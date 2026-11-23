@@ -174,38 +174,49 @@ fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// A file's place, read as one place however its path is written: made absolute, a file that is a
-/// link followed to where it leads; the longest part
-/// of it, as written, that stands on the drive read by the drive, through its links (a `..` after a
-/// link is the parent of where the link leads, as the drive takes it); the rest, which does not
-/// stand yet, its `.` and `..` folded; on Windows, without case, as its drives compare names.
+/// A file's place, read as one place however its path is written: made absolute, then read part by
+/// part as the drive reads it, a part that is a link replaced by where it leads (its target taken
+/// from its folder), standing or not yet, forty links at most, the drive's own bound; a `..` the
+/// parent of what is read so far, so a `..` after a link is the parent of where the link leads. What
+/// of it stands is then read by the drive itself (on Windows, its names as the drive keeps them),
+/// and on Windows the whole compared without case (Unicode's lowercase).
 fn same_place(p: &Path) -> PathBuf {
-    let mut abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
-    // A file that is itself a link, whether or not what it leads to stands yet, read as where it
-    // leads (a link's own target relative to its folder), as portal's open would follow it.
-    for _ in 0..40 {
-        let Ok(to) = std::fs::read_link(&abs) else { break };
-        let next = abs.parent().map(|d| d.join(&to)).unwrap_or(to);
-        abs = std::path::absolute(&next).unwrap_or(next);
-    }
-    let parts: Vec<std::path::Component> = abs.components().collect();
-    let mut stands = parts.len();
+    use std::path::Component;
+    let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let owned = |q: &Path| q.components().map(|c| PathBuf::from(c.as_os_str())).collect::<std::collections::VecDeque<PathBuf>>();
+    let mut pending = owned(&abs);
     let mut out = PathBuf::new();
+    let mut hops = 0;
+    while let Some(part) = pending.pop_front() {
+        match part.components().next() {
+            Some(Component::CurDir) | None => {}
+            Some(Component::ParentDir) => {
+                out.pop();
+            }
+            Some(Component::Normal(_)) => {
+                let next = out.join(&part);
+                match std::fs::read_link(&next) {
+                    Ok(to) if hops < 40 => {
+                        hops += 1;
+                        let mut led = owned(&out.join(to));
+                        led.extend(pending.drain(..));
+                        pending = led;
+                        out = PathBuf::new();
+                    }
+                    _ => out = next,
+                }
+            }
+            Some(_) => out.push(&part),
+        }
+    }
+    let parts: Vec<Component> = out.components().collect();
+    let mut stands = parts.len();
     while stands > 0 {
         if let Ok(read) = std::fs::canonicalize(parts[..stands].iter().collect::<PathBuf>()) {
-            out = read;
+            out = parts[stands..].iter().fold(read, |o, c| o.join(c));
             break;
         }
         stands -= 1;
-    }
-    for c in &parts[stands..] {
-        match c {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
     }
     if cfg!(windows) {
         out = PathBuf::from(out.to_string_lossy().to_lowercase());

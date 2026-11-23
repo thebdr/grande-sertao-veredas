@@ -2005,7 +2005,14 @@ fn every_kind_of_store_a_project_keeps_is_the_one_its_session_runs_with() {
     // link to the other's, neither made yet; a store folder of each run's own not made yet, under a
     // link to the folder above the other's. Each refused at the check, nothing started.
     #[cfg(unix)]
-    for (ways, made) in [([("ram", "store = { disk = \"../pinned/a.duckdb\" }"), ("dir", "store = { disk = \"../pinned/b.duckdb\" }")], "pinned/a.duckdb"), ([("ram", "store = { dir = \"../real/runs\" }"), ("dir", "store = { dir = \"../alias/runs\" }")], "real/runs")] {
+    for (ways, made) in [
+        ([("ram", "store = { disk = \"../pinned/a.duckdb\" }"), ("dir", "store = { disk = \"../pinned/b.duckdb\" }")], "pinned/a.duckdb"),
+        ([("ram", "store = { dir = \"../real/runs\" }"), ("dir", "store = { dir = \"../alias/runs\" }")], "real/runs"),
+        // Through a link to a folder not made yet (`dangle` to `unmade`): a pinned file and a store
+        // folder of each run's own beneath it.
+        ([("ram", "store = { disk = \"../unmade/a.duckdb\" }"), ("dir", "store = { disk = \"../dangle/a.duckdb\" }")], "unmade"),
+        ([("ram", "store = { dir = \"../unmade/runs\" }"), ("dir", "store = { dir = \"../dangle/runs\" }")], "unmade"),
+    ] {
         for (name, store) in ways {
             let p = dir.path().join(name).join("project.toml");
             let text = std::fs::read_to_string(&p).unwrap();
@@ -2017,6 +2024,7 @@ fn every_kind_of_store_a_project_keeps_is_the_one_its_session_runs_with() {
         if !dir.path().join("pinned/b.duckdb").is_symlink() {
             std::os::unix::fs::symlink("a.duckdb", dir.path().join("pinned/b.duckdb")).unwrap();
             std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("alias")).unwrap();
+            std::os::unix::fs::symlink("unmade", dir.path().join("dangle")).unwrap();
         }
         let out = Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).args([path.as_os_str(), "--check".as_ref()]).stdin(Stdio::null()).output().unwrap();
         let said = String::from_utf8_lossy(&out.stderr).to_string();

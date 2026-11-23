@@ -267,9 +267,9 @@ No two sessions of one file open one database file: a store pinned to one file, 
 each run's own or a record kept in one folder by projects whose names portal writes as one file
 name (each file named from the project's name, its letters, digits, `-` and `_` kept and every other
 character written `_`, and the host's start, the same instant for every session), is refused when
-the file loads, naming both sessions. A place is one however its path is written: made absolute,
-read through its links as the drive reads them where it stands, its `.` and `..` folded where it
-does not stand yet, and on Windows without case. Another folder, or a name portal writes as another
+the file loads, naming both sessions. A place is one however its path is written: made absolute and
+read part by part as the drive reads it, a part that is a link followed to where it leads whether
+or not that stands yet, and on Windows without case (Unicode's lowercase). Another folder, or a name portal writes as another
 file name, for one of them loads.
 
 ## The binding file: keys

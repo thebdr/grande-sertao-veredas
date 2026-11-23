@@ -464,6 +464,24 @@ fn two_sessions_never_open_one_database_file() {
         assert!(two_by("store = { disk = \"../hall/one.duckdb\" }", "store = { disk = \"lnk/../one.duckdb\" }", "the hall", false, &|d| link(d, "hall/lnk", "elsewhere/deep")).is_ok(), "the file the letters alone would fold it to");
         let got = refused(two_by("store = { dir = \"../real/new\" }", "store = { dir = \"../lnk/new\" }", "the loop", false, &|d| link(d, "lnk", "real")));
         assert!(got.ends_with(&tail("store")), "a folder not made yet, under a link: {got}");
+        // A folder that is a link to one not made yet, beside the folder it leads to: a store of each
+        // run's own, a pinned file and a record, each refused.
+        let to_nothing = |d: &std::path::Path| std::os::unix::fs::symlink("real", d.join("alias")).unwrap();
+        for (a, b, what) in [
+            ("store = { dir = \"../real\" }", "store = { dir = \"../alias\" }", "store"),
+            ("store = { disk = \"../real/one.duckdb\" }", "store = { disk = \"../alias/one.duckdb\" }", "store"),
+            ("store = \"ram\"\nrecord = { dir = \"../real\", max_mb = 5 }", "store = \"ram\"\nrecord = { dir = \"../alias\", max_mb = 5 }", "record"),
+        ] {
+            let got = refused(two_by(a, b, "the loop", false, &to_nothing));
+            assert!(got.ends_with(&tail(what)), "{b} beside {a}, the link to a folder not made: {got}");
+        }
+        // A pinned file reached through two links, beside the one they lead to.
+        let got = refused(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/b.duckdb\" }", "the hall", false, &|d| {
+            std::fs::create_dir_all(d.join("stores")).unwrap();
+            std::os::unix::fs::symlink("c.duckdb", d.join("stores/b.duckdb")).unwrap();
+            std::os::unix::fs::symlink("a.duckdb", d.join("stores/c.duckdb")).unwrap();
+        }));
+        assert!(got.ends_with(&tail("store")), "a pinned file through two links: {got}");
         // A pinned file that is itself a link to the other's, neither made yet (a link to nothing).
         let got = refused(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/b.duckdb\" }", "the hall", false, &|d| {
             std::fs::create_dir_all(d.join("stores")).unwrap();
@@ -471,6 +489,30 @@ fn two_sessions_never_open_one_database_file() {
         }));
         assert!(got.ends_with(&tail("store")), "a pinned file that is a link to the other's: {got}");
     }
+    // Three sessions, the first and the third sharing a store folder under one name, the second
+    // between them elsewhere in name: the third refused, naming the first.
+    let three = |stores: [&str; 3], names: [&str; 3]| -> Result<config::HostConfig, ConfigError> {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ex = example();
+        for s in ["hall", "yard"] {
+            ex.host.push_str(&format!("\n[[session]]\nname = \"{s}\"\nproject = \"{s}/project.toml\"\nbinding = \"{s}/binding.toml\"\n"));
+        }
+        let path = write_example(dir.path(), &ex);
+        for (i, s) in ["loop", "hall", "yard"].into_iter().enumerate() {
+            std::fs::create_dir_all(dir.path().join(s)).unwrap();
+            if s != "loop" {
+                for f in ["binding.toml", "layout.svg"] {
+                    std::fs::copy(dir.path().join("loop").join(f), dir.path().join(s).join(f)).unwrap();
+                }
+            }
+            std::fs::write(dir.path().join(s).join("project.toml"), ex.project.replace("\nstore = \"ram\"\n", &format!("\n{}\n", stores[i])).replace("\nname = \"the loop\"\n", &format!("\nname = \"{}\"\n", names[i]))).unwrap();
+        }
+        config::load_file(&path)
+    };
+    let shared = "store = { dir = \"../stores\" }";
+    let got = refused(three([shared, shared, shared], ["the loop", "the hall", "the loop"]));
+    assert!(got.starts_with("session `yard`: ") && got.ends_with(&tail("store")), "the first and the third of three: {got}");
+    assert!(three([shared, shared, shared], ["the loop", "the hall", "the yard"]).is_ok(), "three names, one folder");
     // One file written relative and absolute, the supervisão file read by a path relative to the
     // folder the test runs in: refused.
     let got = refused(two_by("store = { disk = \"../one.duckdb\" }", "store = { disk = \"{dir}/one.duckdb\" }", "the hall", true, &none));
@@ -1123,9 +1165,9 @@ No two sessions of one file open one database file: a store pinned to one file, 
 each run's own or a record kept in one folder by projects whose names portal writes as one file
 name (each file named from the project's name, its letters, digits, `-` and `_` kept and every other
 character written `_`, and the host's start, the same instant for every session), is refused when
-the file loads, naming both sessions. A place is one however its path is written: made absolute,
-read through its links as the drive reads them where it stands, its `.` and `..` folded where it
-does not stand yet, and on Windows without case. Another folder, or a name portal writes as another
+the file loads, naming both sessions. A place is one however its path is written: made absolute and
+read part by part as the drive reads it, a part that is a link followed to where it leads whether
+or not that stands yet, and on Windows without case (Unicode's lowercase). Another folder, or a name portal writes as another
 file name, for one of them loads.
 
 ## The binding file: keys
