@@ -243,6 +243,22 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     if !refusals.is_empty() {
         return Err(refused(refusals.join("\n")));
     }
+    // A bundle's `bin/` holds one executable a name, and so does the tester machine's PATH: a name
+    // two components build would ship one of them where the manifest names both.
+    let mut builders: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for h in held.values() {
+        for b in &h.bins {
+            builders.entry(b.as_str()).or_default().push(h.name.as_str());
+        }
+    }
+    let shared: Vec<String> = builders
+        .iter()
+        .filter(|(_, by)| by.len() > 1)
+        .map(|(b, by)| format!("`{b}` is an executable of {}: a bundle holds one executable a name", by.join(" and ")))
+        .collect();
+    if !shared.is_empty() {
+        return Err(refused(shared.join("\n")));
+    }
     let tmp = crate::cache::dir()?.join("tmp");
     std::fs::create_dir_all(&tmp)?;
     // The toolchain the suite runs with, read as the suite runs: the manifest's and the builder's.

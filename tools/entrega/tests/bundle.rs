@@ -1033,3 +1033,46 @@ fn a_bundles_entries_are_in_name_order_owned_by_root_by_number_and_dated_at_its_
         assert!(e.mode == "drwxr-xr-x" || e.mode == "-rw-r--r--", "{e:?}");
     }
 }
+
+#[test]
+fn an_executable_name_two_components_build_is_refused_before_anything_runs() {
+    // Two components each building `ferramenta` (cargo builds one file of that name, warning only),
+    // and a third building `outra`.
+    let r = Repo { dir: tempfile::tempdir().unwrap() };
+    r.git(&["init", "-q", "-b", "main"]);
+    r.write(".gitignore", "/target/\n");
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-a\", \"crates/veredas-b\", \"crates/veredas-c\"]\nresolver = \"3\"\n");
+    for (c, bins) in [("veredas-a", ["ferramenta", "a"]), ("veredas-b", ["ferramenta", "outra"]), ("veredas-c", ["outra", "c"])] {
+        let targets: String = bins.iter().map(|b| format!("\n[[bin]]\nname = \"{b}\"\npath = \"src/{b}.rs\"\n")).collect();
+        r.write(&format!("crates/{c}/Cargo.toml"), &format!("[package]\nname = \"{c}\"\nversion = \"2.0.0\"\nedition = \"2024\"\n{targets}"));
+        for b in bins {
+            r.write(&format!("crates/{c}/src/{b}.rs"), "fn main() {}\n");
+        }
+    }
+    r.write("tools/entrega/maquina/maquina.toml", &recipe_with("cpus = 4", "cpus = 4"));
+    r.commit("two executables named alike");
+    let (got, left) = trial_cut(r.dir.path());
+    match got {
+        Err(CutError::Refused(e)) => assert_eq!(
+            e,
+            "`ferramenta` is an executable of veredas-a and veredas-b: a bundle holds one executable a name\n\
+             `outra` is an executable of veredas-b and veredas-c: a bundle holds one executable a name"
+        ),
+        other => panic!("not refused: {:?}", other.map(|c| c.manifest)),
+    }
+    assert!(!left, "refused before anything ran or was built");
+}
+
+#[test]
+fn a_trials_manifest_goes_beside_its_bundle() {
+    // `entrega cut <release> --trial` with no `--out`: where its manifest goes is where the cut
+    // looks for one already there, the release's own work folder (and where `entrega maquina`
+    // looks for it).
+    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let beside = r.dir.path().join("target/entrega/9.9.9/9.9.9.toml");
+    std::fs::create_dir_all(beside.parent().unwrap()).unwrap();
+    std::fs::write(&beside, "").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).args(["cut", "9.9.9", "--trial"]).current_dir(r.dir.path()).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(String::from_utf8_lossy(&out.stderr), format!("{} exists: release 9.9.9 is cut already\n", beside.display()));
+}
