@@ -242,6 +242,8 @@ fn recover<'a, T>(r: Result<MutexGuard<'a, T>, std::sync::PoisonError<MutexGuard
 mod connections_test;
 #[cfg(test)]
 mod together_test;
+#[cfg(test)]
+mod page_test;
 
 impl DuckStore {
     /// Open a fresh session database, create the `samples` and base tables, then apply the view
@@ -785,10 +787,29 @@ impl DuckStore {
     /// A windowed, ordered page of one table's rows as typed JSON cells, newest first by the
     /// time column (`index_ms`, else `ts`); a table with neither is unordered.
     pub fn query_rows(&self, table: &str, q: &RowsQuery) -> Result<RowsPage, StoreError> {
+        self.query_rows_between(table, q, &mut || {})
+    }
+
+    /// A page and its total read in one transaction, so both see one moment of the store: a row
+    /// the ingest commits between the count and the page is in neither (C-041). `between` runs
+    /// between the two, for the test that commits there.
+    pub(crate) fn query_rows_between(&self, table: &str, q: &RowsQuery, between: &mut dyn FnMut()) -> Result<RowsPage, StoreError> {
         let conn = recover(self.api.lock());
+        // The catalog read first, outside the transaction: describing a view over a file gone is
+        // a failure the listing absorbs, and a failure inside a transaction ends it.
         let tables = self.list_tables_on(&conn)?;
         let info = tables.iter().find(|t| t.name == table).ok_or_else(|| StoreError::UnknownTable(table.to_string()))?;
         let columns = info.columns.clone();
+        conn.execute_batch("BEGIN TRANSACTION")?;
+        let page = Self::page_on(&conn, table, columns, q, between);
+        // A read: the transaction ends with nothing to keep, whatever the page's outcome.
+        let ended = conn.execute_batch("ROLLBACK");
+        let page = page?;
+        ended?;
+        Ok(page)
+    }
+
+    fn page_on(conn: &Connection, table: &str, columns: Vec<ColumnInfo>, q: &RowsQuery, between: &mut dyn FnMut()) -> Result<RowsPage, StoreError> {
         let has = |c: &str| columns.iter().any(|col| col.name == c);
         let time_col = if has("index_ms") {
             Some("index_ms".to_string())
@@ -832,6 +853,7 @@ impl DuckStore {
             let mut stmt = conn.prepare(&sql)?;
             stmt.query_row(duckdb::params_from_iter(params.iter()), |r| r.get::<_, i64>(0)).map(|n| n.max(0) as u64)?
         };
+        between();
 
         let sql = format!("SELECT * FROM {qt}{where_sql}{order} LIMIT {limit} OFFSET {}", q.offset);
         let mut stmt = conn.prepare(&sql)?;
