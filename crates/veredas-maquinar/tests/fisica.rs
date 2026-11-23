@@ -195,7 +195,7 @@ fn a_mover_reaches_each_pose_at_the_next_step_and_pushes_without_being_pushed() 
         assert!((b.at[0] as f64 - x).abs() < 1e-5 && b.at[1] == 0.0 && b.at[2] == 0.2, "{i}: {b:?}");
     }
     // Ahead of the blade's face (0.525) at the blade's speed, 1.5 m/s, its back face into the
-    // blade by no more than the allowed millimetre and one step's travel (6 mm).
+    // blade within 7 mm: one step's travel (6 mm) and a millimetre (2.04 mm measured).
     let h = w.body("heavy").unwrap();
     assert!(h.at[0] - 0.2 >= 0.525 - 0.001 - 0.006 && h.at[0] - 0.2 <= 0.525 + 0.001, "pushed ahead of the blade: {h:?}");
     assert!((h.velocity[0] - 1.5).abs() < 0.05, "{h:?}");
@@ -721,7 +721,7 @@ mod round_1 {
              [[body]]\nname = \"part\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.626]\nfriction = 0\n",
         );
         steps(&mut w, 50);
-        // The table rises until the part's top meets the belt's underside (z = 1.0), then 3 mm more (past the allowed millimetre).
+        // The table rises until the part's top meets the belt's underside (z = 1.0), then 3 mm more.
         // Part top = table centre + 0.025 + 0.2.
         let top: f64 = 1.0 - 0.2 - 0.025 + 0.003;
         let mut z: f64 = 0.5;
@@ -1175,5 +1175,276 @@ mod round_2 {
         let past = (1u64 << 32) + 1;
         assert_eq!(fisica::time_at(4, past), std::time::Duration::from_millis(4 * past));
         assert_eq!(fisica::time_at(100, u64::MAX), std::time::Duration::from_millis(u64::MAX));
+    }
+}
+
+/// C-114's third refute round: the critic's probes (`~/.cache/veredas/critic-c114-r3/probes`), kept
+/// as pins: belts with bodies added later (the belt the pair's first collider), every range at its
+/// bounds, sensors overlapping a fixed shape and a belt, the late count of a step held past its
+/// time, the depth at gravity 100, and the engine as the clause names it.
+mod round_3 {
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::fisica::{self, Body, Placement, Scene, World};
+
+    fn scene(body: &str) -> Scene {
+        fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")).unwrap()
+    }
+    fn world(body: &str) -> World {
+        World::new(&scene(body)).unwrap()
+    }
+    fn steps(w: &mut World, n: u64) {
+        for _ in 0..n {
+            w.step();
+        }
+    }
+
+    /// A1: a body added later on a slow belt is carried (the wake serves the belt-first pair).
+    #[test]
+    fn an_added_body_on_a_slow_belt_is_carried() {
+        let mut bad = Vec::new();
+        for speed in [0.01f64, 0.03, 0.06, -0.03] {
+            let mut w = world(&format!("[[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.1]\nat = [0.0, 0.0, 0.75]\nspeed = {speed}\n"));
+            w.add_body(&Body { mass: 2.5, ..Body::new("carton", [0.3, 0.3, 0.3], [0.0, 0.0, 0.95]) }).unwrap();
+            steps(&mut w, 50);
+            let a = w.body("carton").unwrap().at;
+            steps(&mut w, 1250);
+            let b = w.body("carton").unwrap();
+            let moved = b.at[0] - a[0];
+            println!("A1 added body, belt {speed} m/s: moved {moved} m in 5 s (expected {}), v {:?}", speed * 5.0, b.velocity);
+            if (moved as f64 - speed * 5.0).abs() >= 0.02 * speed.abs() * 5.0 + 0.002 {
+                bad.push((speed, moved));
+            }
+        }
+        assert!(bad.is_empty(), "added bodies a slow belt stopped carrying: {bad:?}");
+    }
+
+    /// A2: a body added later leaning on a belt's side (a frictionless slope pushing it there) is not
+    /// carried.
+    #[test]
+    fn an_added_body_against_a_belt_side_is_not_carried() {
+        let r = 20f64.to_radians();
+        let (ny, nz) = (-r.sin(), r.cos());
+        let (cy, cz) = (0.3 - 0.05 * ny + 0.7 * r.cos(), 0.05 - 0.05 * nz + 0.7 * r.sin());
+        let (py, pz) = (0.3 + 0.35 * r.cos() + 0.1005 * ny, 0.05 + 0.35 * r.sin() + 0.1005 * nz);
+        let mut w = world(&format!(
+            "[[fixed]]\nname = \"slope\"\nsize = [8.0, 1.4, 0.1]\nat = [0.0, {cy}, {cz}]\nroll = 20\nfriction = 0\n\
+             [[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.5]\nat = [0.0, 0.0, 0.25]\nspeed = 0.5\nfriction = 1.2\n"
+        ));
+        w.add_body(&Body { roll: 20.0, friction: 0.0, ..Body::new("part", [0.2, 0.2, 0.2], [0.0, py, pz]) }).unwrap();
+        steps(&mut w, 250);
+        let a = w.body("part").unwrap();
+        steps(&mut w, 250);
+        let b = w.body("part").unwrap();
+        println!("A2 added body at the side: after 1 s {a:?}\nA2 after 2 s {b:?}");
+        assert!(a.at[1] < 0.45, "the part reached the belt's side: {a:?}");
+        assert!(b.at[0].abs() < 0.01 && b.velocity[0].abs() < 0.01, "carried by the belt's side: {b:?}");
+    }
+
+    /// A3: a body added later pressed up against a belt's underside by a table is not carried.
+    #[test]
+    fn an_added_body_under_a_belt_is_not_carried() {
+        let mut w = world(
+            "[[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.1]\nat = [0.0, 0.0, 1.05]\nspeed = 0.5\nfriction = 1.2\n\
+             [[mover]]\nname = \"table\"\nsize = [0.6, 0.6, 0.05]\nat = [0.0, 0.0, 0.5]\nfriction = 0\n",
+        );
+        w.add_body(&Body { friction: 0.0, ..Body::new("part", [0.2, 0.2, 0.2], [0.0, 0.0, 0.626]) }).unwrap();
+        steps(&mut w, 50);
+        let top: f64 = 1.0 - 0.2 - 0.025 + 0.003;
+        let mut z: f64 = 0.5;
+        while z < top {
+            z = (z + 0.002).min(top);
+            w.place("table", Placement::at([0.0, 0.0, z])).unwrap();
+            w.step();
+        }
+        let a = w.body("part").unwrap();
+        steps(&mut w, 250);
+        let b = w.body("part").unwrap();
+        println!("A3 added body pressed under the belt: {a:?}\nA3 one second on: {b:?}");
+        assert!((b.at[0] - a.at[0]).abs() < 0.01, "carried by the belt's underside: {a:?} -> {b:?}");
+    }
+
+    /// A4: a body added later standing on the floor against the belt's side (the main test's `side`,
+    /// added instead of the file's) is not carried.
+    #[test]
+    fn an_added_body_standing_at_a_belt_side_is_not_carried() {
+        let mut w = world(
+            "[[fixed]]\nname = \"floor\"\nsize = [20.0, 4.0, 0.1]\nat = [0.0, 0.0, -0.05]\n\
+             [[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.5]\nat = [0.0, 0.0, 0.25]\nspeed = 0.5\n",
+        );
+        w.add_body(&Body::new("side", [0.2, 0.2, 0.2], [0.0, 0.401, 0.1])).unwrap();
+        steps(&mut w, 75);
+        let s = w.body("side").unwrap();
+        println!("A4 {s:?}");
+        assert!(s.velocity[0].abs() < 0.01 && s.at[0].abs() < 0.001, "{s:?}");
+    }
+
+    #[test]
+    fn every_range_takes_its_bounds_and_refuses_past_them() {
+        let ok = |body: &str| fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")).map(|_| ()).map_err(|e| format!("{body}: {e}"));
+        let mut bad = Vec::new();
+        for body in [
+            "step_ms = 1\n".to_string(),
+            "step_ms = 100\n".to_string(),
+            "gravity = 100\n".to_string(),
+            "[[belt]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\nspeed = 100\n".to_string(),
+            "[[belt]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\nspeed = -100\n".to_string(),
+            "[[fixed]]\nname = \"f\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\nfriction = 10\n".to_string(),
+            "[[fixed]]\nname = \"f\"\nsize = [10000.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n".to_string(),
+            "[[fixed]]\nname = \"f\"\nsize = [1.0, 1.0, 1.0]\nat = [10000.0, -10000.0, 0.0]\n".to_string(),
+            "[[sensor]]\nname = \"s\"\nradius = 10000.0\nat = [0.0, 0.0, 0.0]\n".to_string(),
+        ] {
+            if let Err(e) = ok(&body) {
+                bad.push(e);
+            }
+        }
+        let mut w = world("[[belt]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n");
+        if let Err(e) = w.set_speed("b", -100.0) {
+            bad.push(format!("set_speed -100: {e}"));
+        }
+        // Past the bound, or not finite: refused.
+        for body in ["[[sensor]]\nname = \"s\"\nradius = nan\nat = [0.0, 0.0, 0.0]\n", "[[sensor]]\nname = \"s\"\nradius = 10000.5\nat = [0.0, 0.0, 0.0]\n", "gravity = inf\n"] {
+            if ok(body).is_ok() {
+                bad.push(format!("{body}: accepted"));
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    #[test]
+    fn a_sensor_overlapping_a_fixed_shape_and_a_belt_holds_neither() {
+        let s = fisica::load(&{
+            let doc = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/cena-schema.md")).unwrap();
+            let start = doc.find("```toml\n").unwrap() + 8;
+            doc[start..start + doc[start..].find("```").unwrap()].to_string()
+        })
+        .unwrap();
+        let (b1, belt) = (&s.sensors[0], &s.belts[0]);
+        let b1_bottom = b1.at[2] - b1.size.unwrap()[2] / 2.0;
+        let belt_top = belt.at[2] + belt.size[2] / 2.0;
+        println!("E1 the reference's B1 bottom {b1_bottom} against the belt's top {belt_top}: overlap {}", b1_bottom < belt_top);
+        let mut w = world(
+            "[[fixed]]\nname = \"floor\"\nsize = [10.0, 4.0, 0.1]\nat = [0.0, 0.0, -0.05]\n\
+             [[belt]]\nname = \"belt\"\nsize = [4.0, 0.6, 0.1]\nat = [0.0, 0.0, 0.75]\nspeed = 0.5\n\
+             [[sensor]]\nname = \"on_floor\"\nsize = [0.5, 0.5, 0.5]\nat = [3.0, 0.0, 0.0]\n\
+             [[sensor]]\nname = \"on_belt\"\nsize = [0.01, 0.8, 0.5]\nat = [0.0, 0.0, 0.75]\n\
+             [[sensor]]\nname = \"ball\"\nradius = 0.3\nat = [-1.0, 0.0, 0.0]\n",
+        );
+        steps(&mut w, 10);
+        let ev = w.take_events();
+        println!("E1 {ev:?} {:?}", w.sensors());
+        assert!(ev.is_empty() && w.sensors().iter().all(|s| !s.occupied()), "{ev:?} {:?}", w.sensors());
+    }
+
+    #[test]
+    fn a_step_the_handle_held_past_its_time_is_counted_late() {
+        let s = scene("[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 1000.0]\n");
+        let h = fisica::start(&s).unwrap();
+        let starts: Arc<Mutex<Vec<(u64, Instant)>>> = Arc::new(Mutex::new(Vec::with_capacity(2000)));
+        let st = Arc::clone(&starts);
+        h.add_hook(Box::new(move |w: &mut World| {
+            st.lock().unwrap().push((w.steps(), Instant::now()));
+        }));
+        std::thread::sleep(Duration::from_millis(200));
+        let late0 = h.status().late;
+        let holds = 40;
+        for _ in 0..holds {
+            h.with(|_| std::thread::sleep(Duration::from_millis(9)));
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let late = h.status().late - late0;
+        drop(h);
+        let starts = starts.lock().unwrap().clone();
+        // The step taken after `n` steps is due at begun + (n + 1) step; begun is at most the least
+        // of (start - (n + 1) step), so each lateness read against it is at most the real one.
+        let step = Duration::from_millis(4);
+        let base = starts.iter().map(|(n, t)| *t - step * (*n as u32 + 1)).min().unwrap();
+        let window_from = starts.iter().find(|(_, t)| *t >= starts[0].1 + Duration::from_millis(200)).unwrap().0;
+        let begun_late = starts
+            .iter()
+            .filter(|(n, _)| *n >= window_from)
+            .filter(|(n, t)| t.saturating_duration_since(base + step * (*n as u32 + 1)) > step)
+            .count();
+        let worst: Vec<f64> = {
+            let mut v: Vec<f64> = starts.iter().filter(|(n, _)| *n >= window_from).map(|(n, t)| t.saturating_duration_since(base + step * (*n as u32 + 1)).as_secs_f64() * 1000.0).collect();
+            v.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            v.truncate(12);
+            v
+        };
+        println!("F1 {holds} holds of 9 ms: steps begun more than one step late (a lower bound) {begun_late}, counted late {late}; the latest (ms) {worst:?}");
+        assert!(late as usize + 3 >= begun_late, "{begun_late} steps began more than one step after their time, {late} counted late");
+    }
+
+    /// F2: the same with holds of 6 ms (a step and a half): the step that waits begins up to 6 ms
+    /// late, the next at most 2 ms; the clause counts the first, the runner never does.
+    #[test]
+    fn a_step_a_step_and_a_half_late_is_counted_late() {
+        let s = scene("[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 1000.0]\n");
+        let h = fisica::start(&s).unwrap();
+        let starts: Arc<Mutex<Vec<(u64, Instant)>>> = Arc::new(Mutex::new(Vec::with_capacity(2000)));
+        let st = Arc::clone(&starts);
+        h.add_hook(Box::new(move |w: &mut World| {
+            st.lock().unwrap().push((w.steps(), Instant::now()));
+        }));
+        std::thread::sleep(Duration::from_millis(200));
+        let late0 = h.status().late;
+        let holds = 40;
+        for _ in 0..holds {
+            h.with(|_| std::thread::sleep(Duration::from_millis(6)));
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let late = h.status().late - late0;
+        drop(h);
+        let starts = starts.lock().unwrap().clone();
+        let step = Duration::from_millis(4);
+        let base = starts.iter().map(|(n, t)| *t - step * (*n as u32 + 1)).min().unwrap();
+        let window_from = starts.iter().find(|(_, t)| *t >= starts[0].1 + Duration::from_millis(200)).unwrap().0;
+        let begun_late = starts.iter().filter(|(n, _)| *n >= window_from).filter(|(n, t)| t.saturating_duration_since(base + step * (*n as u32 + 1)) > step).count();
+        println!("F2 {holds} holds of 6 ms: steps begun more than one step late (a lower bound) {begun_late}, counted late {late}");
+        assert!(late as usize + 3 >= begun_late, "{begun_late} steps began more than one step after their time, {late} counted late");
+    }
+
+    #[test]
+    fn the_depth_a_body_rests_grows_with_gravity() {
+        // 0.07 mm at 9.81 m/s² (pinned in round 2), ten times that at gravity 100, whatever the step.
+        let depth = |step_ms: u32, gravity: f64| {
+            let mut w = world(&format!("step_ms = {step_ms}\ngravity = {gravity}\n[[fixed]]\nname = \"floor\"\nsize = [40.0, 40.0, 0.2]\nat = [0.0, 0.0, -0.1]\n[[body]]\nname = \"box\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.11]\n"));
+            steps(&mut w, u64::from(5000 / step_ms));
+            f64::from(0.1f32 - w.body("box").unwrap().at[2])
+        };
+        for step_ms in [1, 4, 10, 100] {
+            let d = depth(step_ms, 9.81);
+            assert!((0.00005..0.0001).contains(&d), "{step_ms} ms at 9.81: {d}");
+        }
+        for step_ms in [4, 10] {
+            let d = depth(step_ms, 100.0);
+            assert!((0.0006..0.0008).contains(&d), "{step_ms} ms at 100: {d}");
+        }
+    }
+
+    #[test]
+    fn the_engine_is_rapier_0_36_1_with_enhanced_determinism_named_in_the_world_module_alone() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+        let workspace = std::fs::read_to_string(format!("{root}/Cargo.toml")).unwrap();
+        assert!(workspace.lines().any(|l| l.trim() == "rapier3d = { version = \"=0.36.1\", features = [\"enhanced-determinism\"] }"), "the workspace's rapier3d line");
+        let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
+        assert!(manifest.lines().any(|l| l.trim() == "rapier3d = { workspace = true }"));
+        let lock = std::fs::read_to_string(format!("{root}/Cargo.lock")).unwrap();
+        assert!(lock.contains("name = \"rapier3d\"\nversion = \"0.36.1\""));
+        // Named in `src/fisica/world.rs` alone.
+        let mut naming = Vec::new();
+        let mut dirs = vec![std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if std::fs::read_to_string(&p).unwrap_or_default().contains("rapier3d") {
+                    naming.push(p);
+                }
+            }
+        }
+        assert!(naming.len() == 1 && naming[0].ends_with(std::path::Path::new("src").join("fisica").join("world.rs")), "{naming:?}");
     }
 }

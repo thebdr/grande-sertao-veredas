@@ -119,13 +119,16 @@ fn run_scene(run: &Shared, step: Duration) {
         let now = Instant::now();
         if due > now {
             std::thread::sleep(due - now);
-        } else if now - due > step {
-            run.late.fetch_add(1, Ordering::Relaxed);
         }
         if run.stop.load(Ordering::SeqCst) {
             break;
         }
         let mut world = run.world();
+        // Late when it begins more than one step after its time, whatever held it: an oversleep,
+        // the handle holding the world, the step before running long.
+        if Instant::now().saturating_duration_since(due) > step {
+            run.late.fetch_add(1, Ordering::Relaxed);
+        }
         for hook in run.hooks.lock().unwrap_or_else(|e| e.into_inner()).iter_mut() {
             hook(&mut world);
         }
