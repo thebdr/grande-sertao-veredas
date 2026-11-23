@@ -314,6 +314,8 @@ pub enum LldpError {
     Overrun { index: usize, tlv_type: u8, len: usize, left: usize },
     #[error("the mandatory {0} TLV is missing")]
     Missing(&'static str),
+    #[error("TLV {index} is of type {tlv_type}: the first three are the chassis id (1), the port id (2) and the time to live (3), in that order")]
+    Order { index: usize, tlv_type: u8 },
     #[error("a TLV value holds at most 511 bytes; type {tlv_type} has {len}")]
     TlvTooLong { tlv_type: u8, len: usize },
     #[error("a PDU's trailing bytes are the one byte after its last TLV when it has no End; {0} cannot be written")]
@@ -333,7 +335,8 @@ pub enum LldpError {
 }
 
 /// Decode an LLDP PDU (the bytes after the EtherType). It ends at the End TLV or at the last
-/// whole TLV; the three mandatory TLVs (chassis id, port id, time to live) must be there.
+/// whole TLV; the three mandatory TLVs (chassis id, port id, time to live) must be there, the first
+/// three in that order.
 pub fn decode(payload: &[u8]) -> Result<LldpPdu, LldpError> {
     if payload.len() < 2 {
         return Err(LldpError::TooShort(payload.len()));
@@ -355,6 +358,11 @@ pub fn decode(payload: &[u8]) -> Result<LldpPdu, LldpError> {
         let v = &payload[off..off + len];
         off += len;
         index += 1;
+        // 802.1AB: the first three TLVs are the chassis id, the port id and the time to live, in
+        // that order; a receiver discards a PDU where they are not (as the dissector does).
+        if (1..=3).contains(&index) && tlv_type != 0 && usize::from(tlv_type) != index {
+            return Err(LldpError::Order { index, tlv_type });
+        }
         // A TLV that says what is already said (a second chassis id, a second system name) or
         // that does not fit its type is kept among the unread, never dropped.
         let kept = match tlv_type {
