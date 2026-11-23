@@ -1,16 +1,20 @@
 //! C-291, the parts of the cut that need no machine: an executable's needs read from `objdump -p`
 //! and held to the tester machine's libraries; `SHA256SUMS` written and every disagreement named;
 //! the manifest the cut writes read back by the reader; the recipe file read and refused by key;
-//! the cut refusing a tree that differs from HEAD and a release already cut. The run of a real
-//! bundle is `tests/cut.rs` (feature `corte`).
+//! the cut refusing a tree that differs from HEAD and a release already cut; the run together
+//! refused for every way the plant is not running, each named. The run of a real bundle is
+//! `tests/cut.rs` (feature `corte`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use entrega::bundle;
 use entrega::cut::{self, CutError, Options};
 use entrega::machine::Recipe;
 use entrega::manifest;
+use entrega::together::{self, Answer, Report};
+use serde_json::{Value, json};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
@@ -432,4 +436,135 @@ fn round_five_the_orcl_plan_a_mode_change_ignored_folders_and_the_packers_enviro
     let odd = (std::ffi::OsString::from("LANG_X"), std::ffi::OsString::from_vec(b"caf\xe9".to_vec()));
     let cmd = cut::suite_command(Path::new("/repo"), Path::new("/tmpdir"), &["true"], vec![odd.clone()].into_iter());
     assert!(cmd.get_envs().any(|(k, v)| k == odd.0.as_os_str() && v == Some(odd.1.as_os_str())));
+}
+
+/// The loop's objects the run together reads (the binding's eight).
+const LOOP: [&str; 8] = ["speed", "read-rate", "infeed", "outlet-1", "outlet-2", "outlet-3", "parcel-1", "parcel-2"];
+
+/// A run of the plant as the cut reads one that is right: the page, every object of the loop live,
+/// both sources live, both parcels moved between the snapshots, the write refused by the switch,
+/// both executables ended with 0.
+fn running() -> Report {
+    let snapshot = |place: f64| {
+        let objects: Vec<Value> = LOOP.iter().map(|id| json!({ "id": id, "value": 1.0, "stale": false, "place": place })).collect();
+        json!({ "objects": objects, "session": { "health": { "plc": { "state": "live" }, "sorter": { "state": "live" } } } })
+    };
+    Report {
+        page: Answer { status: 200, body: "<!doctype html><html><body></body></html>".into() },
+        first: snapshot(0.1),
+        second: snapshot(0.2),
+        apart: Duration::from_secs(2),
+        write: Answer { status: 403, body: r#"{"error":"writes are turned off for this project"}"#.into() },
+        bench_exit: Some(0),
+        supervisao_exit: Some(0),
+        bench_out: String::new(),
+        supervisao_out: String::new(),
+    }
+}
+
+fn objects(snapshot: &mut Value) -> &mut Vec<Value> {
+    snapshot["objects"].as_array_mut().unwrap()
+}
+
+fn set(snapshot: &mut Value, id: &str, key: &str, v: Value) {
+    objects(snapshot).iter_mut().find(|o| o["id"] == id).unwrap()[key] = v;
+}
+
+fn faults_of(change: impl FnOnce(&mut Report)) -> Vec<String> {
+    let mut r = running();
+    change(&mut r);
+    together::faults(&r)
+}
+
+#[test]
+fn the_run_together_is_refused_for_every_way_the_plant_is_not_running_each_named() {
+    assert_eq!(together::faults(&running()), Vec::<String>::new());
+    // The page.
+    assert_eq!(faults_of(|r| r.page.status = 404), ["the page answered 404 without a page"]);
+    assert_eq!(faults_of(|r| r.page.body = "Not Found".into()), ["the page answered 200 without a page"]);
+    // Each object of the loop: stale, without a value, absent from the feed.
+    for id in LOOP {
+        for (key, v) in [("stale", Value::Bool(true)), ("value", Value::Null)] {
+            let mut r = running();
+            set(&mut r.second, id, key, v);
+            let o = together::object(&r.second, id).unwrap().clone();
+            assert_eq!(together::faults(&r), [format!("object `{id}` shows no live value: {o}")], "{id} {key}");
+        }
+        let mut want = vec![format!("object `{id}` is not in the feed")];
+        if id.starts_with("parcel-") {
+            want.push(format!("`{id}` did not move along the loop in 2000 ms (Some(Number(0.1)) then None)"));
+        }
+        assert_eq!(faults_of(|r| objects(&mut r.second).retain(|o| o["id"] != id)), want);
+    }
+    // Each source: in another state, absent from the session's health.
+    for source in ["plc", "sorter"] {
+        assert_eq!(
+            faults_of(|r| r.second["session"]["health"][source]["state"] = "stale".into()),
+            [format!(r#"source `{source}` is "stale", not live"#)]
+        );
+        assert_eq!(
+            faults_of(|r| {
+                r.second["session"]["health"].as_object_mut().unwrap().remove(source);
+            }),
+            [format!("source `{source}` is null, not live")]
+        );
+    }
+    // Each parcel: where it was, at no place, not in the first snapshot.
+    for id in ["parcel-1", "parcel-2"] {
+        let still = format!("`{id}` did not move along the loop in 2000 ms");
+        assert_eq!(faults_of(|r| set(&mut r.second, id, "place", 0.1.into())), [format!("{still} (Some(Number(0.1)) then Some(Number(0.1)))")]);
+        assert_eq!(faults_of(|r| set(&mut r.second, id, "place", Value::Null)), [format!("{still} (Some(Number(0.1)) then Some(Null))")]);
+        assert_eq!(faults_of(|r| objects(&mut r.first).retain(|o| o["id"] != id)), [format!("{still} (None then Some(Number(0.2)))")]);
+    }
+    // The offered write: carried out, refused by something else than the switch, unanswered.
+    assert_eq!(
+        faults_of(|r| r.write = Answer { status: 200, body: "{}".into() }),
+        ["the offered write was not refused by the switch: 200 {}"]
+    );
+    assert_eq!(
+        faults_of(|r| r.write.body = r#"{"error":"forbidden"}"#.into()),
+        [r#"the offered write was not refused by the switch: 403 {"error":"forbidden"}"#]
+    );
+    assert_eq!(
+        faults_of(|r| r.write = Answer { status: 0, body: String::new() }),
+        ["the offered write was not refused by the switch: 0 "]
+    );
+    // Each executable: ended otherwise than with 0, or not ended.
+    assert_eq!(
+        faults_of(|r| {
+            r.bench_exit = Some(1);
+            r.bench_out = "panicked".into();
+        }),
+        ["the bench ended with Some(1): panicked"]
+    );
+    assert_eq!(faults_of(|r| r.bench_exit = None), ["the bench ended with None: "]);
+    assert_eq!(
+        faults_of(|r| {
+            r.supervisao_exit = Some(101);
+            r.supervisao_out = "boom".into();
+        }),
+        ["supervisão ended with Some(101): boom"]
+    );
+    assert_eq!(faults_of(|r| r.supervisao_exit = None), ["supervisão ended with None: "]);
+    // The machine's check of its plant reads no exit (its services are not stopped to be judged);
+    // the cut's reads both.
+    let mut r = running();
+    r.bench_exit = None;
+    r.supervisao_exit = None;
+    assert_eq!(together::plant_faults(&r), Vec::<String>::new());
+    assert_eq!(together::faults(&r), ["the bench ended with None: ", "supervisão ended with None: "]);
+    // A plant that answered nothing: the page, the eight objects, the two sources, the two parcels,
+    // the write and the two exits, each named.
+    let silent = Report {
+        page: Answer { status: 0, body: String::new() },
+        first: Value::Null,
+        second: Value::Null,
+        apart: Duration::from_secs(2),
+        write: Answer { status: 0, body: String::new() },
+        bench_exit: None,
+        supervisao_exit: None,
+        bench_out: String::new(),
+        supervisao_out: String::new(),
+    };
+    assert_eq!(together::faults(&silent).len(), 16, "{:#?}", together::faults(&silent));
 }
