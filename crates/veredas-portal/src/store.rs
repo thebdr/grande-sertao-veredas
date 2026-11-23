@@ -1340,9 +1340,7 @@ pub fn csv_header_fits(path: &str, opts: &CsvOptions) -> bool {
 
 /// The dialect a file is read in (C-041), among `opts` and the delimiters with its quote and
 /// escape: of those that fit the file (above), the one typing the most columns as numbers, by the
-/// decimal comma or not, a column it cuts out of what another that fits reads as a list of
-/// numbers on its delimiter no number (a `;` file of lists `10,20,30` under `x,y,z`); on equal
-/// numbers `opts` itself, then the widest header, then
+/// decimal comma or not; on equal numbers `opts` itself, then the widest header, then
 /// `CSV_DELIMS`' order; never one typing fewer numbers than `opts` unless `opts` leaves the header
 /// one field (a `;` file whose header's units hold as many commas as its rows' decimals splits on
 /// `,` as it splits on `;`, and on `,` every number is cut in two). Where none fits, `opts`, unless
@@ -1356,46 +1354,14 @@ pub fn csv_fitting_dialect(path: &str, opts: &CsvOptions) -> CsvOptions {
 }
 
 fn fitting(conn: &Connection, path: &str, opts: CsvOptions) -> CsvOptions {
+    let numbers = |o: &CsvOptions| -> usize {
+        let typed = |o: &CsvOptions| describe_types(conn, &csv_scan_sql(path, o)).map(|cols| cols.iter().filter(|(_, t)| is_numeric_type(t)).count()).unwrap_or(0);
+        typed(o).max(typed(&CsvOptions { decimal_comma: true, ..o.clone() }))
+    };
     let header = |o: &CsvOptions| csv_field_counts(path, o).and_then(|v| v.first().copied()).unwrap_or(0);
+    let own = numbers(&opts);
     let split = header(&opts) >= 2;
     let others: Vec<CsvOptions> = CSV_DELIMS.iter().map(|d| CsvOptions { delim: Some(d.to_string()), ..opts.clone() }).filter(|c| c.delim != opts.delim).collect();
-    // `opts` first, then the others in their order.
-    let all: Vec<&CsvOptions> = std::iter::once(&opts).chain(others.iter()).collect();
-    let fits: Vec<bool> = all.iter().map(|c| csv_header_fits(path, c)).collect();
-    // Every dialect's fields split out of one read of the file, so a line a logger adds meanwhile
-    // is in all of them or in none.
-    let text = csv_text(path).unwrap_or_default();
-    let lines: Vec<_> = all.iter().map(|c| csv_split(&text, c)).collect();
-    let delim_of = |c: &CsvOptions| c.delim.as_deref().and_then(|d| d.chars().next()).unwrap_or(',');
-    // The columns a dialect types as numbers, by the decimal comma or not, less those it cuts out
-    // of a column another dialect that fits reads as a list of numbers on its delimiter (`x,y,z`
-    // over `10,20,30` on `,`): splitting a list is no reason. A column that ends inside one this
-    // dialect reads as a number is no list: its last part is half that number (`1;5;21` of `21,5`
-    // on `;`).
-    let weighed: Vec<usize> = (0..all.len())
-        .map(|k| {
-            let typed = |o: &CsvOptions| describe_types(conn, &csv_scan_sql(path, o)).map(|cols| cols.iter().map(|(_, t)| is_numeric_type(t)).collect::<Vec<_>>()).unwrap_or_default();
-            let (plain, comma) = (typed(all[k]), typed(&CsvOptions { decimal_comma: true, ..all[k].clone() }));
-            let count = |v: &[bool]| v.iter().filter(|n| **n).count();
-            let flags = if count(&comma) > count(&plain) { comma } else { plain };
-            let own_head = lines[k].first();
-            let inside_a_number = |at: usize| own_head.is_some_and(|h| h.iter().enumerate().any(|(i, f)| flags.get(i).copied().unwrap_or(false) && f.start < at && at < f.end));
-            let cut_from_a_list = |i: usize| {
-                let Some(span) = own_head.and_then(|h| h.get(i)) else { return false };
-                (0..all.len()).filter(|&e| e != k && fits[e]).any(|e| {
-                    let other = &lines[e];
-                    let quote = all[e].quote_char.as_deref().map_or(Some('"'), |q| q.chars().next());
-                    other.first().is_some_and(|h| {
-                        h.iter().enumerate().any(|(j, o)| {
-                            o.start <= span.start && span.end <= o.end && *o != *span && !inside_a_number(o.end) && csv_number_list(&text, other, j, delim_of(all[k]), quote)
-                        })
-                    })
-                })
-            };
-            flags.iter().enumerate().filter(|&(i, n)| *n && !cut_from_a_list(i)).count()
-        })
-        .collect();
-    let own = weighed[0];
     // (numbers, `opts` itself, header width, earlier in the order): the largest wins.
     let mut best: Option<((usize, bool, usize, usize), CsvOptions)> = None;
     let mut weigh = |key: (usize, bool, usize, usize), c: CsvOptions| {
@@ -1403,12 +1369,12 @@ fn fitting(conn: &Connection, path: &str, opts: CsvOptions) -> CsvOptions {
             best = Some((key, c));
         }
     };
-    if fits[0] {
+    if csv_header_fits(path, &opts) {
         weigh((own, true, header(&opts), usize::MAX), opts.clone());
     }
     for (i, c) in others.iter().enumerate() {
-        if fits[i + 1] {
-            let n = weighed[i + 1];
+        if csv_header_fits(path, c) {
+            let n = numbers(c);
             if !split || n >= own {
                 weigh((n, false, header(c), usize::MAX - 1 - i), c.clone());
             }
@@ -1420,8 +1386,7 @@ fn fitting(conn: &Connection, path: &str, opts: CsvOptions) -> CsvOptions {
     if !split {
         let mut alt: Option<((usize, usize, usize), CsvOptions)> = None;
         for (i, c) in others.iter().enumerate() {
-            // Nothing fits here, so nothing is a list another fitting dialect reads.
-            let (n, width) = (weighed[i + 1], header(c));
+            let (n, width) = (numbers(c), header(c));
             if width >= 2 && n > own && alt.as_ref().is_none_or(|(b, _)| (n, width, usize::MAX - i) > *b) {
                 alt = Some(((n, width, usize::MAX - i), c.clone()));
             }
@@ -1436,17 +1401,8 @@ fn fitting(conn: &Connection, path: &str, opts: CsvOptions) -> CsvOptions {
 /// The fields of each row over the first 2 048 rows, read as [`csv_is_ragged`] says; nothing for
 /// a file that cannot be read.
 fn csv_field_counts(path: &str, opts: &CsvOptions) -> Option<Vec<usize>> {
-    csv_text(path).map(|text| csv_split(&text, opts).iter().map(Vec::len).collect())
-}
-
-/// A CSV file's text, read once (lossily); nothing for a file that cannot be read.
-fn csv_text(path: &str) -> Option<String> {
-    std::fs::read(path.trim()).ok().map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-}
-
-/// The fields of each row of `text` over its first 2 048 rows, as byte ranges into it, split as
-/// [`csv_is_ragged`] says.
-fn csv_split(text: &str, opts: &CsvOptions) -> Vec<Vec<std::ops::Range<usize>>> {
+    let Ok(text) = std::fs::read(path.trim()) else { return None };
+    let text = String::from_utf8_lossy(&text);
     let char_of = |s: &Option<String>, or: Option<char>| match s.as_deref() {
         None => or,
         Some(s) => s.chars().next(),
@@ -1454,21 +1410,20 @@ fn csv_split(text: &str, opts: &CsvOptions) -> Vec<Vec<std::ops::Range<usize>>> 
     let d = char_of(&opts.delim, Some(',')).unwrap_or(',');
     let quote = char_of(&opts.quote_char, Some('"'));
     let escape = char_of(&opts.escape_char, quote);
-    let mut lines: Vec<Vec<std::ops::Range<usize>>> = Vec::new();
-    let mut fields: Vec<std::ops::Range<usize>> = Vec::new();
-    let mut start = 0usize;
+    let mut counts: Vec<usize> = Vec::new();
+    let mut fields = 1usize;
     let mut quoted = false;
     let mut field_start = true;
     let mut lead_space = false;
     let mut at_line_start = true;
-    let mut chars = text.char_indices().peekable();
-    while let Some((at, c)) = chars.next() {
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
         if quoted {
             if Some(c) == escape && escape != quote {
                 // An escaped character inside quotes is text, whatever it is.
                 chars.next();
             } else if Some(c) == quote {
-                if escape == quote && chars.peek().map(|&(_, p)| p) == Some(c) {
+                if escape == quote && chars.peek() == Some(&c) {
                     // A doubled quote is one quote, text.
                     chars.next();
                 } else {
@@ -1476,23 +1431,21 @@ fn csv_split(text: &str, opts: &CsvOptions) -> Vec<Vec<std::ops::Range<usize>>> 
                 }
             }
         } else if c == '\n' || c == '\r' {
-            if c == '\r' && chars.peek().map(|&(_, p)| p) == Some('\n') {
+            if c == '\r' && chars.peek() == Some(&'\n') {
                 chars.next();
             }
             if !at_line_start {
-                fields.push(start..at);
-                lines.push(std::mem::take(&mut fields));
-                if lines.len() >= CSV_RAGGED_WINDOW {
+                counts.push(fields);
+                if counts.len() >= CSV_RAGGED_WINDOW {
                     break;
                 }
             }
-            start = chars.peek().map_or(text.len(), |&(i, _)| i);
+            fields = 1;
             field_start = true;
             lead_space = false;
             at_line_start = true;
         } else if c == d {
-            fields.push(start..at);
-            start = at + c.len_utf8();
+            fields += 1;
             field_start = true;
             lead_space = false;
             at_line_start = false;
@@ -1510,34 +1463,10 @@ fn csv_split(text: &str, opts: &CsvOptions) -> Vec<Vec<std::ops::Range<usize>>> 
             at_line_start = false;
         }
     }
-    if !at_line_start && lines.len() < CSV_RAGGED_WINDOW {
-        fields.push(start..text.len());
-        lines.push(fields);
+    if !at_line_start && counts.len() < CSV_RAGGED_WINDOW {
+        counts.push(fields);
     }
-    lines
-}
-
-/// Whether column `j` of a file split into `lines` is a list of numbers on `d`: every cell it
-/// holds below the header is two numbers or more on `d`, each an integer or a decimal of either
-/// point (`10,20,30`); a cell holding one (`3` among `2,5` and `4,5`) makes it decimals, or
-/// anything else. A quote around the whole of a field is no part of it. (A dialect cuts a column
-/// out of it only where the header names parts on `d`.)
-fn csv_number_list(text: &str, lines: &[Vec<std::ops::Range<usize>>], j: usize, d: char, quote: Option<char>) -> bool {
-    let field = |r: &std::ops::Range<usize>| {
-        let t = text.get(r.clone()).unwrap_or_default().trim();
-        match quote {
-            Some(q) if t.len() >= 2 && t.starts_with(q) && t.ends_with(q) => &t[q.len_utf8()..t.len() - q.len_utf8()],
-            _ => t,
-        }
-    };
-    let number = |s: &str| {
-        let s = s.trim();
-        let s = s.strip_prefix(['-', '+']).unwrap_or(s);
-        let digits = s.chars().filter(char::is_ascii_digit).count();
-        let points = s.chars().filter(|c| *c == '.' || *c == ',').count();
-        digits > 0 && points <= 1 && digits + points == s.chars().count()
-    };
-    lines.iter().skip(1).filter_map(|l| l.get(j)).map(field).filter(|c| !c.is_empty()).all(|cell| cell.contains(d) && cell.split(d).all(number))
+    Some(counts)
 }
 
 /// A page's read transaction, rolled back when it goes out of scope still open (a panic between

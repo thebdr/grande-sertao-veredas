@@ -1320,56 +1320,52 @@ fn dialects_that_fit_are_weighed_by_their_numbers() {
     assert_eq!(csv_fitting_dialect(&export, &delim(",")).delim.as_deref(), Some(","));
 }
 
-/// A `;` file whose last column is a list of integers named by its parts (`x,y,z` over
-/// `10,20,30`) fits `,` as well, where it types two numbers to `;`'s one: both are cut out of the
-/// list, and splitting a list is no reason, so it reads on `;` whatever the dialect given, in four
-/// rows or in thirty with a short one among them, and so does one with an id alone (`3`), which is
-/// no list on `;`. Its mirror, a `,` file of lists on `;`, stays on `,`. The limit: a file each
-/// reading of which is a list of numbers in the other in every row (`id;x,y,z` over `1;10,20,30`)
-/// weighs alike both ways and stays on the dialect given.
+/// The limit, kept after rounds 11 to 13: a file whose last column is a list of integers named
+/// by its parts (`x,y,z` over `10,20,30` in a `;` file) fits the other delimiter too, and on it
+/// the list's items type as numbers, so the weighing reads it there, the `;` file on `,`, its
+/// mirror on `;`. A rule telling a list from its cut (rounds 11 and 12) broke the far commoner `;`
+/// exports of decimal commas each time it was refined, so the numbers alone weigh, as in round 10.
 #[test]
-fn numbers_cut_out_of_a_list_are_no_reason() {
+fn a_list_of_integers_is_weighed_by_its_numbers_a_limit() {
     let dir = tempfile::tempdir().unwrap();
     let lists = csv_file(dir.path(), "lists.csv", "id;name;x,y,z\n1;alpha;10,20,30\n2;beta;40,50,60\n3;gamma\n");
-    assert!(csv_header_fits(&lists, &delim(",")) && csv_header_fits(&lists, &delim(";")));
-    for given in [",", ";"] {
-        assert_eq!(csv_fitting_dialect(&lists, &delim(given)).delim.as_deref(), Some(";"), "given {given}");
-    }
-    let (opts, page) = read_as_sniffed(&lists);
-    assert_eq!(opts.delim.as_deref(), Some(";"), "{opts:?}");
-    assert_eq!(names(&page), ["id", "name", "x,y,z"]);
-    assert_eq!((page.total, page.rows[0].clone()), (3, vec![serde_json::json!(1), serde_json::json!("alpha"), serde_json::json!("10,20,30")]));
-    let mut body = String::from("id;name;x,y,z\n");
-    for i in 1..=30 {
-        if i == 15 {
-            body.push_str(&format!("{i};n{i}\n"));
-        } else {
-            body.push_str(&format!("{i};n{i};{},{},{}\n", 10 * i, 10 * i + 1, 10 * i + 2));
-        }
-    }
-    let thirty = csv_file(dir.path(), "lists30.csv", &body);
-    let (opts, page) = read_as_sniffed(&thirty);
-    assert_eq!((opts.delim.as_deref(), page.total), (Some(";"), 30), "{opts:?}");
-    assert_eq!(page.rows[0], vec![serde_json::json!(1), serde_json::json!("n1"), serde_json::json!("10,11,12")]);
     let mirror = csv_file(dir.path(), "mirror.csv", "id,name,x;y;z\n1,alpha,10;20;30\n2,beta,40;50;60\n3,gamma\n");
     for given in [",", ";"] {
-        assert_eq!(csv_fitting_dialect(&mirror, &delim(given)).delim.as_deref(), Some(","), "given {given}");
-    }
-    let alone = csv_file(dir.path(), "alone.csv", "id;x,y,z\n1;10,20,30\n2;40,50,60\n3\n");
-    for given in [",", ";"] {
-        assert_eq!(csv_fitting_dialect(&alone, &delim(given)).delim.as_deref(), Some(";"), "given {given}");
-    }
-    let both = csv_file(dir.path(), "both.csv", "id;x,y,z\n1;10,20,30\n2;40,50,60\n");
-    for given in [",", ";"] {
-        assert_eq!(csv_fitting_dialect(&both, &delim(given)).delim.as_deref(), Some(given), "the limit, given {given}");
+        assert_eq!(csv_fitting_dialect(&lists, &delim(given)).delim.as_deref(), Some(","), "given {given}");
+        assert_eq!(csv_fitting_dialect(&mirror, &delim(given)).delim.as_deref(), Some(";"), "the mirror, given {given}");
     }
 }
 
-/// A column that ends inside a number the dialect weighed reads with the decimal comma is no
-/// list: two ids glued to the integer part of `21,5` (`1;5;21` on `,`) are half a number, and
-/// leave `;` its numbers, so `,` never cuts every decimal in two, whatever the dialect given.
+/// Round 13's files, read on their own delimiter as round 10 read them: a `;` export of decimal
+/// commas whose note column's name holds the comma (`Notiz, frei`), with a short row or a note
+/// holding a comma too, on `;` whatever the dialect given; and a `,` file whose list of `;` sits
+/// between a stamp and a temperature, on `,` as given and as the sniffer reads it.
 #[test]
-fn a_column_ending_inside_a_decimal_is_half_a_number_and_no_list() {
+fn decimal_exports_with_a_comma_in_a_note_and_a_list_between_numbers_read_on_their_own_delimiter() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, body) in [
+        ("notiz.csv", "Nr;Zaehler;Wert;Notiz, frei\n1;5;21,5;ab\n2;6;22,0;cd\n3;7;21,7;ef\n"),
+        ("notiz_short.csv", "Nr;Zaehler;Wert;Notiz, frei\n1;5;21,5;ab\n2;6;22,0;cd\n3;7;21,7;ef\n4;8\n"),
+        ("comment.csv", "Zeit;Zaehler;Temperatur;Kommentar, Bediener\n1;5;21,5;ab\n2;6;22,0;cd, ef\n3;7;21,7;gh\n"),
+    ] {
+        let file = csv_file(dir.path(), name, body);
+        for given in [",", ";"] {
+            assert_eq!(csv_fitting_dialect(&file, &delim(given)).delim.as_deref(), Some(";"), "{name}, given {given}");
+        }
+    }
+    let middle = csv_file(dir.path(), "middle.csv", "ts,x;y;z,temp\n1,10;20;30,21.5\n2,40;50;60,22.5\n3,70;80;90,23.0\n");
+    assert_eq!(csv_fitting_dialect(&middle, &delim(",")).delim.as_deref(), Some(","));
+    // Regular, it is the sniffer's to read, and the sniffer reads it on `,`.
+    let (opts, page) = read_as_sniffed(&middle);
+    assert_eq!(names(&page), ["ts", "x;y;z", "temp"], "{opts:?}");
+    assert_eq!(page.rows[0], vec![serde_json::json!(1), serde_json::json!("10;20;30"), serde_json::json!(21.5)]);
+}
+
+/// Round 12's files: two ids glued on `,` to the integer part of a decimal (`1;5;21` of `21,5`)
+/// type nothing, and `;` keeps its numbers, so `,` never cuts every decimal in two, whatever the
+/// dialect given.
+#[test]
+fn ids_glued_to_half_a_decimal_leave_the_file_on_its_own_delimiter() {
     let dir = tempfile::tempdir().unwrap();
     for (name, body) in [("counter.csv", "Nr;Zaehler;Wert, C\n1;5;21,5\n2;6;22\n3;7;21,7\n"), ("short.csv", "id;n;T, C\n1;2;21,5\n2;3;22\n3;4;23,5\n4;5\n")] {
         let file = csv_file(dir.path(), name, body);
@@ -1380,11 +1376,11 @@ fn a_column_ending_inside_a_decimal_is_half_a_number_and_no_list() {
     }
 }
 
-/// A file a logger is still writing to is weighed from one read of it, every dialect's fields
-/// split out of the same text: a line added between two dialects' splits never puts one's
-/// places in the other's text (it panicked there, its ranges past the other's end).
+/// A file a logger is still writing to is weighed and sniffed without a panic, whatever the
+/// logger adds between two reads of it (round 11's weighing panicked there, one read's places cut
+/// out of another's text).
 #[test]
-fn a_file_growing_while_it_is_weighed_is_weighed_from_one_read() {
+fn a_file_growing_while_it_is_weighed_never_panics() {
     use std::io::Write;
     let dir = tempfile::tempdir().unwrap();
     let mut body = String::from("id;name;x,y,z\n");

@@ -476,12 +476,11 @@ Recorded as the port meets them.
   And the header alone can lie (round 9): a `;` file whose units hold as many commas as its
   decimals fits `,` too, so a fit never replaces a dialect with one typing fewer numbers; and
   where the rows' counts tie (round 10), the dialects that fit are weighed by their numbers. The
-  numbers can lie too (round 11): a list `10,20,30` cut on `,` types its integers, so a column cut
-  out of what another fitting dialect reads as a list of numbers is no number; decimal commas
-  look like lists of two, and only a cell with no comma (`3` among `2,5`) tells them apart; nor
-  is a column that ends inside a decimal the other reading keeps whole (`1;5;21` of `21,5`). A
-  file is weighed from one read of it: read once per dialect, a logger's line between two reads
-  put one read's places past the other's text (round 12).
+  numbers can lie too: a list `10,20,30` cut on `,` types its integers, so a `;` file whose last
+  column is such a list, named by its parts, reads on `,`. Rounds 11 to 13 tried to tell a list
+  from a cut (a column cut out of another reading's list of numbers no number); each refinement
+  broke `;` exports of decimal commas, far commoner (ids glued to a decimal's integer part pass
+  for a list), so the weighing is round 10's again and the list file a stated limit.
 - **A transaction does not freeze a file** (C-041, round 11). The engine reads a CSV again at
   every statement, so a page's count and rows over a view of a log still being written were two
   reads of it, though one transaction held them. A view's window is read once into a table of the
