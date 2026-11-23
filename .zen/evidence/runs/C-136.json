@@ -1,24 +1,26 @@
 {
   "clause": "C-136",
-  "command": "cargo test -p veredas-aranha --test alarm",
+  "command": "cargo test -j 4 -p veredas-aranha --test alarm",
   "commandArgv": [
     "cargo",
     "test",
+    "-j",
+    "4",
     "-p",
     "veredas-aranha",
     "--test",
     "alarm"
   ],
   "exitCode": 0,
-  "outputSha": "402c683bba82a7a46083cd937182967fcce0b704700e357fc3301d918b5f6ab4",
-  "outputTail": "\nrunning 6 tests\ntest a_notification_is_its_header_and_its_block_to_the_byte ... ok\ntest the_bits_are_named ... ok\ntest an_alarm_ack_and_the_transport_s_pdus_to_the_byte ... ok\ntest what_would_read_back_as_another_is_refused ... ok\ntest what_is_not_read_is_kept_with_its_reason ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running tests/alarm.rs (target/debug/build/veredas-aranha/ef9f766a493291cb/out/alarm-ef9f766a493291cb)",
-  "ranAt": "2026-11-23T07:15:19.533Z",
-  "headCommit": "a50cdfdf3249e3f42c02de8f01f965b191684122",
+  "outputSha": "3341a24e7e50bccb74665a64c5f1774091056b2e643c9372d3b4fc76b123768f",
+  "outputTail": "\nrunning 6 tests\ntest a_notification_is_its_header_and_its_block_to_the_byte ... ok\ntest the_bits_are_named ... ok\ntest what_would_read_back_as_another_is_refused ... ok\ntest an_alarm_ack_and_the_transport_s_pdus_to_the_byte ... ok\ntest what_is_not_read_is_kept_with_its_reason ... ok\ntest the_dissectors_read_every_frame_as_it_was_written ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.86s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.09s\n     Running tests/alarm.rs (target/debug/build/veredas-aranha/dc7dec4c24df9046/out/alarm-dc7dec4c24df9046)",
+  "ranAt": "2026-11-23T14:55:26.998Z",
+  "headCommit": "46cf3c50a403fb35508cc61bb0bb19a29e134a3e",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/alarm.rs",
       "file": "crates/veredas-aranha/tests/alarm.rs",
-      "fileSha": "0627d5d36a0da73c706b9781e413e04b0875f5328baa3c305d7a414cd938a748"
+      "fileSha": "7b1d3906ac322ff54b5e611d27aa7179518a50ab8529b709a976dec74de39a9a"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",
