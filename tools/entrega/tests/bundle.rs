@@ -251,10 +251,11 @@ impl Repo {
 fn the_cut_refuses_a_version_another_release_pinned_at_other_code_before_building_anything() {
     let r = Repo { dir: tempfile::tempdir().unwrap() };
     r.git(&["init", "-q", "-b", "main"]);
+    r.write(".gitignore", "/target/\n");
     r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\"]\n");
     r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
     r.write("crates/veredas-core/src/lib.rs", "\n");
-    r.write("tools/entrega/maquina/maquina.toml", &std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap());
+    r.write("tools/entrega/maquina/maquina.toml", &recipe_with("cpus = 4", "cpus = 4"));
     let c1 = r.commit("core 2.0.0");
     let components = vec![("veredas-core".to_string(), "2.0.0".to_string(), vec![])];
     let first = semver::Version::parse("2.0.0").unwrap();
@@ -262,17 +263,17 @@ fn the_cut_refuses_a_version_another_release_pinned_at_other_code_before_buildin
     r.commit("release 2.0.0");
     r.write("crates/veredas-core/src/lib.rs", "pub fn changed() {}\n");
     r.commit("core changed, its version not bumped");
-    let work = r.dir.path().join("target/entrega/2.0.1");
-    // A real cut (the suite is to run): the one-tree check comes first, so nothing runs or builds.
-    let options = Options { release: semver::Version::parse("2.0.1").unwrap(), out: r.dir.path().join("releases"), work: work.clone(), run_suite: true };
-    match cut::cut(r.dir.path(), &options) {
-        Err(CutError::Refused(e)) => assert_eq!(
-            e,
-            "release 2.0.1 would not check:\nveredas-core 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree"
-        ),
-        other => panic!("not refused: {:?}", other.map(|c| c.manifest)),
-    }
-    assert!(!work.exists(), "refused before anything was run or built");
+    // A real cut (the suite is to run, through the stand-ins): the one-tree check comes first, so
+    // nothing runs or builds; a cut that let it through would stop at once, its suite "not building".
+    let cache = tempfile::tempdir().unwrap();
+    let (got, log) = cut_with_suite(&r, cache.path(), 1, "exit 1", &[]);
+    assert_eq!(got.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&got.stderr),
+        "release 2.0.1 would not check:\nveredas-core 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree\n"
+    );
+    assert_eq!(log, Vec::<String>::new(), "refused before the suite");
+    assert!(!r.dir.path().join("target/entrega/2.0.1").exists(), "refused before anything was run or built");
     assert!(!r.dir.path().join("releases/2.0.1.toml").exists());
 }
 
@@ -578,9 +579,10 @@ fn the_run_together_is_refused_for_every_way_the_plant_is_not_running_each_named
 /// A real cut (`entrega cut 2.0.1`) of the repository `r`, its cache `cache`, seen through
 /// stand-ins for `cargo nextest` and `flock` first on its `PATH` (every other cargo command goes to
 /// the real one): the stand-in's build exits `build_exit`, its suite runs `run`. The caller's shell
-/// holds `NEXTEST_PROFILE` and `CARGO_TARGET_DIR`. Hands back the cut's output and the stand-ins'
+/// holds `NEXTEST_PROFILE`, `CARGO_TARGET_DIR` and a `RUSTUP_TOOLCHAIN` naming no toolchain, which
+/// the cut, reading its toolchain as the suite runs, never meets. Hands back the cut's output and the stand-ins'
 /// log, a line a call: its arguments, and what the suite's environment held.
-fn cut_with_suite(r: &Repo, cache: &Path, build_exit: u8, run: &str) -> (std::process::Output, Vec<String>) {
+fn cut_with_suite(r: &Repo, cache: &Path, build_exit: u8, run: &str, args: &[&str]) -> (std::process::Output, Vec<String>) {
     use std::os::unix::fs::PermissionsExt;
     let stub = tempfile::tempdir().unwrap();
     let log = stub.path().join("log");
@@ -598,11 +600,13 @@ fn cut_with_suite(r: &Repo, cache: &Path, build_exit: u8, run: &str) -> (std::pr
     let path = std::env::join_paths(std::iter::once(stub.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap()))).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_entrega"))
         .args(["cut", "2.0.1"])
+        .args(args)
         .current_dir(r.dir.path())
         .env("PATH", path)
         .env("ENTREGA_CACHE", cache)
         .env("NEXTEST_PROFILE", "no-browser")
         .env("CARGO_TARGET_DIR", stub.path().join("elsewhere"))
+        .env("RUSTUP_TOOLCHAIN", "no-such-toolchain")
         .output()
         .unwrap();
     let lines = std::fs::read_to_string(&log).unwrap_or_default().lines().map(String::from).collect();
@@ -638,21 +642,21 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
     let start = |at: &str| format!("entrega: the whole suite at {at}, behind the machine's lock\n");
 
     // A suite that does not build: refused, the lock never taken, nothing built, no manifest.
-    let (out, log) = cut_with_suite(&r, cache.path(), 1, "exit 0");
+    let (out, log) = cut_with_suite(&r, cache.path(), 1, "exit 0", &[]);
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(stderr(&out), format!("{}the suite does not build at {commit} (exit status: 1): no release is cut from it\n", start(&commit)));
     assert_eq!(log, std::slice::from_ref(&built));
     assert!(!work.exists() && !manifest.exists());
 
     // A red suite.
-    let (out, log) = cut_with_suite(&r, cache.path(), 0, "exit 1");
+    let (out, log) = cut_with_suite(&r, cache.path(), 0, "exit 1", &[]);
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(stderr(&out), format!("{}the suite is not green at {commit} (exit status: 1): no release is cut from it\n", start(&commit)));
     assert_eq!(log, [built.clone(), locked.clone(), ran.clone()]);
     assert!(!work.exists() && !manifest.exists());
 
     // A green suite while a file was added: the tree it tested is not the commit's.
-    let (out, log) = cut_with_suite(&r, cache.path(), 0, "echo x > stray; exit 0");
+    let (out, log) = cut_with_suite(&r, cache.path(), 0, "echo x > stray; exit 0", &[]);
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         stderr(&out),
@@ -663,7 +667,7 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
     std::fs::remove_file(r.dir.path().join("stray")).unwrap();
 
     // A green suite while a commit was made.
-    let (out, log) = cut_with_suite(&r, cache.path(), 0, "git -c user.name=e -c user.email=e@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m moved; exit 0");
+    let (out, log) = cut_with_suite(&r, cache.path(), 0, "git -c user.name=e -c user.email=e@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m moved; exit 0", &[]);
     let moved = r.git(&["rev-parse", "HEAD"]);
     assert_ne!(moved, commit);
     assert_eq!(out.status.code(), Some(2));
@@ -673,7 +677,7 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
 
     // A green suite, the tree untouched: the cut goes on to the builder (whose first download, from
     // an address nothing answers, fails here), still without a manifest.
-    let (out, log) = cut_with_suite(&r, cache.path(), 0, "exit 0");
+    let (out, log) = cut_with_suite(&r, cache.path(), 0, "exit 0", &[]);
     assert_eq!(log, [built, locked, ran]);
     assert_eq!(out.status.code(), Some(2));
     let text = stderr(&out);
@@ -1075,4 +1079,78 @@ fn a_trials_manifest_goes_beside_its_bundle() {
     let out = Command::new(env!("CARGO_BIN_EXE_entrega")).args(["cut", "9.9.9", "--trial"]).current_dir(r.dir.path()).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(String::from_utf8_lossy(&out.stderr), format!("{} exists: release 9.9.9 is cut already\n", beside.display()));
+}
+
+#[test]
+fn a_release_already_cut_where_the_cut_writes_takes_part_in_its_check() {
+    // Release 2.0.0, cut into a folder of its own (`--out`) and not committed, pins veredas-core
+    // 2.0.0 at its commit; HEAD changes core's code without its version. The cut runs with the
+    // stand-ins, so a cut that let this through would stop at once, its suite "not building".
+    let r = Repo { dir: tempfile::tempdir().unwrap() };
+    r.git(&["init", "-q", "-b", "main"]);
+    r.write(".gitignore", "/target/\n");
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    r.write("tools/entrega/maquina/maquina.toml", &recipe_with("cpus = 4", "cpus = 4"));
+    let c1 = r.commit("core 2.0.0");
+    let out = tempfile::tempdir().unwrap();
+    let components = vec![("veredas-core".to_string(), "2.0.0".to_string(), vec![])];
+    let first = semver::Version::parse("2.0.0").unwrap();
+    std::fs::write(out.path().join("2.0.0.toml"), cut::manifest_text(&first, &c1, "x86_64-unknown-linux-gnu", "rustc 1", &components, cut::SUITE)).unwrap();
+    r.write("crates/veredas-core/src/lib.rs", "pub fn changed() {}\n");
+    r.commit("core changed, its version not bumped");
+    let cache = tempfile::tempdir().unwrap();
+    let (got, log) = cut_with_suite(&r, cache.path(), 1, "exit 1", &["--out", out.path().to_str().unwrap()]);
+    assert_eq!(got.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&got.stderr),
+        "release 2.0.1 would not check:\nveredas-core 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree\n"
+    );
+    assert_eq!(log, Vec::<String>::new(), "refused before the suite");
+    assert!(!r.dir.path().join("target/entrega/2.0.1").exists() && !out.path().join("2.0.1.toml").exists());
+}
+
+/// The name of the test below, which runs its own binary again for it.
+const PACK_UNDER_THE_SHELL: &str = "a_bundle_packs_to_the_same_bytes_whatever_the_shells_tar_and_gzip_variables_say";
+
+#[test]
+fn a_bundle_packs_to_the_same_bytes_whatever_the_shells_tar_and_gzip_variables_say() {
+    // The child: this test run again with the shell's `TAR_OPTIONS`, `GZIP` and `GZIP_OPT` set; it
+    // packs the folder it is given and leaves.
+    if let Some(dir) = std::env::var_os("ENTREGA_PACK_UNDER_THE_SHELL") {
+        let dir = PathBuf::from(dir);
+        bundle::pack(&dir, "veredas-z", "1795300000", &dir.join("child.tar.gz")).unwrap();
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("veredas-z");
+    std::fs::create_dir_all(dir.join("bin")).unwrap();
+    std::fs::write(dir.join("bin/tool"), "#!/bin/sh\n").unwrap();
+    std::fs::write(dir.join("README.md"), "z\n".repeat(4096)).unwrap();
+    let parent = work.path().join("parent.tar.gz");
+    bundle::pack(work.path(), "veredas-z", "1795300000", &parent).unwrap();
+    let shell = [("TAR_OPTIONS", "--format=posix"), ("GZIP", "-1"), ("GZIP_OPT", "-1")];
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", PACK_UNDER_THE_SHELL])
+        .env("ENTREGA_PACK_UNDER_THE_SHELL", work.path())
+        .envs(shell)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let child = work.path().join("child.tar.gz");
+    assert_eq!(std::fs::read(&child).unwrap(), std::fs::read(&parent).unwrap(), "the shell's variables reached the packing");
+    // Where they do reach tar and gzip, the same files pack to other bytes.
+    let reached = work.path().join("reached.tar.gz");
+    let status = Command::new("tar")
+        .args(["--sort=name", "--owner=0", "--group=0", "--numeric-owner", "--mode=a+rX,u+w,go-w,ug-s", "--mtime=@1795300000", "--use-compress-program=gzip -n", "-cf"])
+        .arg(&reached)
+        .arg("-C")
+        .arg(work.path())
+        .arg("veredas-z")
+        .envs(shell)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert_ne!(std::fs::read(&reached).unwrap(), std::fs::read(&parent).unwrap());
 }
