@@ -213,7 +213,7 @@ status P-018.
 - **Aranha's PROFINET codecs move into core** when the controller needs them, and the adopted
   network libraries become core's dependencies.
 - **The OPC UA server code moves from maquinar into core**, since controlador's embedded portal
-  serves OPC UA.
+  serves OPC UA. Maquinar agreed to the cut on 2026-11-22; the design is "The OPC UA server", below.
 - Open: where the masters' tests against the bench live, law L4 standing (Q34); where the readers
   of GSDML, ESI and EDS files live (Q45); the review's entries 23 and 26 (Q31).
 
@@ -254,6 +254,38 @@ traps: a multi-threaded process cannot enter a new user namespace, so the test r
 a child, and the child needs its uid map). Outside the app (a plain terminal, CI) the host's
 AppArmor rule refuses it unless `kernel.apparmor_restrict_unprivileged_userns` is 0. A real
 network card needs `CAP_NET_RAW` on the controller's executable, an install step.
+
+## The OPC UA server (P-018): the cut from maquinar
+Controlador's embedded portal serves OPC UA, so the server leaves the bench for core as
+`opc::server`, behind a feature of its own, `opc-server` (with `net` and async-opcua's server; the
+demo plant then stands on it). Maquinar agreed to the cut on 2026-11-22 with five corrections,
+taken whole (`maquinar-answers-2026-11-22.md` on the shared notes folder). Into core:
+- **The start:** on a thread and current-thread runtime of its own, bound first and advertising the
+  port it got (port 0 included). The application URI and name, the data namespace and the folder
+  (node id and browse name) are the caller's, and core names no component. A namespace equal to the
+  application URI is refused by name: the diagnostics node manager would claim its index, and every
+  read would come back `BadNodeIdUnknown`. Anonymous access is always accepted, plus optionally one
+  user by name and password, the password hidden in `Debug`. `max_sessions` and
+  `max_nodes_per_read` are optional knobs.
+- **A variable:** a string id, a browse name, a type (int as Int32, float as Double, bool, text),
+  an access (read, write-only, read-write) and an initial value; `parse_value`, `render_value`, and
+  the check of a value's wire type.
+- **The write guard:** a client's write of the wrong wire type is answered `BadTypeMismatch`, and
+  one with an index range `BadIndexRangeInvalid`. A right one lands as soon as the address space's
+  lock is free, and is handed to the caller as `(id, value)` in the order the writes landed. A set
+  through core's handle is never handed as a client write, so the bench's reactions tell their own
+  sets from a client's. The guard counts the mismatches (a client's refused, a caller's set
+  dropped) and keeps the last; the bench's status composes them.
+- **The handle:** set, get and snapshot from the caller's side (write-only variables included);
+  the client writes; the status; a handle on the server's runtime, so a caller's loop runs on the
+  server's one thread and keeps the bench's timing margins; stop; and drop as the teardown that
+  closes every connection and frees the port.
+
+Stays in maquinar, on core's server: `OpcConfig` and its reading from the bench file, the draws,
+ramps and reactions and their loop, `stall`, `TICK` and the timer guard, and the relay's start.
+Once core's module is on `main`, maquinar switches `opc.rs` onto it in one commit of its own.
+C-026's test file stays unchanged; its run is recorded again and refuted on the switch. Core's
+own clause tests the server against core's OPC UA client.
 
 ## Traps
 Recorded as the port meets them.
