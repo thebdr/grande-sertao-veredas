@@ -1081,7 +1081,13 @@ impl<'a> Model<'a> {
         if args.len() != 1 {
             return CalcResult::new_args_number_error(cell);
         }
-        if let CalcResult::Range { left, right } = self.evaluate_node_with_reference(&args[0], cell)
+        let reference = self.evaluate_node_with_reference(&args[0], cell);
+        // a reference that is an error (`#REF!` where its cell was deleted) is that error, as in
+        // Excel
+        if let CalcResult::Error { .. } = reference {
+            return reference;
+        }
+        if let CalcResult::Range { left, right } = reference
         {
             if left.sheet != right.sheet {
                 return CalcResult::Error {

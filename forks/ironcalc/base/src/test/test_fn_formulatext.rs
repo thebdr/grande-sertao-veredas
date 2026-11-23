@@ -112,3 +112,27 @@ fn test_sign_prefixed() {
     assert_eq!(model._get_text("A6"), *"42");
     assert_eq!(model._get_text("A7"), *"#NAME?");
 }
+
+#[test]
+fn a_reference_that_is_an_error_is_that_error() {
+    // Excel: FORMULATEXT of a deleted cell's reference is #REF!, as the spill operator's is
+    let mut model = new_empty_model();
+    model._set("A1", "=1+1");
+    model._set("B1", "=FORMULATEXT(A1)");
+    model._set("C1", "=SEQUENCE(2)");
+    model._set("D1", "=SUM(_xlfn.ANCHORARRAY(C1))");
+    model._set("E1", "=FORMULATEXT(#REF!)");
+    model._set("F1", "=SUM(_xlfn.ANCHORARRAY(#REF!))");
+    model.evaluate();
+    assert_eq!(model._get_text("B1"), *"=1+1");
+    assert_eq!(model._get_text("D1"), *"3");
+    assert_eq!(model._get_text("E1"), *"#REF!");
+    assert_eq!(model._get_text("F1"), *"#REF!");
+    // the cells they read deleted
+    model.delete_columns(0, 1, 1).unwrap();
+    model.delete_columns(0, 2, 1).unwrap();
+    model.evaluate();
+    assert_eq!(model._get_formula("A1"), *"=FORMULATEXT(#REF!)");
+    assert_eq!(model._get_text("A1"), *"#REF!");
+    assert_eq!(model._get_text("B1"), *"#REF!");
+}

@@ -1296,6 +1296,9 @@ impl<'a> Model<'a> {
                         ),
                     }
                 }
+                // a reference that is an error (`#REF!` where its cell was deleted) is that error,
+                // as in Excel
+                error @ CalcResult::Error { .. } => error,
                 _ => CalcResult::new_error(
                     Error::ERROR,
                     cell,
