@@ -15,6 +15,19 @@ fn row() -> WideRow {
     WideRow { source: SourceId::new("s"), key: None, index_ms: 1, arrival_ms: 1, seq: 1, values: vec![Some(Value::Float(1.5))] }
 }
 
+fn numbered(seq: u64) -> WideRow {
+    WideRow { source: SourceId::new("s"), key: None, index_ms: seq as i64, arrival_ms: seq as i64, seq, values: vec![Some(Value::Float(seq as f64 * 1.5))] }
+}
+
+/// The record's rows of `a`, as (seq, value), in seq order.
+fn rows_of(r: &Recorder) -> Vec<(u64, f64)> {
+    let page = r.store.query_rows("a", &RowsQuery { limit: 100, ..RowsQuery::default() }).unwrap();
+    let at = |name: &str| page.columns.iter().position(|c| c.name == name).unwrap();
+    let mut out: Vec<(u64, f64)> = page.rows.iter().map(|row| (row[at("seq")].as_u64().unwrap(), row[at("v")].as_f64().unwrap())).collect();
+    out.sort_by_key(|(seq, _)| *seq);
+    out
+}
+
 fn held(r: &Recorder) -> u64 {
     r.store.query_rows("a", &RowsQuery { limit: 1, ..RowsQuery::default() }).unwrap().total
 }
@@ -32,10 +45,11 @@ fn a_failed_write_lands_nothing_stops_the_recording_and_counts_the_batch_unrecor
         written_at: Instant::now(),
         status: RecordingStatus { file, limit_bytes: 1 << 30, ..RecordingStatus::default() },
     };
-    // A batch whose first table is fine: written whole.
-    r.take(0, &[row(), row()]);
+    // A batch whose first table is fine: written whole, the very rows taken.
+    r.take(0, &[numbered(1), numbered(2)]);
     r.write();
     assert_eq!((held(&r), r.status.recorded_rows, r.status.unrecorded_rows, r.status.stopped_why.clone()), (2, 2, 0, None));
+    assert_eq!(rows_of(&r), vec![(1, 1.5), (2, 3.0)]);
     // A batch whose second table the record lacks: nothing of it lands, the first table's rows
     // rolled back with the second's, the batch counted unrecorded, the recording stopped.
     r.take(0, &[row(), row()]);
@@ -43,6 +57,7 @@ fn a_failed_write_lands_nothing_stops_the_recording_and_counts_the_batch_unrecor
     r.write();
     assert_eq!((held(&r), r.status.recorded_rows, r.status.unrecorded_rows), (2, 2, 3), "{:?}", r.status);
     assert!(r.status.stopped_why.as_deref().is_some_and(|w| w.starts_with("a write to the record failed")), "{:?}", r.status.stopped_why);
+    assert_eq!(rows_of(&r), vec![(1, 1.5), (2, 3.0)], "the failed batch's rows nowhere");
     // Stopped: rows after are counted unrecorded and never written.
     r.take(0, &[row()]);
     r.write();
