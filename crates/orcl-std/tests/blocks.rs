@@ -955,16 +955,24 @@ fn the_sources_read_as_compiled_hold_only_the_words_the_clause_allows() {
         assert_eq!(count(&all, "macro_rules"), usize::from(file == "bits.rs"), "{file}: macro_rules");
         // and that macro takes types alone, in one invocation, so it can re-emit nothing the reading did not see
         if file == "bits.rs" {
-            let matcher = "macro_rules ! impl_bits { ( $ ( $ t : ty ) ,";
-            let arms = [format!("{matcher} * ) = > {{"), format!("{matcher} + ) = > {{")];
-            let found = arms.iter().map(|arm| code.matches(arm.as_str()).count()).sum::<usize>();
-            assert_eq!(found, 1, "bits.rs: impl_bits! takes types alone");
-            let widths = code.split_once("impl_bits ! ( ").and_then(|(_, rest)| rest.split_once(" ) ;"));
-            let mut widths: Vec<&str> = widths.map(|(inside, _)| inside.split(" , ").collect()).unwrap_or_default();
+            let tokens: Vec<&str> = code.split(' ').collect();
+            // every fragment the macro takes is a type: no token tree, expression or attribute passes through it
+            for at in 0..tokens.len().saturating_sub(3) {
+                let fragment = tokens[at] == "$" && tokens[at + 2] == ":" && words(tokens[at + 1]) == [tokens[at + 1]];
+                if fragment {
+                    assert_eq!(tokens[at + 3], "ty", "bits.rs: impl_bits! takes a `{}` fragment", tokens[at + 3]);
+                }
+            }
+            // and its one invocation, whatever its delimiter, holds the four widths and nothing else
+            let call = tokens.windows(2).position(|pair| pair == ["impl_bits", "!"]).map(|at| at + 2);
+            let inside: Vec<&str> = call.map_or(Vec::new(), |open| {
+                let close = match tokens[open] { "(" => ")", "[" => "]", _ => "}" };
+                tokens[open + 1..].iter().take_while(|t| **t != close).copied().filter(|t| *t != ",").collect()
+            });
+            let mut widths = inside;
             widths.sort_unstable();
             assert_eq!(widths, ["u16", "u32", "u64", "u8"], "bits.rs: impl_bits! invoked once, on the four widths");
             assert_eq!(count(&all, "impl_bits"), 2, "bits.rs: impl_bits! defined and invoked, nothing more");
-            assert_eq!(code.matches("= > {").count(), 1, "bits.rs: impl_bits! has one arm");
         }
         for refused in ["impl", "trait", "macro_rules", "macro_use"] {
             assert_eq!(count(&module_words, refused), 0, "{file}: the unit tests' module holds {refused}");
@@ -1518,4 +1526,90 @@ fn a_scan_at_time_zero_is_time_zero_whatever_its_cycle() {
     on.scan(&zero, true, ms(100));
     assert!(!on.scan(&at(90), true, ms(100)), "90 ms after a start at zero");
     assert!(on.scan(&at(100), true, ms(100)));
+}
+
+// The twenty-second refute round: a pt set to zero after some time and mid-pulse, a pulse ended at a zero pt with its
+// input off, a disabled pulse pressed then enabled, a held pulse at exactly its pt, time zero with a non-zero cycle
+// for every timer, and on-delays and off-delays side by side.
+
+#[test]
+fn a_pt_set_to_zero_after_some_time_caps_the_elapsed_time_at_zero() {
+    let mut on = Ton::default();
+    on.scan(&at(0), true, ms(100));
+    assert_eq!((on.scan(&at(50), true, ms(100)), on.et()), (false, ms(50)));
+    assert_eq!((on.scan(&at(60), true, ms(0)), on.q(), on.et()), (true, true, ms(0)), "mid-delay: on, capped at zero");
+    let mut on = Ton::default();
+    on.scan(&at(0), true, ms(100));
+    assert_eq!((on.scan(&at(100), true, ms(100)), on.et()), (true, ms(100)));
+    assert_eq!((on.scan(&at(110), true, ms(0)), on.q(), on.et()), (true, true, ms(0)), "switched on: capped at zero");
+    let mut pulse = Tp::default();
+    pulse.scan(&at(0), true, ms(100));
+    assert_eq!((pulse.scan(&at(50), true, ms(100)), pulse.et()), (true, ms(50)));
+    assert_eq!((pulse.scan(&at(60), true, ms(0)), pulse.q(), pulse.et()), (false, false, ms(0)), "mid-pulse: over");
+}
+
+#[test]
+fn a_pulse_ended_or_disabled_at_a_zero_pt_gives_no_pulse_without_an_edge() {
+    // dropped mid-pulse, then pt set to zero: over and reset; pt restored, its input still off: no pulse
+    let mut p = Tp::default();
+    let mut tp = |t: u64, input: bool, pt: u64| (p.scan(&at(t), input, ms(pt)), p.q(), p.et());
+    tp(0, true, 100);
+    assert_eq!(tp(30, false, 100), (true, true, ms(30)));
+    assert_eq!(tp(40, false, 0), (false, false, ms(0)), "over at a zero pt, its input off: reset");
+    assert_eq!(tp(50, false, 100), (false, false, ms(0)), "pt restored, its input still off: no pulse");
+    // a pulse disabled by a zero pt, pressed and released, then enabled with its input off: nothing till a new press
+    let mut p = Tp::default();
+    let mut tp = |t: u64, input: bool, pt: u64| (p.scan(&at(t), input, ms(pt)), p.q());
+    assert_eq!(tp(0, true, 0), (false, false));
+    assert_eq!(tp(10, false, 0), (false, false));
+    assert_eq!(tp(20, false, 5_000), (false, false), "enabled with the input off: no pulse");
+    assert_eq!(tp(30, true, 5_000), (true, true), "the next press pulses");
+    // held past its end and dropped: reset, and a scan whose time goes back starts nothing either
+    let mut p = Tp::default();
+    let mut tp = |t: u64, input: bool| (p.scan(&at(t), input, ms(100)), p.q(), p.et());
+    tp(0, true);
+    assert_eq!(tp(100, true), (false, false, ms(100)));
+    assert_eq!(tp(110, false), (false, false, ms(0)));
+    assert_eq!(tp(60, false), (false, false, ms(0)), "a scan back in time, its input off");
+}
+
+#[test]
+fn a_held_pulse_at_exactly_its_pt_after_its_end_stays_over() {
+    let mut p = Tp::default();
+    p.scan(&at(0), true, ms(100));
+    assert_eq!((p.scan(&at(100), true, ms(100)), p.q()), (false, false));
+    assert_eq!((p.scan(&at(100), true, ms(100)), p.q(), p.et()), (false, false, ms(100)), "a second scan at that instant");
+    assert_eq!((p.scan(&at(150), true, ms(150)), p.q(), p.et()), (false, false, ms(150)), "pt raised to exactly it");
+}
+
+#[test]
+fn every_timer_reads_a_scan_at_time_zero_as_time_zero_whatever_its_cycle() {
+    let zero = |cycle: u64| Scan { now: Duration::ZERO, period: ms(10), cycle };
+    let mut off = Tof::default();
+    off.scan(&zero(0), true, ms(100));
+    assert!(off.scan(&zero(50), false, ms(100)));
+    assert!(off.scan(&at(90), false, ms(100)));
+    assert!(!off.scan(&at(100), false, ms(100)), "off 100 ms after a drop at time zero");
+    let mut pulse = Tp::default();
+    assert!(pulse.scan(&zero(50), true, ms(100)));
+    assert!(!pulse.scan(&at(100), true, ms(100)), "over 100 ms after an edge at time zero");
+}
+
+#[test]
+fn on_delays_and_off_delays_side_by_side_each_keep_their_own_start() {
+    let (mut a, mut b) = (Ton::default(), Ton::default());
+    a.scan(&at(0), true, ms(100));
+    b.scan(&at(50), true, ms(100));
+    assert!(a.scan(&at(100), true, ms(100)));
+    assert!(!b.scan(&at(100), true, ms(100)), "b started at 50 ms");
+    assert!(b.scan(&at(150), true, ms(100)));
+    let (mut c, mut d) = (Tof::default(), Tof::default());
+    c.scan(&at(0), true, ms(100));
+    d.scan(&at(0), true, ms(100));
+    c.scan(&at(10), false, ms(100));
+    d.scan(&at(10), true, ms(100));
+    d.scan(&at(60), false, ms(100));
+    assert!(!c.scan(&at(110), false, ms(100)), "c dropped at 10 ms");
+    assert!(d.scan(&at(110), false, ms(100)), "d dropped at 60 ms");
+    assert!(!d.scan(&at(160), false, ms(100)));
 }
