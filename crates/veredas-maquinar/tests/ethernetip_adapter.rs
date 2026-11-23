@@ -1660,3 +1660,239 @@ mod round_3 {
         assert!(took < Duration::from_secs(1) && (st.tcp_connections, st.sessions) == (0, 0), "{took:?}, {} connection(s), {} session(s)", st.tcp_connections, st.sessions);
     }
 }
+
+/// C-111's fourth refute round: the critic's probes (`~/.cache/veredas/critic-c111-r4/probes`), kept
+/// as pins: a restart with a request in flight opening nothing, routes of several words, a reply's
+/// items in order, ListIdentity's status while a connection is open, the Assembly's other services.
+mod round_4 {
+    use super::*;
+    use std::net::TcpStream;
+
+    fn frame(command: u16, session: u32, body: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&command.to_le_bytes());
+        f.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        f.extend_from_slice(&session.to_le_bytes());
+        f.extend_from_slice(&0u32.to_le_bytes());
+        f.extend_from_slice(b"critic!!");
+        f.extend_from_slice(&0u32.to_le_bytes());
+        f.extend_from_slice(body);
+        f
+    }
+
+    fn read(s: &mut TcpStream) -> Vec<u8> {
+        let mut h = [0u8; 24];
+        s.read_exact(&mut h).unwrap();
+        let len = u16::from_le_bytes([h[2], h[3]]) as usize;
+        let mut b = vec![0u8; len];
+        s.read_exact(&mut b).unwrap();
+        [h.to_vec(), b].concat()
+    }
+
+    /// A SendRRData body: interface 0, timeout 5, a null address, the request, and `extra` items.
+    fn rr_body(request: &[u8], extra: &[(u16, Vec<u8>)]) -> Vec<u8> {
+        let mut b = vec![0, 0, 0, 0, 5, 0];
+        b.extend_from_slice(&(2 + extra.len() as u16).to_le_bytes());
+        b.extend_from_slice(&[0, 0, 0, 0]);
+        b.extend_from_slice(&0x00B2u16.to_le_bytes());
+        b.extend_from_slice(&(request.len() as u16).to_le_bytes());
+        b.extend_from_slice(request);
+        for (kind, data) in extra {
+            b.extend_from_slice(&kind.to_le_bytes());
+            b.extend_from_slice(&(data.len() as u16).to_le_bytes());
+            b.extend_from_slice(data);
+        }
+        b
+    }
+
+    fn sockaddr_item(udp: &UdpSocket) -> (u16, Vec<u8>) {
+        let SocketAddr::V4(me) = udp.local_addr().unwrap() else { panic!() };
+        let mut d = 2u16.to_be_bytes().to_vec();
+        d.extend_from_slice(&me.port().to_be_bytes());
+        d.extend_from_slice(&me.ip().octets());
+        d.extend_from_slice(&[0; 8]);
+        (0x8001, d)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// A Forward_Open as raw bytes (round 3's `fo`).
+    fn fo(serial: u16, vendor: u16, originator: u32, rpi: u32, multiplier: u8, o_size: u16, t_size: u16, path: &[u8]) -> Vec<u8> {
+        let mut b = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&(0x8000_0000u32 | u32::from(serial)).to_le_bytes());
+        b.extend_from_slice(&serial.to_le_bytes());
+        b.extend_from_slice(&vendor.to_le_bytes());
+        b.extend_from_slice(&originator.to_le_bytes());
+        b.extend_from_slice(&[multiplier, 0, 0, 0]);
+        b.extend_from_slice(&rpi.to_le_bytes());
+        b.extend_from_slice(&((2u16 << 13) | o_size).to_le_bytes());
+        b.extend_from_slice(&rpi.to_le_bytes());
+        b.extend_from_slice(&((2u16 << 13) | t_size).to_le_bytes());
+        b.push(0x01);
+        b.push((path.len() / 2) as u8);
+        b.extend_from_slice(path);
+        b
+    }
+
+    const PATH: [u8; 8] = [0x20, 0x04, 0x24, 151, 0x2C, 150, 0x2C, 100];
+
+    fn register(s: &mut TcpStream) -> u32 {
+        s.write_all(&frame(0x65, 0, &[1, 0, 0, 0])).unwrap();
+        let r = read(s);
+        assert_eq!(&r[8..12], &[0, 0, 0, 0]);
+        u32::from_le_bytes(r[4..8].try_into().unwrap())
+    }
+
+    /// The CPF items of a SendRRData reply, in the order they come: (type, data).
+    fn items(reply: &[u8]) -> Vec<(u16, Vec<u8>)> {
+        let b = &reply[24 + 6..];
+        let n = u16::from_le_bytes([b[0], b[1]]) as usize;
+        let mut at = 2;
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let kind = u16::from_le_bytes([b[at], b[at + 1]]);
+            let len = u16::from_le_bytes([b[at + 2], b[at + 3]]) as usize;
+            out.push((kind, b[at + 4..at + 4 + len].to_vec()));
+            at += 4 + len;
+        }
+        out
+    }
+
+
+    /// A session pipelining one Forward_Open over and over while a reader drains its replies; the
+    /// first open held, then `restart()` comes 3 ms on.
+    fn restart_under_pipelined_opens(adapter: &EnipHandle) -> (TcpStream, UdpSocket, std::thread::JoinHandle<()>, std::thread::JoinHandle<()>) {
+        let mut s = TcpStream::connect(adapter.addr).unwrap();
+        s.set_nodelay(true).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let session = register(&mut s);
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let one = frame(0x6F, session, &rr_body(&fo(0x0101, 0x00FE, 0x0BAD_CAFE, 100_000, 0, 4 + 6, 8 + 2, &PATH), &[sockaddr_item(&udp)]));
+        let mut writer = s.try_clone().unwrap();
+        let mut reader = s.try_clone().unwrap();
+        let r = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 65536];
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+            }
+        });
+        let w = std::thread::spawn(move || {
+            let batch = one.repeat(200);
+            for _ in 0..100 {
+                if writer.write_all(&batch).is_err() {
+                    break;
+                }
+            }
+        });
+        assert!(wait(Duration::from_secs(5), || adapter.status().connections.len() == 1), "the first open");
+        std::thread::sleep(Duration::from_millis(3));
+        adapter.restart();
+        (s, udp, w, r)
+    }
+
+    #[test]
+    fn a_restart_leaves_no_class_1_connection_a_request_in_flight_opened() {
+        let adapter = start(&config(&device(150))).unwrap();
+        let mut leaked = 0;
+        for _ in 0..40 {
+            let (s, _udp, w, r) = restart_under_pipelined_opens(&adapter);
+            if !adapter.status().connections.is_empty() {
+                leaked += 1;
+            }
+            let _ = s.shutdown(std::net::Shutdown::Both);
+            let _ = w.join();
+            let _ = r.join();
+            adapter.restart();
+        }
+        assert_eq!(leaked, 0, "restart() returned with a Class 1 connection open in {leaked} of 40 rounds");
+    }
+
+    #[test]
+    fn after_a_restart_a_reconnecting_scanner_opens_its_connection() {
+        let adapter = start(&config(&device(151))).unwrap();
+        let mut refused = Vec::new();
+        for round in 0..40u16 {
+            let (s, udp, w, r) = restart_under_pipelined_opens(&adapter);
+            let _ = s.shutdown(std::net::Shutdown::Both);
+            let _ = w.join();
+            let _ = r.join();
+            // The scanner reconnects at once and opens again under a new connection serial.
+            let mut t = TcpStream::connect(adapter.addr).unwrap();
+            t.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let session = register(&mut t);
+            t.write_all(&frame(0x6F, session, &rr_body(&fo(0x0200 + round, 0x00FE, 0x0BAD_CAFE, 100_000, 0, 4 + 6, 8 + 2, &PATH), &[sockaddr_item(&udp)]))).unwrap();
+            let d = items(&read(&mut t)).into_iter().find(|i| i.0 == 0x00B2).unwrap().1;
+            if d[2] != 0 {
+                refused.push((round, status_of(&d)));
+            }
+            drop(t);
+            adapter.restart();
+        }
+        assert!(refused.is_empty(), "{} of 40 reopenings refused: {refused:02X?}", refused.len());
+    }
+
+    #[test]
+    fn the_routing_refusal_counts_a_route_of_several_words_as_the_dissectors_read_it() {
+        let adapter = start(&config(&device(152))).unwrap();
+        let mut c = Encap::connect(adapter.addr);
+        let s = c.register();
+        let inner = [0x0E, 0x03, 0x20, 0x01, 0x24, 0x01, 0x30, 0x01];
+        // An extended port segment: port 2, the link address "10.0.0.10" (9 bytes) and its pad: 6 words.
+        let mut ip_route = vec![0x12, 9];
+        ip_route.extend_from_slice(b"10.0.0.10");
+        ip_route.push(0);
+        let cases: Vec<(Vec<u8>, u8)> = vec![(vec![0x01, 0x02], 1), (vec![0x01, 0x02, 0x01, 0x03], 2), (vec![0x01, 0x00, 0x01, 0x02], 2), (ip_route, 6)];
+        for (route, words) in &cases {
+            assert_eq!(c.cip(s, &wrap_us(&inner, route)), [0xD2, 0x00, 0x01, 0x01, 0x12, 0x03, *words, 0x00], "{route:02X?}");
+        }
+        let packets = dissect(&capture(&c.log, &[]));
+        let sizes: Vec<String> = packets.iter().flat_map(|p| field(p, "cipcm_cip_cm_remain_path_size")).collect();
+        let bad: Vec<String> = packets.iter().flat_map(complaints).collect();
+        assert_eq!((sizes, bad), (vec!["1".to_string(), "2".into(), "2".into(), "6".into()], Vec::<String>::new()));
+        // Slot 0 in the long form (port 1 with a one-byte link 0, extended): another route, refused.
+        assert_eq!(c.cip(s, &wrap_us(&inner, &[0x11, 0x01, 0x00, 0x00])), [0xD2, 0x00, 0x01, 0x01, 0x12, 0x03, 2, 0x00]);
+    }
+
+    #[test]
+    fn a_send_rr_data_reply_has_its_items_in_the_protocol_s_order() {
+        let adapter = start(&config(&device(153))).unwrap();
+        let mut s = TcpStream::connect(adapter.addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let session = register(&mut s);
+        s.write_all(&frame(0x6F, session, &rr_body(&[0x0E, 0x03, 0x20, 0x01, 0x24, 0x01, 0x30, 0x01], &[]))).unwrap();
+        let plain: Vec<u16> = items(&read(&mut s)).iter().map(|i| i.0).collect();
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        s.write_all(&frame(0x6F, session, &rr_body(&fo(0x0303, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, &PATH), &[sockaddr_item(&udp)]))).unwrap();
+        let opened: Vec<u16> = items(&read(&mut s)).iter().map(|i| i.0).collect();
+        assert_eq!((plain, opened), (vec![0x0000, 0x00B2], vec![0x0000, 0x00B2, 0x8000]));
+    }
+
+    #[test]
+    fn list_identity_states_the_owned_bit_while_a_connection_is_open() {
+        let adapter = start(&config(&device(154))).unwrap();
+        let mut s = TcpStream::connect(adapter.addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let session = register(&mut s);
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        s.write_all(&frame(0x6F, session, &rr_body(&fo(0x0505, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, &PATH), &[sockaddr_item(&udp)]))).unwrap();
+        read(&mut s);
+        s.write_all(&frame(0x63, 0, &[])).unwrap();
+        let r = read(&mut s);
+        // The item's body after its count, type and length: version, socket address, vendor, device
+        // type, product code, revision, then the status.
+        let at = 24 + 6 + 2 + 16 + 2 + 2 + 2 + 2;
+        assert_eq!(u16::from_le_bytes([r[at], r[at + 1]]), 1, "owned");
+    }
+
+    #[test]
+    fn the_assembly_object_refuses_another_service_0x08() {
+        let adapter = start(&config(&device(155))).unwrap();
+        let mut c = Encap::connect(adapter.addr);
+        let s = c.register();
+        for service in [0x01u8, 0x4B, 0x05] {
+            assert_eq!(c.cip(s, &[service, 0x02, 0x20, 0x04, 0x24, 100])[2], 0x08, "{service:#04x}");
+        }
+    }
+}

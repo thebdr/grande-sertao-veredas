@@ -710,7 +710,7 @@ async fn session(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mut g
                 if handle == 0 || header.session != handle {
                     Some(header.reply(header.session, encap_status::INVALID_SESSION, &[]))
                 } else {
-                    match rr_data(&shared, peer, &body) {
+                    match rr_data(&shared, peer, generation, &body) {
                         Some(out) => Some(header.reply(handle, encap_status::SUCCESS, &out)),
                         None => Some(header.reply(handle, encap_status::INCORRECT_DATA, &[])),
                     }
@@ -734,7 +734,7 @@ async fn session(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mut g
 
 /// A SendRRData body answered: the interface handle and timeout, then the request's items read
 /// (a null address and unconnected data), the request answered, the reply's items written.
-fn rr_data(shared: &Shared, peer: SocketAddr, body: &[u8]) -> Option<Vec<u8>> {
+fn rr_data(shared: &Shared, peer: SocketAddr, generation: u64, body: &[u8]) -> Option<Vec<u8>> {
     if body.len() < 6 {
         return None;
     }
@@ -744,7 +744,7 @@ fn rr_data(shared: &Shared, peer: SocketAddr, body: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let t_to_o = items.iter().find(|i| i.kind == item::SOCKADDR_T_TO_O).and_then(|i| read_sockaddr(&i.data));
-    let (reply, extra) = cip(shared, peer, &data.data, t_to_o);
+    let (reply, extra) = cip(shared, peer, generation, &data.data, t_to_o);
     let mut out = vec![0u8; 6];
     let mut items = vec![Item { kind: item::NULL_ADDRESS, data: Vec::new() }, Item { kind: item::UNCONNECTED_DATA, data: reply }];
     items.extend(extra);
@@ -757,7 +757,7 @@ fn count(shared: &Shared, service: u8, general: u8) {
 }
 
 /// A CIP request answered: the reply frame, and any items the reply carries besides.
-fn cip(shared: &Shared, peer: SocketAddr, frame: &[u8], t_to_o: Option<SocketAddrV4>) -> (Vec<u8>, Vec<Item>) {
+fn cip(shared: &Shared, peer: SocketAddr, generation: u64, frame: &[u8], t_to_o: Option<SocketAddrV4>) -> (Vec<u8>, Vec<Item>) {
     let Some(req) = parse_request(frame) else {
         let service = frame.first().copied().unwrap_or(0);
         count(shared, service, general::NOT_ENOUGH_DATA);
@@ -774,7 +774,7 @@ fn cip(shared: &Shared, peer: SocketAddr, frame: &[u8], t_to_o: Option<SocketAdd
         Ok(_) => unreachable!("a path with no other segment is taken above"),
     };
     let (general_status, additional, data, extra): Answer = match (path.class, path.instance) {
-        (Some(class::CONNECTION_MANAGER), Some(1)) => connection_manager(shared, peer, &req, t_to_o),
+        (Some(class::CONNECTION_MANAGER), Some(1)) => connection_manager(shared, peer, generation, &req, t_to_o),
         (Some(class::IDENTITY), Some(i)) => identity(shared, &req, i, path.attribute),
         (Some(class::ASSEMBLY), Some(i)) => assembly(shared, &req, i, path.attribute),
         _ => (general::PATH_DESTINATION_UNKNOWN, Vec::new(), Vec::new(), Vec::new()),
@@ -874,19 +874,19 @@ fn assembly(shared: &Shared, req: &Request, instance: u16, attribute: Option<u16
 
 /// The Connection Manager: Forward_Open, Large_Forward_Open, Forward_Close, and an
 /// Unconnected_Send whose route ends here.
-fn connection_manager(shared: &Shared, peer: SocketAddr, req: &Request, t_to_o: Option<SocketAddrV4>) -> Answer {
+fn connection_manager(shared: &Shared, peer: SocketAddr, generation: u64, req: &Request, t_to_o: Option<SocketAddrV4>) -> Answer {
     match req.service {
-        service::FORWARD_OPEN => forward_open(shared, peer, &req.data, false, t_to_o),
-        service::LARGE_FORWARD_OPEN => forward_open(shared, peer, &req.data, true, t_to_o),
+        service::FORWARD_OPEN => forward_open(shared, peer, generation, &req.data, false, t_to_o),
+        service::LARGE_FORWARD_OPEN => forward_open(shared, peer, generation, &req.data, true, t_to_o),
         service::FORWARD_CLOSE => forward_close(shared, &req.data),
-        service::UNCONNECTED_SEND => unconnected_send(shared, peer, &req.data, t_to_o),
+        service::UNCONNECTED_SEND => unconnected_send(shared, peer, generation, &req.data, t_to_o),
         _ => status_only(general::SERVICE_NOT_SUPPORTED),
     }
 }
 
 /// An Unconnected_Send: its embedded request answered here when the route is empty or names this
 /// adapter's own backplane slot 0 (port 1, link 0); any other route cannot be followed.
-fn unconnected_send(shared: &Shared, peer: SocketAddr, data: &[u8], t_to_o: Option<SocketAddrV4>) -> Answer {
+fn unconnected_send(shared: &Shared, peer: SocketAddr, generation: u64, data: &[u8], t_to_o: Option<SocketAddrV4>) -> Answer {
     if data.len() < 4 {
         return status_only(general::NOT_ENOUGH_DATA);
     }
@@ -914,7 +914,7 @@ fn unconnected_send(shared: &Shared, peer: SocketAddr, data: &[u8], t_to_o: Opti
     if message.first() == Some(&service::UNCONNECTED_SEND) {
         return status_only(general::SERVICE_NOT_SUPPORTED);
     }
-    let (reply, extra) = cip(shared, peer, message, t_to_o);
+    let (reply, extra) = cip(shared, peer, generation, message, t_to_o);
     (general::SUCCESS, Vec::new(), reply, extra)
 }
 
@@ -947,7 +947,7 @@ fn timeout_of(rpi_us: u32, multiplier: u8) -> Duration {
 /// producing once its open is answered, and a slow one's first frame is not a silence.
 const FIRST_FRAME_GRACE: Duration = Duration::from_secs(10);
 
-fn forward_open(shared: &Shared, peer: SocketAddr, body: &[u8], large: bool, t_to_o: Option<SocketAddrV4>) -> Answer {
+fn forward_open(shared: &Shared, peer: SocketAddr, generation: u64, body: &[u8], large: bool, t_to_o: Option<SocketAddrV4>) -> Answer {
     let Some(fo) = parse_forward_open(body, large) else {
         return status_only(general::NOT_ENOUGH_DATA);
     };
@@ -1029,6 +1029,12 @@ fn forward_open(shared: &Shared, peer: SocketAddr, body: &[u8], large: bool, t_t
     // a session cannot send another host the adapter's frames (OpENer takes the port alone too).
     let sends_to = SocketAddr::V4(SocketAddrV4::new(originator_ip, t_to_o.map(|a| a.port()).unwrap_or(DEFAULT_IO_PORT)));
     let mut state = shared.lock();
+    // A session a restart has ended (its generation past) opens nothing: the restart cleared the
+    // connections under this lock, and one opened after it would outlive the device's restart.
+    if state.generation != generation {
+        drop(state);
+        return refuse_open(shared, triple, extended::NO_MORE_CONNECTIONS, None);
+    }
     if state.conns.iter().any(|c| c.status.output == output) {
         drop(state);
         return refuse_open(shared, triple, extended::OWNERSHIP_CONFLICT, None);
