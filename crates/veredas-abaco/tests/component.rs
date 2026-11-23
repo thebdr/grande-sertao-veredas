@@ -715,11 +715,42 @@ fn package_of(id: &str) -> String {
 
 /// What one build of Ábaco's library shows of the three packages: every file rustc read to compile
 /// each library and each build script (from their dep-info), and what each build script told cargo
-/// (the `cfg`s it set, the native libraries it linked).
+/// (the `cfg`s it set, the native libraries it linked, and every instruction it printed, read from
+/// the output cargo keeps of its run).
 struct Built {
     libraries: Vec<(&'static str, BTreeSet<PathBuf>)>,
     scripts: Vec<(String, BTreeSet<PathBuf>)>,
-    executed: Vec<(String, Vec<String>, Vec<String>)>,
+    executed: Vec<(String, Vec<String>, Vec<String>, Vec<String>)>,
+}
+
+/// A build script's instructions, from the output cargo keeps beside its `out` folder (`run/stdout`
+/// since cargo 1.100's layout, `output` before it): its lines that start `cargo:`, which cargo reads
+/// as instructions. No such file fails, so the reading never passes on output it did not see.
+fn instructions(out_dir: &Path, package: &str) -> Vec<String> {
+    let folder = out_dir.parent().unwrap();
+    let file = [folder.join("run").join("stdout"), folder.join("output")]
+        .into_iter()
+        .find(|f| f.is_file())
+        .unwrap_or_else(|| panic!("{package}: no output of its build script beside {}", out_dir.display()));
+    std::fs::read_to_string(&file).unwrap().lines().filter(|l| l.starts_with("cargo:")).map(str::to_string).collect()
+}
+
+/// An instruction a build script may give, or why not: it may name what reruns it, declare a `cfg`
+/// name, warn, fail, and set a variable of its own for `env!` (none of rustc's or cargo's). Every
+/// other one, a link argument, a search path, a flag, a `cfg` set, a library linked, metadata, is
+/// refused, as is a key cargo does not know (read as metadata under `cargo:`).
+fn refused_instruction(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("cargo::").or_else(|| line.strip_prefix("cargo:"))?;
+    let (key, value) = rest.split_once('=').unwrap_or((rest, ""));
+    let allowed = match key {
+        "rerun-if-changed" | "rerun-if-env-changed" | "rustc-check-cfg" | "warning" | "error" => true,
+        "rustc-env" => {
+            let name = value.split_once('=').map_or(value, |(n, _)| n);
+            !name.is_empty() && !name.starts_with("RUSTC") && !name.starts_with("CARGO")
+        }
+        _ => false,
+    };
+    (!allowed).then(|| line.to_string())
 }
 
 fn built() -> Built {
@@ -759,7 +790,9 @@ fn built() -> Built {
         .filter(|m| m["reason"] == "build-script-executed" && shipped(&m["package_id"]))
         .map(|m| {
             let list = |k: &str| m[k].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-            (package_of(m["package_id"].as_str().unwrap()), list("cfgs"), list("linked_libs"))
+            let package = package_of(m["package_id"].as_str().unwrap());
+            let printed = instructions(Path::new(m["out_dir"].as_str().unwrap()), &package);
+            (package, list("cfgs"), list("linked_libs"), printed)
         })
         .collect();
     Built { libraries, scripts, executed }
@@ -778,9 +811,16 @@ fn a_build_script_sets_no_cfg_links_no_library_and_compiles_its_crate_s_files_al
     // files of its own crate alone, every library and binary of the three having its root under `src/`
     let built = built();
     assert!(built.scripts.iter().any(|(p, _)| p == "ironcalc_base"), "{:?}", built.scripts.iter().map(|(p, _)| p).collect::<Vec<_>>());
-    for (package, cfgs, libs) in &built.executed {
+    assert!(built.executed.iter().any(|(p, ..)| p == "ironcalc"), "{:?}", built.executed.iter().map(|(p, ..)| p).collect::<Vec<_>>());
+    for (package, cfgs, libs, printed) in &built.executed {
         assert!(cfgs.is_empty(), "{package}'s build script sets {cfgs:?}");
         assert!(libs.is_empty(), "{package}'s build script links {libs:?}");
+        // and every instruction it printed is one that changes neither the compiled code nor the link
+        // (`rustc-link-arg=-lws2_32` passes a library past `linked_libs`)
+        assert!(!printed.is_empty(), "{package}'s build script printed no instruction");
+        for line in printed {
+            assert_eq!(refused_instruction(line), None, "{package}'s build script prints `{line}`");
+        }
     }
     for (package, files) in &built.scripts {
         let home = root().join(SHIPPED.iter().find(|(n, _)| n == package).unwrap().1);
@@ -798,6 +838,35 @@ fn a_build_script_sets_no_cfg_links_no_library_and_compiles_its_crate_s_files_al
                 assert!(src.starts_with(root().join(folder).join("src")), "{name}: {kinds:?} rooted at {}", src.display());
             }
         }
+    }
+}
+
+#[test]
+fn a_build_script_s_instructions_are_read_by_their_key() {
+    for line in [
+        "cargo:rustc-link-arg=-lws2_32",
+        "cargo::rustc-link-arg-bins=-lws2_32",
+        "cargo:rustc-cdylib-link-arg=-lws2_32",
+        "cargo:rustc-link-search=native=/opt/sockets",
+        "cargo:rustc-flags=-l ws2_32",
+        "cargo::rustc-cfg=feature=\"mock_time\"",
+        "cargo:rustc-link-lib=ws2_32",
+        "cargo::metadata=socket=1",
+        "cargo:socket=1",
+        "cargo:rustc-env=RUSTC_BOOTSTRAP=1",
+        "cargo::rustc-env=CARGO_ENCODED_RUSTFLAGS=-lws2_32",
+    ] {
+        assert_eq!(refused_instruction(line), Some(line.to_string()), "{line}");
+    }
+    for line in [
+        "cargo:rerun-if-changed=.git/HEAD",
+        "cargo::rerun-if-env-changed=PATH",
+        "cargo::rustc-check-cfg=cfg(fuzzing)",
+        "cargo:warning=a word",
+        "cargo:rustc-env=GIT_VERSION=d528905a",
+        "not an instruction",
+    ] {
+        assert_eq!(refused_instruction(line), None, "{line}");
     }
 }
 
@@ -1002,7 +1071,13 @@ fn identifiers(code: &str) -> Vec<(String, usize)> {
         } else if let Some(end) = char_at(code, i) {
             i = end;
         } else if b[i].is_ascii_alphabetic() || b[i] == b'_' {
-            let start = i;
+            // a raw identifier (`r#socket`) is the identifier it names
+            let start = if b[i] == b'r' && b.get(i + 1) == Some(&b'#') && b.get(i + 2).is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_') {
+                i += 2;
+                i
+            } else {
+                i
+            };
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
                 i += 1;
             }
@@ -1225,13 +1300,12 @@ fn extern_functions(code: &str) -> Vec<String> {
         if code[open..close].contains('$') {
             out.push("$".to_string());
         }
-        for pair in words[i + 1..].windows(2) {
-            let ((fn_kw, fn_at), (name, _)) = (&pair[0], &pair[1]);
-            if *fn_at > close {
-                break;
-            }
-            if fn_kw == "fn" && *fn_at > open {
-                out.push(name.clone());
+        // every item it declares, a function or a static (`static socket: u8`, called through its
+        // address), `mut` passed over
+        let inside: Vec<&(String, usize)> = words[i + 1..].iter().filter(|(_, at)| *at > open && *at <= close).filter(|(w, _)| w != "mut").collect();
+        for pair in inside.windows(2) {
+            if matches!(pair[0].0.as_str(), "fn" | "static") {
+                out.push(pair[1].0.clone());
             }
         }
     }
@@ -1243,11 +1317,8 @@ fn no_socket_in_its_sources_or_the_engine_s() {
     // no plant connection: its graph holds no network crate (`REVIEWED`), and nothing of its own or
     // the engine's that is or could be compiled opens a socket: every source under each crate's
     // `src/` whatever the platform (a module's code is there, the test above), every file the
-    // libraries' dep-info lists whatever its kind, and each build script. Read for the standard
-    // library's sockets, `libc` used at all, Winsock and its library, and an `extern` block
-    // declaring a socket function.
-    let words =
-        ["std::net", "std::os::unix::net", "TcpStream", "TcpListener", "UdpSocket", "UnixStream", "UnixListener", "UnixDatagram", "Win32::Networking", "WinSock", "ws2_32"];
+    // libraries' dep-info lists whatever its kind, and each build script, each read by
+    // `socket_route`.
     let mut files: BTreeSet<PathBuf> = BTreeSet::new();
     for folder in ["crates/veredas-abaco", "forks/ironcalc/base", "forks/ironcalc/xlsx"] {
         let home = root().join(folder);
@@ -1267,36 +1338,74 @@ fn no_socket_in_its_sources_or_the_engine_s() {
     files.extend(built.libraries.into_iter().flat_map(|(_, f)| f));
     files.extend(built.scripts.into_iter().flat_map(|(_, f)| f));
     assert!(files.iter().any(|f| f.ends_with("forks/ironcalc/base/build.rs")));
-    let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
     for file in &files {
         let text = String::from_utf8_lossy(&std::fs::read(file).unwrap()).to_string();
-        for w in words {
-            for (at, _) in text.match_indices(w) {
-                let before = text[..at].chars().next_back();
-                let after = text[at + w.len()..].chars().next();
-                assert!(ident(before) || ident(after), "{}: `{w}`", file.display());
-            }
+        if let Some(route) = socket_route(&text) {
+            panic!("{}: {route}", file.display());
         }
-        assert!(!text.to_ascii_lowercase().contains("ws2_32"), "{}: `ws2_32`", file.display());
-        let code = without_comments(&text);
-        let words = identifiers(&code);
-        assert!(!words.iter().any(|(w, _)| w == "libc"), "{}: `libc`", file.display());
-        for f in extern_functions(&code) {
-            assert!(!SOCKET_FUNCTIONS.contains(&f.as_str()) && f != "$", "{}: an extern block declares `{f}`", file.display());
-        }
-        // a function named as a socket function anywhere (one an `extern` block a macro builds would
-        // declare), and a symbol linked under such a name (`#[link_name = "socket"]`)
-        for pair in words.windows(2) {
-            assert!(!(pair[0].0 == "fn" && SOCKET_FUNCTIONS.contains(&pair[1].0.as_str())), "{}: `fn {}`", file.display(), pair[1].0);
-        }
-        for (w, at) in &words {
-            if w == "link_name" {
-                let rest = code[*at..].trim_start().strip_prefix('=').map(str::trim_start).unwrap_or("");
-                let linked = string_at(rest, 0).map(|(_, s)| s).unwrap_or_default();
-                assert!(!SOCKET_FUNCTIONS.contains(&linked.as_str()), "{}: `link_name = \"{linked}\"`", file.display());
+    }
+}
+
+/// The words of the standard library's sockets and Winsock, matched in a source's text whole.
+const SOCKET_WORDS: [&str; 11] =
+    ["std::net", "std::os::unix::net", "TcpStream", "TcpListener", "UdpSocket", "UnixStream", "UnixListener", "UnixDatagram", "Win32::Networking", "WinSock", "ws2_32"];
+
+/// The identifiers that reach a socket, a host or a symbol by its name: the standard library's
+/// `net` module and its name lookup (`ToSocketAddrs`, `lookup_host`), `libc`, and the loaders that
+/// find a function by a name built at run time.
+const SOCKET_IDENTIFIERS: &[&str] =
+    &["net", "ToSocketAddrs", "lookup_host", "libc", "dlsym", "dlvsym", "dlopen", "dlmopen", "GetProcAddress", "LoadLibraryA", "LoadLibraryW", "LoadLibraryExA", "LoadLibraryExW", "link_ordinal"];
+
+/// How a source reaches a socket, if it does, by what it says: a socket word, an identifier of
+/// [`SOCKET_IDENTIFIERS`], a function or a static named as a socket function anywhere or declared in
+/// an `extern` block (one a macro fills included), a `link_name` that names one or is no plain
+/// string, or a native library a `#[link(…)]` attribute links (`raw-dylib` among them).
+fn socket_route(text: &str) -> Option<String> {
+    let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    for w in SOCKET_WORDS {
+        for (at, _) in text.match_indices(w) {
+            if !(ident(text[..at].chars().next_back()) || ident(text[at + w.len()..].chars().next())) {
+                return Some(format!("`{w}`"));
             }
         }
     }
+    if text.to_ascii_lowercase().contains("ws2_32") || text.contains("raw-dylib") {
+        return Some("Winsock's library or a raw `dylib` link".into());
+    }
+    let code = without_comments(text);
+    let words = identifiers(&code);
+    if let Some((w, _)) = words.iter().find(|(w, _)| SOCKET_IDENTIFIERS.contains(&w.as_str())) {
+        return Some(format!("`{w}`"));
+    }
+    for f in extern_functions(&code) {
+        if SOCKET_FUNCTIONS.contains(&f.as_str()) || f == "$" {
+            return Some(format!("an extern block declares `{f}`"));
+        }
+    }
+    for pair in words.windows(2) {
+        if matches!(pair[0].0.as_str(), "fn" | "static") && SOCKET_FUNCTIONS.contains(&pair[1].0.as_str()) {
+            return Some(format!("`{} {}`", pair[0].0, pair[1].0));
+        }
+    }
+    for (w, at) in &words {
+        if w == "link_name" {
+            // a plain string with no escape, or the reading fails closed (`"\x73ocket"`, a `concat!`)
+            let rest = code[*at..].trim_start().strip_prefix('=').map(str::trim_start).unwrap_or("");
+            match string_at(rest, 0) {
+                Some((_, linked)) if !linked.contains('\\') => {
+                    if SOCKET_FUNCTIONS.contains(&linked.as_str()) {
+                        return Some(format!("`link_name = \"{linked}\"`"));
+                    }
+                }
+                _ => return Some("a `link_name` that is no plain string".into()),
+            }
+        }
+        // a native library linked by the source (`#[link(name = "…")]`), which the graph shows not
+        if w == "link" && code[*at..].trim_start().starts_with('(') && code[..*at - w.len()].trim_end().ends_with('[') {
+            return Some("a native library linked by `#[link(…)]`".into());
+        }
+    }
+    None
 }
 
 #[test]
@@ -1315,6 +1424,27 @@ fn the_shipped_packages_rename_no_dependency_and_take_no_system_or_socket_crate(
             assert!(!SYSTEM.contains(&d["name"].as_str().unwrap()), "{name} takes `{}`", d["name"]);
         }
     }
+}
+
+#[test]
+fn every_route_the_critics_found_is_a_socket_route() {
+    for (what, text) in [
+        ("a raw identifier", "unsafe extern \"C\" { fn r#socket(d: i32, t: i32, p: i32) -> i32; }"),
+        ("an escaped link_name", "extern \"C\" { #[link_name = \"\\x73ocket\"] fn open_channel() -> i32; }"),
+        ("a link_name built", "extern \"C\" { #[link_name = concat!(\"sock\", \"et\")] fn open_channel() -> i32; }"),
+        ("a static", "extern \"C\" { static mut connect: u8; }"),
+        ("a loader", "let f = unsafe { dlsym(std::ptr::null_mut(), c\"socket\".as_ptr()) };"),
+        ("a native library", "#[link(name = \"gio-2.0\")] unsafe extern \"C\" { fn g_socket_client_new(); }"),
+        ("a grouped use", "use std::{net::ToSocketAddrs};"),
+        ("std :: net", "let _ = std :: net :: Ipv4Addr::LOCALHOST;"),
+        ("raw-dylib", "#[link(name = \"wsock32\", kind = \"raw-dylib\")] extern \"system\" {}"),
+    ] {
+        assert!(socket_route(text).is_some(), "{what}: {text}");
+    }
+    // and what the engine holds is none: a raw identifier of a keyword, `include` as a word, `net`
+    // in a comment (the socket words are read in comments too, the identifiers in code alone)
+    assert_eq!(socket_route("fn f(r#if: bool, include: bool) -> bool { r#if && include } // the net value"), None);
+    assert!(socket_route("// see std::net").is_some());
 }
 
 #[test]
@@ -1503,46 +1633,287 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
     }
 }
 
-/// The rows of the record's table under `## Local changes`, each by its first cell, as a GFM
-/// Markdown reader reads a table: a header row and a delimiter row (cells of `-` and `:`) open it,
-/// each opening with `|` after at most three spaces; every line after them is a row, its leading
-/// `|` or not, until a blank line, a line indented four spaces or more, or one that opens another
-/// block (a heading, an HTML block such as a comment, a code fence, a quote). Lines inside an HTML
-/// comment before the table are none of it.
+/// The rows of the record's table under `## Local changes`, each by its first cell, as GitHub's
+/// Markdown (GFM) reads a table: a header row and a delimiter row of as many cells (each `:?-+:?`)
+/// open it, the header a line a paragraph holds; every line after them is a row, its leading `|` or
+/// not, until a blank line or one that opens another block ([`block_start`]). Cells split at each
+/// `|` no backslash escapes, one leading and one trailing pipe passed over. Fenced code and HTML
+/// blocks before the table are none of it.
 fn change_rows(record: &str) -> Vec<String> {
     let section = record.split("## Local changes").nth(1).unwrap();
     let lines: Vec<&str> = section.lines().collect();
-    let indent = |l: &str| l.len() - l.trim_start_matches(' ').len();
-    let cells = |l: &str| -> Vec<String> { l.trim().trim_start_matches('|').trim_end_matches('|').split('|').map(|c| c.trim().to_string()).collect() };
-    let delimiter = |l: &str| indent(l) <= 3 && l.contains('-') && cells(l).iter().all(|c| !c.is_empty() && c.chars().all(|ch| matches!(ch, '-' | ':')));
-    let mut in_comment = false;
+    let delimiter = |l: &str| {
+        column_of(l) <= 3 && {
+            let cells = gfm_cells(l);
+            !cells.is_empty()
+                && cells.iter().all(|c| {
+                    let c = c.strip_prefix(':').unwrap_or(c);
+                    let c = c.strip_suffix(':').unwrap_or(c);
+                    !c.is_empty() && c.chars().all(|ch| ch == '-')
+                })
+        }
+    };
     let mut out = Vec::new();
     let mut i = 0;
     while i + 1 < lines.len() {
         let l = lines[i];
-        if in_comment {
-            in_comment = !l.contains("-->");
-            i += 1;
-            continue;
-        }
-        if l.trim_start().starts_with("<!--") && !l.contains("-->") {
-            in_comment = true;
-            i += 1;
-            continue;
-        }
-        if indent(l) <= 3 && l.contains('|') && delimiter(lines[i + 1]) {
-            for row in &lines[i + 2..] {
-                let t = row.trim_start();
-                if row.trim().is_empty() || indent(row) >= 4 || ["#", "<", "```", "~~~", ">"].iter().any(|b| t.starts_with(b)) {
-                    break;
+        match block_start(l) {
+            // a fence or an HTML block: passed over to its end, a table in it is none
+            Some(Block::Fence(ch, n)) => {
+                i += 1;
+                while i < lines.len() && !closes_fence(lines[i], ch, n) {
+                    i += 1;
                 }
-                out.push(cells(row).into_iter().next().unwrap_or_default());
             }
-            break;
+            Some(Block::Html(kind)) => {
+                let ends = |line: &str| html_block_ends(kind, line);
+                if !ends(l) {
+                    i += 1;
+                    while i < lines.len() && !ends(lines[i]) {
+                        i += 1;
+                    }
+                }
+            }
+            None if delimiter(lines[i + 1]) && gfm_cells(l).len() == gfm_cells(lines[i + 1]).len() => {
+                for row in &lines[i + 2..] {
+                    if block_start(row).is_some() {
+                        break;
+                    }
+                    out.push(gfm_cells(row).into_iter().next().unwrap_or_default());
+                }
+                break;
+            }
+            _ => {}
         }
         i += 1;
     }
     out
+}
+
+/// The column a line's text starts at, a tab advancing to the next multiple of four.
+fn column_of(line: &str) -> usize {
+    let mut col = 0;
+    for ch in line.chars() {
+        match ch {
+            ' ' => col += 1,
+            '\t' => col += 4 - col % 4,
+            _ => break,
+        }
+    }
+    col
+}
+
+/// A table row's cells as GFM splits them: one leading and one trailing `|` passed over, a split at
+/// each other `|` no backslash escapes, each cell trimmed.
+fn gfm_cells(line: &str) -> Vec<String> {
+    let t = line.trim();
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let t = match t.strip_suffix('|') {
+        Some(rest) if !rest.ends_with('\\') => rest,
+        _ => t,
+    };
+    let mut cells = vec![String::new()];
+    let mut escaped = false;
+    for ch in t.chars() {
+        if ch == '|' && !escaped {
+            cells.push(String::new());
+        } else {
+            cells.last_mut().unwrap().push(ch);
+        }
+        escaped = ch == '\\' && !escaped;
+    }
+    cells.into_iter().map(|c| c.trim().to_string()).collect()
+}
+
+/// The blocks a line can open that end a table (GFM 0.29 and GitHub's footnotes).
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Block {
+    Blank,
+    IndentedCode,
+    Quote,
+    Heading,
+    Fence(char, usize),
+    Html(u8),
+    ThematicBreak,
+    ListItem,
+    Footnote,
+}
+
+/// The block a line opens, if any: what ends a table's rows.
+fn block_start(line: &str) -> Option<Block> {
+    if line.trim().is_empty() {
+        return Some(Block::Blank);
+    }
+    if column_of(line) >= 4 {
+        return Some(Block::IndentedCode);
+    }
+    let t = line.trim_start_matches([' ', '\t']);
+    let space_or_end = |rest: &str| rest.is_empty() || rest.starts_with([' ', '\t']);
+    if t.starts_with('>') {
+        return Some(Block::Quote);
+    }
+    let hashes = t.chars().take_while(|c| *c == '#').count();
+    if (1..=6).contains(&hashes) && space_or_end(&t[hashes..]) {
+        return Some(Block::Heading);
+    }
+    for ch in ['`', '~'] {
+        let n = t.chars().take_while(|c| *c == ch).count();
+        if n >= 3 && !(ch == '`' && t[n..].contains('`')) {
+            return Some(Block::Fence(ch, n));
+        }
+    }
+    if let Some(kind) = html_block_start(t) {
+        return Some(Block::Html(kind));
+    }
+    let marks: String = t.chars().filter(|c| !matches!(c, ' ' | '\t')).collect();
+    if marks.len() >= 3 && ["-", "_", "*"].iter().any(|m| marks.chars().all(|c| c.to_string() == *m)) {
+        return Some(Block::ThematicBreak);
+    }
+    if t.starts_with(['-', '+', '*']) && space_or_end(&t[1..]) {
+        return Some(Block::ListItem);
+    }
+    let digits = t.chars().take_while(char::is_ascii_digit).count();
+    if (1..=9).contains(&digits) && t[digits..].starts_with(['.', ')']) && space_or_end(&t[digits + 1..]) {
+        return Some(Block::ListItem);
+    }
+    if let Some(rest) = t.strip_prefix("[^") {
+        if let Some(close) = rest.find("]:") {
+            if close > 0 && !rest[..close].contains([' ', '\t', ']']) {
+                return Some(Block::Footnote);
+            }
+        }
+    }
+    None
+}
+
+/// GFM's seven HTML block starts, by their number, on a line with its indentation removed.
+fn html_block_start(t: &str) -> Option<u8> {
+    let lower = t.to_ascii_lowercase();
+    let after_name = |rest: &str| rest.is_empty() || rest.starts_with([' ', '\t', '>']) || rest.starts_with("/>");
+    for name in ["script", "pre", "style", "textarea"] {
+        if let Some(rest) = lower.strip_prefix('<').and_then(|r| r.strip_prefix(name)) {
+            if rest.is_empty() || rest.starts_with([' ', '\t', '>']) {
+                return Some(1);
+            }
+        }
+    }
+    if lower.starts_with("<!--") {
+        return Some(2);
+    }
+    if lower.starts_with("<?") {
+        return Some(3);
+    }
+    if lower.starts_with("<![cdata[") {
+        return Some(5);
+    }
+    if lower.strip_prefix("<!").is_some_and(|r| r.starts_with(|c: char| c.is_ascii_alphabetic())) {
+        return Some(4);
+    }
+    const BLOCK_TAGS: [&str; 62] = [
+        "address", "article", "aside", "base", "basefont", "blockquote", "body", "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir", "div", "dl", "dt",
+        "fieldset", "figcaption", "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hr", "html", "iframe", "legend",
+        "li", "link", "main", "menu", "menuitem", "nav", "noframes", "ol", "optgroup", "option", "p", "param", "section", "source", "summary", "table", "tbody", "td",
+        "tfoot", "th", "thead", "title", "tr", "track", "ul",
+    ];
+    let tag = lower.strip_prefix("</").or_else(|| lower.strip_prefix('<'));
+    if let Some(tag) = tag {
+        let name_len = tag.chars().take_while(|c| c.is_ascii_alphanumeric()).count();
+        if BLOCK_TAGS.contains(&&tag[..name_len]) && after_name(&tag[name_len..]) {
+            return Some(6);
+        }
+    }
+    complete_tag_alone(t).then_some(7)
+}
+
+/// A line that is one complete open or closing tag and whitespace (GFM's HTML block 7).
+fn complete_tag_alone(t: &str) -> bool {
+    let b = t.trim_end().as_bytes();
+    let name = |b: &[u8], i: usize| -> usize {
+        let mut j = i;
+        if j < b.len() && b[j].is_ascii_alphabetic() {
+            j += 1;
+            while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'-') {
+                j += 1;
+            }
+        }
+        j
+    };
+    let skip_ws = |b: &[u8], mut i: usize| {
+        while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n') {
+            i += 1;
+        }
+        i
+    };
+    if b.first() != Some(&b'<') {
+        return false;
+    }
+    if b.get(1) == Some(&b'/') {
+        let end = name(b, 2);
+        if end == 2 {
+            return false;
+        }
+        let i = skip_ws(b, end);
+        return i + 1 == b.len() && b[i] == b'>';
+    }
+    let mut i = name(b, 1);
+    if i == 1 {
+        return false;
+    }
+    loop {
+        let ws = skip_ws(b, i);
+        if ws < b.len() && (b[ws] == b'>' || (b[ws] == b'/' && b.get(ws + 1) == Some(&b'>'))) {
+            return if b[ws] == b'>' { ws + 1 == b.len() } else { ws + 2 == b.len() };
+        }
+        // an attribute needs whitespace before it
+        if ws == i || ws >= b.len() || !(b[ws].is_ascii_alphabetic() || b[ws] == b'_' || b[ws] == b':') {
+            return false;
+        }
+        i = ws + 1;
+        while i < b.len() && (b[i].is_ascii_alphanumeric() || matches!(b[i], b'_' | b'.' | b':' | b'-')) {
+            i += 1;
+        }
+        let eq = skip_ws(b, i);
+        if eq < b.len() && b[eq] == b'=' {
+            let v = skip_ws(b, eq + 1);
+            match b.get(v) {
+                Some(q @ (b'"' | b'\'')) => {
+                    let Some(close) = b[v + 1..].iter().position(|c| c == q) else { return false };
+                    i = v + 1 + close + 1;
+                }
+                Some(_) => {
+                    let mut j = v;
+                    while j < b.len() && !matches!(b[j], b' ' | b'\t' | b'\n' | b'"' | b'\'' | b'=' | b'<' | b'>' | b'`') {
+                        j += 1;
+                    }
+                    if j == v {
+                        return false;
+                    }
+                    i = j;
+                }
+                None => return false,
+            }
+        }
+    }
+}
+
+/// Where an HTML block of GFM's kind `kind` ends: on the line holding its end mark (kinds 1 to 5),
+/// or before a blank line (6 and 7).
+fn html_block_ends(kind: u8, line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    match kind {
+        1 => ["</script>", "</pre>", "</style>", "</textarea>"].iter().any(|m| lower.contains(m)),
+        2 => line.contains("-->"),
+        3 => line.contains("?>"),
+        4 => line.contains('>'),
+        5 => line.contains("]]>"),
+        _ => line.trim().is_empty(),
+    }
+}
+
+/// A line that closes a fence of `n` marks `ch`: as many or more, then whitespace alone.
+fn closes_fence(line: &str, ch: char, n: usize) -> bool {
+    let t = line.trim_start_matches(' ');
+    column_of(line) <= 3 && t.chars().take_while(|c| *c == ch).count() >= n && t.trim_start_matches(ch).trim().is_empty()
 }
 
 #[test]
@@ -1552,6 +1923,33 @@ fn the_record_s_rows_are_read_as_markdown_reads_a_table() {
     // a row with no leading pipe is one; a row in an HTML comment after the table is none
     let record = "## Local changes\n<!--\n| 0 | commented |\n-->\n| # | Change |\n|---|---|\n| 29 | a |\n32 | no leading pipe | base | none\n\n<!--\n| 30 | hidden |\n-->\n";
     assert_eq!(change_rows(record), ["29", "32"]);
+    // what opens a block ends the rows: a list item, a thematic break, a footnote, an HTML block of
+    // a block tag or a lone complete tag; a line that only starts with `#` or `<` is a row
+    for (line, row) in [
+        ("- 5 | a list item |", false),
+        ("1. 5 | an ordered item |", false),
+        ("***", false),
+        ("[^5]: a footnote", false),
+        ("<div>", false),
+        ("<span class=\"x\">", false),
+        ("``` | a fence |", false),
+        ("#5 | not a heading |", true),
+        ("<b>5</b> | inline html |", true),
+        ("-5 | no space after the dash |", true),
+    ] {
+        let record = format!("## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n{line}\n| 2 | b |\n");
+        let expected = if row { vec!["1".to_string(), gfm_cells(line)[0].clone(), "2".to_string()] } else { vec!["1".to_string()] };
+        assert_eq!(change_rows(&record), expected, "{line}");
+    }
+    // a header and a delimiter of unequal cells, or a delimiter cell no GFM delimiter is, open no
+    // table; a table in a fence before the record's is none
+    for opening in ["| # | Change |\n|---|", "| # | Change |\n|:-:-:|---|", "| # | Change |\n|---|- -|"] {
+        assert_eq!(change_rows(&format!("## Local changes\n{opening}\n| 1 | a |\n")), Vec::<String>::new(), "{opening}");
+    }
+    let record = "## Local changes\n```\n| # | Change |\n|---|---|\n| 0 | fenced |\n```\n| # | Change |\n|---|---|\n| 1 | a |\n";
+    assert_eq!(change_rows(record), ["1"]);
+    // cells split at unescaped pipes alone, one leading pipe passed over
+    assert_eq!(gfm_cells("||28| a \\| b |"), ["", "28", "a \\| b"]);
 }
 
 /// The change each commit subject names, `(fork change 7)` as `7`, `(fork change 1, refined)` as
