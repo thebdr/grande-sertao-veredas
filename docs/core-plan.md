@@ -226,7 +226,9 @@ tests switch them on through the self dev-dependency.
   codecs, pinned exactly, and writes the scanner itself (Q102): their own scanner opens with no
   bound in time, leaves the 16-bit sequence count out of a connection's sizes, names the Sockaddr
   Info items the other way round (see "Traps"), and watches no silence. Met against maquinar's
-  EtherNet/IP adapter (C-111) from `tools/mestres`.
+  EtherNet/IP adapter (C-111) from `tools/mestres`. The first input is awaited the standard's
+  initial watchdog, 10 s (or the timeout when longer), as the bench's adapter awaits its first
+  output; `Spec::first_input` shortens it for a test.
 - **PROFINET IO controller** (`fieldbus::profinet`): written here on aranha's codecs (DCP, the
   real-time frames), moved into core when the controller needs them (the cut asked of aranha
   through the orchestrator). Raw Ethernet frames.

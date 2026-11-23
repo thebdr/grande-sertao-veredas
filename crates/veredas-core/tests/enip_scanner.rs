@@ -55,6 +55,8 @@ struct Script {
     names_io: bool,
     /// The address the 0x8000 item names, the adapter's I/O socket's when `None`.
     io_named: Option<SocketAddr>,
+    /// How long the Forward_Open's answer is held back.
+    open_delay: Duration,
     /// Inputs carry a run/idle header.
     input_run_idle: bool,
     input_size: usize,
@@ -69,6 +71,7 @@ impl Default for Script {
             granted: None,
             names_io: true,
             io_named: None,
+            open_delay: Duration::ZERO,
             input_run_idle: false,
             input_size: 6,
         }
@@ -339,6 +342,13 @@ fn serve(
             }
             _ => None,
         };
+        if command == 0x006F
+            && items(&data)
+                .iter()
+                .any(|(t, d)| *t == 0x00B2 && d.first() == Some(&0x54))
+        {
+            thread::sleep(script.open_delay);
+        }
         if let Some(r) = reply {
             log.lock().unwrap().push((false, r.clone()));
             if s.write_all(&r).is_err() {
@@ -366,6 +376,13 @@ fn input_frame(id: u32, seq: u32, count: u16, run: Option<bool>, data: &[u8]) ->
     f
 }
 
+/// The spec with a short response bound, for the tests that time the bound itself.
+fn spec_short(a: &Adapter) -> Spec {
+    let mut s = spec(a);
+    s.timeouts.response = Duration::from_millis(300);
+    s
+}
+
 /// Waits for the scanner's UnRegisterSession to reach the adapter (its last frame).
 fn unregistered(a: &Adapter) -> bool {
     wait(Duration::from_secs(1), || {
@@ -381,7 +398,8 @@ fn spec(a: &Adapter) -> Spec {
     s.originator_serial = 0x1234_5678;
     s.timeouts = Timeouts {
         connect: Duration::from_millis(500),
-        response: Duration::from_millis(300),
+        // Long enough for a loaded machine; a test of the bound itself sets its own.
+        response: Duration::from_secs(1),
     };
     s
 }
@@ -653,6 +671,8 @@ fn a_connection_outside_the_standards_bounds_never_reaches_the_wire() {
 #[test]
 fn the_adapters_refusals_and_wrong_answers_end_the_open_by_name() {
     let open = |script: Script| Scanner::open(&spec(&Adapter::start(script))).unwrap_err();
+    let open_short =
+        |script: Script| Scanner::open(&spec_short(&Adapter::start(script))).unwrap_err();
     assert_eq!(
         open(Script {
             open: Answer::Refuse(0x01, vec![0x0127, 10]),
@@ -691,14 +711,14 @@ fn the_adapters_refusals_and_wrong_answers_end_the_open_by_name() {
         other => panic!("{other:?}"),
     };
     assert_eq!(
-        no_answer(open(Script {
+        no_answer(open_short(Script {
             register: Answer::Silent,
             ..Script::default()
         })),
         "RegisterSession: no answer within 300 ms"
     );
     assert_eq!(
-        no_answer(open(Script {
+        no_answer(open_short(Script {
             open: Answer::Silent,
             ..Script::default()
         })),
@@ -919,7 +939,7 @@ fn a_refused_close_says_so_and_a_drop_closes() {
         close: Answer::Silent,
         ..Script::default()
     });
-    let s = Scanner::open(&spec(&a)).unwrap();
+    let s = Scanner::open(&spec_short(&a)).unwrap();
     let t = Instant::now();
     drop(s);
     assert!(
@@ -938,7 +958,7 @@ fn a_refused_close_says_so_and_a_drop_closes() {
         close: Answer::Silent,
         ..Script::default()
     });
-    let s = Scanner::open(&spec(&a)).unwrap();
+    let s = Scanner::open(&spec_short(&a)).unwrap();
     assert_eq!(
         s.close().unwrap_err(),
         EnipError::NoAnswer {
@@ -1052,9 +1072,13 @@ fn stray_frames_never_keep_a_silent_adapters_connection() {
 fn the_timeout_runs_from_the_open() {
     let a = Adapter::start(Script::default());
     a.producing.store(false, Ordering::SeqCst);
+    // A first-input window shorter than the timeout: the timeout applies from the open.
+    let mut sp = spec(&a);
+    sp.first_input = Duration::ZERO;
     let before = Instant::now();
-    let s = Scanner::open(&spec(&a)).unwrap();
+    let s = Scanner::open(&sp).unwrap();
     let after = Instant::now();
+    assert_eq!(s.opened().first_input, RPI * 4);
     assert!(wait(Duration::from_secs(2), || s.state() != LinkState::Running));
     // Lost no sooner than the timeout after the open began, and soon after the open returned (a
     // stall of the machine during the open is not the scanner's).
@@ -1063,6 +1087,69 @@ fn the_timeout_runs_from_the_open() {
     assert!(least >= RPI * 4, "{least:?}");
     assert!(most < RPI * 4 + Duration::from_millis(250), "{most:?}");
     assert_eq!(s.counters().consumed, 0);
+    // The outputs went from the open on, before any input.
+    assert!(
+        s.counters().produced >= 2,
+        "produced {}",
+        s.counters().produced
+    );
+    assert!(
+        a.outputs().len() >= 2,
+        "the adapter received {}",
+        a.outputs().len()
+    );
+}
+
+/// The first input is awaited its window, the standard's 10 s by default, counted from the end of
+/// the open: an open slower than the timeout loses nothing, and the window, not the timeout,
+/// applies before the first input.
+#[test]
+fn the_first_input_is_awaited_its_window_from_the_end_of_the_open() {
+    assert_eq!(
+        Spec::new("127.0.0.1:44818".parse().unwrap(), 1, 2, 3, 0, 0).first_input,
+        FIRST_INPUT
+    );
+    assert_eq!(FIRST_INPUT, Duration::from_secs(10));
+    // An open that takes 300 ms against an 80 ms timeout and a 200 ms window, the adapter
+    // producing from its reply: the connection runs.
+    let a = Adapter::start(Script {
+        open_delay: Duration::from_millis(300),
+        ..Script::default()
+    });
+    let mut sp = spec(&a);
+    sp.first_input = Duration::from_millis(200);
+    let s = Scanner::open(&sp).unwrap();
+    assert_eq!(s.opened().first_input, Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(500));
+    assert_eq!(s.state(), LinkState::Running);
+    assert!(
+        s.counters().consumed >= 10,
+        "consumed {}",
+        s.counters().consumed
+    );
+    drop(s);
+    // The same open, the adapter silent: lost at the window after the open returned.
+    let a = Adapter::start(Script {
+        open_delay: Duration::from_millis(300),
+        ..Script::default()
+    });
+    a.producing.store(false, Ordering::SeqCst);
+    let mut sp = spec(&a);
+    sp.first_input = Duration::from_millis(200);
+    let s = Scanner::open(&sp).unwrap();
+    let after = Instant::now();
+    assert!(wait(Duration::from_secs(2), || s.state() != LinkState::Running));
+    let took = after.elapsed();
+    assert_eq!(
+        s.state(),
+        LinkState::Lost {
+            timeout: Duration::from_millis(200)
+        }
+    );
+    assert!(
+        took >= Duration::from_millis(150) && took < Duration::from_millis(450),
+        "{took:?}"
+    );
 }
 
 /// A first input is new data whatever its count, 0 included.

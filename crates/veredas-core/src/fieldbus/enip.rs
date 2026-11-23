@@ -25,7 +25,9 @@
 //!   new data, and nothing else resets the connection's timeout;
 //! - the connection's timeout is the adapter's actual interval times 4 shifted left by the
 //!   multiplier: an adapter silent that long has lost the connection ([`LinkState::Lost`]), the
-//!   scanner stops producing, and the inputs it holds are the last ones received;
+//!   scanner stops producing, and the inputs it holds are the last ones received; the first input
+//!   is awaited the standard's initial watchdog, 10 s ([`FIRST_INPUT`]), or the timeout when
+//!   longer, counted from the open's end, and the outputs go from the open on;
 //! - [`Scanner::close`] (and a drop) stops producing, sends the Forward_Close and unregisters the
 //!   session whatever the close's answer, bounded, so the adapter frees its output at once rather
 //!   than at its own timeout.
@@ -53,6 +55,9 @@ use tokio::sync::mpsc;
 pub const ENCAPSULATION_PORT: u16 = 44818;
 /// The Class 1 I/O port, UDP.
 pub const IO_PORT: u16 = 2222;
+/// How long a consumer waits for the first packet of a connection, by the standard's initial
+/// watchdog, before the connection's own timeout applies.
+pub const FIRST_INPUT: Duration = Duration::from_secs(10);
 /// The largest size of one direction the 16-bit Forward_Open carries, in bytes on the wire.
 pub const MAX_CONNECTION_SIZE: u16 = 511;
 
@@ -136,6 +141,9 @@ pub struct Spec {
     pub rpi: Duration,
     /// The connection timeout's multiplier code: the timeout is the interval times 4 << code.
     pub timeout_multiplier: u8,
+    /// How long the first input may take after the open: the standard's initial watchdog, 10 s,
+    /// or the connection's timeout when that is longer.
+    pub first_input: Duration,
     /// The originator's identity on the connection: its vendor and serial number.
     pub vendor: u16,
     pub originator_serial: u32,
@@ -165,6 +173,7 @@ impl Spec {
             input_header: Header::Modeless,
             rpi: Duration::from_millis(10),
             timeout_multiplier: 0,
+            first_input: FIRST_INPUT,
             vendor: 0,
             originator_serial: 0x5645_5245, // "VERE"
             timeouts: Timeouts::default(),
@@ -275,8 +284,9 @@ fn extended_text(extended: &[u16]) -> String {
 pub enum LinkState {
     /// Both directions exchanging.
     Running,
-    /// The adapter fell silent past the connection's timeout: no outputs are produced any more,
-    /// and a new connection must be opened.
+    /// The adapter fell silent past the connection's timeout (or sent no first input within its
+    /// window, the duration then that window's): no outputs are produced any more, and a new
+    /// connection must be opened.
     Lost { timeout: Duration },
     /// Closed by the scanner.
     Closed,
@@ -320,6 +330,9 @@ pub struct Opened {
     pub receives_on: SocketAddr,
     /// The connection's timeout: no input for this long and it is lost.
     pub timeout: Duration,
+    /// How long the first input may take after the open: the longer of the spec's `first_input`
+    /// and the timeout.
+    pub first_input: Duration,
 }
 
 struct Io {
@@ -654,13 +667,16 @@ async fn run(
     }
     let mut tick = tokio::time::interval(opened.o_to_t_rpi);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The watch runs from the open's end: the first input within its window, each next one
+    // within the timeout of the last.
     let mut last_heard = tokio::time::Instant::now();
+    let mut window = opened.first_input;
     let mut last_count: Option<u16> = None;
     let mut sequence: u32 = 0;
     let mut count: u16 = 0;
     let mut buf = vec![0u8; 2048];
     let reply = loop {
-        let deadline = last_heard + opened.timeout;
+        let deadline = last_heard + window;
         // In this order: a close first, then the timeout (once it has passed nothing more goes
         // out), then the next output when it is due (so no flood of datagrams, of this
         // connection or not, can hold the outputs back), then inputs.
@@ -668,7 +684,7 @@ async fn run(
             biased;
             done = close_rx.recv() => break done,
             _ = tokio::time::sleep_until(deadline) => {
-                shared.lock().state = LinkState::Lost { timeout: opened.timeout };
+                shared.lock().state = LinkState::Lost { timeout: window };
                 // Lost: produce no more, close the session, wait for the handle's close or drop.
                 drop(session);
                 let done = close_rx.recv().await;
@@ -709,6 +725,7 @@ async fn run(
                     None => io.counters.stray += 1,
                     Some(f) => {
                         last_heard = tokio::time::Instant::now();
+                        window = opened.timeout;
                         io.counters.consumed += 1;
                         if last_count != Some(f.cip_sequence) {
                             last_count = Some(f.cip_sequence);
@@ -848,6 +865,9 @@ async fn open(
         sends_to,
         receives_on,
         timeout: t_to_o_rpi * (4u32 << spec.timeout_multiplier),
+        first_input: spec
+            .first_input
+            .max(t_to_o_rpi * (4u32 << spec.timeout_multiplier)),
     };
     Ok((session, udp, opened))
 }
