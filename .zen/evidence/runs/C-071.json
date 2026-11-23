@@ -14,10 +14,10 @@
     "modbus"
   ],
   "exitCode": 0,
-  "outputSha": "c2d096cc6bb5db9b350ad2e78362dd9e9e1d2ab8d4a33a14f299b9ea58e13cee",
-  "outputTail": "test the_client_is_a_feature_off_by_default ... ok\ntest an_answer_that_does_not_answer_the_request_is_refused_and_ends_the_connection ... ok\ntest a_writes_exception_says_not_done_only_where_the_standard_does ... ok\ntest a_late_answer_is_never_read_as_the_next_requests ... ok\ntest a_silent_device_ends_the_call_at_the_bound_and_the_connection_with_it ... ok\ntest connecting_is_bounded_and_says_nothing_was_sent ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n   Compiling veredas-maquinar v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-maquinar)\n   Compiling mestres v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/tools/mestres)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.89s\n     Running tests/modbus.rs (target/debug/build/mestres/78db5df42a4e0471/out/modbus-78db5df42a4e0471)\n     Running tests/modbus_client.rs (target/debug/build/veredas-core/3219d356be15e223/out/modbus_client-3219d356be15e223)",
-  "ranAt": "2026-11-22T21:56:49.213Z",
-  "headCommit": "a9f13279bca142b122ba3b07ac62c32ed8b56b94",
+  "outputSha": "1b2c5594b9d5d4c52bcfdd4cc4c1bcc5596cdb4b69965a3c7c2ae56bd51f535d",
+  "outputTail": "test a_broken_link_ends_the_call_and_a_write_is_unconfirmed ... ok\ntest every_request_carries_the_targets_unit ... ok\ntest dropping_the_client_closes_its_connection ... ok\ntest the_client_is_a_feature_off_by_default ... ok\ntest an_answer_that_does_not_answer_the_request_is_refused_and_ends_the_connection ... ok\ntest a_writes_exception_says_not_done_only_where_the_standard_does ... ok\ntest a_late_answer_is_never_read_as_the_next_requests ... ok\ntest a_silent_device_ends_the_call_at_the_bound_and_the_connection_with_it ... ok\ntest connecting_is_bounded_and_says_nothing_was_sent ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s\n     Running tests/modbus.rs (target/debug/build/mestres/9209ca6b111e2eb7/out/modbus-9209ca6b111e2eb7)\n     Running tests/modbus_client.rs (target/debug/build/veredas-core/3ed93a3d653d27fa/out/modbus_client-3ed93a3d653d27fa)",
+  "ranAt": "2026-11-23T10:13:35.047Z",
+  "headCommit": "dafc98d603110a8e25b2f7e8a278b02d33792c58",
   "tests": [
     {
       "name": "crates/veredas-core/tests/modbus_client.rs",

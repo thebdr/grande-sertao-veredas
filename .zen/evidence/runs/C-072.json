@@ -14,10 +14,10 @@
     "enip"
   ],
   "exitCode": 0,
-  "outputSha": "c4a514d801ec33c197233065e1524bc16fa2aa1251991e1d79775f4101648583",
-  "outputTail": "test the_first_input_window_is_the_longer_and_only_an_input_ends_it ... ok\ntest a_flood_of_stray_datagrams_holds_no_output_back ... ok\ntest the_first_input_is_awaited_its_window_from_the_end_of_the_open ... ok\ntest every_request_is_the_standards_bytes_and_the_exchange_runs_at_the_interval ... ok\ntest the_adapters_refusals_and_wrong_answers_end_the_open_by_name ... ok\ntest a_first_input_window_without_end_runs_and_closes ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.51s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n   Compiling veredas-maquinar v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-maquinar)\n   Compiling mestres v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/tools/mestres)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.74s\n     Running tests/enip.rs (target/debug/build/mestres/f280b2eb99b03f56/out/enip-f280b2eb99b03f56)\n     Running tests/enip_scanner.rs (target/debug/build/veredas-core/9cffd9403ac43016/out/enip_scanner-9cffd9403ac43016)",
-  "ranAt": "2026-11-23T09:28:05.457Z",
-  "headCommit": "d86d2f24710635bfbda9290783ca5d313fbff3ff",
+  "outputSha": "e69d71dcb4203461ae3c335036a52156893608056fe424dec48f2bdc89122996",
+  "outputTail": "test the_dissectors_read_the_whole_conversation_as_the_standard_has_it ... ok\ntest a_refused_close_says_so_and_a_drop_closes ... ok\ntest each_direction_runs_at_its_own_granted_interval ... ok\ntest the_first_input_window_is_the_longer_and_only_an_input_ends_it ... ok\ntest a_flood_of_stray_datagrams_holds_no_output_back ... ok\ntest the_first_input_is_awaited_its_window_from_the_end_of_the_open ... ok\ntest every_request_is_the_standards_bytes_and_the_exchange_runs_at_the_interval ... ok\ntest the_adapters_refusals_and_wrong_answers_end_the_open_by_name ... ok\ntest a_first_input_window_without_end_runs_and_closes ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.53s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running tests/enip.rs (target/debug/build/mestres/f280b2eb99b03f56/out/enip-f280b2eb99b03f56)\n     Running tests/enip_scanner.rs (target/debug/build/veredas-core/9cffd9403ac43016/out/enip_scanner-9cffd9403ac43016)",
+  "ranAt": "2026-11-23T10:13:47.053Z",
+  "headCommit": "dafc98d603110a8e25b2f7e8a278b02d33792c58",
   "tests": [
     {
       "name": "crates/veredas-core/tests/enip_scanner.rs",
