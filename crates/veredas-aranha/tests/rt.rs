@@ -36,9 +36,9 @@ fn a_cyclic_frame_is_its_id_its_data_and_its_status_to_the_byte() {
     let untagged = f.frame(DEVICE, CONTROLLER, None).unwrap();
     assert_eq!(untagged.len(), 60);
     assert_eq!(&untagged[..14], &[2, 0, 0, 0, 0, 0x0D, 2, 0, 0, 0, 0, 0x0C, 0x88, 0x92]);
-    let other = VlanTag { priority: 5, drop_eligible: false, id: 100 };
+    let other = VlanTag { priority: 5, drop_eligible: true, id: 100 };
     let wire = f.frame(DEVICE, CONTROLLER, Some(other)).unwrap();
-    assert_eq!(&wire[12..18], &[0x81, 0x00, 0xA0, 0x64, 0x88, 0x92]);
+    assert_eq!(&wire[12..18], &[0x81, 0x00, 0xB0, 0x64, 0x88, 0x92]);
     let e = ether::parse(&wire).unwrap();
     assert_eq!((e.dst, e.src, e.vlan), (DEVICE, CONTROLLER, Some(other)));
     // The longest data.
@@ -96,6 +96,8 @@ fn what_is_not_a_cyclic_frame_is_refused_both_ways() {
     assert_eq!(CyclicFrame::decode(&short), Err(RtError::DataLength(39)));
     assert_eq!(CyclicFrame::decode(&[0x80]), Err(RtError::DataLength(0)));
     assert_eq!(CyclicFrame::decode(&[0x80, 0x00, 1, 2]), Err(RtError::DataLength(0)));
+    // A frame id and the APDU status with no data between them: no data is no frame.
+    assert_eq!(CyclicFrame::decode(&[0x80, 0x00, 0x12, 0x34, 0x35, 0x00]), Err(RtError::DataLength(0)));
     let mut long = vec![0x80, 0x00];
     long.extend_from_slice(&[0; 1445]);
     assert_eq!(CyclicFrame::decode(&long), Err(RtError::DataLength(1441)));
@@ -104,7 +106,7 @@ fn what_is_not_a_cyclic_frame_is_refused_both_ways() {
     // Any bytes decode or are refused, never a panic.
     let mut noise = common::Noise(0xC1C);
     for _ in 0..20_000 {
-        let n = usize::from(noise.next()) * 8 % 1600;
+        let n = (usize::from(noise.next()) << 8 | usize::from(noise.next())) % 1600;
         let p = noise.bytes(n);
         if let Ok(f) = CyclicFrame::decode(&p) {
             assert_eq!(f.encode().unwrap(), p);
