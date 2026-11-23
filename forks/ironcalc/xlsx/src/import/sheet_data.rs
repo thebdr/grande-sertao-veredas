@@ -479,7 +479,9 @@ impl SheetDataReader<'_, '_> {
                 // <f ca="1"/>
                 formula_type = "hint-volatile";
             }
-            let formula_text = formula.text.unwrap_or_default();
+            // a formula is escaped text as a cell's is (ST_Formula is an ST_Xstring): `_xHHHH_`
+            // decoded, `_x005F_` the underscore of a literal one
+            let formula_text = decode_xlsx_escapes(&formula.text.unwrap_or_default());
             let context = format!("{}!{}", self.sheet_name, cell.reference);
             match formula_type {
                 "shared" => {
@@ -704,6 +706,16 @@ mod tests {
         let mut strings = SharedStringTable::new(Vec::new());
         let dynamic: std::collections::HashSet<u32> = dynamic_cm.iter().copied().collect();
         read_sheet_data(xml.as_bytes(), "Sheet1", &mut parser, &mut strings, &dynamic).unwrap()
+    }
+
+    #[test]
+    fn a_formula_decodes_the_ooxml_escape_like_text() {
+        // Excel writes the underscore of a literal "_x0041_" in a formula's string as _x005F_
+        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="str"><f>"_x005F_x0041_"&amp;"x"</f><v>_x005F_x0041_x</v></c><c r="B1" t="str"><f>"_x0041_"</f><v>A</v></c></row></sheetData></worksheet>"#;
+        let data = read(xml, &[1]);
+        assert_eq!(data.shared_formulas.len(), 2, "{:?}", data.shared_formulas);
+        assert!(data.shared_formulas[0].contains(r#""_x0041_""#), "{:?}", data.shared_formulas);
+        assert!(data.shared_formulas[1].contains(r#""A""#) && !data.shared_formulas[1].contains("_x"), "{:?}", data.shared_formulas);
     }
 
     #[test]
