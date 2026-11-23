@@ -13,7 +13,7 @@ use std::time::Duration;
 use entrega::builder;
 use entrega::bundle;
 use entrega::cut::{self, CutError, Options};
-use entrega::machine::Recipe;
+use entrega::machine::{Recipe, RecipeError};
 use entrega::manifest;
 use entrega::together::{self, Answer, Report};
 use entrega::vm::{self, VmError};
@@ -868,4 +868,89 @@ fn a_machine_starts_with_12_gb_available_and_the_engines_lock_is_the_one_flock_t
     assert!(!free(), "flock took the lock while entrega held it");
     drop(held);
     assert!(free(), "the lock outlived its holder");
+}
+
+/// A throwaway repository a trial cut can read up to its build: one component, `veredas-core`
+/// 2.0.0, its root manifest `workspace`, and the recipe `recipe` (none when `None`) committed.
+fn repo_for_cut(workspace: &str, recipe: Option<&str>) -> (Repo, String) {
+    let r = Repo { dir: tempfile::tempdir().unwrap() };
+    r.git(&["init", "-q", "-b", "main"]);
+    r.write(".gitignore", "/target/\n");
+    r.write("Cargo.toml", workspace);
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    if let Some(text) = recipe {
+        r.write("tools/entrega/maquina/maquina.toml", text);
+    }
+    let commit = r.commit("core 2.0.0");
+    (r, commit)
+}
+
+/// The repository's recipe with its base at an address nothing answers (a cut that got as far as
+/// its build would stop at the first download) and `from` replaced by `to`.
+fn recipe_with(from: &str, to: &str) -> String {
+    let text = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    assert_eq!(text.matches(from).count(), 1, "{from}");
+    text.lines()
+        .map(|l| if l.starts_with("url = ") { "url = \"https://127.0.0.1:9/entrega-stub.qcow2\"\n".to_string() } else { format!("{l}\n") })
+        .collect::<String>()
+        .replace(from, to)
+}
+
+/// A trial cut of release 9.9.9 of the repository at `root`: its outcome, and whether it left
+/// anything (its work folder, a manifest where it writes).
+fn trial_cut(root: &Path) -> (Result<cut::Cut, CutError>, bool) {
+    let out = tempfile::tempdir().unwrap();
+    let work = root.join("target/entrega/9.9.9");
+    let o = Options { release: semver::Version::parse("9.9.9").unwrap(), out: out.path().to_path_buf(), work: work.clone(), run_suite: false };
+    let got = cut::cut(root, &o);
+    let left = work.exists() || out.path().join("9.9.9.toml").exists();
+    (got, left)
+}
+
+#[test]
+fn every_refusal_before_the_build_stops_the_cut_with_nothing_built() {
+    let workspace = "[workspace]\nmembers = [\"crates/veredas-core\"]\n";
+    let message = |got: Result<cut::Cut, CutError>| match got {
+        Err(e) => e.to_string(),
+        Ok(c) => panic!("cut: {:?}", c.manifest),
+    };
+
+    // The commit holds no recipe.
+    let (r, c) = repo_for_cut(workspace, None);
+    let (got, left) = trial_cut(r.dir.path());
+    assert_eq!(message(got), format!("commit {c} holds no tools/entrega/maquina/maquina.toml"));
+    assert!(!left);
+
+    // The commit's recipe refused by core's header reader, by a misspelled key and by a value.
+    for (from, to, want) in [
+        ("\nversion = 1\n", "\nversion = 2\n", None),
+        ("glibc = \"2.41\"", "glibcc = \"2.41\"", Some("a machine recipe: unknown field `glibcc`")),
+        ("glibc = \"2.41\"", "glibc = \"v2.41\"", Some("a machine recipe: `base.glibc` is `v2.41`, not a version of dotted digits")),
+    ] {
+        let (r, _) = repo_for_cut(workspace, Some(&recipe_with(from, to)));
+        let (got, left) = trial_cut(r.dir.path());
+        match (got, want) {
+            (Err(CutError::Recipe(RecipeError::Header(e))), None) => assert!(e.to_string().contains("version"), "{e}"),
+            (Err(CutError::Recipe(RecipeError::Invalid(e))), Some(w)) => assert!(format!("a machine recipe: {e}").starts_with(w), "{e}"),
+            (other, _) => panic!("{to}: {:?}", other.map(|c| c.manifest)),
+        }
+        assert!(!left, "{to}");
+    }
+
+    // The commit's components refused (its root manifest no workspace).
+    let (r, c) = repo_for_cut("[package]\nname = \"veredas-raiz\"\nversion = \"2.0.0\"\nedition = \"2024\"\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let (got, left) = trial_cut(r.dir.path());
+    assert_eq!(message(got), format!("commit {c}: its Cargo.toml is no workspace (`[workspace]`): cargo would look for one above the tree"));
+    assert!(!left);
+
+    // The manifest it would write refused against the repository (a shallow clone's history is
+    // cut), before anything runs.
+    let (r, _) = repo_for_cut(workspace, Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let shallow = tempfile::tempdir().unwrap();
+    let out = Command::new("git").args(["clone", "-q", "--depth", "1"]).arg(format!("file://{}", r.dir.path().display())).arg(shallow.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let (got, left) = trial_cut(shallow.path());
+    assert_eq!(message(got), "release 9.9.9 would not check:\nthe repository is a shallow clone: its history is cut, and a release is checked against the whole of it");
+    assert!(!left);
 }
