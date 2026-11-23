@@ -1113,3 +1113,277 @@ mod round_2 {
         assert!(e.contains("unknown field `staton`"), "{e}");
     }
 }
+
+/// C-112's third refute round: the critic's probes (`~/.cache/veredas/critic-c112-r3/probes`), kept
+/// as pins: the strict mute by the kernel's own send stamps, a mute lifted at once still dropping
+/// what waited, the shutdown after a rename naming what its frames named, a Get too large for a
+/// frame, the frame ids of a Hello, an Identify answer and a Set answer, a vendor not ASCII refused.
+mod round_3 {
+    use std::time::{Duration, Instant, SystemTime};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::dcp::{self, DcpPdu, Filter, Service, ServiceType};
+    use veredas_aranha::profinet::ether;
+    use veredas_aranha::profinet::lldp::{self, LldpPdu};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::*;
+
+    fn config(text: &str) -> ProfinetConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn link(iface: &str, ethertype: u16) -> RawLink {
+        RawLink::open_with(iface, Options { ethertype: Some(ethertype), promiscuous: false, outgoing: false }).unwrap()
+    }
+
+    fn next_dcp(link: &RawLink, within: Duration) -> Option<DcpPdu> {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            let r = link.recv(within.saturating_sub(started.elapsed())).unwrap()?;
+            let f = ether::parse(&r.bytes).unwrap();
+            if f.ethertype == ether::ETHERTYPE_PROFINET {
+                return Some(dcp::decode(f.payload).unwrap());
+            }
+        }
+        None
+    }
+
+    const DEVICE: &str = "interface = \"b0\"\nstation = \"io-device-1\"\nalias = \"port-001.switch-1\"\nvendor_id = 7\ndevice_id = 9\nip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\nlldp_interval_ms = 200\nseed = 3\nhello = false\n";
+
+    /// A packet socket on the device's own end with the kernel's send stamp (SO_TIMESTAMPNS): a frame
+    /// the device sends is stamped as it is handed to the interface (dev_queue_xmit_nit), inside the
+    /// device's `send` call.
+    struct Tap {
+        fd: i32,
+    }
+
+    impl Tap {
+        fn open(iface: &str) -> Tap {
+            unsafe {
+                let all = (libc::ETH_P_ALL as u16).to_be();
+                let fd = libc::socket(libc::AF_PACKET, libc::SOCK_RAW | libc::SOCK_CLOEXEC, i32::from(all));
+                assert!(fd >= 0, "socket: {}", std::io::Error::last_os_error());
+                let name = std::ffi::CString::new(iface).unwrap();
+                let index = libc::if_nametoindex(name.as_ptr());
+                assert!(index > 0);
+                let mut addr: libc::sockaddr_ll = std::mem::zeroed();
+                addr.sll_family = libc::AF_PACKET as u16;
+                addr.sll_protocol = all;
+                addr.sll_ifindex = index as i32;
+                let rc = libc::bind(fd, (&raw const addr).cast(), std::mem::size_of::<libc::sockaddr_ll>() as u32);
+                assert!(rc == 0, "bind: {}", std::io::Error::last_os_error());
+                let on: libc::c_int = 1;
+                let rc = libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_TIMESTAMPNS, (&raw const on).cast(), 4);
+                assert!(rc == 0, "SO_TIMESTAMPNS: {}", std::io::Error::last_os_error());
+                let size: libc::c_int = 8 << 20;
+                libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVBUF, (&raw const size).cast(), 4);
+                Tap { fd }
+            }
+        }
+
+        /// The next frame within `timeout`: its bytes, the kernel's stamp, its packet type.
+        fn recv(&self, timeout: Duration) -> Option<(Vec<u8>, SystemTime, u8)> {
+            unsafe {
+                let mut pfd = libc::pollfd { fd: self.fd, events: libc::POLLIN, revents: 0 };
+                let rc = libc::poll(&raw mut pfd, 1, timeout.as_millis() as i32);
+                if rc <= 0 {
+                    return None;
+                }
+                let mut buf = vec![0u8; 2048];
+                let mut from: libc::sockaddr_ll = std::mem::zeroed();
+                let mut iov = libc::iovec { iov_base: buf.as_mut_ptr().cast(), iov_len: buf.len() };
+                let mut control = [0u64; 32];
+                let mut msg: libc::msghdr = std::mem::zeroed();
+                msg.msg_name = (&raw mut from).cast();
+                msg.msg_namelen = std::mem::size_of::<libc::sockaddr_ll>() as u32;
+                msg.msg_iov = &raw mut iov;
+                msg.msg_iovlen = 1;
+                msg.msg_control = control.as_mut_ptr().cast();
+                msg.msg_controllen = std::mem::size_of_val(&control);
+                let n = libc::recvmsg(self.fd, &raw mut msg, libc::MSG_DONTWAIT);
+                if n < 0 {
+                    return None;
+                }
+                buf.truncate(n as usize);
+                let mut stamp = None;
+                let mut cmsg = libc::CMSG_FIRSTHDR(&raw const msg);
+                while !cmsg.is_null() {
+                    if (*cmsg).cmsg_level == libc::SOL_SOCKET && (*cmsg).cmsg_type == libc::SCM_TIMESTAMPNS {
+                        let ts: libc::timespec = std::ptr::read_unaligned(libc::CMSG_DATA(cmsg).cast());
+                        stamp = Some(SystemTime::UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32));
+                    }
+                    cmsg = libc::CMSG_NXTHDR(&raw const msg, cmsg);
+                }
+                Some((buf, stamp.expect("a kernel stamp"), from.sll_pkttype))
+            }
+        }
+    }
+
+    /// DCP answers the device sent (stamp, frame id, service, type), read from the tap until it is
+    /// quiet for `quiet`.
+    fn drain_answers(tap: &Tap, dev: Mac, quiet: Duration) -> Vec<(SystemTime, u16, Service, ServiceType)> {
+        let mut out = Vec::new();
+        while let Some((bytes, at, kind)) = tap.recv(quiet) {
+            if kind != libc::PACKET_OUTGOING {
+                continue;
+            }
+            let Ok(f) = ether::parse(&bytes) else { continue };
+            if f.src != dev || f.ethertype != ether::ETHERTYPE_PROFINET {
+                continue;
+            }
+            if let Ok(p) = dcp::decode(f.payload) {
+                out.push((at, p.frame_id, p.service, p.service_type));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn no_dcp_frame_is_handed_to_the_interface_after_the_mute_returns() {
+        // Bursts of 200 Identify requests (factor 1), Sets of the signal and Gets, the mute at a
+        // different moment each round: every DCP answer is stamped by the kernel as it is handed
+        // to the interface, and none carries a stamp past the moment `set_muted(true)` returned.
+        netns::isolated("round_3::no_dcp_frame_is_handed_to_the_interface_after_the_mute_returns", &[("a0", "b0")], || {
+            let tap = Tap::open("b0");
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            drain_answers(&tap, dev.mac, Duration::from_millis(50));
+            let (mut late, mut total, mut cut) = (Vec::new(), 0usize, 0u32);
+            for round in 0..150u32 {
+                let kind = ["identify", "set", "get"][round as usize % 3];
+                dev.set_muted(false);
+                for i in 0..200u32 {
+                    let f = match kind {
+                        "identify" => dcp::identify_request(me, round * 1000 + i, 1, &Filter::All).unwrap(),
+                        "set" => dcp::signal_request(dev.mac, me, round * 1000 + i).unwrap(),
+                        _ => dcp::get_request(dev.mac, me, round * 1000 + i, &[(2, 2)]).unwrap(),
+                    };
+                    ctl.send(&f).unwrap();
+                }
+                std::thread::sleep(Duration::from_micros(u64::from(round % 12) * 100));
+                dev.set_muted(true);
+                let returned = SystemTime::now();
+                let answers = drain_answers(&tap, dev.mac, Duration::from_millis(60));
+                while ctl.recv(Duration::from_millis(1)).unwrap().is_some() {}
+                total += answers.len();
+                if answers.len() < 200 {
+                    cut += 1;
+                }
+                for (at, _, service, _) in answers {
+                    if at > returned {
+                        late.push(format!("round {round} ({kind}): {service:?} {:?} after the mute returned", at.duration_since(returned).unwrap()));
+                    }
+                }
+            }
+            assert!(total > 0 && cut > 0, "no burst cut by the mute");
+            assert_eq!(late, Vec::<String>::new());
+        });
+    }
+
+    #[test]
+    fn a_mute_lifted_at_once_still_drops_the_answer_that_waited() {
+        netns::isolated("round_3::a_mute_lifted_at_once_still_drops_the_answer_that_waited", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            for round in 0..5u32 {
+                ctl.send(&dcp::identify_request(me, 500 + round, 200, &Filter::All).unwrap()).unwrap();
+                std::thread::sleep(Duration::from_millis(2));
+                dev.set_muted(true);
+                dev.set_muted(false);
+                assert_eq!(next_dcp(&ctl, Duration::from_millis(2100)).map(|p| p.xid), None, "round {round}");
+            }
+            assert_eq!(dev.status().identify_answered, 0);
+            // An Identify after the mute was lifted is answered as ever.
+            ctl.send(&dcp::identify_request(me, 600, 1, &Filter::All).unwrap()).unwrap();
+            assert_eq!(next_dcp(&ctl, Duration::from_millis(500)).map(|p| p.xid), Some(600));
+        });
+    }
+
+    fn lldp_until(link: &RawLink, within: Duration, mut stop: impl FnMut(&LldpPdu) -> bool) -> Vec<LldpPdu> {
+        let mut seen = Vec::new();
+        let started = Instant::now();
+        while started.elapsed() < within {
+            if let Some(r) = link.recv(Duration::from_millis(50)).unwrap() {
+                let f = ether::parse(&r.bytes).unwrap();
+                if f.ethertype == ether::ETHERTYPE_LLDP {
+                    let p = lldp::decode(f.payload).unwrap();
+                    let done = stop(&p);
+                    seen.push(p);
+                    if done {
+                        break;
+                    }
+                }
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn the_shutdown_after_a_rename_names_what_its_frames_named() {
+        netns::isolated("round_3::the_shutdown_after_a_rename_names_what_its_frames_named", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let lctl = link("a0", ether::ETHERTYPE_LLDP);
+            let me = ctl.mac();
+            // The reference's interval: a rename and a stop within it.
+            let dev = start(&config(&DEVICE.replace("lldp_interval_ms = 200", "lldp_interval_ms = 1000"))).unwrap();
+            let first = lldp_until(&lctl, Duration::from_secs(2), |_| true);
+            ctl.send(&dcp::set_name_request(dev.mac, me, 2, "renamed-1", true).unwrap()).unwrap();
+            assert!(next_dcp(&ctl, Duration::from_millis(500)).is_some(), "the Set's answer");
+            dev.stop();
+            let rest = lldp_until(&lctl, Duration::from_secs(2), |p| p.ttl == 0);
+            let shutdown = rest.iter().find(|p| p.ttl == 0).expect("a shutdown");
+            let named: Vec<_> = first.iter().chain(rest.iter()).filter(|p| p.ttl > 0).map(|p| (&p.chassis, &p.port)).collect();
+            assert_eq!((&shutdown.chassis, &shutdown.port), (&first[0].chassis, &first[0].port));
+            assert!(named.contains(&(&shutdown.chassis, &shutdown.port)), "{named:?}");
+        });
+    }
+
+    #[test]
+    fn a_get_whose_answer_would_not_fit_a_frame_is_neither_answered_nor_counted() {
+        netns::isolated("round_3::a_get_whose_answer_would_not_fit_a_frame_is_neither_answered_nor_counted", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            let pairs: Vec<(u8, u8)> = (0..200u8).map(|i| (0x80, i)).collect();
+            ctl.send(&dcp::get_request(dev.mac, me, 9, &pairs).unwrap()).unwrap();
+            assert!(next_dcp(&ctl, Duration::from_millis(500)).is_none());
+            assert_eq!(dev.status().gets, 0);
+            ctl.send(&dcp::get_request(dev.mac, me, 10, &[(2, 2)]).unwrap()).unwrap();
+            assert_eq!(next_dcp(&ctl, Duration::from_millis(500)).map(|p| p.xid), Some(10));
+            assert_eq!(dev.status().gets, 1);
+        });
+    }
+
+    #[test]
+    fn a_hello_an_identify_answer_and_a_set_answer_go_under_their_frame_ids() {
+        netns::isolated("round_3::a_hello_an_identify_answer_and_a_set_answer_go_under_their_frame_ids", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(&DEVICE.replace("hello = false\n", ""))).unwrap();
+            let hello = next_dcp(&ctl, Duration::from_millis(500)).unwrap();
+            assert_eq!((hello.service, hello.frame_id), (Service::Hello, 0xFEFC));
+            ctl.send(&dcp::identify_request(me, 1, 1, &Filter::All).unwrap()).unwrap();
+            let answer = next_dcp(&ctl, Duration::from_millis(500)).unwrap();
+            assert_eq!((answer.service, answer.service_type, answer.frame_id), (Service::Identify, ServiceType::Success, dcp::FRAME_ID_IDENTIFY_RES));
+            ctl.send(&dcp::signal_request(dev.mac, me, 2).unwrap()).unwrap();
+            let set = next_dcp(&ctl, Duration::from_millis(500)).unwrap();
+            assert_eq!((set.service, set.frame_id), (Service::Set, dcp::FRAME_ID_GET_SET));
+        });
+    }
+
+    #[test]
+    fn a_vendor_text_dcp_cannot_carry_is_refused_before_anything_opens() {
+        for vendor in ["Fábrica de bancada", "", &"v".repeat(256), "tab\there"] {
+            let mut cfg = ProfinetConfig::new("b0");
+            cfg.vendor = vendor.to_string();
+            assert_eq!(validate(&cfg).err().map(|e| e.to_string()), Some(format!("profinet.vendor `{vendor}`: 1 to 255 visible ASCII characters")), "{vendor:?}");
+        }
+        let mut cfg = ProfinetConfig::new("b0");
+        cfg.vendor = "v".repeat(255);
+        assert!(validate(&cfg).is_ok());
+    }
+}

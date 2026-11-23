@@ -182,10 +182,12 @@ pub fn validate(cfg: &ProfinetConfig) -> Result<(), ProfinetError> {
     if cfg.lldp_interval_ms > MAX_LLDP_INTERVAL_MS {
         return Err(bad(format!("profinet.lldp_interval_ms: {}, over {MAX_LLDP_INTERVAL_MS} (an hour, 802.1AB's longest)", cfg.lldp_interval_ms)));
     }
-    if cfg.vendor.is_empty() || cfg.vendor.len() > 255 {
-        return Err(bad("profinet.vendor: 1 to 255 characters".into()));
-    }
     let visible = |t: &str| t.bytes().all(|b| (0x20..=0x7E).contains(&b));
+    // DCP carries the vendor's text as visible ASCII: another byte would silence every frame that
+    // names the device (its Hello, its Identify answers, a Get of it).
+    if cfg.vendor.is_empty() || cfg.vendor.len() > 255 || !visible(&cfg.vendor) {
+        return Err(bad(format!("profinet.vendor `{}`: 1 to 255 visible ASCII characters", cfg.vendor)));
+    }
     if cfg.order_id.is_empty() || cfg.order_id.len() > 20 || !visible(&cfg.order_id) {
         return Err(bad(format!("profinet.order_id `{}`: 1 to 20 visible characters", cfg.order_id)));
     }
@@ -244,6 +246,9 @@ struct State {
     /// The neighbour its LLDP reception heard last on its port, and when its information ages
     /// out (its frame's TTL from when it was heard); gone sooner with its own TTL of 0.
     neighbour: Option<(Peer, Instant)>,
+    /// How many times the DCP was muted: an Identify answer queued before a mute is never sent,
+    /// even when the mute is lifted before the device's thread sees it.
+    mutes: u64,
 }
 
 struct Shared {
@@ -301,8 +306,11 @@ impl ProfinetHandle {
     /// leaves the device: the flag is set under the lock every DCP answer is decided and sent
     /// under, so an answer either went out before the call took the lock or never does.
     pub fn set_muted(&self, muted: bool) {
-        let _state = self.shared.lock();
+        let mut state = self.shared.lock();
         self.shared.muted.store(muted, Ordering::SeqCst);
+        if muted {
+            state.mutes += 1;
+        }
     }
 
     pub fn status(&self) -> ProfinetStatus {
@@ -373,7 +381,7 @@ pub fn start(cfg: &ProfinetConfig) -> Result<ProfinetHandle, ProfinetError> {
         .map_err(|e| ProfinetError::Link(e.to_string()))?;
     let mac = link.mac();
     let shared = Arc::new(Shared {
-        state: Mutex::new(State { identity: identity_of(cfg, mac), status: ProfinetStatus::new(mac), neighbour: None }),
+        state: Mutex::new(State { identity: identity_of(cfg, mac), status: ProfinetStatus::new(mac), neighbour: None, mutes: 0 }),
         muted: AtomicBool::new(false),
         stop: AtomicBool::new(false),
     });
@@ -414,7 +422,11 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
         None => Pcg32::from_entropy(0x0D0C),
     };
     let mac = link.mac();
-    let mut pending: Vec<(Instant, Vec<u8>)> = Vec::new();
+    // Identify answers waiting out their delay: when due, the frame, the mutes counted when queued.
+    let mut pending: Vec<(Instant, Vec<u8>, u64)> = Vec::new();
+    // The identity the last LLDP frame named: the shutdown names the same chassis and port, so a
+    // neighbour forgets what it heard (a rename since is not in it).
+    let mut last_lldp: Option<DeviceIdentity> = None;
     let every = Duration::from_millis(cfg.lldp_interval_ms);
     let mut next_lldp = Instant::now();
     // The RPC server's boot time: the start, in seconds since the epoch.
@@ -423,7 +435,7 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
     loop {
         if shared.stop.load(Ordering::SeqCst) {
             if cfg.lldp_interval_ms > 0 {
-                let id = shared.lock().identity.clone();
+                let id = last_lldp.take().unwrap_or_else(|| shared.lock().identity.clone());
                 if let Some(f) = lldp_frame(mac, &cfg, &id, 0) {
                     let _ = link.send(&f);
                 }
@@ -437,6 +449,7 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                 && link.send(&f).is_ok()
             {
                 shared.lock().status.lldp_sent += 1;
+                last_lldp = Some(id);
             }
             while next_lldp <= now {
                 next_lldp += every;
@@ -445,15 +458,16 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
         if shared.muted.load(Ordering::SeqCst) {
             pending.clear();
         }
-        pending.retain(|(due, frame)| {
+        pending.retain(|(due, frame, mutes)| {
             if *due > now {
                 return true;
             }
             // Decided and sent under the lock `set_muted` takes: an answer whose time comes once a
-            // mute has returned is never sent. Counted as it goes out, so whoever reads the answer
-            // finds it counted; a send that fails takes it back.
+            // mute has returned is never sent, nor one queued before a mute since lifted. Counted
+            // as it goes out, so whoever reads the answer finds it counted; a send that fails takes
+            // it back.
             let mut state = shared.lock();
-            if !shared.muted.load(Ordering::SeqCst) {
+            if !shared.muted.load(Ordering::SeqCst) && state.mutes == *mutes {
                 state.status.identify_answered += 1;
                 if link.send(frame).is_err() {
                     state.status.identify_answered -= 1;
@@ -533,11 +547,13 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                     continue;
                 }
                 let Ok(answer) = dcp::identify_response(frame.src, mac, pdu.xid, &state.identity) else { continue };
+                // The mutes so far, read with the answer: a mute from now on drops it.
+                let mutes = state.mutes;
                 drop(state);
                 // Spread over the request's response delay: a factor of 1 (or 0) answers at once,
                 // a factor of n anywhere within (n - 1) steps of 10 ms.
                 let spread = if pdu.response_delay > 1 { (rng.next_u32() as u64) % (u64::from(pdu.response_delay - 1) * 10_000 + 1) } else { 0 };
-                pending.push((Instant::now() + Duration::from_micros(spread), answer));
+                pending.push((Instant::now() + Duration::from_micros(spread), answer, mutes));
             }
             // A Set and a Get are taken and answered under the lock `set_muted` takes, as an
             // Identify answer is sent: a mute that returned first leaves the request untaken.
@@ -556,7 +572,6 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                 if shared.muted.load(Ordering::SeqCst) {
                     continue;
                 }
-                state.status.gets += 1;
                 let held = state.identity.blocks();
                 // Each pair asked, in the order asked: the block, or a control response saying the
                 // suboption is not there (0x02, "suboption not supported or no DataSet available").
@@ -573,8 +588,11 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                     })
                     .collect();
                 let answer = DcpPdu { frame_id: dcp::FRAME_ID_GET_SET, service: Service::Get, service_type: ServiceType::Success, xid: pdu.xid, response_delay: 0, blocks, trailing: Vec::new() };
-                if let Ok(f) = answer.frame(frame.src, mac) {
-                    let _ = link.send(&f);
+                // An answer that would not fit one frame is not sent, nor the Get counted.
+                if let Ok(f) = answer.frame(frame.src, mac)
+                    && link.send(&f).is_ok()
+                {
+                    state.status.gets += 1;
                 }
             }
             _ => {}

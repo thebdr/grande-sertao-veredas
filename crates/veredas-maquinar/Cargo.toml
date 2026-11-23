@@ -52,6 +52,10 @@ bytes = { workspace = true }
 ethercrab = { workspace = true }
 futures-lite = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# The kernel's own stamp of a frame as it is sent (tests/profinet_device.rs, the strict mute).
+libc = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 # The bench holds the host's timer at a millisecond while it runs (timer.rs, Q13).
 windows-sys = { version = "0.59", features = ["Win32_Media", "Win32_System_Threading", "Win32_Foundation"] }

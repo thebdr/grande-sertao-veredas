@@ -4422,6 +4422,7 @@ dependencies = [
  "ethernetip-connections",
  "ethernetip-core",
  "futures-lite",
+ "libc",
  "rapier3d",
  "regex",
  "serde",

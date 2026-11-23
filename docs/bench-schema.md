@@ -402,7 +402,7 @@ its I&M0 and its port's data.
 - `station` (`""`): its station name, the standard's rule for one; empty for a device not yet
   named, which answers no Identify by name.
 - `alias` (none): its alias name, a port name, a dot and a station name (`port-001.switch-1`).
-- `vendor` (`"veredas bench device"`): the vendor's text for its type, 1 to 255 characters.
+- `vendor` (`"veredas bench device"`): the vendor's text for its type, 1 to 255 visible ASCII characters.
 - `vendor_id` (`0`), `device_id` (`0`): its vendor and device ids.
 - `ip` (none): its IP suite, as an inline table; absent, 0.0.0.0 and not set.
 - `hello` (`true`): a Hello at start.
