@@ -320,5 +320,15 @@ classes, the report, the corpus list, and the parity test.
 - **XML reads a carriage return as a line feed**: a text holding one is written `_x000D_`.
 - **Excel writes a volatile array's spilled cells with an empty `<f ca="1"/>`**: a placeholder,
   not a formula; and a move can leave the engine a spilled cell outside its array, read empty.
+- **What reads a random cell is unstable only while it does** (C-223's third round): exempt a
+  cell from "moved" only if it is unstable before the edits and after them, or a formula the
+  edits made deterministic keeps a stale cache.
+- **References hide outside the formulas the engine reads**: a table's totals row and sort, a
+  chartEx (`cx:f`, its own relationship type), a shape's `textlink`, an autoFilter's `colId`
+  (counted from its first column) and its sort. Verification cannot see them: each has its test.
+- **Excel writes `#SPILL!` and `#CALC!` as `#VALUE!`** with value metadata in rich-data parts;
+  the patcher writes `#VALUE!` alone.
+- **The engine names a workbook after its file** (`CELL("filename")`): the model is named after
+  the destination before the first evaluation the patch compares.
 - **Calamine 0.26 does not build with zip 2.6**: the lock holds zip 2.4.2, the version Veredas 1's
   lock had.

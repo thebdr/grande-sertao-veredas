@@ -735,9 +735,12 @@ impl Before {
 
     /// Whether the edits moved the engine's value of the formula that was at
     /// `orig` on sheet `sheet` and evaluates to `live` now.
-    fn moved(&self, sheet: u32, orig: (i32, i32), live: &Value) -> bool {
+    /// `unstable_now`: whether the cell, where it is after the edits, is unstable in the edited
+    /// workbook. A cell is exempt only when it is unstable both before and after: one the edits
+    /// made deterministic (its random input replaced, deleted) has a value to bring its cache to.
+    fn moved(&self, sheet: u32, orig: (i32, i32), live: &Value, unstable_now: bool) -> bool {
         let s = sheet as usize;
-        if self.unstable.get(s).is_some_and(|u| u.contains(&orig)) {
+        if unstable_now && self.unstable.get(s).is_some_and(|u| u.contains(&orig)) {
             return false;
         }
         match self.values.get(s).and_then(|m| m.get(&orig)) {
@@ -934,6 +937,14 @@ pub fn patch(
         LinkChoice::UseCached
     })?;
     let mut wb = Workbook::from_model(opened.model, crate::book::Origin::New);
+    // the workbook the model computes is the destination (`CELL("filename")` names it), from the
+    // first evaluation the patch compares
+    if let Some(stem) = dest.file_stem().map(|s| s.to_string_lossy().to_string())
+        && stem != wb.model().workbook.name
+    {
+        wb.model_mut().workbook.name = stem;
+        wb.recalc();
+    }
     if crate::files::contents(source).map_err(|e| io_err(source, e))? != fingerprint {
         return Err(PatchError::SourceMoved(source.to_path_buf()));
     }
@@ -1051,18 +1062,26 @@ pub fn patch(
                 let s = sheet_ix(&wb, sheet)?;
                 let ar = Area::parse(area).map_err(|e| fail(e.to_string()))?;
                 let canonical = wb.sheet_name(s).map_err(|e| fail(e.to_string()))?;
-                let existing: Vec<Addr> = wb
+                let inside = |row: i32, col: i32| {
+                    row >= ar.first.row && row <= ar.last.row && col >= ar.first.column && col <= ar.last.column
+                };
+                // a cell an array spills into from outside the area is the array's: Excel's clear
+                // leaves it, as it leaves a value edit (an anchor inside clears the whole array)
+                let spilled_from_outside = |a: &Addr| {
+                    wb.model().workbook.worksheet(s).ok().and_then(|ws| ws.cell(a.row, a.column)).is_some_and(|c| {
+                        matches!(c.as_ref(), Cell::SpillCell { a: (r, c), .. } if !inside(*r, *c))
+                    })
+                };
+                let (left, existing): (Vec<Addr>, Vec<Addr>) = wb
                     .cells(s)
                     .map_err(|e| fail(e.to_string()))?
                     .into_iter()
                     .map(|(a, _)| a)
-                    .filter(|a| {
-                        a.row >= ar.first.row
-                            && a.row <= ar.last.row
-                            && a.column >= ar.first.column
-                            && a.column <= ar.last.column
-                    })
-                    .collect();
+                    .filter(|a| inside(a.row, a.column))
+                    .partition(|a| spilled_from_outside(a));
+                if !left.is_empty() {
+                    outcome.note = format!("{canonical}!{area}: {} cell(s) an array spills into left to it", left.len());
+                }
                 wb.clear(s, ar).map_err(|e| fail(e.to_string()))?;
                 for a in existing {
                     writes.push(PendingWrite {
@@ -1271,6 +1290,11 @@ pub fn patch(
 
     fixed.reference();
     wb.recalc();
+    // what is unstable after the edits, by final position, measured as before them
+    let unstable_after = {
+        let values = Before::snapshot(&wb);
+        Before::unstable(&mut wb, &values, &fixed)
+    };
 
     // ---- the plan at final positions -------------------------------------
     let order: Vec<String> = wb.sheet_names();
@@ -1370,7 +1394,10 @@ pub fn patch(
     let holds_cell = |name: &str, at: (i32, i32)| {
         in_file.as_ref().is_none_or(|f| f.get(&name.to_lowercase()).is_some_and(|s| s.contains(&at)))
     };
-    let unstable = |i: usize, orig: &(i32, i32)| before.unstable.get(i).is_some_and(|u| u.contains(orig));
+    // exempt: unstable before the edits and, where it is now, after them
+    let unstable = |i: usize, orig: &(i32, i32), now: (i32, i32)| {
+        before.unstable.get(i).is_some_and(|u| u.contains(orig)) && unstable_after.get(i).is_some_and(|u| u.contains(&now))
+    };
     if spills_now {
         for (i, ws) in wb.model().workbook.worksheets.iter().enumerate() {
             let name = order.get(i).cloned().unwrap_or_default();
@@ -1390,7 +1417,7 @@ pub fn patch(
             for (row, col) in spilled {
                 let v = wb.value_now(i as u32, Addr::new(row, col)).map_err(|e| PatchError::Malformed(e.to_string()))?;
                 if let Some((orig, then)) = was.get(&(row, col))
-                    && (same(then, &v) || unstable(i, orig))
+                    && (same(then, &v) || unstable(i, orig, (row, col)))
                 {
                     continue;
                 }
@@ -1403,10 +1430,21 @@ pub fn patch(
         }
     }
     let computes = |i: usize, at: (i32, i32)| wb.model().workbook.worksheet(i as u32).is_ok_and(|ws| computed_at(ws, at));
+    // a cell an edit wrote a value into that the engine computes now (an array spilling into it)
+    // must say what the engine says
+    for (name, cells) in &final_writes {
+        let Some(i) = order.iter().position(|o| o.eq_ignore_ascii_case(name)) else { continue };
+        for (&(row, col), w) in cells {
+            if matches!(w.content, Some(NewContent::Value(_))) && computes(i, (row, col)) {
+                let live = wb.value_now(i as u32, Addr::new(row, col)).unwrap_or(Value::Empty);
+                expected.push((name.clone(), row, col, live));
+            }
+        }
+    }
     for (i, values) in before.values.iter().enumerate() {
         let Some(name) = order.get(i) else { continue };
         for (orig, was) in values {
-            if unstable(i, orig) && map_pos(name, 0, orig.0, orig.1).is_some_and(|p| computes(i, p)) {
+            if map_pos(name, 0, orig.0, orig.1).is_some_and(|p| unstable(i, orig, p) && computes(i, p)) {
                 continue;
             }
             let Some((row, col)) = map_pos(name, 0, orig.0, orig.1) else { continue };
@@ -1563,8 +1601,9 @@ pub fn patch(
             wb.value_now(sheet_index, Addr::new(row, col))
                 .unwrap_or(Value::Empty)
         };
-        let moved = |orig: (i32, i32), live: &Value| -> bool {
-            fresh.is_none() && before.moved(sheet_index, orig, live)
+        let moved = |orig: (i32, i32), new: (i32, i32), live: &Value| -> bool {
+            let unstable_now = unstable_after.get(sheet_index as usize).is_some_and(|u| u.contains(&new));
+            fresh.is_none() && before.moved(sheet_index, orig, live, unstable_now)
         };
         let extents_now = wb
             .model()
@@ -1651,11 +1690,10 @@ pub fn patch(
                             // charts hang off the drawing; their series formulas
                             // may point at any moved sheet
                             shift_charts(&mut pkg, &r.target, &shifts, &order, &mut replaced)?;
-                            if own.is_empty() {
-                                None
-                            } else {
-                                package::shift_drawing(&content, &own)
-                            }
+                            // the anchors follow this sheet's moves; a shape's text link any move
+                            let anchored = if own.is_empty() { None } else { package::shift_drawing(&content, &own) };
+                            let base = anchored.clone().unwrap_or(content.clone());
+                            package::shift_textlinks(&base, &shifts, Some(name), &order).or(anchored)
                         }
                         "table" => {
                             let t = if own.is_empty() {
@@ -1664,14 +1702,18 @@ pub fn patch(
                                 package::shift_table(&content, &own)?
                             };
                             let base = t.clone().unwrap_or(content.clone());
-                            package::shift_formula_elements(
+                            // a column's formula and its totals row's
+                            let calculated = package::shift_formula_elements(
                                 &base,
                                 "calculatedColumnFormula",
                                 &shifts,
                                 Some(name),
                                 &order,
-                            )
-                            .or(t)
+                            );
+                            let base = calculated.clone().unwrap_or(base);
+                            package::shift_formula_elements(&base, "totalsRowFormula", &shifts, Some(name), &order)
+                                .or(calculated)
+                                .or(t)
                         }
                         _ => None,
                     };
@@ -1852,9 +1894,15 @@ fn shift_charts(
     }
     let dx = pkg.read_text(&drels)?;
     for c in package::rels(drawing, &dx) {
-        if c.kind == "chart" && !c.external && pkg.has(&c.target) && !replaced.contains_key(&c.target) {
+        // a chart's series formulas are `c:f`, a chartEx's (Excel 2016's charts) `cx:f`
+        let element = match c.kind.as_str() {
+            "chart" => "c:f",
+            "chartEx" => "cx:f",
+            _ => continue,
+        };
+        if !c.external && pkg.has(&c.target) && !replaced.contains_key(&c.target) {
             let cx = pkg.read_text(&c.target)?;
-            if let Some(n) = package::shift_formula_elements(&cx, "c:f", shifts, None, order) {
+            if let Some(n) = package::shift_formula_elements(&cx, element, shifts, None, order) {
                 replaced.insert(c.target.clone(), n.into_bytes());
             }
         }

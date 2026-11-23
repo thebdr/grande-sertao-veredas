@@ -78,7 +78,8 @@ pub(crate) struct SheetJob<'a> {
     /// Whether the edits moved the engine's value of the formula that was at
     /// an ORIGINAL position and evaluates to the given value now — the only
     /// formulas whose cache the rewrite may touch.
-    pub moved: &'a dyn Fn((i32, i32), &Value) -> bool,
+    /// (Its final position given too: a cell unstable before the edits and after them is exempt.)
+    pub moved: &'a dyn Fn((i32, i32), (i32, i32), &Value) -> bool,
     /// The dynamic array that was anchored at an ORIGINAL position and is at a final one: how many
     /// rows and columns it spilled over before the edits (`None` for one they made) and spills
     /// over now; `None` where the engine holds no dynamic array (a CSE array's `ref` moves with
@@ -144,6 +145,8 @@ pub(crate) fn same_value(cached: &Value, live: &Value) -> bool {
     match (cached, live) {
         (Value::Number(a), Value::Number(b)) => a == b || format!("{a:.14e}") == format!("{b:.14e}"),
         (Value::Empty, Value::Text(t)) | (Value::Text(t), Value::Empty) => t.is_empty(),
+        // a `#SPILL!` or `#CALC!` is cached as `#VALUE!` (see `cached_xml`)
+        (Value::Error(a), Value::Error(b)) if a == "#VALUE!" && (b == "#SPILL!" || b == "#CALC!") => true,
         (a, b) => a == b,
     }
 }
@@ -166,6 +169,10 @@ fn cached_xml(v: &Value) -> (Option<&'static str>, String) {
         Value::Number(n) => (None, format!("<v>{}</v>", number(*n))),
         Value::Text(s) => (Some("str"), text_element("v", s)),
         Value::Bool(b) => (Some("b"), format!("<v>{}</v>", u8::from(*b))),
+        // `#SPILL!` and `#CALC!` Excel writes as `#VALUE!`, marking them with value metadata in
+        // rich-data parts the patcher does not write: `#VALUE!` alone is the spelling every reader
+        // takes, Excel's before it knew the two
+        Value::Error(e) if e == "#SPILL!" || e == "#CALC!" => (Some("e"), "<v>#VALUE!</v>".to_string()),
         Value::Error(e) => (Some("e"), format!("<v>{}</v>", escape_text(e))),
         Value::Empty => (Some("str"), "<v></v>".to_string()),
     }
@@ -969,7 +976,7 @@ fn rewrite_cell(
             // formula the engine reads differently from the file for its own
             // reasons keeps the file's cache, whatever happened to its text
             let live = (job.value_at)(new.0, new.1);
-            let moved = (job.moved)(orig, &live);
+            let moved = (job.moved)(orig, new, &live);
             let v_raw = xml::find_open(&new_inner, "v", 0).map(|v| {
                 if v.self_closing {
                     (v.start, v.end, Some(""))
@@ -985,10 +992,9 @@ fn rewrite_cell(
             if moved && !same_value(&cached, &live) {
                 let (t, v) = cached_xml(&live);
                 new_tag = set_or_remove(&new_tag, "t", t);
-                // value metadata marks a cached `#SPILL!` or `#CALC!`: another value drops it
-                if !matches!(&live, Value::Error(e) if e == "#SPILL!" || e == "#CALC!") {
-                    new_tag = remove_attr(&new_tag, "vm");
-                }
+                // value metadata marks what a cached `#VALUE!` stands for (`#SPILL!`, `#CALC!`): a
+                // refreshed cache is written without it (see `cached_xml`)
+                new_tag = remove_attr(&new_tag, "vm");
                 new_inner = match v_raw {
                     Some((a, b, _)) => format!("{}{}{}", &new_inner[..a], v, &new_inner[b..]),
                     None => {
@@ -1016,7 +1022,7 @@ fn rewrite_cell(
         // value, Excel would read it as a constant); a plain value is never the engine's to move
         // (`moved` is false for a cell the engine did not compute)
         let live = (job.value_at)(new.0, new.1);
-        if (job.moved)(orig, &live) || (job.left)(orig, new) {
+        if (job.moved)(orig, new, &live) || (job.left)(orig, new) {
             out.refreshed += 1;
             return Ok(match spilled_cell(new.0, new.1, attr(&new_tag, "s"), &live) {
                 Some(s) => CellOut::New(s),
@@ -1308,8 +1314,8 @@ fn rewrite_tail(tail: &str, job: &SheetJob, own: &[Shift]) -> Option<String> {
     Some(fix_counts(&out))
 }
 
-const DROP_IF_GONE_TAG: &[&str] = &["mergeCell", "hyperlink", "ignoredError", "protectedRange"];
-const DROP_IF_GONE_ELEMENT: &[&str] = &["conditionalFormatting", "dataValidation", "autoFilter"];
+const DROP_IF_GONE_TAG: &[&str] = &["mergeCell", "hyperlink", "ignoredError", "protectedRange", "sortCondition"];
+const DROP_IF_GONE_ELEMENT: &[&str] = &["conditionalFormatting", "dataValidation", "autoFilter", "sortState"];
 const FORMULA_TEXT: &[&str] = &["formula", "formula1", "formula2", "xm:f"];
 const X14_ELEMENTS: &[&str] = &["x14:conditionalFormatting", "x14:dataValidation"];
 
@@ -1368,6 +1374,9 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
     // the original `sqref` of the conditional format or validation being walked: its formulas are
     // relative to its top-left cell
     let mut local: Option<String> = None;
+    // the autoFilter being walked: its first column before the moves and after them (a filter
+    // column's `colId` counts from it)
+    let mut filter: Option<(i32, i32)> = None;
     let row_shifts: Vec<Shift> = own.iter().copied().filter(|x| x.is_rows()).collect();
     let col_shifts: Vec<Shift> = own.iter().copied().filter(|x| !x.is_rows()).collect();
     let mut in_breaks: Option<bool> = None; // Some(true) = rowBreaks
@@ -1380,6 +1389,9 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
             }
             if t.name == "conditionalFormatting" || t.name == "dataValidation" {
                 local = None;
+            }
+            if t.name == "autoFilter" {
+                filter = None;
             }
             out.push_str(t.text);
             continue;
@@ -1414,9 +1426,6 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
                 "ref"
             };
             let mut text = t.text.to_string();
-            if (name == "conditionalFormatting" || name == "dataValidation") && !t.self_closing {
-                local = attr(t.text, "sqref").map(str::to_string);
-            }
             if let Some(v) = attr(t.text, key) {
                 let new = if key == "sqref" {
                     shift_sqref_text(v, own).map(Some)
@@ -1426,14 +1435,38 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
                 match new {
                     Some(Some(n)) if !n.is_empty() => text = set_attr(&text, key, &n),
                     Some(_) => {
-                        // gone: drop the element
+                        // gone: drop the element (and nothing of it lives on in what follows)
                         pos = xml::element_span(s, &t).map(|(_, b)| b).unwrap_or(t.end);
                         continue;
                     }
                     None => {}
                 }
             }
+            if !t.self_closing {
+                if name == "conditionalFormatting" || name == "dataValidation" {
+                    local = attr(t.text, "sqref").map(str::to_string);
+                }
+                if name == "autoFilter" {
+                    filter = attr(t.text, "ref").and_then(refs::parse_area).map(|a| {
+                        let (_, c1, _, _) = a.bounds();
+                        let now = attr(&text, "ref").and_then(refs::parse_area).map(|b| b.bounds().1).unwrap_or(c1);
+                        (c1, now)
+                    });
+                }
+            }
             out.push_str(&text);
+            continue;
+        }
+        if name == "filterColumn"
+            && let (Some((was, now)), Some(id)) = (filter, attr(t.text, "colId").and_then(|v| v.parse::<i32>().ok()))
+        {
+            // a filter on a column counts from the filter's first column; one on a deleted column goes
+            match map_index(&col_shifts, false, was + id) {
+                Some(col) => out.push_str(&set_attr(t.text, "colId", &(col - now).to_string())),
+                None => {
+                    pos = if t.self_closing { t.end } else { xml::element_span(s, &t).map(|(_, b)| b).unwrap_or(t.end) };
+                }
+            }
             continue;
         }
         if name == "rowBreaks" || name == "colBreaks" {
@@ -1490,6 +1523,7 @@ fn fix_counts(s: &str) -> String {
     for (parent, child, attrs) in [
         ("mergeCells", "mergeCell", &["count"][..]),
         ("dataValidations", "dataValidation", &["count"][..]),
+        ("x14:dataValidations", "x14:dataValidation", &["count"][..]),
         ("rowBreaks", "brk", &["count", "manualBreakCount"][..]),
         ("colBreaks", "brk", &["count", "manualBreakCount"][..]),
     ] {

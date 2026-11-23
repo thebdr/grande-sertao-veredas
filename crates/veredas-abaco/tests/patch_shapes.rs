@@ -349,7 +349,7 @@ fn drawings_and_threaded_comments_follow_their_cells() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("drawn.xlsx");
     let data: String = (1..=6).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
-    let drawing = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="2" name="Box"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr/></xdr:sp><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#;
+    let drawing = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp macro="" textlink="$A$5"><xdr:nvSpPr><xdr:cNvPr id="2" name="Box"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr/></xdr:sp><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#;
     let threaded = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"><threadedComment ref="A5" dT="2026-11-22T10:00:00.00" personId="{00000000-0000-0000-0000-000000000001}" id="{00000000-0000-0000-0000-000000000002}"><text>check</text></threadedComment></ThreadedComments>"#;
     plain_book(
         &src,
@@ -371,6 +371,8 @@ fn drawings_and_threaded_comments_follow_their_cells() {
     patch(&src, &dst, &[rows("S", 2, 2)], &verified()).unwrap();
     let d = part(&dst, "xl/drawings/drawing1.xml");
     assert!(d.contains("<xdr:row>6</xdr:row>") && d.contains("<xdr:row>7</xdr:row>"), "{d}");
+    // the shape's text read from a cell follows it
+    assert!(d.contains(r#"textlink="$A$7""#), "{d}");
     assert!(part(&dst, "xl/threadedComments/threadedComment1.xml").contains(r#"<threadedComment ref="A7""#));
 }
 
@@ -634,4 +636,204 @@ fn a_cell_a_random_array_no_longer_reaches_goes() {
     let sheet = part(&dst, "xl/worksheets/sheet1.xml");
     assert_eq!(element(&sheet, "C1"), Some(r#"<c r="C1"><f ca="1"/><v>0.2</v></c>"#), "{sheet}");
     assert_eq!(element(&sheet, "D1"), None, "{sheet}");
+}
+
+// ---- refute round 3 ---------------------------------------------------------------------------
+
+#[test]
+fn a_formula_that_no_longer_reads_a_random_cell_gets_its_value() {
+    let dir = tempfile::tempdir().unwrap();
+    // D2 reads the random C1; deleting row 1 leaves it `#REF!*10`, deterministic
+    let src = dir.path().join("reader.xlsx");
+    let data = r#"<row r="1"><c r="C1"><f>RAND()</f><v>0.5</v></c></row><row r="2"><c r="D2"><f>C1*10</f><v>5</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[Edit::DeleteRows { sheet: "S".into(), at: 1, count: 1 }], &verified()).unwrap();
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "D1"), Some(r#"<c r="D1" t="e"><f>#REF!*10</f><v>#REF!</v></c>"#));
+    // C1 set to 3: D1 reads a value now
+    let data = r#"<row r="1"><c r="C1"><f>RAND()</f><v>0.5</v></c><c r="D1"><f>C1*10</f><v>5</v></c><c r="E1"><f>A1+RAND()</f><v>1.5</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    std::fs::remove_file(&dst).unwrap();
+    patch(&src, &dst, &[value("S", "C1", serde_json::json!(3))], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert_eq!(element(&sheet, "D1"), Some(r#"<c r="D1"><f>C1*10</f><v>30</v></c>"#), "{sheet}");
+    // a formula that calls a random function itself is volatile still: its cache stays
+    assert_eq!(element(&sheet, "E1"), Some(r#"<c r="E1"><f>A1+RAND()</f><v>1.5</v></c>"#), "{sheet}");
+}
+
+#[test]
+fn a_tables_totals_row_formula_follows_what_it_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("totals.xlsx");
+    let text = |c: &str, t: &str| format!(r#"<c r="{c}" t="inlineStr"><is><t>{t}</t></is></c>"#);
+    let data = format!(
+        r#"<row r="2">{}{}</row><row r="3">{}<c r="B3"><v>1</v></c></row><row r="4">{}<c r="B4"><v>2</v></c></row><row r="5">{}<c r="B5"><f>SUM(Other!A1:A3)</f><v>6</v></c></row>"#,
+        text("A2", "Name"), text("B2", "Qty"), text("A3", "a"), text("A4", "b"), text("A5", "Total")
+    );
+    let other: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let table = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><table xmlns="{MAIN}" id="1" name="Table1" displayName="Table1" ref="A2:B5" totalsRowCount="1"><autoFilter ref="A2:B4"/><tableColumns count="2"><tableColumn id="1" name="Name" totalsRowLabel="Total"/><tableColumn id="2" name="Qty" totalsRowFunction="custom"><totalsRowFormula>SUM(Other!A1:A3)</totalsRowFormula></tableColumn></tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>"#
+    );
+    plain_book(
+        &src,
+        &[("T", worksheet(&data, r#"<tableParts count="1"><tablePart r:id="rId1"/></tableParts>"#)), ("Other", worksheet(&other, ""))],
+        "",
+        &[
+            ("xl/worksheets/_rels/sheet1.xml.rels", rels(&[rel("rId1", "table", "../tables/table1.xml")])),
+            ("xl/tables/table1.xml", table),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[rows("Other", 1, 1)], &verified()).unwrap();
+    assert!(part(&dst, "xl/tables/table1.xml").contains("<totalsRowFormula>SUM(Other!A2:A4)</totalsRowFormula>"));
+    assert_eq!(stored(&dst, "T", "B5").0.as_deref(), Some("SUM(Other!A2:A4)"));
+}
+
+#[test]
+fn a_chartex_series_follows_the_rows_it_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("chartex.xlsx");
+    let data: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let drawing = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>"#;
+    let chartex = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:f dir="row">Data!$A$1:$A$3</cx:f></cx:numDim></cx:data></cx:chartData></cx:chartSpace>"#;
+    let chartex_rel = rels(&[r#"<Relationship Id="rId1" Type="http://schemas.microsoft.com/office/2014/relationships/chartEx" Target="../charts/chartEx1.xml"/>"#.to_string()]);
+    plain_book(
+        &src,
+        &[("Data", worksheet(&data, r#"<drawing r:id="rId1"/>"#))],
+        "",
+        &[
+            ("xl/worksheets/_rels/sheet1.xml.rels", rels(&[rel("rId1", "drawing", "../drawings/drawing1.xml")])),
+            ("xl/drawings/drawing1.xml", drawing.to_string()),
+            ("xl/drawings/_rels/drawing1.xml.rels", chartex_rel),
+            ("xl/charts/chartEx1.xml", chartex.to_string()),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[rows("Data", 1, 1)], &verified()).unwrap();
+    assert!(part(&dst, "xl/charts/chartEx1.xml").contains(r#"<cx:f dir="row">Data!$A$2:$A$4</cx:f>"#));
+}
+
+/// Sheet `S`: A1:C5 under an autoFilter filtering column C, sorted by C.
+fn filtered_book(path: &Path) {
+    let data: String = (1..=5).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{r}</v></c><c r="C{r}"><v>{r}</v></c></row>"#)).collect();
+    let after = r#"<autoFilter ref="A1:C5"><filterColumn colId="2"><filters><filter val="3"/></filters></filterColumn></autoFilter><sortState ref="A2:C5"><sortCondition ref="C2:C5"/></sortState>"#;
+    plain_book(path, &[("S", worksheet(&data, after))], "", &[]);
+}
+
+#[test]
+fn an_autofilter_keeps_filtering_and_sorting_its_own_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("filter.xlsx");
+    filtered_book(&src);
+    let dst = dir.path().join("out.xlsx");
+    let cols = |at: &str, insert: bool| {
+        if insert {
+            Edit::InsertColumns { sheet: "S".into(), at: at.into(), count: 1 }
+        } else {
+            Edit::DeleteColumns { sheet: "S".into(), at: at.into(), count: 1 }
+        }
+    };
+    for (edit, filter, sort) in [
+        (cols("B", true), r#"<autoFilter ref="A1:D5"><filterColumn colId="3">"#, r#"<sortState ref="A2:D5"><sortCondition ref="D2:D5"/></sortState>"#),
+        (cols("B", false), r#"<autoFilter ref="A1:B5"><filterColumn colId="1">"#, r#"<sortState ref="A2:B5"><sortCondition ref="B2:B5"/></sortState>"#),
+        // the filtered column deleted: its filter and its sort go with it
+        (cols("C", false), r#"<autoFilter ref="A1:B5"></autoFilter>"#, r#"<sortState ref="A2:B5"></sortState>"#),
+    ] {
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[edit.clone()], &verified()).unwrap();
+        let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+        assert!(sheet.contains(filter) && sheet.contains(sort), "{edit:?}: {sheet}");
+    }
+}
+
+#[test]
+fn a_clear_leaves_the_cells_an_array_spills_into_to_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("seq3.xlsx");
+    let data = r#"<row r="1"><c r="A1" cm="1"><f t="array" ref="A1:A3">_xlfn.SEQUENCE(3)</f><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><row r="3"><c r="A3"><v>3</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let clear = |area: &str| Edit::Clear { sheet: "S".into(), area: area.into() };
+    let report = patch(&src, &dst, &[clear("A2:A3")], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Applied);
+    assert_eq!(report.outcomes[0].note, "S!A2:A3: 2 cell(s) an array spills into left to it");
+    assert_eq!(parts(&src)["xl/worksheets/sheet1.xml"], parts(&dst)["xl/worksheets/sheet1.xml"]);
+    // its anchor inside the area: the whole array goes
+    std::fs::remove_file(&dst).unwrap();
+    patch(&src, &dst, &[clear("A1:A3")], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    for cell in ["A1", "A2", "A3"] {
+        assert_eq!(element(&sheet, cell), None, "{sheet}");
+    }
+}
+
+#[test]
+fn spill_and_calc_errors_are_cached_as_excel_spells_them() {
+    // FILTER_ERRORS.xlsx: C1 filters A1:A4 above 3; A4 set to 0 leaves nothing: #CALC!
+    let dir = tempfile::tempdir().unwrap();
+    let dst = dir.path().join("out.xlsx");
+    let src = fork_file("calc_tests/LOOKUP_AND_REFERENCE/FILTER_ERRORS.xlsx");
+    patch(&src, &dst, &[value("Sheet1", "A4", serde_json::json!(0))], &verified()).unwrap();
+    let c1 = element(&part(&dst, "xl/worksheets/sheet1.xml"), "C1").unwrap().to_string();
+    assert!(c1.contains(r#"t="e""#) && c1.ends_with("<v>#VALUE!</v></c>") && !c1.contains("vm="), "{c1}");
+    assert_eq!(read_back(&dst, "Sheet1", "C1"), Value::Error("#CALC!".into()));
+    // an array blocked by a value in its way: #SPILL!
+    let src = dir.path().join("blocked.xlsx");
+    let data = r#"<row r="1"><c r="A1" cm="1"><f t="array" ref="A1:A3">_xlfn.SEQUENCE(B1)</f><v>1</v></c><c r="B1"><v>3</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><row r="3"><c r="A3"><v>3</v></c></row><row r="5"><c r="A5"><v>7</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    std::fs::remove_file(&dst).unwrap();
+    patch(&src, &dst, &[value("S", "B1", serde_json::json!(5))], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    let a1 = element(&sheet, "A1").unwrap();
+    assert!(a1.contains(r#"t="e""#) && a1.ends_with("<v>#VALUE!</v></c>"), "{sheet}");
+    assert_eq!(element(&sheet, "A2"), None, "{sheet}");
+    assert_eq!(read_back(&dst, "S", "A1"), Value::Error("#SPILL!".into()));
+}
+
+#[test]
+fn a_dropped_format_takes_its_anchor_with_it() {
+    // a format on B2:B3, row 2 deleted twice: the format goes; the sparkline after it reads S!B5:D5,
+    // now S!B3:D3, at E3
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("sparks.xlsx");
+    let data: String = (1..=5).map(|r| format!(r#"<row r="{r}"><c r="B{r}"><v>{r}</v></c></row>"#)).collect();
+    let after = r#"<conditionalFormatting sqref="B2:B3"><cfRule type="expression" dxfId="0" priority="1"><formula>B2&gt;1</formula></cfRule></conditionalFormatting><extLst><ext uri="{05C60535-1F16-4fd2-B633-F4F36F0B64E0}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:sparklineGroups xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:sparklineGroup><x14:sparklines><x14:sparkline><xm:f>S!B5:D5</xm:f><xm:sqref>E5</xm:sqref></x14:sparkline></x14:sparklines></x14:sparklineGroup></x14:sparklineGroups></ext></extLst>"#;
+    plain_book(&src, &[("S", worksheet(&data, after))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let delete = || Edit::DeleteRows { sheet: "S".into(), at: 2, count: 1 };
+    patch(&src, &dst, &[delete(), delete()], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(!sheet.contains("<conditionalFormatting"), "{sheet}");
+    assert!(sheet.contains("<xm:f>S!B3:D3</xm:f><xm:sqref>E3</xm:sqref>"), "{sheet}");
+}
+
+#[test]
+fn an_x14_validation_dropped_by_a_move_is_no_longer_counted() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("x14.xlsx");
+    let data: String = (1..=5).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let validation = |at: &str| format!(r#"<x14:dataValidation type="list" allowBlank="1"><x14:formula1><xm:f>Other!$A$1:$A$3</xm:f></x14:formula1><xm:sqref>{at}</xm:sqref></x14:dataValidation>"#);
+    let after = format!(
+        r#"<extLst><ext uri="{{CCE6A557-97BC-4b89-ADB6-D9C93CAAB3DF}}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:dataValidations count="2" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">{}{}</x14:dataValidations></ext></extLst>"#,
+        validation("B2"),
+        validation("C5")
+    );
+    let other: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    plain_book(&src, &[("S", worksheet(&data, &after)), ("Other", worksheet(&other, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[Edit::DeleteRows { sheet: "S".into(), at: 2, count: 1 }], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<x14:dataValidations count="1""#) && sheet.contains("<xm:sqref>C4</xm:sqref>"), "{sheet}");
+}
+
+#[test]
+fn a_workbook_is_computed_as_the_destination_it_is_written_to() {
+    // CELL("filename") names the workbook: patched from in.xlsx to out.xlsx, the model is out
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("in.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1" t="str"><f>CELL("filename",A1)</f><v>[in.xlsx]S</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    let dst = dir.path().join("out.xlsx");
+    let report = patch(&src, &dst, &[value("S", "A1", serde_json::json!(2))], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::Applied);
 }

@@ -401,6 +401,37 @@ fn replace_inner(s: &str, name: &str, value: &str) -> String {
     format!("{}{}{}", &s[..open.end], value, &s[close.start..])
 }
 
+/// A table's sort (`sortState ref`, each `sortCondition ref`) moved with the table (a table is
+/// moved whole: its sort's columns stay in it).
+fn shift_sort_refs(s: &str, own: &[Shift]) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut pos = 0;
+    while let Some(t) = next_tag(s, pos) {
+        out.push_str(&s[pos..t.start]);
+        pos = t.end;
+        let mut text = t.text.to_string();
+        if !t.closing
+            && (t.name == "sortState" || t.name == "sortCondition")
+            && let Some(r) = attr(t.text, "ref")
+            && let Some(mut area) = refs::parse_area(r)
+        {
+            let mut whole = true;
+            for sh in own {
+                match sh.area(area) {
+                    Some(a) => area = a,
+                    None => whole = false,
+                }
+            }
+            if whole {
+                text = set_attr(&text, "ref", &area.spell());
+            }
+        }
+        out.push_str(&text);
+    }
+    out.push_str(&s[pos..]);
+    out
+}
+
 /// Drawing anchors (`xdr:from`/`xdr:to`, 0-based col/row) follow the grid.
 pub(crate) fn shift_drawing(s: &str, own: &[Shift]) -> Option<String> {
     let mut out = String::with_capacity(s.len());
@@ -424,6 +455,41 @@ pub(crate) fn shift_drawing(s: &str, own: &[Shift]) -> Option<String> {
                     continue;
                 }
         out.push_str(t.text);
+    }
+    out.push_str(&s[pos..]);
+    (out != s).then_some(out)
+}
+
+/// The `textlink` of a drawing's shapes (a shape's text read from a cell, `$A$5`), moved with
+/// the cells it reads; `home` is the drawing's sheet. `None` when unchanged.
+pub(crate) fn shift_textlinks(
+    s: &str,
+    shifts: &[(String, Shift)],
+    home: Option<&str>,
+    order: &[String],
+) -> Option<String> {
+    let mut out = String::with_capacity(s.len());
+    let mut pos = 0;
+    while let Some(t) = next_tag(s, pos) {
+        out.push_str(&s[pos..t.start]);
+        pos = t.end;
+        let mut text = t.text.to_string();
+        if !t.closing
+            && let Some(link) = attr(t.text, "textlink").filter(|l| !l.is_empty())
+        {
+            let mut cur = decode_text(link);
+            let mut changed = false;
+            for (sheet, sh) in shifts {
+                if let Some(n) = refs::shift_formula(&cur, sheet, *sh, home, order) {
+                    cur = n;
+                    changed = true;
+                }
+            }
+            if changed {
+                text = set_attr(&text, "textlink", &xml::escape_attr(&cur));
+            }
+        }
+        out.push_str(&text);
     }
     out.push_str(&s[pos..]);
     (out != s).then_some(out)
@@ -472,7 +538,7 @@ pub(crate) fn shift_formula_elements(
 
 /// A table on a moved sheet: its `ref` and its filter's `ref`.
 pub(crate) fn shift_table(s: &str, own: &[Shift]) -> Result<Option<String>, PatchError> {
-    let mut out = s.to_string();
+    let mut out = shift_sort_refs(s, own);
     for name in ["table", "autoFilter"] {
         let Some(t) = xml::find_open(&out, name, 0) else {
             continue;
