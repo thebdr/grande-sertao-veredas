@@ -12,15 +12,15 @@
     "component"
   ],
   "exitCode": 0,
-  "outputSha": "c63fa01d2f2100722851ec9662a5a0f887d3d57e785d2f3aa41af39b3191f140",
-  "outputTail": "running 4 tests\ntest before_any_status_every_action_is_off_and_posts_nothing ... ok\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 45.03s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s\n     Running tests/component.rs (target/debug/build/veredas-supervisao/41e36307da1a6f43/out/component-41e36307da1a6f43)\n     Running tests/writes.rs (target/debug/build/veredas-supervisao/ccb91ede2c188f24/out/writes-ccb91ede2c188f24)",
-  "ranAt": "2026-11-23T06:19:13.817Z",
-  "headCommit": "fe53acdbcbe8bb25e488dafdd8535c318ef0e42d",
+  "outputSha": "a17f2f2a475e6c91e29e567c8005da1c3207257992478551d8a928a48b7eaecc",
+  "outputTail": "\n\nrunning 4 tests\ntest before_any_status_every_action_is_off_and_posts_nothing ... ok\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 29.13s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running tests/component.rs (target/debug/build/veredas-supervisao/45a805a4ff54118c/out/component-45a805a4ff54118c)\n     Running tests/writes.rs (target/debug/build/veredas-supervisao/061c38795ee37d85/out/writes-061c38795ee37d85)",
+  "ranAt": "2026-11-23T12:34:08.595Z",
+  "headCommit": "89d8f27dd64070382ee4090667200293c0ad4da3",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/writes.rs",
       "file": "crates/veredas-supervisao/tests/writes.rs",
-      "fileSha": "7bf112b0114987edfada8f0880608220333370f1384bd00496d862fc726e7e1a"
+      "fileSha": "26d4b5c4a2d518508093c3962cde3761a96d0f96c1451d060f84255d7ea73dd9"
     },
     {
       "name": "crates/veredas-supervisao/tests/component.rs",
