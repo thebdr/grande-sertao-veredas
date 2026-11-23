@@ -564,6 +564,81 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     complaint(3, "malformed");
     complaint(4, "Block version 2.0 not implemented");
 
+    // A status the dissector does not know draws its complaint: an ErrorDecode it has no table for,
+    // an ErrorCode1 it does not know under PNIO's. And a var part this codec keeps unread is not
+    // always one the dissector complains of: a notification of the other priority than its frame
+    // it reads as a notification, silent. The dissector is no oracle for what is kept unread.
+    let unknown_decode = RtaPdu::error(Priority::Low, 1, 2, 3, 4, PnioStatus { code: 0xCF, decode: 0x82, code1: 0, code2: 0 });
+    let unknown_code1 = RtaPdu::error(Priority::High, 1, 2, 3, 4, PnioStatus { code: 0xCF, decode: 0x81, code1: 0, code2: 0 });
+    let other_priority = {
+        let var = RtaPdu::notification(Priority::Low, 1, 2, 7, 6, diagnosis(None)).encode().unwrap()[14..].to_vec();
+        pdu(PduType::Data, 0x11, Body::Unread { bytes: var, why: Unread::Priority(0x0002) })
+    };
+    assert_eq!(RtaPdu::decode(&other_priority.encode().unwrap()).unwrap(), other_priority);
+    let frames: Vec<Vec<u8>> = [&unknown_decode, &unknown_code1, &other_priority].iter().map(|p| p.frame(CONTROLLER, DEVICE, Some(p.priority.tag())).unwrap()).collect();
+    let d = common::dissect(&frames);
+    assert!(d[0].complaints().iter().any(|c| c.contains("Unknown ErrorDecode 0x82")), "{:?}", d[0].complaints());
+    assert!(d[1].complaints().iter().any(|c| c.contains("Unknown ErrorCode1 0x0")), "{:?}", d[1].complaints());
+    assert_eq!(d[2].complaints(), Vec::<String>::new());
+    assert_eq!(pn_io(&d[2], "pn_io_pn_io_block_type"), ["2"]);
+
+    // A seeded batch of typed frames, statuses the dissector knows: each read field for field, with
+    // no complaint (seven hand-picked frames are not the whole of the claim).
+    let mut noise = common::Noise(0xA1A3);
+    let mut batch = Vec::new();
+    for i in 0..300u32 {
+        let priority = if noise.next() & 1 == 0 { Priority::High } else { Priority::Low };
+        let (dst, src, send, ack) = (u16::from(noise.next()) << 8 | u16::from(noise.next()), u16::from(noise.next()), u16::from(noise.next()) << 7, u16::from(noise.next()));
+        let n = Notification {
+            alarm_type: u16::from(noise.next() % 0x20),
+            api: u32::from(noise.next()) << 16 | u32::from(noise.next()),
+            slot: u16::from(noise.next()),
+            subslot: 0x8000 | u16::from(noise.next()),
+            module_ident: u32::from(noise.next()) << 24 | u32::from(noise.next()),
+            submodule_ident: u32::from(noise.next()),
+            specifier: AlarmSpecifier(u16::from(noise.next()) << 8 & 0xBF00 | u16::from(noise.next())),
+            item: match i % 3 {
+                0 => None,
+                1 => {
+                    let usi = u16::from(noise.next() & 0x7F) << 8 | u16::from(noise.next());
+                    let len = usize::from(noise.next() % 40);
+                    Some(AlarmItem { usi, data: noise.bytes(len) })
+                }
+                _ => Some(channel()),
+            },
+        };
+        let p = match i % 4 {
+            0 | 1 => RtaPdu::notification(priority, dst, src, send, ack, n),
+            2 => RtaPdu::alarm_ack(priority, dst, src, send, ack, AlarmAck { alarm_type: n.alarm_type, api: n.api, slot: n.slot, subslot: n.subslot, specifier: n.specifier, status: PnioStatus::OK }),
+            _ => RtaPdu::transport_ack(priority, dst, src, send, ack),
+        };
+        batch.push(p);
+    }
+    let frames: Vec<Vec<u8>> = batch.iter().map(|p| p.frame(CONTROLLER, DEVICE, Some(p.priority.tag())).unwrap()).collect();
+    let d = common::dissect(&frames);
+    for (i, (p, d)) in batch.iter().zip(&d).enumerate() {
+        assert_eq!(d.complaints(), Vec::<String>::new(), "frame {i}: {p:?}");
+        let one = |k: &str| pn_io(d, k);
+        assert_eq!(one("pn_io_pn_io_alarm_dst_endpoint"), [p.dst_endpoint.to_string()], "frame {i}");
+        assert_eq!(one("pn_io_pn_io_alarm_src_endpoint"), [p.src_endpoint.to_string()], "frame {i}");
+        assert_eq!(one("pn_io_pn_io_send_seq_num"), [p.send_seq.to_string()], "frame {i}");
+        assert_eq!(one("pn_io_pn_io_ack_seq_num"), [p.ack_seq.to_string()], "frame {i}");
+        match &p.body {
+            Body::Notification(n) => {
+                assert_eq!(one("pn_io_pn_io_alarm_type"), [n.alarm_type.to_string()], "frame {i}");
+                assert_eq!(one("pn_io_pn_io_api"), [n.api.to_string()], "frame {i}");
+                assert_eq!(one("pn_io_pn_io_slot_nr"), [n.slot.to_string()], "frame {i}");
+                assert_eq!(one("pn_io_pn_io_subslot_nr"), [n.subslot.to_string()], "frame {i}");
+                assert_eq!(one("pn_io_pn_io_module_ident_number"), [n.module_ident.to_string()], "frame {i}");
+                assert_eq!(one("pn_io_pn_io_alarm_specifier_sequence"), [n.specifier.sequence().to_string()], "frame {i}");
+                let usi: Vec<String> = n.item.iter().map(|it| it.usi.to_string()).collect();
+                assert_eq!(one("pn_io_pn_io_user_structure_identifier"), usi, "frame {i}");
+            }
+            Body::Ack(a) => assert_eq!((one("pn_io_pn_io_alarm_type"), one("pn_io_pn_io_slot_nr")), (vec![a.alarm_type.to_string()], vec![a.slot.to_string()]), "frame {i}"),
+            _ => assert!(one("pn_io_pn_io_block_type").is_empty(), "frame {i}"),
+        }
+    }
+
     // The dissector reads TACK as the whole high nibble of AddFlags, reserved bits with it: with
     // reserved bits set, this codec's TACK (bit 4) and the dissector's differ, as written.
     let reserved = [pdu(PduType::Ack, 0xF1, Body::Empty), pdu(PduType::Ack, 0xE1, Body::Empty)];
