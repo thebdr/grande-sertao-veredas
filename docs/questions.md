@@ -1605,6 +1605,21 @@ Options:
 `crates/veredas-abaco/src/abacofile.rs`.
 
 **Reversible?** Yes: one line, once core's feature lands.
+
+**Measured** 2026-11-23, once core's `net` feature landed (C-073; `docs/core-plan.md`
+"Features"): with `veredas-core = { path = "../veredas-core", default-features = false }`, Ábaco
+built alone carries `schema` on serde, toml and thiserror, as asked. A workspace build unifies a
+package's features across its members, though: `cargo tree --workspace` shows Ábaco's subtree
+holding `veredas-core [default, demo-server, net]`, and under it tokio, socket2 and the OPC UA
+client, the plant stack C-220's workspace-subtree check refuses (every suite run, and the
+workspace's own `cargo test`, builds Ábaco that way). So (a) brings that stack into every test
+build of Ábaco, while (c) keeps the reader's very code without it. A further option:
+- (e) The header reader in a crate of its own (`schema` alone, on serde, toml and thiserror),
+  which core and Ábaco both depend on: no unification can bring the plant stack in. A new member
+  under L1 to L6 (its plan, its name), core's to propose.
+
+**Recommended now**: (c) stays, or (e) if core takes it; (a) only if the architect accepts the plant
+stack in Ábaco's workspace builds (its release build, made alone, would not carry it).
 ---
 
 ## Q346 - How does Excel spell PERCENTOF in a file?

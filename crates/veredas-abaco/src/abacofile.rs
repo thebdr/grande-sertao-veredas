@@ -739,9 +739,9 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
 
 /// The suite's one header reader (C-045): core's own source, compiled here by path, so the stamp
 /// is read by the very code every other file of the suite is read by, its order and its texts.
-/// Ábaco cannot take `veredas-core` as a dependency while core carries its network layers
-/// unconditionally (C-220 holds no plant connection); the day core puts them behind a feature this
-/// becomes `use veredas_core::schema` (docs/questions.md Q345).
+/// Core's layers stand behind its `net` feature now, but a workspace build unifies a package's
+/// features across members, so `veredas-core` without `net` would still bring the plant stack into
+/// Ábaco's test builds, which C-220 refuses (docs/questions.md Q345, measured 2026-11-23).
 // DECISION PENDING (Q345)
 #[allow(dead_code)]
 #[path = "../../veredas-core/src/schema.rs"]
