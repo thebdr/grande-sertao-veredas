@@ -11,15 +11,15 @@
     "store"
   ],
   "exitCode": 0,
-  "outputSha": "7c7bf6ca4f65d32c8d9b7df9a6cd939b592e6d44c9b6844aa5267b1af34d4154",
-  "outputTail": "test views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest quotes_escapes_and_line_endings_are_read_as_the_file_writes_them ... ok\ntest a_headerless_file_of_decimal_commas_cut_short_reads_on_its_own_delimiter ... ok\ntest newest_first_pages_neither_repeat_nor_skip_rows_that_share_a_time ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\ntest a_dialect_fits_the_header_as_it_fits_the_rows ... ok\ntest pages_see_each_row_once_across_sources_and_on_a_view_without_a_sequence ... ok\n\ntest result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n   Compiling veredas-maquinar v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-maquinar)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.95s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/7f0b8c3e2ef39c29/out/veredas_portal-7f0b8c3e2ef39c29)\n     Running tests/store.rs (target/debug/build/veredas-portal/7544009b773864dd/out/store-7544009b773864dd)",
-  "ranAt": "2026-11-23T16:33:19.024Z",
-  "headCommit": "5c69ddfdfbe24745b361b31cb62b9e98df9ec430",
+  "outputSha": "26c3f02b96e05c50df9bfdf8add88dbfb37a422f906327f4b083761f8445d7d3",
+  "outputTail": "test a_blank_line_moves_the_window_by_none ... ok\ntest dialects_that_fit_are_weighed_by_their_numbers ... ok\ntest views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest newest_first_pages_neither_repeat_nor_skip_rows_that_share_a_time ... ok\ntest numbers_cut_out_of_a_list_are_no_reason ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\ntest a_dialect_fits_the_header_as_it_fits_the_rows ... ok\ntest pages_see_each_row_once_across_sources_and_on_a_view_without_a_sequence ... ok\n\ntest result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.95s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/7f0b8c3e2ef39c29/out/veredas_portal-7f0b8c3e2ef39c29)\n     Running tests/store.rs (target/debug/build/veredas-portal/7544009b773864dd/out/store-7544009b773864dd)",
+  "ranAt": "2026-11-23T17:36:42.870Z",
+  "headCommit": "4a9aa84891e1db170bededf052925164335f15ee",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store.rs",
       "file": "crates/veredas-portal/tests/store.rs",
-      "fileSha": "2eb669354a14640e31d70be51fa147dfcdb2a7335b7d4e6440ee2d8136166feb"
+      "fileSha": "2748f4e45a18f1077bf2962182d830b1da6e4cbe9be1e61dd440762366c7955f"
     }
   ]
 }
