@@ -240,12 +240,22 @@ impl ProfinetStatus {
     }
 }
 
+/// A neighbour LLDP heard: as the port data states it, the ids its frame carried (802.1AB names a
+/// neighbour by its chassis and port TLVs, subtype and bytes, not by how they read as text), and
+/// when its information ages out (its frame's TTL from when it was heard).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+struct Heard {
+    peer: Peer,
+    ids: (veredas_aranha::profinet::lldp::ChassisId, veredas_aranha::profinet::lldp::PortId),
+    until: Instant,
+}
+
 struct State {
     identity: DeviceIdentity,
     status: ProfinetStatus,
-    /// The neighbour its LLDP reception heard last on its port, and when its information ages
-    /// out (its frame's TTL from when it was heard); gone sooner with its own TTL of 0.
-    neighbour: Option<(Peer, Instant)>,
+    /// The neighbour its LLDP reception heard last on its port; gone at its TTL, or sooner with
+    /// its own TTL of 0.
+    neighbour: Option<Heard>,
     /// How many times the DCP was muted: an Identify answer queued before a mute is never sent,
     /// even when the mute is lifted before the device's thread sees it.
     mutes: u64,
@@ -319,7 +329,7 @@ impl ProfinetHandle {
 
     /// The neighbour its LLDP reception heard on its port, as its port data states it.
     pub fn neighbour(&self) -> Option<Peer> {
-        self.shared.lock().neighbour.as_ref().filter(|(_, until)| Instant::now() < *until).map(|(p, _)| p.clone())
+        self.shared.lock().neighbour.as_ref().filter(|n| Instant::now() < n.until).map(|n| n.peer.clone())
     }
 
     fn stop_and_join(&mut self) {
@@ -480,13 +490,15 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
         match frame.ethertype {
             ether::ETHERTYPE_LLDP => {
                 if let Ok(pdu) = lldp::decode(frame.payload) {
-                    let heard = neighbour_of(&pdu, frame.src);
+                    let peer = neighbour_of(&pdu, frame.src);
                     let mut state = shared.lock();
                     if pdu.ttl > 0 {
-                        state.neighbour = Some((heard, Instant::now() + Duration::from_secs(u64::from(pdu.ttl))));
-                    } else if state.neighbour.as_ref().is_some_and(|(n, _)| (&n.chassis_id, &n.port_id) == (&heard.chassis_id, &heard.port_id)) {
-                        // Its own shutdown frame (802.1AB names a neighbour by chassis and port):
-                        // another station's leaves it.
+                        let until = Instant::now() + Duration::from_secs(u64::from(pdu.ttl));
+                        state.neighbour = Some(Heard { peer, ids: (pdu.chassis, pdu.port), until });
+                    } else if state.neighbour.as_ref().is_some_and(|n| (&n.ids.0, &n.ids.1) == (&pdu.chassis, &pdu.port)) {
+                        // Its own shutdown frame, the same chassis and port TLVs (aranha decodes a
+                        // subtype and its bytes one way): another station's leaves it, whatever
+                        // its ids read as.
                         state.neighbour = None;
                     }
                 }
@@ -656,7 +668,7 @@ fn port_data(state: &State, cfg: &ProfinetConfig) -> PortDataReal {
         subslot: SUBSLOT_PORT,
         own_port_id: cfg.port.clone(),
         // Its information aged out at its TTL (802.1AB's rxInfoAge): no peer once it has.
-        peers: state.neighbour.iter().filter(|(_, until)| Instant::now() < *until).map(|(p, _)| p.clone()).collect(),
+        peers: state.neighbour.iter().filter(|n| Instant::now() < n.until).map(|n| n.peer.clone()).collect(),
         mau_type: 0x0010,
         domain_boundary: 0,
         multicast_boundary: 0,
@@ -717,8 +729,10 @@ fn other_of(data: &[u8]) -> String {
 }
 
 /// A neighbour as its LLDP frame names it: the port id and the chassis id as text by their
-/// subtype (a MAC as its address, a network address as its text, a name as itself), each at most
-/// 255 visible characters; its source MAC; no measured delay.
+/// subtype (a MAC as its address, an IPv4 or IPv6 network address as its text and another family as
+/// hex, a name of 802.1AB's text subtypes as itself, any other subtype as its text when it is
+/// visible ASCII and as hex otherwise), each at most 255 visible characters; its source MAC; no
+/// measured delay.
 #[cfg(target_os = "linux")]
 fn neighbour_of(pdu: &LldpPdu, src: Mac) -> Peer {
     let chassis = match &pdu.chassis {
@@ -726,8 +740,9 @@ fn neighbour_of(pdu: &LldpPdu, src: Mac) -> Peer {
         ChassisId::Mac { mac } => mac.to_string(),
         ChassisId::IfName { name } => text_of(name),
         ChassisId::Network { data } => address_of(data),
-        // A name (the interface's, the local one) whose bytes are not UTF-8: still a name.
-        ChassisId::Other { subtype: 6 | 7, data } => text_of_bytes(data),
+        // A name whose bytes are not UTF-8 (802.1AB's text subtypes: a chassis or port component,
+        // an interface alias or name, a local one): still a name.
+        ChassisId::Other { subtype: 1 | 2 | 3 | 6 | 7, data } => text_of_bytes(data),
         ChassisId::Other { data, .. } => other_of(data),
     };
     let port = match &pdu.port {
@@ -735,7 +750,7 @@ fn neighbour_of(pdu: &LldpPdu, src: Mac) -> Peer {
         PortId::IfName { name } | PortId::IfAlias { name } => text_of(name),
         PortId::Mac { mac } => mac.to_string(),
         PortId::Other { subtype: 4, data } => address_of(data),
-        PortId::Other { subtype: 1 | 5 | 7, data } => text_of_bytes(data),
+        PortId::Other { subtype: 1 | 2 | 5 | 7, data } => text_of_bytes(data),
         PortId::Other { data, .. } => other_of(data),
     };
     Peer { port_id: port, chassis_id: chassis, line_delay: 0, mac: src }

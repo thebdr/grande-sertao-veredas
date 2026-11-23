@@ -640,7 +640,8 @@ mod round_1 {
         f[14 + 10..14 + 12].copy_from_slice(&c.to_be_bytes());
     }
 
-    /// P2b: a chassis id of another subtype (1, chassis component) with a long payload.
+    /// P2b: a chassis id of a subtype no text names (8, reserved: round 3 made 1 to 3 text, as
+    /// 802.1AB has them) with a long payload.
     #[test]
     fn a_long_chassis_of_another_subtype_is_written_as_hex() {
         netns::isolated("round_1::a_long_chassis_of_another_subtype_is_written_as_hex", &[("a0", "b0")], || {
@@ -649,7 +650,7 @@ mod round_1 {
             let raw = RawLink::open_with("a0", Options { ethertype: Some(ether::ETHERTYPE_LLDP), promiscuous: false, outgoing: false }).unwrap();
             let s = socket();
             let sw = raw.mac();
-            raw.send(&lldp::frame(sw, &LldpPdu::new(ChassisId::Other { subtype: 1, data: vec![0xAB; 100] }, PortId::Local { id: "port-003".into() }, 120)).unwrap()).unwrap();
+            raw.send(&lldp::frame(sw, &LldpPdu::new(ChassisId::Other { subtype: 8, data: vec![0xAB; 100] }, PortId::Local { id: "port-003".into() }, 120)).unwrap()).unwrap();
             assert!(wait(Duration::from_secs(2), || dev.neighbour().is_some()));
             let (st, rec) = port_data(&s, 1);
             assert_eq!(st, PnioStatus::OK);
@@ -677,26 +678,26 @@ mod round_2 {
     use veredas_maquinar::profinet::ip;
     use veredas_maquinar::profinet::*;
 
-    const DEVICE: &str = "interface = \"b0\"\nstation = \"io-device-1\"\nvendor_id = 7\ndevice_id = 9\nip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\nport = \"port-002\"\norder_id = \"6ES7 bench\"\nserial_number = \"SN-0001\"\nhello = false\nlldp_interval_ms = 0\n";
+    pub(super) const DEVICE: &str = "interface = \"b0\"\nstation = \"io-device-1\"\nvendor_id = 7\ndevice_id = 9\nip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\nport = \"port-002\"\norder_id = \"6ES7 bench\"\nserial_number = \"SN-0001\"\nhello = false\nlldp_interval_ms = 0\n";
 
-    fn config(text: &str) -> ProfinetConfig {
+    pub(super) fn config(text: &str) -> ProfinetConfig {
         toml::from_str(text).unwrap()
     }
 
-    fn host_address() {
+    pub(super) fn host_address() {
         for args in [&["ip", "addr", "add", "192.168.0.1/24", "dev", "a0"][..], &["ethtool", "-K", "a0", "tx", "off"][..]] {
             let out = std::process::Command::new(args[0]).args(&args[1..]).output().unwrap();
             assert!(out.status.success());
         }
     }
 
-    fn socket() -> UdpSocket {
+    pub(super) fn socket() -> UdpSocket {
         let s = UdpSocket::bind("192.168.0.1:0").unwrap();
         s.set_read_timeout(Some(Duration::from_millis(700))).unwrap();
         s
     }
 
-    fn send_pdu(s: &UdpSocket, pdu: &RpcPdu) -> Option<(RpcPdu, ResponseArgs)> {
+    pub(super) fn send_pdu(s: &UdpSocket, pdu: &RpcPdu) -> Option<(RpcPdu, ResponseArgs)> {
         s.send_to(&pdu.encode().unwrap(), ("192.168.0.10", PNIO_PORT)).unwrap();
         let mut buf = [0u8; 4096];
         let (n, from) = s.recv_from(&mut buf).ok()?;
@@ -706,12 +707,12 @@ mod round_2 {
         Some((answer, args))
     }
 
-    fn read_req(s: &UdpSocket, req: &ReadRequest, args_max: u32, activity: Uuid) -> Option<(RpcPdu, ResponseArgs)> {
+    pub(super) fn read_req(s: &UdpSocket, req: &ReadRequest, args_max: u32, activity: Uuid) -> Option<(RpcPdu, ResponseArgs)> {
         let pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), activity, u32::from(req.seq), req, args_max).unwrap();
         send_pdu(s, &pdu)
     }
 
-    fn wait(within: Duration, mut done: impl FnMut() -> bool) -> bool {
+    pub(super) fn wait(within: Duration, mut done: impl FnMut() -> bool) -> bool {
         let begun = Instant::now();
         while begun.elapsed() < within {
             if done() {
@@ -722,7 +723,7 @@ mod round_2 {
         done()
     }
 
-    fn port_data(s: &UdpSocket, seq: u16) -> (PnioStatus, Option<PortDataReal>) {
+    pub(super) fn port_data(s: &UdpSocket, seq: u16) -> (PnioStatus, Option<PortDataReal>) {
         let (_, args) = read_req(s, &ReadRequest::implicit(seq, 0, SUBSLOT_PORT, INDEX_PORT_DATA_REAL, 4096), 4160, Uuid([seq as u8; 16])).expect("an answer");
         if args.data.len() <= 64 {
             return (args.status, None);
@@ -731,12 +732,12 @@ mod round_2 {
         (args.status, Some(PortDataReal::from_block(&rpc::read_blocks(&record).0[0]).unwrap()))
     }
 
-    fn lldp_link() -> RawLink {
+    pub(super) fn lldp_link() -> RawLink {
         RawLink::open_with("a0", Options { ethertype: Some(ether::ETHERTYPE_LLDP), promiscuous: false, outgoing: false }).unwrap()
     }
 
     /// An LLDP frame from `src`; for a TTL over 0, waits till the device holds it as its neighbour.
-    fn heard(raw: &RawLink, dev: &ProfinetHandle, src: Mac, chassis: ChassisId, port: PortId, ttl: u16) {
+    pub(super) fn heard(raw: &RawLink, dev: &ProfinetHandle, src: Mac, chassis: ChassisId, port: PortId, ttl: u16) {
         let before = dev.neighbour();
         raw.send(&lldp::frame(src, &LldpPdu::new(chassis, port, ttl)).unwrap()).unwrap();
         if ttl > 0 {
@@ -747,7 +748,7 @@ mod round_2 {
     }
 
     /// The neighbour's (chassis, port) as the port data states them.
-    fn peer(s: &UdpSocket, seq: u16) -> (String, String) {
+    pub(super) fn peer(s: &UdpSocket, seq: u16) -> (String, String) {
         let (st, pd) = port_data(s, seq);
         assert_eq!(st, PnioStatus::OK);
         let p = pd.unwrap().peers[0].clone();
@@ -761,8 +762,8 @@ mod round_2 {
             let dev = start(&config(DEVICE)).unwrap();
             let (raw, s) = (lldp_link(), socket());
             let sw = raw.mac();
-            // 200 bytes of another subtype: 127 whole bytes of hex, 254 characters.
-            heard(&raw, &dev, sw, ChassisId::Other { subtype: 1, data: vec![0xAB; 200] }, PortId::Local { id: "port-003".into() }, 120);
+            // 200 bytes of a subtype no text names: 127 whole bytes of hex, 254 characters.
+            heard(&raw, &dev, sw, ChassisId::Other { subtype: 8, data: vec![0xAB; 200] }, PortId::Local { id: "port-003".into() }, 120);
             assert_eq!(peer(&s, 1).0, "ab".repeat(127));
             // 127 ü (two bytes each, eight characters escaped) and an x: 31 ü and one escape whole.
             heard(&raw, &dev, sw, ChassisId::Local { id: "ü".repeat(127) + "x" }, PortId::Local { id: "port-004".into() }, 120);
@@ -917,6 +918,204 @@ mod round_2 {
                 assert_eq!((d.status.to_bytes(), d.data.len()), ([0xDE, 0x80, 0xB4, 0x00], 64), "{index:#x}");
             }
             assert_eq!(dev.status().reads_refused, before + 2);
+        });
+    }
+}
+
+/// C-116's third refute round: the critic's probes (`~/.cache/veredas/critic-c116-r3/probes`), kept
+/// as pins: a neighbour heard again kept to its last frame's TTL, no data under the header, the API
+/// before a slot it lacks, every text subtype escaped, LLDP heard while muted, another station whose
+/// ids only read the same, ARP to another MAC and for another address.
+mod round_3 {
+    use std::net::{Ipv4Addr, UdpSocket};
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::profinet::record::INDEX_IM0;
+    use veredas_aranha::profinet::rpc::{self, ByteOrder, PnioStatus, ReadRequest, Uuid};
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::*;
+
+    use super::round_2::{DEVICE, config, heard, host_address, lldp_link, peer, port_data, read_req, socket, wait};
+
+    fn send(raw: &RawLink, src: Mac, chassis: ChassisId, port: PortId, ttl: u16) {
+        raw.send(&lldp::frame(src, &LldpPdu::new(chassis, port, ttl)).unwrap()).unwrap();
+    }
+
+    /// On the machine's lock: it measures the TTL.
+    #[test]
+    fn the_same_neighbour_heard_again_is_kept_to_its_last_frame_s_ttl() {
+        netns::isolated("round_3::the_same_neighbour_heard_again_is_kept_to_its_last_frame_s_ttl", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            let sw = raw.mac();
+            let t0 = Instant::now();
+            send(&raw, sw, ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 2);
+            assert!(wait(Duration::from_secs(1), || dev.neighbour().is_some()));
+            // Its next frame within its TTL of 2 s, as an LLDP agent sends one.
+            std::thread::sleep(Duration::from_millis(1200).saturating_sub(t0.elapsed()));
+            send(&raw, sw, ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 2);
+            std::thread::sleep(Duration::from_millis(2600).saturating_sub(t0.elapsed()));
+            let (st, pd) = port_data(&s, 1);
+            assert_eq!((st, pd.map(|p| p.peers.len()), dev.neighbour().is_some()), (PnioStatus::OK, Some(1), true), "kept past the first frame's TTL by the second's");
+            std::thread::sleep(Duration::from_millis(3700).saturating_sub(t0.elapsed()));
+            assert_eq!(dev.neighbour(), None, "gone at the last frame's TTL");
+        });
+    }
+
+    #[test]
+    fn an_args_maximum_under_the_header_gets_a_read_error_and_no_data_at_all() {
+        netns::isolated("round_3::an_args_maximum_under_the_header_gets_a_read_error_and_no_data_at_all", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            for (seq, max) in [(1u16, 32u32), (2, 63), (3, 0)] {
+                let (_, args) = read_req(&s, &ReadRequest::implicit(seq, 0, SUBSLOT_DAP, INDEX_IM0, 4096), max, Uuid([seq as u8; 16])).expect("an answer");
+                assert_eq!((args.status.to_bytes(), args.args_length, args.max_count, args.data.len()), ([0xDE, 0x80, 0xA0, 0x00], 0, max, 0), "ArgsMaximum {max}");
+            }
+        });
+    }
+
+    #[test]
+    fn another_api_is_refused_for_the_api_at_a_slot_or_subslot_it_lacks() {
+        netns::isolated("round_3::another_api_is_refused_for_the_api_at_a_slot_or_subslot_it_lacks", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            for (seq, slot, subslot) in [(1u16, 5u16, 1u16), (2, 0, 0x8002)] {
+                let mut r = ReadRequest::implicit(seq, slot, subslot, INDEX_IM0, 4096);
+                r.api = 1;
+                let (_, args) = read_req(&s, &r, 4160, Uuid([seq as u8; 16])).expect("an answer");
+                assert_eq!((args.status.to_bytes(), args.data.len()), ([0xDE, 0x80, 0xB4, 0x00], 64), "API 1 at ({slot}, {subslot:#x})");
+            }
+        });
+    }
+
+    #[test]
+    fn every_text_subtype_keeps_its_bytes_escaped_and_another_is_hex() {
+        netns::isolated("round_3::every_text_subtype_keeps_its_bytes_escaped_and_another_is_hex", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            let sw = raw.mac();
+            let mut seq = 0;
+            let mut read = |dev: &ProfinetHandle, chassis: ChassisId, port: PortId| {
+                heard(&raw, dev, sw, chassis, port, 120);
+                seq += 1;
+                peer(&s, seq)
+            };
+            // 802.1AB's text subtypes: a chassis or port component, an interface alias or name, a
+            // local one; bytes not UTF-8 escaped, UTF-8 past ASCII escaped byte by byte.
+            for subtype in [1u8, 2, 3, 6] {
+                let (chassis, _) = read(&dev, ChassisId::Other { subtype, data: b"sw-\xfc".to_vec() }, PortId::Local { id: format!("port-{subtype}") });
+                assert_eq!(chassis, "sw-\\xfc", "chassis subtype {subtype}");
+            }
+            for subtype in [1u8, 2, 7] {
+                let (_, port) = read(&dev, ChassisId::Local { id: format!("switch-{subtype}") }, PortId::Other { subtype, data: b"port-\xff".to_vec() });
+                assert_eq!(port, "port-\\xff", "port subtype {subtype}");
+            }
+            let (chassis, port) = read(&dev, ChassisId::Other { subtype: 2, data: "Schrank-ü".as_bytes().to_vec() }, PortId::IfAlias { name: "Schrank-ü".into() });
+            assert_eq!((chassis.as_str(), port.as_str()), ("Schrank-\\xc3\\xbc", "Schrank-\\xc3\\xbc"), "an interface alias alike as chassis and as port");
+            // An agent circuit id (port subtype 6) and a reserved chassis subtype: hex unless
+            // visible ASCII; a network address of another family as hex with its family byte.
+            let (chassis, port) = read(&dev, ChassisId::Other { subtype: 8, data: b"sw-\xfc".to_vec() }, PortId::Other { subtype: 6, data: vec![0x01, 0x02, 0xff] });
+            assert_eq!((chassis.as_str(), port.as_str()), ("73772dfc", "0102ff"));
+            let (chassis, _) = read(&dev, ChassisId::Network { data: vec![6, 0x02, 0, 0, 0, 0, 1] }, PortId::Local { id: "port-9".into() });
+            assert_eq!(chassis, "06020000000001");
+        });
+    }
+
+    #[test]
+    fn a_muted_device_still_hears_its_neighbour() {
+        netns::isolated("round_3::a_muted_device_still_hears_its_neighbour", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            dev.set_muted(true);
+            let (raw, s) = (lldp_link(), socket());
+            heard(&raw, &dev, raw.mac(), ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 120);
+            assert_eq!(peer(&s, 1), ("switch-1".into(), "port-003".into()));
+        });
+    }
+
+    #[test]
+    fn another_station_whose_ids_only_read_the_same_leaves_the_neighbour() {
+        netns::isolated("round_3::another_station_whose_ids_only_read_the_same_leaves_the_neighbour", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = lldp_link();
+            let (a, b) = (raw.mac(), Mac([0x02, 0xBB, 0, 0, 0, 0x01]));
+            let cases = [
+                ("a local chassis, then an interface name of the same text", ChassisId::Local { id: "switch-1".into() }, ChassisId::IfName { name: "switch-1".into() }),
+                ("two names alike in their first 31 letters past ASCII", ChassisId::Local { id: "ж".repeat(40) + "1" }, ChassisId::Local { id: "ж".repeat(40) + "2" }),
+                ("visible bytes, then bytes whose hex reads the same", ChassisId::Other { subtype: 8, data: b"abcd".to_vec() }, ChassisId::Other { subtype: 8, data: vec![0xab, 0xcd] }),
+            ];
+            for (n, (what, ours, theirs)) in cases.into_iter().enumerate() {
+                heard(&raw, &dev, a, ours.clone(), PortId::Local { id: format!("port-00{n}") }, 120);
+                let shown = dev.neighbour().unwrap();
+                heard(&raw, &dev, b, theirs, PortId::Local { id: format!("port-00{n}") }, 0);
+                assert_eq!(dev.neighbour(), Some(shown), "{what}: left by the other's TTL-0");
+                // Its own TTL-0 clears it.
+                heard(&raw, &dev, a, ours, PortId::Local { id: format!("port-00{n}") }, 0);
+                assert_eq!(dev.neighbour(), None, "{what}: its own TTL-0");
+            }
+        });
+    }
+
+    /// An ARP request for 192.168.0.10, from the test's raw link, to `dst`.
+    fn arp_request(raw: &RawLink, dst: Mac) -> usize {
+        let me = raw.mac();
+        let mut ask = dst.0.to_vec();
+        ask.extend_from_slice(&me.0);
+        ask.extend_from_slice(&[0x08, 0x06, 0, 1, 0x08, 0, 6, 4, 0, 1]);
+        ask.extend_from_slice(&me.0);
+        ask.extend_from_slice(&[192, 168, 0, 1]);
+        ask.extend_from_slice(&[0; 6]);
+        ask.extend_from_slice(&[192, 168, 0, 10]);
+        ask.resize(60, 0);
+        raw.send(&ask).unwrap();
+        let mut replies = 0;
+        let until = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < until {
+            if let Ok(Some(r)) = raw.recv(Duration::from_millis(50))
+                && r.bytes.len() >= 42
+                && r.bytes[20..22] == [0, 2]
+            {
+                replies += 1;
+            }
+        }
+        replies
+    }
+
+    #[test]
+    fn an_arp_request_to_another_mac_is_not_answered_nor_counted() {
+        netns::isolated("round_3::an_arp_request_to_another_mac_is_not_answered_nor_counted", &[("a0", "b0")], || {
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = RawLink::open_with("a0", Options { ethertype: Some(0x0806), promiscuous: false, outgoing: false }).unwrap();
+            assert_eq!((arp_request(&raw, Mac([0x02, 0xEE, 0, 0, 0, 0x01])), dev.status().arp_answered), (0, 0), "to another MAC");
+            assert_eq!((arp_request(&raw, dev.mac), dev.status().arp_answered), (1, 1), "to its own MAC");
+            assert_eq!((arp_request(&raw, Mac::BROADCAST), dev.status().arp_answered), (1, 2), "broadcast");
+        });
+    }
+
+    #[test]
+    fn an_arp_request_for_another_address_is_not_counted() {
+        netns::isolated("round_3::an_arp_request_for_another_address_is_not_counted", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            assert!(read_req(&s, &ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160, Uuid([1; 16])).is_some());
+            assert_eq!(dev.status().arp_answered, 1);
+            // A read to .11: the kernel asks for .11, which the device leaves unanswered.
+            let other = UdpSocket::bind("192.168.0.1:0").unwrap();
+            other.set_read_timeout(Some(Duration::from_millis(700))).unwrap();
+            let pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([2; 16]), 2, &ReadRequest::implicit(2, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+            other.send_to(&pdu.encode().unwrap(), (Ipv4Addr::new(192, 168, 0, 11), rpc::PNIO_PORT)).unwrap();
+            let mut buf = [0u8; 4096];
+            assert!(other.recv_from(&mut buf).is_err(), "no answer from .11");
+            assert_eq!(dev.status().arp_answered, 1, "the request for .11 not counted");
         });
     }
 }

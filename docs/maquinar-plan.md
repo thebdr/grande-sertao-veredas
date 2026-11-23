@@ -441,9 +441,11 @@ Recorded as the port meets them.
   | test(round_6::a_close_behind_many_pipelined_requests_is_seen_at_once)
   | test(round_3::no_dcp_frame_is_handed_to_the_interface_after_the_mute_returns)
   | test(round_3::a_step_the_handle_held_past_its_time_is_counted_late)
-  | test(round_3::a_step_a_step_and_a_half_late_is_counted_late)`
+  | test(round_3::a_step_a_step_and_a_half_late_is_counted_late)
+  | test(round_3::the_same_neighbour_heard_again_is_kept_to_its_last_frame_s_ttl)`
   (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23; the adapter's
-  multiplier at 3 and its restart within a second; the PROFINET neighbour aged out by its TTL; the
+  multiplier at 3 and its restart within a second; the PROFINET neighbour aged out by its TTL, and
+  kept to its last frame's when heard again; the
   executable's status lines a second apart; the Modbus server's delays side by side and a close
   behind many requests seen at once; the PROFINET device's strict mute, whose bursts meet the mute
   as the load lets them; `fisica`'s late count against the steps' own starts).

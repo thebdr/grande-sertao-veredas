@@ -33,10 +33,15 @@ fn be16(f: &[u8], at: usize) -> u16 {
     u16::from_be_bytes([f[at], f[at + 1]])
 }
 
-/// The answer to an ARP request for `ip`: a reply from `mac`, padded to the least frame. `None`
-/// for any other frame.
+/// The answer to an ARP request for `ip`, broadcast or to `mac`: a reply from `mac`, padded to the
+/// least frame. `None` for any other frame.
 pub fn arp_reply(frame: &[u8], mac: Mac, ip: Ipv4Addr) -> Option<Vec<u8>> {
     if frame.len() < 42 || be16(frame, 12) != ETHERTYPE_ARP {
+        return None;
+    }
+    // Broadcast or to its own MAC: a frame to another station is not its (a card drops it).
+    let dst = mac_at(frame, 0);
+    if dst != mac && dst != Mac::BROADCAST {
         return None;
     }
     let a = &frame[14..];
