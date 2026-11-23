@@ -310,7 +310,9 @@ fn each_form_holds_the_layers_it_promises() {
         (
             "default-form",
             "",
-            "veredas_core::types::Value, veredas_core::types::Sample, veredas_core::source::SourceHandle, \
+            "veredas_core::Quality, veredas_core::Sample, veredas_core::SeriesRef, veredas_core::SeriesType, \
+             veredas_core::SourceId, veredas_core::Value, veredas_core::SourceError, veredas_core::SourceHandle, \
+             veredas_core::types::Value, veredas_core::types::Sample, veredas_core::source::SourceHandle, \
              veredas_core::telegram::Channel, veredas_core::telegram::Catalog, veredas_core::opc::Browser, \
              veredas_core::opc::OpcWorker, veredas_core::schema::Stamp, veredas_core::state::ControllerState, \
              veredas_core::rng::Pcg32",
@@ -370,4 +372,65 @@ fn each_form_holds_the_layers_it_promises() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+}
+
+/// Every feature gate in core's source is one of the expected set, so no item of a layer can be
+/// put behind a feature other than its own (an item the suite's builds would still see, every
+/// build of core inside the suite merging the forms). The set: `net` on the four plant-facing
+/// modules and the crate root's two re-exports, `demo-server` on the demo plant, each master on
+/// its own module.
+#[test]
+fn every_feature_gate_is_where_it_belongs() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = vec![src.clone()];
+    let mut gates: BTreeSet<String> = BTreeSet::new();
+    while let Some(path) = files.pop() {
+        if path.is_dir() {
+            files.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let rel = path
+            .strip_prefix(&src)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let lines: Vec<&str> = text.lines().collect();
+        for (n, line) in lines.iter().enumerate() {
+            // Any mention of a feature in a cfg, an attribute or the macro, whatever its form.
+            let squeezed: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+            if squeezed.contains("feature=") || squeezed.contains("cfg!(") {
+                let gated = lines[n + 1..]
+                    .iter()
+                    .map(|l| l.trim())
+                    .find(|l| !l.starts_with("#[") && !l.starts_with("//"))
+                    .unwrap_or("");
+                let item: String = gated
+                    .split(['{', ';'])
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                gates.insert(format!("{rel}: {squeezed} -> {item}"));
+            }
+        }
+    }
+    let want: BTreeSet<String> = [
+        "fieldbus/mod.rs: #[cfg(feature=\"enip\")] -> pub mod enip",
+        "fieldbus/mod.rs: #[cfg(feature=\"modbus\")] -> pub mod modbus",
+        "lib.rs: #[cfg(feature=\"net\")] -> pub mod opc",
+        "lib.rs: #[cfg(feature=\"net\")] -> pub mod source",
+        "lib.rs: #[cfg(feature=\"net\")] -> pub mod telegram",
+        "lib.rs: #[cfg(feature=\"net\")] -> pub mod types",
+        "lib.rs: #[cfg(feature=\"net\")] -> pub use source::",
+        "lib.rs: #[cfg(feature=\"net\")] -> pub use types::",
+        "opc/mod.rs: #[cfg(feature=\"demo-server\")] -> pub mod demo",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    assert_eq!(gates, want);
 }
