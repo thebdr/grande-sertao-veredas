@@ -719,10 +719,15 @@ async fn session(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mut g
             // Connected explicit messaging is not served: the command is not taken.
             _ => Some(header.reply(header.session, encap_status::INVALID_COMMAND, &[])),
         };
-        if let Some(reply) = reply
-            && wr.write_all(&reply).await.is_err()
-        {
-            return;
+        if let Some(reply) = reply {
+            // A client that does not read leaves the write waiting: a restart does not wait for it.
+            let written = tokio::select! {
+                r = wr.write_all(&reply) => r.is_ok(),
+                _ = ended(&mut gone, generation) => false,
+            };
+            if !written {
+                return;
+            }
         }
     }
 }
@@ -899,8 +904,10 @@ fn unconnected_send(shared: &Shared, peer: SocketAddr, data: &[u8], t_to_o: Opti
     }
     let here = route.is_empty() || route == [0x01, 0x00];
     if !here {
-        // 0x0312: the link address is not valid here: an adapter routes nowhere.
-        return (general::CONNECTION_FAILURE, vec![0x0312], Vec::new(), Vec::new());
+        // 0x0312: the link address is not valid here: an adapter routes nowhere. A routing error
+        // carries the route's remaining size in words, as the router that met it saw it (all of
+        // it: the first hop), then a reserved byte.
+        return (general::CONNECTION_FAILURE, vec![0x0312], vec![route_words as u8, 0], Vec::new());
     }
     // An Unconnected_Send wrapped in another goes nowhere either: the adapter routes one level
     // and no more, so no request can nest the stack away.

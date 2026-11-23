@@ -236,8 +236,10 @@ pub(super) fn check(cfg: &EnipConfig) -> Result<(), EnipError> {
     if cfg.bind.trim().is_empty() {
         return Err(bad("ethernetip.bind is empty".into()));
     }
-    // Class 1 and the socket-address items carry IPv4 addresses alone.
-    if cfg.bind.parse::<std::net::Ipv6Addr>().is_ok() {
+    // Class 1 and the socket-address items carry IPv4 addresses alone: the address bound (the
+    // text trimmed, as `start` binds it) is a dotted quad, never an IPv6 one nor a host name that
+    // could resolve to one.
+    if cfg.bind.trim().parse::<std::net::Ipv4Addr>().is_err() {
         return Err(bad(format!("ethernetip.bind `{}`: EtherNet/IP is IPv4, a dotted quad", cfg.bind)));
     }
     cfg.identity.revision_bytes().map_err(|e| bad(format!("ethernetip.identity.revision: {e}")))?;

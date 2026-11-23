@@ -1487,3 +1487,176 @@ mod round_2 {
         }
     }
 }
+
+/// C-111's third refute round: the critic's probes (`~/.cache/veredas/critic-c111-r3/probes`), kept
+/// as pins: a bind that is not a dotted quad however written, the triple's three fields, a key or an
+/// extended port segment in a request's path, a restart past a session whose answers wait unread,
+/// the multiplier at 3, a port segment in a connection path, a taken encapsulation port over UDP,
+/// the routing refusal's remaining path size.
+mod round_3 {
+    use super::*;
+
+    /// A Forward_Open as raw bytes: the triple's three fields and the T→O and O→T sizes chosen.
+    #[allow(clippy::too_many_arguments)]
+    fn fo(serial: u16, vendor: u16, originator: u32, rpi: u32, multiplier: u8, o_size: u16, t_size: u16, path: &[u8]) -> Vec<u8> {
+        let mut b = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&(0x8000_0000u32 | u32::from(serial)).to_le_bytes());
+        b.extend_from_slice(&serial.to_le_bytes());
+        b.extend_from_slice(&vendor.to_le_bytes());
+        b.extend_from_slice(&originator.to_le_bytes());
+        b.extend_from_slice(&[multiplier, 0, 0, 0]);
+        b.extend_from_slice(&rpi.to_le_bytes());
+        b.extend_from_slice(&((2u16 << 13) | o_size).to_le_bytes());
+        b.extend_from_slice(&rpi.to_le_bytes());
+        b.extend_from_slice(&((2u16 << 13) | t_size).to_le_bytes());
+        b.push(0x01);
+        b.push((path.len() / 2) as u8);
+        b.extend_from_slice(path);
+        b
+    }
+
+    /// A Forward_Close of the triple, by raw bytes.
+    fn fc(serial: u16, vendor: u16, originator: u32) -> Vec<u8> {
+        let mut b = vec![0x4E, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
+        b.extend_from_slice(&serial.to_le_bytes());
+        b.extend_from_slice(&vendor.to_le_bytes());
+        b.extend_from_slice(&originator.to_le_bytes());
+        b.push(4);
+        b.push(0);
+        b.extend_from_slice(&PATH_150_100);
+        b
+    }
+
+    const PATH_150_100: [u8; 8] = [0x20, 0x04, 0x24, 151, 0x2C, 150, 0x2C, 100];
+    const PATH_152_101: [u8; 8] = [0x20, 0x04, 0x24, 151, 0x2C, 152, 0x2C, 101];
+
+    /// `device(host)` with a second connection, outputs 152 and inputs 101.
+    fn two_connections(host: u8) -> String {
+        device(host)
+            .replace("{ instance = 151, size = 2 } ]", "{ instance = 151, size = 2 }, { instance = 152, size = 2 }, { instance = 101, size = 2 } ]")
+            .replace("connections = [ { config = 151, output = 150, input = 100 } ]", "connections = [ { config = 151, output = 150, input = 100 }, { config = 151, output = 152, input = 101 } ]")
+    }
+
+    fn sockaddr(udp: &UdpSocket) -> ethernetip_core::cpf::Item {
+        let SocketAddr::V4(me) = udp.local_addr().unwrap() else { panic!() };
+        ethernetip_core::cpf::Item::new(0x8001, ethernetip_core::cpf::encode_sockaddr_in_v4(SocketAddr::V4(me)).unwrap())
+    }
+
+    #[test]
+    fn a_bind_that_is_not_a_dotted_quad_is_refused_however_written() {
+        for bind in [" ::1", "::1 ", "ip6-localhost", "localhost", "127.0.0.1.5"] {
+            let text = format!("bind = \"{bind}\"\nport = 0\nio_port = 0\n");
+            let want = format!("ethernetip.bind `{bind}`: EtherNet/IP is IPv4, a dotted quad");
+            assert_eq!(validate(&config(&text)).err().map(|e| e.to_string()), Some(want.clone()), "{bind:?}");
+            assert_eq!(start(&config(&text)).err().map(|e| e.to_string()), Some(want), "{bind:?}");
+        }
+        // A dotted quad with spaces around it is the address it names.
+        let adapter = start(&config(" bind = \" 127.0.0.140 \"\nport = 0\nio_port = 0\n")).unwrap();
+        assert_eq!(adapter.addr.ip().to_string(), "127.0.0.140");
+    }
+
+    #[test]
+    fn a_connection_is_its_whole_triple_and_a_close_names_all_three() {
+        let adapter = start(&config(&two_connections(141))).unwrap();
+        let (mut a, mut b) = (Encap::connect(adapter.addr), Encap::connect(adapter.addr));
+        let (sa, sb) = (a.register(), b.register());
+        let (ua, ub) = (UdpSocket::bind("127.0.0.1:0").unwrap(), UdpSocket::bind("127.0.0.1:0").unwrap());
+        // One connection serial under two originators' vendor and serial: two connections.
+        let ra = a.rr(sa, &fo(0x0101, 0x00FE, 0x0BAD_CAFE, 20_000, 0, 4 + 6, 8 + 2, &PATH_150_100), vec![sockaddr(&ua)]).find(0x00B2).unwrap().data.clone();
+        let rb = b.rr(sb, &fo(0x0101, 0x0001, 7, 20_000, 0, 2 + 6, 2 + 2, &PATH_152_101), vec![sockaddr(&ub)]).find(0x00B2).unwrap().data.clone();
+        assert_eq!((status_of(&ra), status_of(&rb)), ((0, vec![]), (0, vec![])));
+        // The same triple again: 0x0100.
+        let again = b.rr(sb, &fo(0x0101, 0x0001, 7, 20_000, 0, 2 + 6, 2 + 2, &PATH_152_101), vec![sockaddr(&ub)]).find(0x00B2).unwrap().data.clone();
+        assert_eq!(status_of(&again), (0x01, vec![0x0100]));
+        // A close naming the serial under a third vendor, then under A's vendor with B's serial: none open.
+        let mut c = Encap::connect(adapter.addr);
+        let sc = c.register();
+        assert_eq!(status_of(&c.cip(sc, &fc(0x0101, 0x0002, 0x0BAD_CAFE))), (0x01, vec![0x0107]));
+        assert_eq!(status_of(&c.cip(sc, &fc(0x0101, 0x00FE, 7))), (0x01, vec![0x0107]));
+        assert_eq!(adapter.status().connections.len(), 2);
+        // A's own triple closes A's alone.
+        assert_eq!(status_of(&c.cip(sc, &fc(0x0101, 0x00FE, 0x0BAD_CAFE))).0, 0);
+        let open: Vec<u16> = adapter.status().connections.iter().map(|x| x.vendor).collect();
+        assert_eq!(open, [0x0001]);
+    }
+
+    #[test]
+    fn a_key_or_an_extended_port_segment_in_a_request_path_is_refused_at_its_word() {
+        let adapter = start(&config(&device(142))).unwrap();
+        let mut c = Encap::connect(adapter.addr);
+        let s = c.register();
+        // The Identity's vendor, its path led by an electronic key naming this very device.
+        let r = c.cip(s, &[0x0E, 0x08, 0x34, 0x04, 9, 0, 7, 0, 3, 0, 2, 5, 0x20, 0x01, 0x24, 0x01, 0x30, 0x01]);
+        assert_eq!(&r[..6], &[0x8E, 0x00, 0x04, 0x01, 0x00, 0x00], "{r:02X?}");
+        // Port 2 with a two-byte link address (an extended port segment), then the same.
+        let r = c.cip(s, &[0x0E, 0x05, 0x12, 0x02, 0x0A, 0x0B, 0x20, 0x01, 0x24, 0x01, 0x30, 0x01]);
+        assert_eq!(&r[..6], &[0x8E, 0x00, 0x04, 0x01, 0x00, 0x00], "{r:02X?}");
+    }
+
+    #[test]
+    fn a_port_segment_in_a_connection_path_is_refused_0x0315() {
+        let adapter = start(&config(&device(143))).unwrap();
+        let mut c = Encap::connect(adapter.addr);
+        let s = c.register();
+        let path = [0x01, 0x05, 0x20, 0x04, 0x24, 151, 0x2C, 150, 0x2C, 100];
+        assert_eq!(status_of(&c.cip(s, &fo(0x0505, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, &path))), (0x01, vec![0x0315]));
+    }
+
+    #[test]
+    fn a_taken_encapsulation_port_over_udp_is_named() {
+        let taken = UdpSocket::bind("127.0.0.144:0").unwrap();
+        let port = taken.local_addr().unwrap().port();
+        let e = start(&config(&format!("bind = \"127.0.0.144\"\nport = {port}\nio_port = 0\n"))).unwrap_err().to_string();
+        assert!(e.starts_with(&format!("bind 127.0.0.144:{port} (udp): ")), "{e}");
+    }
+
+    #[test]
+    fn a_routing_refusal_carries_its_remaining_path_size_as_the_dissectors_read_it() {
+        let adapter = start(&config(&device(145))).unwrap();
+        let mut c = Encap::connect(adapter.addr);
+        let s = c.register();
+        // The Identity's vendor routed through port 1 to slot 2: one word of route, none followed.
+        let r = c.cip(s, &wrap_us(&[0x0E, 0x03, 0x20, 0x01, 0x24, 0x01, 0x30, 0x01], &[0x01, 0x02]));
+        assert_eq!(r, [0xD2, 0x00, 0x01, 0x01, 0x12, 0x03, 0x01, 0x00]);
+        let packets = dissect(&capture(&c.log, &[]));
+        let sizes: Vec<String> = packets.iter().flat_map(|p| field(p, "cipcm_cip_cm_remain_path_size")).collect();
+        let bad: Vec<String> = packets.iter().flat_map(complaints).collect();
+        assert_eq!((sizes, bad), (vec!["1".to_string()], Vec::<String>::new()));
+    }
+
+    #[test]
+    fn a_multiplier_of_three_is_thirty_two_rpis() {
+        let adapter = start(&config(&device(146))).unwrap();
+        let mut o = Originator::connect(&adapter);
+        // O→T 10 ms, multiplier 3: 10 ms × (4 << 3) = 320 ms; held to 2 it would be 160.
+        let (reply, to) = o.open(&adapter, &Open { rpi_us: 10_000, multiplier: 3, ..open_for(4, 8) });
+        let mut last = Instant::now();
+        for i in 0..10u32 {
+            o.send_output(to, reply.o_to_t_connection_id, i, i as u16, true, &[0; 4]);
+            last = Instant::now();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(wait(Duration::from_secs(5), || adapter.status().timed_out == 1));
+        let after = last.elapsed();
+        assert!(after >= Duration::from_millis(320) && after < Duration::from_millis(500), "{after:?}");
+    }
+
+    #[test]
+    fn a_restart_closes_a_session_whose_answers_wait_unread() {
+        let text = device(147).replace("{ instance = 100, size = 8 }", "{ instance = 100, size = 65000 }");
+        let adapter = start(&config(&text)).unwrap();
+        let mut c = Encap::connect(adapter.addr);
+        let s = c.register();
+        // 400 reads of a 65000-byte assembly, never read back: the session's write waits on them.
+        let body = ethernetip_core::cpf::encode_envelope(0, 5, &[ethernetip_core::cpf::Item::null_address(), ethernetip_core::cpf::Item::new(0x00B2, vec![0x0E, 0x03, 0x20, 0x04, 0x24, 100, 0x30, 0x03])]);
+        let one = Encap::frame(0x6F, s, *b"unread..", &body);
+        c.stream.write_all(&one.repeat(400)).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        let started = Instant::now();
+        adapter.restart();
+        let took = started.elapsed();
+        let st = adapter.status();
+        assert!(took < Duration::from_secs(1) && (st.tcp_connections, st.sessions) == (0, 0), "{took:?}, {} connection(s), {} session(s)", st.tcp_connections, st.sessions);
+    }
+}

@@ -432,8 +432,11 @@ Recorded as the port meets them.
   | test(round_1::a_stalled_runner_catches_up_and_counts_its_late_steps) | binary(reflexo)
   | test(round_4::an_answer_to_a_client_that_closed_during_its_delay_is_counted_as_none)
   | test(round_4::the_same_client_closing_with_a_reset_counts_none_either)
-  | test(round_5::a_client_that_closes_or_resets_during_the_delay_is_gone_at_once_whatever_it_pipelined)`
-  (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23).
+  | test(round_5::a_client_that_closes_or_resets_during_the_delay_is_gone_at_once_whatever_it_pipelined)
+  | test(round_3::a_multiplier_of_three_is_thirty_two_rpis)
+  | test(round_3::a_restart_closes_a_session_whose_answers_wait_unread)`
+  (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23; the adapter's
+  multiplier at 3 and its restart within a second).
   Free, by that rule: the bench file, the channels, the controller's rules, the component, the
   EtherCAT segment (ethercrab's own timeouts are deadlines), `fisica` but its runner, and every
   other test of the files above. A new test that measures time joins this list in its commit, and

@@ -1531,8 +1531,8 @@ share an address.
 **An EtherNet/IP adapter** (`[[ethernetip]]`): a device's assemblies over EtherNet/IP, explicit
 messages on a TCP session and Class 1 cyclic I/O over UDP.
 - `name` (required): the part's name.
-- `bind` (`"127.0.0.1"`): the address the adapter listens on, IPv4 (EtherNet/IP's items carry IPv4
-  addresses alone).
+- `bind` (`"127.0.0.1"`): the address the adapter listens on, IPv4 as a dotted quad (EtherNet/IP's
+  items carry IPv4 addresses alone; an IPv6 address or a host name is refused).
 - `port` (`44818`): the encapsulation port, TCP for sessions and UDP for a ListIdentity; `0` lets
   the machine choose, the same port for both.
 - `io_port` (`2222`): the Class 1 port, UDP; `0` lets the machine choose, the port then given in
