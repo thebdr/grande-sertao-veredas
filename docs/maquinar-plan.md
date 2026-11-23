@@ -426,7 +426,10 @@ Recorded as the port meets them.
   | test(round_2::stale_frames_do_not_feed_the_watchdog) | binary(reflexo)`.
   Free, by that rule: the bench file, the channels, the controller's rules, the component, the
   EtherCAT segment (ethercrab's own timeouts are deadlines), `fisica` but its runner, and every
-  other test of the files above. A new test that measures time joins this list in its commit.
+  other test of the files above. A new test that measures time joins this list in its commit, and
+  `.config/nextest.toml`'s exclusive block with it. A run record of a file that holds one goes
+  through `cargo nextest run`, which honours that block; `cargo test` runs a file's tests as threads
+  of one process, the timed ones beside the rest (C-111's record failed so on 2026-11-23).
 - **A thread spawned is not a line written.** The emitter's loop reads its stop flag before its
   first line, so a part that fails right after it (a server on a taken port) can stop and join
   it before its thread's first tick, and its file is not there: CI on Linux did exactly that
