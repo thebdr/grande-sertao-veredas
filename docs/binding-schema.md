@@ -480,7 +480,8 @@ prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a commen
 `transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), on the root the attributes
 `preserveAspectRatio` and `overflow` (the second in its `style` too, and every longhand of it), with
 which the drawing would cut what the page writes at its edge or reach past its frame, and on its root
-nothing but `width`, `height`, `viewBox`, `version` and `id` and Inkscape's own attributes (and the
+nothing but `width`, `height`, `viewBox`, `version` and `id` and Inkscape's own attributes (in the two namespaces it writes there,
+`sodipodi:` and `inkscape:`, an attribute of its RDF, licence or Dublin Core ones refused; and the
 XML ones), any other (a `style`, a presentation attribute) the page's to set, a custom
 property (a `style` declaration whose name begins `--`, however CSS spells it) anywhere, a
 `direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),

@@ -1227,7 +1227,8 @@ prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a commen
 `transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), on the root the attributes
 `preserveAspectRatio` and `overflow` (the second in its `style` too, and every longhand of it), with
 which the drawing would cut what the page writes at its edge or reach past its frame, and on its root
-nothing but `width`, `height`, `viewBox`, `version` and `id` and Inkscape's own attributes (and the
+nothing but `width`, `height`, `viewBox`, `version` and `id` and Inkscape's own attributes (in the two namespaces it writes there,
+`sodipodi:` and `inkscape:`, an attribute of its RDF, licence or Dublin Core ones refused; and the
 XML ones), any other (a `style`, a presentation attribute) the page's to set, a custom
 property (a `style` declaration whose name begins `--`, however CSS spells it) anywhere, a
 `direction` (an attribute or in a `style`) outside a text and its spans (`text`, `tspan`, `textPath`),
@@ -1549,7 +1550,7 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
         }
     }
     // The root holds what Inkscape writes there and nothing else (`ROOT_ATTRIBUTES`, the reference's
-    // list, with Inkscape's own attributes and the XML ones): those load (the Inkscape fixture's root
+    // list, with Inkscape's own attributes in its two namespaces and the XML ones): those load (the Inkscape fixture's root
     // writes them all); any other is refused naming it: a `style` placing its box over the page
     // (fixed, the whole window) or hiding it, a presentation attribute hiding the drawing, a position,
     // an attribute of another namespace, and every near miss above.
@@ -1562,6 +1563,20 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     for attr in ["width=\"400\" height=\"220\" version=\"1.1\" id=\"svg1\"", "xml:space=\"preserve\"", "xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" inkscape:label=\"Plant\"", "xmlns:sodipodi=\"http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd\" sodipodi:docname=\"loop.svg\""] {
         let ex = with_svg(ROOT, &ROOT.replacen("<svg ", &format!("<svg {attr} "), 1));
         assert!(outcome(&ex).is_ok(), "{attr}: {:?}", outcome(&ex).err());
+    }
+    // An attribute of each of the editor's own namespaces (`EDITOR`) on the root: those Inkscape
+    // writes there (`ROOT_EDITOR`, its own two) load; one of each other (its RDF's, a licence's,
+    // Dublin Core's, which it writes in the metadata alone) refused, naming it.
+    use veredas_supervisao::svg::{EDITOR, ROOT_EDITOR};
+    assert!(ROOT_EDITOR.len() == 2 && ROOT_EDITOR.iter().all(|r| EDITOR.iter().any(|(e, _)| e == r)), "{ROOT_EDITOR:?}");
+    for (ns, _) in EDITOR {
+        let ex = with_svg(ROOT, &ROOT.replacen("<svg ", &format!("<svg xmlns:ed=\"{ns}\" ed:mark=\"x\" "), 1));
+        if ROOT_EDITOR.contains(&ns) {
+            assert!(outcome(&ex).is_ok(), "{ns} on the root: {:?}", outcome(&ex).err());
+        } else {
+            let got = binding_refusal(&ex);
+            assert!(got.ends_with(&rooted("mark")), "{ns} on the root: {got}");
+        }
     }
     // A script link in an attribute of each of the editor's own namespaces (`EDITOR`; read by nothing
     // but this check, the reference's sentence), at every place.

@@ -272,12 +272,14 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         }
     }
     // The root holds what Inkscape writes on it and nothing else (Q25): its size, its view, its
-    // version and its id (`ROOT_ATTRIBUTES`), and the editor's own attributes and the XML ones. Any
+    // version and its id (`ROOT_ATTRIBUTES`), the editor's own attributes in the namespaces Inkscape
+    // writes them in there (`ROOT_EDITOR`; an RDF, a licence's or a Dublin Core one it writes only in
+    // the metadata), and the XML ones. Any
     // other is the page's to set: a `style` placing or sizing its box past its frame (over the page's
     // own controls), a presentation attribute hiding the drawing, how it fits.
     if let Some(a) = root.attributes().find(|a| match a.namespace() {
         None => !ROOT_ATTRIBUTES.contains(&a.name()),
-        Some(ns) => ns != XML_NS && !EDITOR.iter().any(|(e, _)| *e == ns),
+        Some(ns) => ns != XML_NS && !ROOT_EDITOR.contains(&ns),
     }) {
         return Err(format!("{} writes `{}` on its root <svg>, which Inkscape writes none of there: the page sets the root's box and how it shows itself (Inkscape's root holds its size, its view, its version and its id, and Inkscape's own attributes)", path.display(), a.name()));
     }
@@ -286,6 +288,11 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
 
 /// The attributes of no namespace Inkscape writes on a drawing's root, the only ones it may hold.
 pub const ROOT_ATTRIBUTES: [&str; 5] = ["width", "height", "viewBox", "version", "id"];
+
+/// The editor's namespaces whose attributes Inkscape writes on a drawing's root (`sodipodi:docname`,
+/// `inkscape:version`, ...), the only ones of `EDITOR` a root may hold: the RDF, licence and Dublin
+/// Core namespaces Inkscape writes in the root's `metadata` alone.
+pub const ROOT_EDITOR: [&str; 2] = [SODIPODI_NS, INKSCAPE_NS];
 
 /// The XML namespace (`xml:space`, `xml:lang`), whose attributes a root may hold.
 pub const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
