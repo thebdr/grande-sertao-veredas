@@ -183,6 +183,11 @@ fn a_damaged_datagram_is_an_error_that_names_it_and_trailing_bytes_are_kept() {
     v5[0] = 5;
     assert_eq!(RpcPdu::decode(&v5), Err(RpcError::NotConnectionless(5)));
     assert_eq!(RpcPdu::decode(&good[..good.len() - 1]), Err(RpcError::Overrun { declared: 84, available: 83 }));
+    // A datagram that is its header alone (a ping, a working, an ack carry no body) is one.
+    let bare = RpcPdu { body: vec![], ..RpcPdu::decode(&good).unwrap() };
+    let b = bare.encode().unwrap();
+    assert_eq!(b.len(), 80);
+    assert_eq!(RpcPdu::decode(&b).unwrap(), bare);
     let mut longer = good.clone();
     longer.extend_from_slice(&[0xAA, 0xBB]);
     let pdu = RpcPdu::decode(&longer).unwrap();
@@ -233,6 +238,10 @@ fn a_damaged_datagram_is_an_error_that_names_it_and_trailing_bytes_are_kept() {
     assert_eq!(ByteOrder::of_drep([0x00, 0, 0]), ByteOrder::Big);
     assert_eq!(ByteOrder::of_drep([0xE0, 0, 0]), ByteOrder::Big);
     assert_eq!(ByteOrder::of_drep([0x01, 0, 0]), ByteOrder::Big);
+    // Bit 4 alone decides, whatever the bits beside it.
+    for (d, o) in [(0x30, ByteOrder::Little), (0xF0, ByteOrder::Little), (0x1F, ByteOrder::Little), (0x02, ByteOrder::Big), (0x04, ByteOrder::Big), (0x08, ByteOrder::Big), (0xEF, ByteOrder::Big)] {
+        assert_eq!(ByteOrder::of_drep([d, 0, 0]), o, "{d:#04x}");
+    }
     assert_eq!((ByteOrder::Big.drep(), ByteOrder::Little.drep()), ([0, 0, 0], [0x10, 0, 0]));
 
     // A datagram past what UDP over IPv4 carries is refused both ways; 65 507 bytes are written and
@@ -310,6 +319,12 @@ fn blocks_whole(data: &[u8]) {
 #[test]
 fn the_arguments_name_their_damage_and_keep_what_follows() {
     for o in [ByteOrder::Big, ByteOrder::Little] {
+        // Arguments with no data (an answer carrying no block) are arguments.
+        let empty = RequestArgs::new(4096, vec![]);
+        assert_eq!(RequestArgs::decode(&empty.encode(o), o).unwrap(), empty);
+        let empty = ResponseArgs::new(PnioStatus::OK, 4096, vec![]);
+        assert_eq!(empty.encode(o).len(), 20);
+        assert_eq!(ResponseArgs::decode(&empty.encode(o), o).unwrap(), empty);
         let args = RequestArgs::new(4096, vec![1, 2, 3]);
         let body = args.encode(o);
         assert_eq!(body.len(), 23);
@@ -377,6 +392,12 @@ fn a_read_header_is_read_only_from_its_own_block() {
         ReadRequest { ar: activity(), ..req.clone() }.block().unwrap_err().to_string(),
         "a target AR travels only under the nil AR (an implicit read); this read's AR is 12345678-1234-5678-9abc-def012345678"
     );
+    // An AR whose first half is zero is an AR all the same: its target's place is padding.
+    let half: Uuid = "00000000-0000-0000-0001-000000000001".parse().unwrap();
+    assert!(ReadRequest { ar: half, ..req.clone() }.block().is_err());
+    let mut named = ReadRequest { ar: half, target_ar: Uuid::NIL, ..req.clone() }.block().unwrap();
+    named.body[34] = 1;
+    assert!(ReadRequest::from_block(&named).is_err());
     let mut padded = ublock.clone();
     padded.body[34] = 1;
     assert!(ReadRequest::from_block(&padded).is_err());
@@ -404,6 +425,17 @@ fn a_read_header_is_read_only_from_its_own_block() {
         assert!(ReadRequest::from_block(&Block { version, ..block.clone() }).is_err(), "{version:?}");
         assert!(ReadResponse::from_block(&Block { version, ..rblock.clone() }).is_err(), "{version:?}");
     }
+    // Of their own type and version, a header of any other length is refused, never a panic.
+    for len in [0usize, 10, 27, 30, 57, 59] {
+        assert!(ReadRequest::from_block(&Block::new(rpc::READ_REQUEST, vec![0; len])).is_err(), "{len}");
+        assert!(ReadResponse::from_block(&Block::new(rpc::READ_RESPONSE, vec![0; len])).is_err(), "{len}");
+    }
+    let mut long_request = block.clone();
+    long_request.body.push(0);
+    assert!(ReadRequest::from_block(&long_request).is_err());
+    let mut short_response = rblock.clone();
+    short_response.body.pop();
+    assert!(ReadResponse::from_block(&short_response).is_err());
     let mut short = block.clone();
     short.body.pop();
     assert!(ReadRequest::from_block(&short).is_err());
