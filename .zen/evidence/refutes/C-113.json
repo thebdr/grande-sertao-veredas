@@ -1,13 +1,13 @@
 {
   "clause": "C-113",
   "verdict": "refuted",
-  "ranAt": "2026-11-22T21:53:01.204Z",
-  "headCommit": "caf5cab8a8acfe775de11aa22b2f0df656bc9a05",
+  "ranAt": "2026-11-23T01:37:38.746Z",
+  "headCommit": "77d4413647da3c5875152fc9ee649e5d0129ce88",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/ethercat_segment.rs",
       "file": "crates/veredas-maquinar/tests/ethercat_segment.rs",
-      "symbolSha": "6185a98fc660a84f4d6fe68d2a7b04576436ff8482b41475a8a524966e6208a4"
+      "symbolSha": "7e76dddf187711f035cdfd6d402313cb018b7865f1db26875b800e8d1ffea889"
     }
   ]
 }
