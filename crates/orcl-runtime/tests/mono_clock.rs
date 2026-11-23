@@ -3,7 +3,10 @@
 //! after them; the clock, read after the wall, is never behind the wall by more than the wall's head start, between
 //! waits as well as at their ends; and a scan that takes its program five milliseconds is measured as at least that.
 //! That the clock only counts forward is read in the source, since no test can step the system's clock without
-//! privileges: it is `std::time::Instant`, never the settable `SystemTime` that NTP or a rewind moves.
+//! privileges: it is `std::time::Instant`, never the settable `SystemTime` that NTP or a rewind moves, and its wait
+//! judges the deadline on that reading. Since another crate or unsafe code would reach the system's clock, or the
+//! operating system, without naming either, cargo's own report pins the engine to orcl-std alone, and its root to
+//! `forbid(unsafe_code)`.
 use orcl_runtime::{Clock, Io, MonoClock, RunState, Task, TaskConfig};
 use orcl_std::{Program, Scan};
 use std::time::{Duration, Instant};
@@ -142,6 +145,9 @@ fn the_target_s_clock_reads_the_monotonic_instant_never_the_settable_system_time
         for refused in ["SystemTime", "UNIX_EPOCH"] {
             assert!(!code.contains(refused), "{file} names {refused}, the clock the system's time setting moves");
         }
+        for refused in ["thread::spawn", "process::"] {
+            assert!(!code.contains(refused), "{file} reaches the operating system with {refused}");
+        }
     }
     let clock = code_squeezed(SOURCES[0].1);
     for needed in [
@@ -149,7 +155,25 @@ fn the_target_s_clock_reads_the_monotonic_instant_never_the_settable_system_time
         "pubstructMonoClock{start:Instant,",
         "start:Instant::now(),",
         "implClockforMonoClock{fnnow(&self)->Duration{self.start.elapsed()}",
+        "letremaining=deadline.saturating_sub(self.now());",
+        "whileself.now()<deadline{std::hint::spin_loop();}",
     ] {
         assert!(clock.contains(needed), "MonoClock's reading is std's Instant: {needed}");
     }
+}
+
+#[test]
+fn the_engine_depends_on_orcl_std_alone_and_forbids_unsafe_code() {
+    // cargo's own report of the crate's normal and build dependencies, on every target
+    let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["tree", "-p", "orcl-runtime", "-e", "normal,build", "--depth", "1", "--prefix", "none"])
+        .args(["--target", "all", "--offline", "--manifest-path", manifest])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let listed = String::from_utf8(out.stdout).unwrap();
+    let crates: Vec<&str> = listed.lines().filter_map(|line| line.split_whitespace().next()).collect();
+    assert_eq!(crates, ["orcl-runtime", "orcl-std"], "the engine and the one crate it uses");
+    assert!(code_squeezed(SOURCES[1].1).contains("#![forbid(unsafe_code)]"), "lib.rs forbids unsafe code");
 }
