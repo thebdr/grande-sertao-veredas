@@ -241,7 +241,10 @@ impl Compiled {
                 return Err(GrepError::Pattern(format!("pattern {} is empty", i + 1)));
             }
             let body = if q.literal { regex::escape(&p.pattern) } else { p.pattern.clone() };
-            let body = if q.whole_word { format!(r"\b(?:{body})\b") } else { body };
+            // A whole word stands apart from word characters on both sides, whatever the pattern's
+            // own ends are (`-5` alone in `offset -5 mm`, not glued in `a-5 b`), as Veredas 1's
+            // engine read it.
+            let body = if q.whole_word { format!(r"\b{{start-half}}(?:{body})\b{{end-half}}") } else { body };
             let re = RegexBuilder::new(&body)
                 .case_insensitive(q.case_insensitive)
                 .build()
@@ -388,7 +391,11 @@ fn search_file(path: &Arc<PathBuf>, q: &Compiled, o: &GrepOptions, h: &GrepHandl
     h.files_searched.fetch_add(1, Ordering::Relaxed);
     let mut text = String::with_capacity(bytes.len());
     let mut decoder = TextDecoder::new();
-    decoder.feed(&bytes, &mut text);
+    // In the tail's own slices: the decoder settles UTF-8 or CP1252 on the slice that holds the
+    // first byte past ASCII, so a file decodes here as the tail decodes it (C-035).
+    for slice in bytes.chunks(crate::tail::READ_CHUNK) {
+        decoder.feed(slice, &mut text);
+    }
     decoder.finish(&mut text);
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
 
@@ -456,22 +463,24 @@ fn walk(roots: Vec<PathBuf>, masks: Vec<String>, recursive: bool) -> Vec<Result<
     let masks: Vec<String> = masks.iter().map(|m| m.trim().to_lowercase()).filter(|m| !m.is_empty()).collect();
     let mut out = Vec::new();
     fn visit(dir: &Path, masks: &[String], recursive: bool, out: &mut Vec<Result<PathBuf, String>>) {
-        let mut entries: Vec<PathBuf> = match std::fs::read_dir(dir) {
-            Ok(rd) => rd.flatten().map(|e| e.path()).collect(),
+        // A link, to a folder or to a file, is not followed (Veredas 1's walk, `follow_links(false)`):
+        // a `loop -> .` would search the tree again and again, a `latest -> 2026-11` twice.
+        let mut entries: Vec<(PathBuf, std::fs::FileType)> = match std::fs::read_dir(dir) {
+            Ok(rd) => rd.flatten().filter_map(|e| e.file_type().ok().map(|t| (e.path(), t))).collect(),
             Err(e) => {
                 out.push(Err(format!("{}: {e}", dir.display())));
                 return;
             }
         };
-        entries.sort();
-        for p in entries {
-            if p.is_dir() {
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (p, kind) in entries {
+            if kind.is_dir() {
                 if recursive {
                     visit(&p, masks, recursive, out);
                 }
-            } else {
-                let name = p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-                if masks.is_empty() || masks.iter().any(|m| glob(m.as_bytes(), name.as_bytes())) {
+            } else if kind.is_file() {
+                let name: Vec<char> = p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default().chars().collect();
+                if masks.is_empty() || masks.iter().any(|m| glob(&m.chars().collect::<Vec<char>>(), &name)) {
                     out.push(Ok(p));
                 }
             }
@@ -487,12 +496,13 @@ fn walk(roots: Vec<PathBuf>, masks: Vec<String>, recursive: bool) -> Vec<Result<
     out
 }
 
-/// A file-name glob: `*` any run of characters, `?` one, anything else itself.
-fn glob(pattern: &[u8], name: &[u8]) -> bool {
+/// A file-name glob over characters: `*` any run of them, `?` one (an accented letter one), anything
+/// else itself.
+fn glob(pattern: &[char], name: &[char]) -> bool {
     match (pattern.first(), name.first()) {
         (None, None) => true,
-        (Some(b'*'), _) => glob(&pattern[1..], name) || (!name.is_empty() && glob(pattern, &name[1..])),
-        (Some(b'?'), Some(_)) => glob(&pattern[1..], &name[1..]),
+        (Some('*'), _) => glob(&pattern[1..], name) || (!name.is_empty() && glob(pattern, &name[1..])),
+        (Some('?'), Some(_)) => glob(&pattern[1..], &name[1..]),
         (Some(p), Some(n)) if p == n => glob(&pattern[1..], &name[1..]),
         _ => false,
     }

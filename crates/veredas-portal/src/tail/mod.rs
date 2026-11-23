@@ -7,6 +7,8 @@
 
 mod backfill;
 mod cursor;
+// The tail's read size, so the grep decodes a file in the same slices (C-094).
+pub(crate) use cursor::READ_CHUNK;
 mod family;
 mod pathkind;
 mod single;

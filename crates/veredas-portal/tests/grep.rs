@@ -166,6 +166,37 @@ fn literal_case_and_whole_word() {
     assert_eq!(numbers(GrepQuery { case_insensitive: true, ..GrepQuery::single("run") }), vec![3, 4, 5]);
     assert_eq!(numbers(GrepQuery { whole_word: true, ..GrepQuery::single("run") }), vec![5]);
     assert_eq!(numbers(GrepQuery { whole_word: true, case_insensitive: true, ..GrepQuery::single("run") }), vec![3, 5]);
+    // A pattern whose ends are no word characters: whole where it stands apart, never where it is
+    // glued to a word.
+    write(&dir.path().join("o.log"), "offset -5 mm\nreg a-5b\nset a-5 b\ntemp 25°C\ntemp 25 °C\n");
+    assert_eq!(numbers(GrepQuery { whole_word: true, literal: true, ..GrepQuery::single("-5") }), vec![1]);
+    assert_eq!(numbers(GrepQuery { whole_word: true, literal: true, ..GrepQuery::single("°C") }), vec![5]);
+    assert_eq!(numbers(GrepQuery { literal: true, ..GrepQuery::single("-5") }), vec![1, 2, 3], "not whole: every one");
+}
+
+/// A file is decoded as the live tail decodes it (C-035), in the tail's own slices: UTF-8 opening
+/// it and one stray CP1252 byte past the tail's first 64 KiB, the grep's lines the tail's.
+#[test]
+fn a_file_is_decoded_as_the_tail_decodes_it_slice_by_slice() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mixed.log");
+    let mut bytes = "Produção iniciada\n".as_bytes().to_vec();
+    for i in 0..4_200 {
+        bytes.extend_from_slice(format!("ascii line {i:05}\n").as_bytes());
+    }
+    bytes.extend_from_slice(b"temp 25\xB0C\n");
+    std::fs::write(&path, &bytes).unwrap();
+    let (mut set, rx) = veredas_portal::SourceSet::new();
+    let cfg = veredas_portal::TailConfig { poll_interval: Duration::from_millis(25), drain_grace: Duration::from_millis(60), use_notify: None, start: veredas_portal::FileStart::Begin };
+    set.spawn(Box::new(veredas_portal::FileTailSource::new("t", "tail", &path, cfg))).unwrap();
+    let mut tail: Vec<String> = Vec::new();
+    while tail.len() < 4_202 {
+        tail.push(rx.recv_timeout(Duration::from_secs(10)).expect("the tail's lines").line);
+    }
+    drop(set);
+    assert_eq!((tail[0].as_str(), tail[4_201].as_str()), ("Produção iniciada", "temp 25\u{FFFD}C"));
+    let (events, _) = run(GrepScope::Files(vec![path.clone()]), &q(&[("Produção", false), ("^temp", false)], Combine::Or), GrepOptions::default());
+    assert_eq!(lines(&events), vec![("mixed.log".to_string(), 1, true, tail[0].clone()), ("mixed.log".to_string(), 4_202, true, tail[4_201].clone())]);
 }
 
 #[test]
@@ -281,11 +312,49 @@ fn a_cancel_stops_a_running_search_and_a_bad_query_starts_none() {
     assert_eq!(search(scope(), &GrepQuery::default(), GrepOptions::default()).err(), Some(GrepError::Pattern("the query has no pattern".into())));
     assert_eq!(search(scope(), &GrepQuery::single(""), GrepOptions::default()).err(), Some(GrepError::Pattern("pattern 1 is empty".into())));
     let e = search(scope(), &q(&[("ok", false), ("(", false)], Combine::And), GrepOptions::default()).err().unwrap();
-    assert!(matches!(&e, GrepError::Pattern(m) if m.starts_with("pattern 2 `(`: ")), "{e:?}");
+    assert!(matches!(&e, GrepError::Pattern(m) if m.starts_with("pattern 2 `(`: ") && m.contains("unclosed group")), "{e:?}");
     assert_eq!(
         search(GrepScope::Tree { roots: vec![], masks: vec![], recursive: true }, &GrepQuery::single("x"), GrepOptions::default()).err(),
         Some(GrepError::Scope("a tree with no root".into()))
     );
     // Lookaround is not the suite's syntax: refused by the engine's own words.
-    assert!(matches!(search(scope(), &GrepQuery::single("(?<=a)b"), GrepOptions::default()), Err(GrepError::Pattern(_))));
+    let e = search(scope(), &GrepQuery::single("(?<=a)b"), GrepOptions::default()).err().unwrap();
+    assert!(matches!(&e, GrepError::Pattern(m) if m.contains("look-around, including look-ahead and look-behind, is not supported")), "{e:?}");
+}
+
+
+/// Masks match a file's name by its characters: `?` one letter, an accented one too.
+#[test]
+fn a_mask_s_question_mark_is_one_letter_whatever_its_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["relé.log", "rele.log", "pressão1.log", "rel.log"] {
+        write(&dir.path().join(name), "hit\n");
+    }
+    let found = |mask: &str| -> Vec<String> {
+        let (events, _) = run(GrepScope::Tree { roots: vec![dir.path().to_path_buf()], masks: vec![mask.into()], recursive: false }, &GrepQuery::single("hit"), GrepOptions::default());
+        matched(&events).into_iter().map(|(f, _)| f).collect()
+    };
+    assert_eq!(found("rel?.log"), vec!["rele.log", "relé.log"]);
+    assert_eq!(found("press?o?.log"), vec!["pressão1.log"]);
+}
+
+/// The walk follows no link, to a folder or to a file, as Veredas 1's did: a `loop -> .` searches
+/// the tree once; and every file is opened for reading alone, a read-only one searched.
+#[cfg(unix)]
+#[test]
+fn the_walk_follows_no_link_and_reads_a_read_only_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a");
+    std::fs::create_dir(&a).unwrap();
+    write(&a.join("x.log"), "hit\n");
+    std::os::unix::fs::symlink(".", a.join("loop")).unwrap();
+    std::os::unix::fs::symlink("x.log", a.join("y.log")).unwrap();
+    let locked = a.join("z.log");
+    write(&locked, "hit locked\n");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let (events, summary) = run(GrepScope::Tree { roots: vec![dir.path().to_path_buf()], masks: vec![], recursive: true }, &GrepQuery::single("hit"), GrepOptions::default());
+    assert_eq!(matched(&events), vec![("x.log".to_string(), 1), ("z.log".to_string(), 1)]);
+    let s = summary.stats;
+    assert_eq!((s.files_searched, s.files_matched, s.matches, s.errors), (2, 2, 2, 0), "{s:?}");
 }
