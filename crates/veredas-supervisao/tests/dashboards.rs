@@ -1407,14 +1407,17 @@ fn spark_at(pts: &[(f64, f64)], w: f64, h: f64) -> Vec<Value> {
 fn probe_dashboard(d: &Value) -> Value {
     let states = every_state();
     let p = |i: usize| d["panels"][i].clone();
-    let word = |s: &str| json!(format!("{s} word"));
+    // Each state's texts given white space of their own (two spaces, a leading and a trailing one, a
+    // tab, a line break), so a text drawn in any state is read so on every surface that draws one.
+    let word = |s: &str| json!(format!("  {s}\tword\n+ "));
     let mut panels = Vec::new();
     for s in &states {
         let mut t = p(0);
         t["data"]["state"] = json!(s);
         t["data"]["word"] = word(s);
         t["data"]["mark"] = json!("!");
-        t["data"]["sub"] = json!(format!("{s} sub"));
+        t["data"]["sub"] = json!(format!("  {s}\tsub\n+ "));
+        t["data"]["text"] = json!(format!("  {s}\t1\n+ "));
         panels.push(t);
     }
     let mut one = p(0);
@@ -1443,7 +1446,7 @@ fn probe_dashboard(d: &Value) -> Value {
     // drawn.
     let mut g = p(7);
     let c0 = g["data"]["cells"][0].clone();
-    let mut cells: Vec<Value> = states.iter().map(|s| { let mut c = c0.clone(); c["state"] = json!(s); c["word"] = word(s); c["label"] = json!(format!("Cell {s}")); c }).collect();
+    let mut cells: Vec<Value> = states.iter().map(|s| { let mut c = c0.clone(); c["state"] = json!(s); c["word"] = word(s); c["label"] = json!(format!("  Cell {s}\t+\n+ ")); c["text"] = json!(format!("  {s}\t2\n+ ")); c }).collect();
     for (label, state, word) in [("Cell gone", "stale", "no value"), ("Cell blank", "normal", "ok")] {
         let mut c = c0.clone();
         (c["label"], c["state"], c["word"], c["text"]) = (json!(label), json!(state), json!(word), Value::Null);
@@ -1454,7 +1457,7 @@ fn probe_dashboard(d: &Value) -> Value {
     panels.push(g);
     let mut l = p(8);
     let r0 = l["data"]["rows"][0].clone();
-    let mut rows: Vec<Value> = states.iter().map(|s| { let mut r = r0.clone(); r["state"] = json!(s); r["word"] = word(s); r }).collect();
+    let mut rows: Vec<Value> = states.iter().map(|s| { let mut r = r0.clone(); r["state"] = json!(s); r["word"] = word(s); r["label"] = json!(format!("  Level {s}\t+\n+ ")); r["text"] = json!(format!("  {s}\t3\n+ ")); r }).collect();
     for (label, state, word) in [("Level gone", "stale", "no value"), ("Level blank", "normal", "ok")] {
         let mut r = r0.clone();
         (r["label"], r["state"], r["word"], r["text"], r["fraction"]) = (json!(label), json!(state), json!(word), Value::Null, Value::Null);
@@ -1467,7 +1470,7 @@ fn probe_dashboard(d: &Value) -> Value {
     let step = (to - from) / states.len() as i64;
     let mut row = tl["data"]["rows"][0].clone();
     row["segments"] = json!(states.iter().enumerate().map(|(i, s)| json!({ "from": from + i as i64 * step, "to": from + (i as i64 + 1) * step, "state": s, "mark": "!", "word": word(s) })).collect::<Vec<_>>());
-    tl["data"]["rows"] = json!(states.iter().map(|s| { let mut r = row.clone(); r["now"]["state"] = json!(s); r["now"]["word"] = word(s); r["now"]["mark"] = json!("!"); r }).collect::<Vec<_>>());
+    tl["data"]["rows"] = json!(states.iter().map(|s| { let mut r = row.clone(); r["label"] = json!(format!("  Line {s}\t+\n+ ")); r["now"]["state"] = json!(s); r["now"]["word"] = word(s); r["now"]["mark"] = json!("!"); r }).collect::<Vec<_>>());
     panels.push(tl);
     let mut tb = p(9);
     let row0 = tb["data"]["rows"][0].clone();
