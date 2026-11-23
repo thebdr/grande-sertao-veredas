@@ -20,12 +20,18 @@
 #include <Spix/AnyRpcServer.h>
 #include <Spix/QtQmlBot.h>
 
+#ifdef Q_OS_WIN
+#include <dxgi1_2.h>
+#include <wrl/client.h>
+#endif
+
 namespace {
 
-// What will draw the windows, asked before the first one (the spike's point 6): the renderer of an
-// OpenGL context made as Qt Quick makes its own on this platform, or none where the platform offers
-// no OpenGL, Qt Quick then drawing in software itself. On Windows Qt Quick draws through Direct3D
-// 11, whose adapter (WARP on a machine with no GPU) this probe does not ask: a remainder.
+// What will draw the windows, asked before the first one (the spike's point 6): the adapter of
+// the graphics API Qt Quick draws through here. On Windows that is Direct3D 11 on the adapter Qt's
+// RHI takes (the first DXGI lists, or the one `QT_D3D_ADAPTER_INDEX` names), unless
+// `QSG_RHI_BACKEND` asks for OpenGL; elsewhere it is OpenGL, through a context made as Qt Quick
+// makes its own. A platform with no OpenGL leaves Qt Quick to draw in software itself.
 struct Drawing {
     QString adapter;
     bool software;
@@ -34,7 +40,15 @@ struct Drawing {
 // Renderers that are a processor drawing, not a GPU: Mesa's, Chromium's, Windows' own.
 constexpr const char *SOFTWARE[] = {"llvmpipe", "softpipe", "swrast", "SwiftShader", "GDI Generic", "Microsoft Basic Render", "WARP"};
 
-Drawing probeDrawing()
+bool namedSoftware(const QString &adapter)
+{
+    bool software = adapter.isEmpty();
+    for (const char *name : SOFTWARE)
+        software = software || adapter.contains(QLatin1String(name), Qt::CaseInsensitive);
+    return software;
+}
+
+Drawing probeOpenGL()
 {
     QOpenGLContext context;
     QOffscreenSurface surface;
@@ -47,10 +61,38 @@ Drawing probeDrawing()
     const auto *renderer = reinterpret_cast<const char *>(context.functions()->glGetString(GL_RENDERER));
     const QString adapter = QString::fromLatin1(renderer ? renderer : "");
     context.doneCurrent();
-    bool software = adapter.isEmpty();
-    for (const char *name : SOFTWARE)
-        software = software || adapter.contains(QLatin1String(name), Qt::CaseInsensitive);
-    return {adapter, software};
+    return {adapter, namedSoftware(adapter)};
+}
+
+#ifdef Q_OS_WIN
+// The adapter Direct3D 11 draws on as Qt's RHI chooses it. WARP, Windows' rasteriser, is a
+// software adapter by its flag, and by its ids (Microsoft's vendor 0x1414, device 0x8C: the
+// Microsoft Basic Render Driver) where a flag is not set.
+Drawing probeDirect3D11()
+{
+    Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+        return {QStringLiteral("no DXGI factory"), true};
+    const UINT wanted = qEnvironmentVariableIsSet("QT_D3D_ADAPTER_INDEX") ? UINT(qEnvironmentVariableIntValue("QT_D3D_ADAPTER_INDEX")) : 0;
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    if (FAILED(factory->EnumAdapters1(wanted, &adapter)))
+        return {QStringLiteral("no Direct3D adapter"), true};
+    DXGI_ADAPTER_DESC1 desc = {};
+    if (FAILED(adapter->GetDesc1(&desc)))
+        return {QStringLiteral("an adapter with no description"), true};
+    const QString name = QString::fromWCharArray(desc.Description);
+    const bool warp = (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0 || (desc.VendorId == 0x1414 && desc.DeviceId == 0x8C);
+    return {name, warp || namedSoftware(name)};
+}
+#endif
+
+Drawing probeDrawing()
+{
+#ifdef Q_OS_WIN
+    if (qEnvironmentVariable("QSG_RHI_BACKEND").compare(QLatin1String("opengl"), Qt::CaseInsensitive) != 0)
+        return probeDirect3D11();
+#endif
+    return probeOpenGL();
 }
 
 } // namespace

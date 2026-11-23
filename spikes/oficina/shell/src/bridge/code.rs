@@ -86,7 +86,7 @@ impl Default for LanguageClientRust {
             version: 0,
             ready: false,
             status: QString::from("idle"),
-            page_url: QString::from(format!("file://{PAGE}").as_str()),
+            page_url: QString::from(lsp::uri_of(Path::new(PAGE)).as_str()),
             path: QString::default(),
         }
     }

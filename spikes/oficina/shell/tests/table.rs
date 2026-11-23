@@ -59,7 +59,7 @@ fn a_million_rows_open_in_under_a_second() {
 /// within 20 MB, once each table is open and its last row drawn. Each is the least of three
 /// processes: a software rasteriser (Mesa's llvmpipe) allocates a few MB more or less from one
 /// process to the next whatever the table holds, which once took a single pair past the bound.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn a_million_rows_cost_the_memory_a_thousand_do() {
     let resident = |rows: usize| {

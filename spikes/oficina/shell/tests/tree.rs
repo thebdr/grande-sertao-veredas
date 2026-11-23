@@ -19,8 +19,11 @@ fn stamped(format: &str, version: u32) -> String {
     format!("format = \"{format}\"\nversion = {version}\n")
 }
 
+/// A folder for a test's project: under `OFICINA_SCRATCH` when a run names one (a guest names its
+/// own disk, its build folder being mounted from elsewhere), under the build's own else.
 fn scratch() -> tempfile::TempDir {
-    tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("a scratch folder")
+    let base = std::env::var_os("OFICINA_SCRATCH").map(std::path::PathBuf::from).unwrap_or_else(|| env!("CARGO_TARGET_TMPDIR").into());
+    tempfile::tempdir_in(base).expect("a scratch folder")
 }
 
 /// The planted project of the model's own tests, and a file whose name is markup.

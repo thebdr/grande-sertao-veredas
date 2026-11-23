@@ -1,7 +1,8 @@
 //! Builds the QML module `Oficina`, the bridge, and the C++ side of the seam, and links Qt,
 //! KDDockWidgets and Spix. `QMAKE` names Qt's qmake (cxx-qt finds Qt through it);
 //! `OFICINA_DEPS` names where KDDockWidgets, Spix and AnyRPC are installed
-//! (`~/.local/opt/oficina-deps` by default; docs/oficina-plan.md, "Where its code lives").
+//! (`~/.local/opt/oficina-deps` by default, the home folder being `USERPROFILE` on Windows;
+//! docs/oficina-plan.md, "Where its code lives").
 
 use std::path::PathBuf;
 
@@ -11,7 +12,7 @@ fn main() {
     println!("cargo::rerun-if-env-changed=OFICINA_DEPS");
     let deps = std::env::var_os("OFICINA_DEPS")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").expect("HOME is set")).join(".local/opt/oficina-deps"));
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).expect("HOME or USERPROFILE is set")).join(".local/opt/oficina-deps"));
     let lib = deps.join("lib");
     let include = deps.join("include");
 
@@ -34,6 +35,10 @@ fn main() {
             cc.define("KDDW_FRONTEND_QTQUICK", None);
             cc.define("KDDW_FRONTEND_QT", None);
             cc.flag_if_supported("-std=c++17");
+            // MSVC: the standard Qt 6 asks for, and `__cplusplus` telling it.
+            cc.flag_if_supported("/std:c++17");
+            cc.flag_if_supported("/Zc:__cplusplus");
+            cc.flag_if_supported("/permissive-");
         })
     };
     builder.build();
@@ -42,10 +47,17 @@ fn main() {
     for l in ["kddockwidgets-qt6", "SpixQtQuick", "SpixCore", "anyrpc"] {
         println!("cargo::rustc-link-lib={l}");
     }
-    println!("cargo::rustc-link-arg=-Wl,-rpath,{}", lib.display());
-    // The spike runs from its build folder: Qt's own libraries are found where qmake says they are.
-    if let Some(qt_libs) = qmake_query("QT_INSTALL_LIBS") {
-        println!("cargo::rustc-link-arg=-Wl,-rpath,{qt_libs}");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // The drawing probe asks DXGI for Direct3D 11's adapter (cpp/shell.cpp). Windows finds
+        // the libraries at run time on PATH (Qt's `bin`, the dependencies' `bin`), as the
+        // Windows run sets it (run-windows.ps1).
+        println!("cargo::rustc-link-lib=dxgi");
+    } else {
+        println!("cargo::rustc-link-arg=-Wl,-rpath,{}", lib.display());
+        // The spike runs from its build folder: Qt's own libraries are found where qmake says.
+        if let Some(qt_libs) = qmake_query("QT_INSTALL_LIBS") {
+            println!("cargo::rustc-link-arg=-Wl,-rpath,{qt_libs}");
+        }
     }
 }
 

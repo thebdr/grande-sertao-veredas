@@ -202,6 +202,17 @@ impl Shell {
             .expect("VmRSS")
     }
 
+    /// The shell's working set in KiB, as Windows counts it (`tasklist`'s memory column), the
+    /// counterpart of Linux's resident memory.
+    #[cfg(windows)]
+    pub fn resident_kib(&self) -> u64 {
+        let out = Command::new("tasklist").args(["/FI", &format!("PID eq {}", self.child.id()), "/FO", "CSV", "/NH"]).output().expect("tasklist");
+        let line = String::from_utf8_lossy(&out.stdout).into_owned();
+        // `"name","pid","session","n","123,456 K"`: the last field, its digits whatever the locale's separator.
+        let last = line.trim().rsplit("\",\"").next().expect("a memory column");
+        last.chars().filter(char::is_ascii_digit).collect::<String>().parse().expect("a number of KiB")
+    }
+
     pub fn log_text(&self) -> String {
         std::fs::read_to_string(&self.log).unwrap_or_default()
     }

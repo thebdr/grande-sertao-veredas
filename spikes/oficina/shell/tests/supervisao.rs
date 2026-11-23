@@ -81,7 +81,7 @@ impl Host {
     fn start(file: &Path) -> Host {
         let exe = std::env::var_os("OFICINA_SUPERVISAO")
             .map(PathBuf::from)
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/veredas-supervisao"));
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug").join(format!("veredas-supervisao{}", std::env::consts::EXE_SUFFIX)));
         assert!(exe.is_file(), "no supervisão host at {}: build it with `cargo build -p veredas-supervisao --bin veredas-supervisao` at the repository's root, or name one in OFICINA_SUPERVISAO", exe.display());
         let mut child = Command::new(&exe).arg(file).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().unwrap();
         let stdin = child.stdin.take();

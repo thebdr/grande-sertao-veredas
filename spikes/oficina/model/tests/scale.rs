@@ -9,7 +9,9 @@ use oficina_spike_model::tree::Tree;
 
 #[test]
 fn a_folder_of_100000_files_is_read_once_and_counted() {
-    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("a scratch folder");
+    // Under `OFICINA_SCRATCH` when a run names one (a guest names its own disk), the build's else.
+    let base = std::env::var_os("OFICINA_SCRATCH").map(std::path::PathBuf::from).unwrap_or_else(|| env!("CARGO_TARGET_TMPDIR").into());
+    let dir = tempfile::tempdir_in(base).expect("a scratch folder");
     let many = dir.path().join("many");
     fs::create_dir_all(&many).expect("a folder");
     for i in 0..100_000 {

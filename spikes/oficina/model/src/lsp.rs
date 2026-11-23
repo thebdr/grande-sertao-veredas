@@ -17,12 +17,22 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use serde_json::{Value, json};
 use thiserror::Error;
 
-/// A file path as the protocol names it.
+/// A file path as the protocol names it. On Windows `C:\a\b` (or the `\\?\C:\a\b` that
+/// `canonicalize` gives) is `file:///C:/a/b`.
 pub fn uri_of(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let text = if cfg!(windows) {
+        let plain = text.strip_prefix(r"\\?\").unwrap_or(&text);
+        format!("/{}", plain.replace('\\', "/"))
+    } else {
+        text.into_owned()
+    };
     let mut out = String::from("file://");
-    for b in path.to_string_lossy().bytes() {
+    for (i, b) in text.bytes().enumerate() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            // A drive's colon, `/C:`, as Windows paths begin.
+            b':' if cfg!(windows) && i == 2 => out.push(':'),
             b => out.push_str(&format!("%{b:02X}")),
         }
     }

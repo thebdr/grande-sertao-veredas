@@ -195,7 +195,8 @@ begins. It is not the crate: it proves no clause (its tests are evidence for P-0
   AnyRPC. Its tests start the window on Qt's `offscreen` platform and drive it through Spix; a
   timing is judged on a release build, alone on the machine.
 - Pinned for the spike: Qt 6.12.0 (6.12.1's WebEngine is not published yet), cxx-qt 0.10.0,
-  KDDockWidgets 2.5.1 (its Qt Quick side), Spix 0.14 over AnyRPC 1.0.2, Monaco 0.57.0,
+  KDDockWidgets 2.5.1 (its Qt Quick side), Spix 0.14 over AnyRPC's master at b1949b3 (its 1.0.2
+  forces AddressSanitizer on), Monaco 0.57.0,
   rust-analyzer from rustup, CMake 4.5.1 for the C++ libraries. How the machine gets Qt is the
   architect's (the measured routes are in the evidence). Everything is built on Linux here; the
   Windows runs are asked for through the orchestrator.
@@ -274,6 +275,38 @@ measures it so the answer exists whichever way it is ruled.
    driver takes Spix's place (Qt's own test library from C++, or the accessibility tree), at the
    cost entry 29 counts.
 
+### The runs elsewhere
+Each is one command whose result is one file, so a run on another machine is a command to start
+and a file to read back.
+- **A Linux guest with no GPU** (point 6): `spikes/oficina/run-guest.sh` on this machine. It boots
+  Ubuntu 26.10's own cloud image (this machine's release: the spike runs there as built here) on
+  QEMU/KVM with 4 cores, 4 GB and no display device, this machine's folders mounted at their own
+  paths, runs the spike's tests from nextest archives on `offscreen` and on X11 under Xvfb, where
+  Mesa draws with llvmpipe, and shuts the guest down. Result:
+  `spikes/oficina/target/guest/guest-run.txt`; the image and the guest's disk in
+  `~/.cache/veredas/oficina/`.
+- **Windows**, at a clone of the repository on the Windows machine:
+  `powershell -ExecutionPolicy Bypass -File spikes\oficina\run-windows.ps1 -Expect software
+  -ExpectAdapter "Microsoft Basic Render"` (no GPU) or `-Expect gpu`. It builds what is missing
+  (AnyRPC, Spix and KDDockWidgets as here, Monaco from npm, supervisão's host), runs the suite on
+  `offscreen` and on `windows`, point 7 twenty times, and the release timings. Result:
+  `spikes\oficina\target\windows-run.txt`, its last lines each step's exit code. Written here,
+  never run: no PowerShell and no Windows compiler on this machine, so neither the script nor the
+  Direct3D 11 probe (`cpp/shell.cpp`) has been parsed or compiled. What it needs installed first,
+  in the versions this machine used where they apply:
+  - Visual Studio 2022 Build Tools 17.14 or later, workload "Desktop development with C++" (MSVC
+    v143 for x64 and a Windows 11 SDK): Qt's `msvc2022_64` build is made with it.
+  - Qt 6.12.0 for MSVC 2022 64-bit in `C:\Qt\6.12.0\msvc2022_64` (`-Qt` names another place),
+    with Qt WebEngine, Qt WebChannel, Qt Positioning, Qt ShaderTools and Qt Quick 3D: through
+    Qt's online installer (an account), or aqtinstall from its repository after 2026-11-22, since
+    its last release, 3.3.0, cannot read Qt 6.12's Windows repository.
+  - Rust 1.100.0 through rustup, its host `x86_64-pc-windows-msvc`, with the components
+    `rust-src` and `rust-analyzer`; cargo-nextest 0.9.152.
+  - CMake 4.5.1 and Ninja 1.13.2 on `PATH`; Git for Windows; Node.js 26.13.0 with npm 11.20.0.
+  - Windows PowerShell 5.1, Windows' own; network to github.com, registry.npmjs.org and
+    crates.io during the run; about 40 GB free and 16 GB of memory (the database engine's C++,
+    built for supervisão's host, is the largest part).
+
 ### Results so far
 On this machine, Qt 6.12.0 on its `offscreen` platform, through Spix, and again on X11 (below);
 the numbers and what was learnt on the way are in the evidence. A test run names its platform with
@@ -313,18 +346,21 @@ the numbers and what was learnt on the way are in the evidence. A test run names
    Oficina's hook (in a script world of Oficina's own, the page carrying no script for it) equal
    to what the bench held, 0.16 to 0.34 s after each change; the served page found no bridge
    object, where the page Oficina ships found its own.
-6. **Passed on this machine; its guests not yet run** (2026-11-23). With Mesa's software
-   rasteriser forced (`LIBGL_ALWAYS_SOFTWARE=1`, on X11), Oficina named llvmpipe as what draws it
-   before its first window, switched its effects off, started WebEngine without the GPU (pages
-   get no WebGL) and said so in its footer; Qt Quick kept its normal pipeline (OpenGL) over
-   llvmpipe, the plan's fallback. Points 1, 2, 3, 5 and 7 passed there (the spike's 40 tests; in
-   release 100 000 files open in 174 to 227 ms, a million rows in 51 to 63 ms). Point 3's frame
+6. **Passed on this machine and in a Linux guest; Windows not yet run** (2026-11-23). With Mesa's
+   software rasteriser forced here (`LIBGL_ALWAYS_SOFTWARE=1`, on X11), and by itself in a Linux
+   guest on QEMU/KVM with no display device (Ubuntu 26.10's cloud image, 4 cores, 4 GB, on X11
+   under Xvfb), Oficina named llvmpipe as what draws it before its first window, switched its
+   effects off, started WebEngine without the GPU (pages get no WebGL) and said so in its footer;
+   Qt Quick kept its normal pipeline (OpenGL) over llvmpipe, the plan's fallback. Points 1, 2, 3,
+   5 and 7 passed in both, and on `offscreen` in the guest, where Qt Quick draws with its own
+   software renderer and Oficina counts that as software too (here in release, 100 000 files in
+   174 to 227 ms and a million rows in 51 to 63 ms; in the guest 139 and 50 ms). Point 3's frame
    times, scrolling 500 rows a second for 3 s (median, 95th percentile and worst interval, ms): on
-   the GPU 17, 29 to 40, 41 to 105; over llvmpipe 25 to 31, 42 to 54, 54 to 67; on `offscreen`,
-   where Qt Quick draws with its own software renderer and Oficina counts that as software too,
-   16, 17 to 24, 18 to 45. **Not run yet:** a Linux guest on QEMU/KVM with no virtual GPU, and
-   Windows 11 on QEMU/KVM over WARP (the orchestrator's machine), where the probe must ask
-   Direct3D 11's adapter, not OpenGL's; and the stated remainder, Hyper-V, VMware and VirtualBox.
+   this machine's GPU 17, 29 to 40, 41 to 105; over llvmpipe here 25 to 31, 42 to 54, 54 to 67;
+   on `offscreen` 16, 17 to 24, 18 to 45; in the guest over llvmpipe under Xvfb, which holds no
+   frame to a display's rate, 12, 20, 31. **Not run yet:** Windows 11 over WARP, where the probe
+   asks Direct3D 11's adapter (written, not compiled), and the stated remainder, Hyper-V, VMware
+   and VirtualBox.
 7. **Passed** (2026-11-23). One test, run by cargo nextest with no display, its exit code the
    verdict: a value typed into the form and the text following it, an edit typed into Monaco and
    read back through Oficina's hook, and a named layout saved by KDDockWidgets' own saver, the
@@ -340,8 +376,16 @@ XWayland, OpenGL 4.6 on its Intel GPU), and the timings held in release (a milli
 7 among them, passed there with the GPU and over llvmpipe. Windows waits for its runs.
 
 ### Verdict
-Not given: point 6's guests remain (a Linux guest on QEMU/KVM, Windows 11 over WARP), and Windows
-for every point.
+Not given: it waits for Windows.
+- **Proven:** on Linux, every point. Points 1 to 5 and 7 on Qt's `offscreen` platform and on X11,
+  with this machine's GPU and over llvmpipe, and again in a Linux guest on QEMU/KVM with no GPU
+  (point 4 there on X11; on the guest's first, cold start its completions came after the test's
+  10 s, the standard library's sources read over the share); point 6 here with the rasteriser
+  forced and in that guest by itself.
+- **Still lacking:** every point on Windows 11, point 6 there over WARP with the Direct3D 11 probe
+  compiled and run (`spikes\oficina\run-windows.ps1`, one command, one result file; what it
+  needs installed is under "The runs elsewhere"); and the stated remainder, Windows on Hyper-V,
+  VMware and VirtualBox, which waits for the architect.
 
 ## Open
 - **Q31, the review's majors and minors**, none ruled. Those that touch Oficina: 22 (Oficina
