@@ -29,8 +29,9 @@ use std::time::{Duration, SystemTime};
 
 use crate::profinet::mac::Mac;
 
-/// The longest frame the link reads; a longer one is reported cut, never handed back as whole.
-pub const MAX_FRAME: usize = 65_536;
+/// The longest frame the link reads, the wire's (`super::MAX_FRAME`); a longer one is reported
+/// cut, never handed back as whole.
+pub const MAX_FRAME: usize = super::MAX_FRAME;
 
 /// One frame heard: its bytes as they arrived (no check sequence), when the link read it, and
 /// whether it left by this interface (this host sent it on it), rather than arrived on it.

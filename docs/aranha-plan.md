@@ -304,6 +304,14 @@ is pinned by a test when its phase lands.
 - **Odd lengths and DCP's padding**: a DCP block is padded to an even length and the pad is not
   counted in its length; an odd station name is where an encoder that forgets it breaks the next
   block.
-- **The capture file has its own clock.** A pcap record holds seconds and microseconds; a witness
-  holds milliseconds since the epoch. A scan written and read back keeps the frame's own time, not
-  the time of the read.
+- **The capture file has its own clock.** A pcap record holds seconds and a fraction, micro- or
+  nanoseconds by the file's magic number; a frame's stamp is nanoseconds since the epoch, so the
+  wire writes nanosecond pcap and nothing heard on a raw link loses its time. A scan written and
+  read back keeps the frame's own time, not the time of the read. tshark reads a record's seconds
+  as unsigned (to 2106) but writes them signed (to 2038): its rewrite of a capture fails on a later
+  stamp, ours does not.
+- **tshark reads a capture more loosely than its header says** (measured, 4.6.6): the snapshot
+  length is not held against a record, a fraction past a second and a length on the wire under the
+  bytes kept draw a complaint and are read, major version 3 is read and 1 is not, and a file cut in
+  its last record gives the frames before it with a note that it was cut short. The reader does
+  the same, naming the damage, so a capture still being written is read up to where it stops.
