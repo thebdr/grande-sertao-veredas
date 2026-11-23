@@ -23,6 +23,10 @@ use super::mac::Mac;
 /// The frame ids of the two alarm connections.
 pub const FRAME_ID_HIGH: u16 = 0xFC01;
 pub const FRAME_ID_LOW: u16 = 0xFE01;
+/// The alarm frames with PROFINET security, high and low priority, which this codec does not read
+/// (their var part is the security's to open; tshark reads them as secured alarms).
+pub const FRAME_ID_HIGH_SECURED: u16 = 0xFC41;
+pub const FRAME_ID_LOW_SECURED: u16 = 0xFE41;
 
 /// The RTA header's length after the frame id.
 pub const HEADER: usize = 12;
@@ -302,6 +306,8 @@ pub enum AlarmError {
     TooShort(usize),
     #[error("frame id {0:#06x} is not an alarm frame's")]
     NotAlarm(u16),
+    #[error("frame id {0:#06x} is an alarm frame with PROFINET security, which this codec does not read")]
+    Secured(u16),
     #[error("the var part is said to be {declared} bytes and {available} follow the header")]
     Overrun { declared: usize, available: usize },
     #[error("the {what} is a nibble; {value} is not")]
@@ -332,13 +338,17 @@ const ACK: usize = 16;
 impl RtaPdu {
     /// Read an RTA PDU from the PROFINET payload (the bytes after the EtherType, without the frame
     /// check sequence). A damaged header (cut short, a frame id not an alarm's, a var part past the
-    /// bytes or past what a frame carries) is an error naming it; a var part this codec does not read
+    /// bytes or past what a frame carries) is an error naming it, and so is an alarm frame with
+    /// PROFINET security (not read); a var part this codec does not read
     /// is kept with the reason; bytes after the var part are the frame's pad and are not kept.
     pub fn decode(payload: &[u8]) -> Result<RtaPdu, AlarmError> {
         if payload.len() < 2 + HEADER {
             return Err(AlarmError::TooShort(payload.len()));
         }
         let frame_id = be16(payload, 0);
+        if matches!(frame_id, FRAME_ID_HIGH_SECURED | FRAME_ID_LOW_SECURED) {
+            return Err(AlarmError::Secured(frame_id));
+        }
         let priority = Priority::of_frame_id(frame_id).ok_or(AlarmError::NotAlarm(frame_id))?;
         let h = &payload[2..];
         let declared = be16(h, 10) as usize;

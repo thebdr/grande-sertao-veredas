@@ -253,6 +253,16 @@ fn what_is_not_read_is_kept_with_its_reason() {
     assert_eq!(RtaPdu::decode(&good[..good.len() - 1]), Err(AlarmError::Overrun { declared: 26, available: 25 }));
     assert_eq!(AlarmError::TooShort(13).to_string(), "an RTA PDU is a frame id and 12 header bytes; this one is 13 bytes");
     assert_eq!(AlarmError::NotAlarm(0xFC02).to_string(), "frame id 0xfc02 is not an alarm frame's");
+    // An alarm frame with PROFINET security is named as one, not as damage (tshark reads it as a
+    // secured alarm); its neighbours are not alarm frames.
+    for (id, secured) in [(0xFC41u16, true), (0xFE41, true), (0xFC40, false), (0xFC42, false), (0xFE40, false), (0xFE42, false)] {
+        let mut f = good.clone();
+        f[..2].copy_from_slice(&id.to_be_bytes());
+        let want = if secured { AlarmError::Secured(id) } else { AlarmError::NotAlarm(id) };
+        assert_eq!(RtaPdu::decode(&f), Err(want), "{id:#06x}");
+    }
+    assert_eq!((alarm::FRAME_ID_HIGH_SECURED, alarm::FRAME_ID_LOW_SECURED), (0xFC41, 0xFE41));
+    assert_eq!(AlarmError::Secured(0xFC41).to_string(), "frame id 0xfc41 is an alarm frame with PROFINET security, which this codec does not read");
     assert_eq!(AlarmError::Overrun { declared: 26, available: 25 }.to_string(), "the var part is said to be 26 bytes and 25 follow the header");
     // A var part past what a frame carries is refused on reading as on writing, typed or not,
     // whether its bytes are there or not.
@@ -555,6 +565,31 @@ fn the_dissectors_read_every_frame_as_it_was_written() {
     let d = common::dissect(&frames);
     assert_eq!(pn_io(&d[0], "pn_io_pn_io_user_structure_identifier"), ["33024", "32770"]);
     assert_eq!(d[0].complaints(), Vec::<String>::new());
+
+    // Several diagnoses under one identifier: this codec keeps them as the item's data; the
+    // dissector reads one diagnosis per identifier and the next one's channel number as an
+    // identifier, silent, or malformed when that channel number is 0x8000.
+    let several = [
+        (AlarmItem { usi: 0x8000, data: hex("0001 0800 0001  0002 0800 0002") }, vec!["32768", "2"], false),
+        (AlarmItem { usi: 0x8002, data: hex("0001 0800 0001 0000 0000 0000  0002 0800 0002 0000 0000 0000") }, vec!["32770", "2"], false),
+        (AlarmItem { usi: 0x8000, data: hex("0001 0800 0001  8000 0800 0002") }, vec!["32768", "32768"], true),
+    ];
+    let frames: Vec<Vec<u8>> = several
+        .iter()
+        .map(|(item, _, _)| {
+            let n = RtaPdu::notification(Priority::High, 1, 2, 3, 4, diagnosis(Some(item.clone())));
+            let back = RtaPdu::decode(&n.encode().unwrap()).unwrap();
+            assert_eq!(back, n);
+            n.frame(CONTROLLER, DEVICE, Some(Priority::High.tag())).unwrap()
+        })
+        .collect();
+    for (p, (item, usis, malformed)) in common::dissect(&frames).iter().zip(&several) {
+        assert_eq!(pn_io(p, "pn_io_pn_io_user_structure_identifier"), *usis, "{item:?}");
+        assert_eq!(p.complaints().iter().any(|c| c.contains("malformed")), *malformed, "{item:?}: {:?}", p.complaints());
+        if !malformed {
+            assert_eq!(p.complaints(), Vec::<String>::new(), "{item:?}");
+        }
+    }
     let complaint = |i: usize, what: &str| {
         let c = d[i].complaints();
         assert!(c.iter().any(|x| x.contains(what)), "frame {i}: {c:?}");
