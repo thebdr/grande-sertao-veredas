@@ -15,15 +15,15 @@
     "cut"
   ],
   "exitCode": 0,
-  "outputSha": "66aed96f572c10d287fc420c2cfc7e867a765e094d2175fd5243b009c781a5d7",
-  "outputTail": "        PASS [   1.227s] (17/18) entrega::bundle the_tree_is_hers_only_when_git_looks_at_every_file\n        SLOW [> 60.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>120.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>180.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>240.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>300.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>360.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>420.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>480.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>540.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>600.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>660.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        PASS [ 717.602s] (18/18) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n────────────\n     Summary [ 717.611s] 18 tests run: 18 passed (1 slow), 0 skipped",
-  "ranAt": "2026-11-23T02:32:55.037Z",
-  "headCommit": "307c701bea20d6e5b1e4519ef61769db41788ee0",
+  "outputSha": "bfb611f2f336153aaf924923c14f67ed525b5cb67b650ce2e5a7ab33bb778373",
+  "outputTail": "        SLOW [> 60.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>120.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>180.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>240.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>300.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>360.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>420.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>480.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>540.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>600.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>660.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>720.000s] (─────) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        PASS [ 748.868s] (19/19) entrega::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n────────────\n     Summary [ 748.880s] 19 tests run: 19 passed (1 slow), 0 skipped",
+  "ranAt": "2026-11-23T03:33:40.733Z",
+  "headCommit": "58634105808edb15332b37960e14b79355790d12",
   "tests": [
     {
       "name": "tools/entrega/tests/bundle.rs",
       "file": "tools/entrega/tests/bundle.rs",
-      "fileSha": "e0d332ce1d9d7303be43819d236d050ce5f7ad6f048bbfca0ffb3afc8938a58a"
+      "fileSha": "b0de476a1381bf83072bba031f48f8b5fc348847d4ce7e1028e386ac382f1a36"
     },
     {
       "name": "tools/entrega/tests/cut.rs",
