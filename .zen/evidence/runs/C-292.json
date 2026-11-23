@@ -15,20 +15,20 @@
     "maquina"
   ],
   "exitCode": 0,
-  "outputSha": "d312821ee23637dd476cc69cc60199aa65f1a9717d50e1f60fa570585e862a6b",
-  "outputTail": "        SLOW [>1560.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1620.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1680.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1740.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1800.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1860.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1920.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1980.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2040.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2100.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2160.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2220.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        PASS [2231.641s] (8/8) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n────────────\n     Summary [2231.642s] 8 tests run: 8 passed (1 slow), 0 skipped",
-  "ranAt": "2026-11-23T08:35:41.112Z",
-  "headCommit": "a2169ff1b7053819267aa6ece7c9a21f972d4c36",
+  "outputSha": "e8b6ce6b731c1b4e5a55707a6b42a0060488aa10d9dc8755580304d4667bbf6a",
+  "outputTail": "        SLOW [>1560.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1620.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1680.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1740.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1800.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1860.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1920.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1980.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2040.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2100.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2160.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2220.000s] (───) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        PASS [2263.152s] (8/8) entrega::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n────────────\n     Summary [2263.153s] 8 tests run: 8 passed (1 slow), 0 skipped",
+  "ranAt": "2026-11-23T09:19:00.549Z",
+  "headCommit": "b9d331c26e8395fb453affb4a78a57dea48cafaf",
   "tests": [
     {
       "name": "tools/entrega/tests/prova.rs",
       "file": "tools/entrega/tests/prova.rs",
-      "fileSha": "acce255ea3328c3ce0186ab3471114617d08d78f6f81c5308ba152c9d8298bfe"
+      "fileSha": "e0539dad1cd16cc11bcae0a39fa4dd553110d02c0b694999563b5f74cacf7693"
     },
     {
       "name": "tools/entrega/tests/maquina.rs",
       "file": "tools/entrega/tests/maquina.rs",
-      "fileSha": "7c94a585bcb0015d3c37582cb70c36b3cce59cd6532549ea7771b9cb6f77e1f7"
+      "fileSha": "6a28d7a18d49da1c2748164c0f8a21db00c19280a6f74d19d61ec4d0410acb6e"
     }
   ]
 }
