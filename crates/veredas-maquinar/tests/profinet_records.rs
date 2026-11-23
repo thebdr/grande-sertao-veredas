@@ -165,8 +165,9 @@ fn a_read_of_what_it_lacks_is_refused_with_the_status_and_no_record() {
             (status.to_bytes(), header.map(|h| (h.index, h.length)), record.len())
         };
         assert_eq!(refused(1, SUBSLOT_DAP, 0x1234), ([0xDE, 0x80, 0xB0, 0x00], Some((0x1234, 0)), 0), "an index it lacks");
-        assert_eq!(refused(2, SUBSLOT_PORT, INDEX_IM0), ([0xDE, 0x80, 0xB2, 0x00], Some((INDEX_IM0, 0)), 0), "I&M0 at the port");
-        assert_eq!(refused(3, SUBSLOT_DAP, INDEX_PORT_DATA_REAL), ([0xDE, 0x80, 0xB2, 0x00], Some((INDEX_PORT_DATA_REAL, 0)), 0), "the port's data at the access point");
+        // A subslot it has that does not carry the index: an index it lacks there (refute round 2).
+        assert_eq!(refused(2, SUBSLOT_PORT, INDEX_IM0), ([0xDE, 0x80, 0xB0, 0x00], Some((INDEX_IM0, 0)), 0), "I&M0 at the port");
+        assert_eq!(refused(3, SUBSLOT_DAP, INDEX_PORT_DATA_REAL), ([0xDE, 0x80, 0xB0, 0x00], Some((INDEX_PORT_DATA_REAL, 0)), 0), "the port's data at the access point");
         assert_eq!(refused(4, 0x8002, INDEX_PORT_DATA_REAL), ([0xDE, 0x80, 0xB2, 0x00], Some((INDEX_PORT_DATA_REAL, 0)), 0), "a port it lacks");
         assert_eq!((ip::INVALID_INDEX.to_bytes(), ip::INVALID_SLOT.to_bytes()), ([0xDE, 0x80, 0xB0, 0x00], [0xDE, 0x80, 0xB2, 0x00]));
         let st = dev.status();
@@ -654,6 +655,268 @@ mod round_1 {
             assert_eq!(st, PnioStatus::OK);
             let pd = PortDataReal::from_block(&rpc::read_blocks(&rec).0[0]).unwrap();
             assert_eq!(pd.peers[0].chassis_id, "ab".repeat(100), "a chassis no text names, as hex");
+        });
+    }
+}
+
+/// C-116's second refute round: the critic's probes (`~/.cache/veredas/critic-c116-r2/probes`), kept
+/// as pins: ids cut at a whole escape or byte, network addresses and other subtypes as their text,
+/// a name not UTF-8 escaped, odd-length checksums, the ArgsMaximum's edges, another neighbour's
+/// TTL-0, a backslash, a neighbour aged out at its TTL, and what is not answered.
+mod round_2 {
+    use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::ether;
+    use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::profinet::record::{INDEX_IM0, INDEX_PORT_DATA_REAL, PortDataReal};
+    use veredas_aranha::profinet::rpc::{self, ByteOrder, PNIO_PORT, PnioStatus, ReadRequest, ReadResponse, ResponseArgs, RpcPdu, Uuid};
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::ip;
+    use veredas_maquinar::profinet::*;
+
+    const DEVICE: &str = "interface = \"b0\"\nstation = \"io-device-1\"\nvendor_id = 7\ndevice_id = 9\nip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\nport = \"port-002\"\norder_id = \"6ES7 bench\"\nserial_number = \"SN-0001\"\nhello = false\nlldp_interval_ms = 0\n";
+
+    fn config(text: &str) -> ProfinetConfig {
+        toml::from_str(text).unwrap()
+    }
+
+    fn host_address() {
+        for args in [&["ip", "addr", "add", "192.168.0.1/24", "dev", "a0"][..], &["ethtool", "-K", "a0", "tx", "off"][..]] {
+            let out = std::process::Command::new(args[0]).args(&args[1..]).output().unwrap();
+            assert!(out.status.success());
+        }
+    }
+
+    fn socket() -> UdpSocket {
+        let s = UdpSocket::bind("192.168.0.1:0").unwrap();
+        s.set_read_timeout(Some(Duration::from_millis(700))).unwrap();
+        s
+    }
+
+    fn send_pdu(s: &UdpSocket, pdu: &RpcPdu) -> Option<(RpcPdu, ResponseArgs)> {
+        s.send_to(&pdu.encode().unwrap(), ("192.168.0.10", PNIO_PORT)).unwrap();
+        let mut buf = [0u8; 4096];
+        let (n, from) = s.recv_from(&mut buf).ok()?;
+        assert_eq!(from, SocketAddr::from((Ipv4Addr::new(192, 168, 0, 10), PNIO_PORT)));
+        let answer = RpcPdu::decode(&buf[..n]).unwrap();
+        let args = ResponseArgs::decode(&answer.body, answer.byte_order()).unwrap();
+        Some((answer, args))
+    }
+
+    fn read_req(s: &UdpSocket, req: &ReadRequest, args_max: u32, activity: Uuid) -> Option<(RpcPdu, ResponseArgs)> {
+        let pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), activity, u32::from(req.seq), req, args_max).unwrap();
+        send_pdu(s, &pdu)
+    }
+
+    fn wait(within: Duration, mut done: impl FnMut() -> bool) -> bool {
+        let begun = Instant::now();
+        while begun.elapsed() < within {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        done()
+    }
+
+    fn port_data(s: &UdpSocket, seq: u16) -> (PnioStatus, Option<PortDataReal>) {
+        let (_, args) = read_req(s, &ReadRequest::implicit(seq, 0, SUBSLOT_PORT, INDEX_PORT_DATA_REAL, 4096), 4160, Uuid([seq as u8; 16])).expect("an answer");
+        if args.data.len() <= 64 {
+            return (args.status, None);
+        }
+        let (_, record) = ReadResponse::split(&args.data).unwrap();
+        (args.status, Some(PortDataReal::from_block(&rpc::read_blocks(&record).0[0]).unwrap()))
+    }
+
+    fn lldp_link() -> RawLink {
+        RawLink::open_with("a0", Options { ethertype: Some(ether::ETHERTYPE_LLDP), promiscuous: false, outgoing: false }).unwrap()
+    }
+
+    /// An LLDP frame from `src`; for a TTL over 0, waits till the device holds it as its neighbour.
+    fn heard(raw: &RawLink, dev: &ProfinetHandle, src: Mac, chassis: ChassisId, port: PortId, ttl: u16) {
+        let before = dev.neighbour();
+        raw.send(&lldp::frame(src, &LldpPdu::new(chassis, port, ttl)).unwrap()).unwrap();
+        if ttl > 0 {
+            assert!(wait(Duration::from_secs(2), || dev.neighbour().is_some() && dev.neighbour() != before), "heard");
+        } else {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+
+    /// The neighbour's (chassis, port) as the port data states them.
+    fn peer(s: &UdpSocket, seq: u16) -> (String, String) {
+        let (st, pd) = port_data(s, seq);
+        assert_eq!(st, PnioStatus::OK);
+        let p = pd.unwrap().peers[0].clone();
+        (p.chassis_id, p.port_id)
+    }
+
+    #[test]
+    fn ids_are_cut_at_a_whole_byte_or_escape_to_at_most_255_characters() {
+        netns::isolated("round_2::ids_are_cut_at_a_whole_byte_or_escape_to_at_most_255_characters", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            let sw = raw.mac();
+            // 200 bytes of another subtype: 127 whole bytes of hex, 254 characters.
+            heard(&raw, &dev, sw, ChassisId::Other { subtype: 1, data: vec![0xAB; 200] }, PortId::Local { id: "port-003".into() }, 120);
+            assert_eq!(peer(&s, 1).0, "ab".repeat(127));
+            // 127 ü (two bytes each, eight characters escaped) and an x: 31 ü and one escape whole.
+            heard(&raw, &dev, sw, ChassisId::Local { id: "ü".repeat(127) + "x" }, PortId::Local { id: "port-004".into() }, 120);
+            assert_eq!(peer(&s, 2).0, "\\xc3\\xbc".repeat(31) + "\\xc3");
+        });
+    }
+
+    #[test]
+    fn network_addresses_interface_aliases_and_visible_other_subtypes_read_as_their_text() {
+        netns::isolated("round_2::network_addresses_interface_aliases_and_visible_other_subtypes_read_as_their_text", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            let sw = raw.mac();
+            heard(&raw, &dev, sw, ChassisId::Network { data: vec![1, 10, 0, 0, 1] }, PortId::Other { subtype: 4, data: vec![1, 10, 0, 0, 2] }, 120);
+            assert_eq!(peer(&s, 1), ("10.0.0.1".into(), "10.0.0.2".into()));
+            let mut v6 = vec![2u8];
+            v6.extend_from_slice(&"fe80::1".parse::<std::net::Ipv6Addr>().unwrap().octets());
+            heard(&raw, &dev, sw, ChassisId::Network { data: v6 }, PortId::Local { id: "port-003".into() }, 120);
+            assert_eq!(peer(&s, 2).0, "fe80::1");
+            heard(&raw, &dev, sw, ChassisId::Other { subtype: 2, data: b"eth0".to_vec() }, PortId::IfAlias { name: "uplink to plc".into() }, 120);
+            assert_eq!(peer(&s, 3), ("eth0".into(), "uplink to plc".into()));
+        });
+    }
+
+    #[test]
+    fn a_name_whose_bytes_are_not_utf8_keeps_them_escaped() {
+        netns::isolated("round_2::a_name_whose_bytes_are_not_utf8_keeps_them_escaped", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            // Latin-1 ü in a local chassis and 0xFF in an interface name: names still, not hex.
+            heard(&raw, &dev, raw.mac(), ChassisId::Other { subtype: 7, data: b"schalter-\xfc".to_vec() }, PortId::Other { subtype: 5, data: b"Gi1/0/\xff".to_vec() }, 120);
+            assert_eq!(peer(&s, 1), ("schalter-\\xfc".into(), "Gi1/0/\\xff".into()));
+        });
+    }
+
+    #[test]
+    fn a_backslash_is_written_escaped_so_an_escape_reads_one_way() {
+        netns::isolated("round_2::a_backslash_is_written_escaped_so_an_escape_reads_one_way", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            heard(&raw, &dev, raw.mac(), ChassisId::Local { id: "DOMAIN\\sw1".into() }, PortId::IfName { name: "Gi1\\0\\3".into() }, 120);
+            assert_eq!(peer(&s, 1), ("DOMAIN\\x5csw1".into(), "Gi1\\x5c0\\x5c3".into()));
+        });
+    }
+
+    #[test]
+    fn odd_lengths_carry_good_checksums_both_ways() {
+        netns::isolated("round_2::odd_lengths_carry_good_checksums_both_ways", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            // A read cut to 11 bytes: 75 bytes of data past the kernel's UDP check.
+            let a = read_req(&s, &ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 11), 4160, Uuid([1; 16]));
+            assert_eq!(a.map(|(_, x)| x.data.len()), Some(64 + 11));
+            // A request with one trailing byte: taken.
+            let mut pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([2; 16]), 2, &ReadRequest::implicit(2, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+            pdu.trailing = vec![0];
+            assert!(send_pdu(&s, &pdu).is_some());
+        });
+    }
+
+    #[test]
+    fn an_args_maximum_leaves_its_record_what_the_header_does_not_take_and_under_it_is_a_read_error() {
+        netns::isolated("round_2::an_args_maximum_leaves_its_record_what_the_header_does_not_take_and_under_it_is_a_read_error", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            let (_, args) = read_req(&s, &ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 74, Uuid([1; 16])).unwrap();
+            let (h, rec) = ReadResponse::split(&args.data).unwrap();
+            assert_eq!((h.length, rec.len(), args.data.len()), (10, 10, 74));
+            // 32: not even the header fits: refused DE 80 A0 00, nothing past what it allows.
+            let refused = dev.status().reads_refused;
+            let (_, args) = read_req(&s, &ReadRequest::implicit(2, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 32, Uuid([2; 16])).unwrap();
+            assert_eq!(args.status.to_bytes(), [0xDE, 0x80, 0xA0, 0x00]);
+            assert!(args.data.len() as u32 <= args.max_count, "{} past {}", args.data.len(), args.max_count);
+            assert_eq!(dev.status().reads_refused, refused + 1);
+        });
+    }
+
+    #[test]
+    fn another_neighbour_s_ttl_0_leaves_the_neighbour_whatever_it_shares() {
+        netns::isolated("round_2::another_neighbour_s_ttl_0_leaves_the_neighbour_whatever_it_shares", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = lldp_link();
+            let sw = raw.mac();
+            heard(&raw, &dev, sw, ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 120);
+            // The same chassis's other port, from another MAC; then the same MAC naming another.
+            heard(&raw, &dev, Mac([0x02, 0xCC, 0, 0, 0, 0x04]), ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-004".into() }, 0);
+            assert!(dev.neighbour().is_some(), "the same chassis's other port is another neighbour");
+            heard(&raw, &dev, sw, ChassisId::Local { id: "switch-9".into() }, PortId::Local { id: "port-009".into() }, 0);
+            assert!(dev.neighbour().is_some(), "the same MAC naming another chassis and port is another neighbour");
+        });
+    }
+
+    #[test]
+    fn a_neighbour_silent_past_its_ttl_ages_out() {
+        netns::isolated("round_2::a_neighbour_silent_past_its_ttl_ages_out", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            heard(&raw, &dev, raw.mac(), ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 1);
+            assert_eq!(peer(&s, 1).0, "switch-1", "within its TTL of 1 s");
+            std::thread::sleep(Duration::from_millis(1500));
+            let (st, pd) = port_data(&s, 2);
+            assert_eq!((st, pd.map(|p| p.peers.len()), dev.neighbour()), (PnioStatus::OK, Some(0), None), "aged out after its TTL (802.1AB)");
+        });
+    }
+
+    #[test]
+    fn a_read_block_it_cannot_read_a_fragment_of_several_and_a_frame_to_another_mac_go_unanswered() {
+        netns::isolated("round_2::a_read_block_it_cannot_read_a_fragment_of_several_and_a_frame_to_another_mac_go_unanswered", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            // A read block of version 1.1.
+            let mut block = ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 4096).block().unwrap();
+            block.version = (1, 1);
+            let pdu = RpcPdu::pnio_request(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([1; 16]), 1, rpc::opnum::READ_IMPLICIT, &rpc::RequestArgs::new(4160, block.encode().unwrap()));
+            assert!(send_pdu(&s, &pdu).is_none(), "a block of version 1.1");
+            // The first fragment of several, and a last one numbered 1.
+            let mut pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([2; 16]), 2, &ReadRequest::implicit(2, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+            pdu.flags1 |= rpc::flags1::FRAGMENT;
+            assert!(send_pdu(&s, &pdu).is_none(), "a first fragment of several");
+            let mut pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([3; 16]), 3, &ReadRequest::implicit(3, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+            pdu.flags1 |= rpc::flags1::FRAGMENT | rpc::flags1::LAST_FRAGMENT;
+            pdu.fragment = 1;
+            assert!(send_pdu(&s, &pdu).is_none(), "a fragment numbered 1");
+            // One fragment that is its first and its last: whole, answered.
+            let mut pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([4; 16]), 4, &ReadRequest::implicit(4, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+            pdu.flags1 |= rpc::flags1::FRAGMENT | rpc::flags1::LAST_FRAGMENT;
+            assert_eq!(send_pdu(&s, &pdu).map(|(_, a)| a.status), Some(PnioStatus::OK));
+            // A frame to another MAC carrying a read to its address.
+            let raw = RawLink::open_with("a0", Options { ethertype: Some(ip::ETHERTYPE_IPV4), promiscuous: false, outgoing: false }).unwrap();
+            let s2 = UdpSocket::bind("192.168.0.1:50000").unwrap();
+            s2.set_read_timeout(Some(Duration::from_millis(700))).unwrap();
+            let req = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([8; 16]), 8, &ReadRequest::implicit(8, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap().encode().unwrap();
+            let f = ip::udp_frame((Mac([0x02, 0xEE, 0, 0, 0, 0x01]), Ipv4Addr::new(192, 168, 0, 10), PNIO_PORT), (raw.mac(), Ipv4Addr::new(192, 168, 0, 1), 50000), 99, &req);
+            raw.send(&f).unwrap();
+            let mut buf = [0u8; 2048];
+            assert!(s2.recv_from(&mut buf).is_err(), "a frame to another MAC answered");
+            // An API refusal: its header carries no record, counted refused; an index of no
+            // place at API 1 refused for the API.
+            let before = dev.status().reads_refused;
+            for (seq, index) in [(5, INDEX_PORT_DATA_REAL), (6, 0x1234)] {
+                let mut api1 = ReadRequest::implicit(seq, 0, SUBSLOT_DAP, index, 4096);
+                api1.api = 1;
+                let (_, d) = read_req(&s, &api1, 4160, Uuid([seq as u8; 16])).unwrap();
+                assert_eq!((d.status.to_bytes(), d.data.len()), ([0xDE, 0x80, 0xB4, 0x00], 64), "{index:#x}");
+            }
+            assert_eq!(dev.status().reads_refused, before + 2);
         });
     }
 }

@@ -151,10 +151,17 @@ pub type Records<'a> = &'a dyn Fn(&ReadRequest) -> Result<Vec<u8>, PnioStatus>;
 
 /// The answer to a connectionless DCE/RPC datagram for the device: an implicit read of a record
 /// answered with the record or the status that refuses it. `None` for what the device does not
-/// answer: not a request, another interface, another operation, a read it cannot decode.
+/// answer: not a request, another interface, another operation, a fragment of several, a read
+/// block it cannot decode.
 pub fn answer(datagram: &[u8], records: Records, server_boot: u32) -> Option<(ReadRequest, Vec<u8>)> {
     let request = RpcPdu::decode(datagram).ok()?;
     if request.packet_type != PacketType::Request || request.interface != rpc::Uuid::PNIO_DEVICE || request.opnum != rpc::opnum::READ_IMPLICIT {
+        return None;
+    }
+    // A request whole in its datagram: not a fragment, or one that is both its first and last.
+    // The device puts no request back together from several.
+    let fragmented = request.flags1 & rpc::flags1::FRAGMENT != 0;
+    if fragmented && (request.flags1 & rpc::flags1::LAST_FRAGMENT == 0 || request.fragment != 0) {
         return None;
     }
     let args = rpc::RequestArgs::decode(&request.body, request.byte_order()).ok()?;
@@ -162,6 +169,12 @@ pub fn answer(datagram: &[u8], records: Records, server_boot: u32) -> Option<(Re
     let read = ReadRequest::from_block(blocks.first()?).ok()?;
     // The record cut to the length asked, and to what the request's ArgsMaximum leaves after the
     // answer's header.
+    // An ArgsMaximum that cannot hold the answer's header is a read the device cannot write out:
+    // refused with no data at all, so the answer stays within what the caller allows.
+    if args.args_maximum < READ_HEADER {
+        let pdu = RpcPdu::pnio_response(&request, server_boot, &rpc::ResponseArgs::new(READ_ERROR, args.args_maximum, Vec::new()));
+        return Some((read, pdu.encode().ok()?));
+    }
     let room = read.length.min(args.args_maximum.saturating_sub(READ_HEADER)) as usize;
     let (status, record) = match records(&read) {
         Ok(r) => (PnioStatus::OK, r.into_iter().take(room).collect::<Vec<u8>>()),

@@ -434,9 +434,10 @@ Recorded as the port meets them.
   | test(round_4::the_same_client_closing_with_a_reset_counts_none_either)
   | test(round_5::a_client_that_closes_or_resets_during_the_delay_is_gone_at_once_whatever_it_pipelined)
   | test(round_3::a_multiplier_of_three_is_thirty_two_rpis)
-  | test(round_3::a_restart_closes_a_session_whose_answers_wait_unread)`
+  | test(round_3::a_restart_closes_a_session_whose_answers_wait_unread)
+  | test(round_2::a_neighbour_silent_past_its_ttl_ages_out)`
   (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23; the adapter's
-  multiplier at 3 and its restart within a second).
+  multiplier at 3 and its restart within a second; the PROFINET neighbour aged out by its TTL).
   Free, by that rule: the bench file, the channels, the controller's rules, the component, the
   EtherCAT segment (ethercrab's own timeouts are deadlines), `fisica` but its runner, and every
   other test of the files above. A new test that measures time joins this list in its commit, and
