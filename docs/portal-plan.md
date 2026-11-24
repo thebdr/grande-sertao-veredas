@@ -476,11 +476,14 @@ Recorded as the port meets them.
   And the header alone can lie (round 9): a `;` file whose units hold as many commas as its
   decimals fits `,` too, so a fit never replaces a dialect with one typing fewer numbers; and
   where the rows' counts tie (round 10), the dialects that fit are weighed by their numbers. The
-  numbers can lie too: a list `10,20,30` cut on `,` types its integers, so a `;` file whose last
-  column is such a list, named by its parts, reads on `,`. Rounds 11 to 13 tried to tell a list
-  from a cut (a column cut out of another reading's list of numbers no number); each refinement
-  broke `;` exports of decimal commas, far commoner (ids glued to a decimal's integer part pass
-  for a list), so the weighing is round 10's again and the list file a stated limit.
+  numbers can lie too: a list `10,20,30` cut on `,` types its items, wherever it stands and
+  whatever its numbers, and a `;` export with one decimal column whose name holds a comma ties
+  with `,`. Rounds 11 to 13 tried to tell a list from a cut (a column cut out of another
+  reading's list of numbers no number); each refinement broke `;` exports of decimal commas, far
+  commoner (ids glued to a decimal's integer part pass for a list), so the weighing is round
+  10's again and those files are stated limits (round 14 gave their real reach). The weighing
+  proposes; a view names its dialect (`CsvOptions` written into its reader), and a link's page
+  can show both readings when two fit (Q131).
 - **A transaction does not freeze a file** (C-041, round 11). The engine reads a CSV again at
   every statement, so a page's count and rows over a view of a log still being written were two
   reads of it, though one transaction held them. A view's window is read once into a table of the

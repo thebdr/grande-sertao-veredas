@@ -2403,3 +2403,31 @@ without editing another member's test; (b) and (c) are each a few lines in `stor
 and green in portal's own tests.
 
 **Reversible?** Yes: portal's change and supervisão's assertion, in one push each.
+
+## Q131 - A CSV that two dialects fit: guess, or show both?
+
+**Raised** 2026-11-24, by portal, after fourteen refute rounds of C-041's CSV weighing.
+
+When a linked CSV is ragged or the engine's sniffer collapses it, portal proposes a dialect: the
+delimiters whose header fits the rows are weighed by the columns they type as numbers, then the
+dialect given, the widest, the order (`store::csv_fitting_dialect`, round 10's weighing). Some
+files fit two delimiters and the numbers cannot tell which is right: a `;` file whose last column
+is a list `10,20,30` named `x,y,z` reads on `,`; a `,` file with a list of `;` between a stamp and
+a temperature reads on `;`, the stamp glued to the list as a decimal; a `;` export of one decimal
+column whose name holds a comma (`Temperatur, C`) ties with `,`, and a cut last line leaves it on
+`,` with every decimal cut in two. Rounds 11 to 13 added rules to tell a list from a cut; each
+broke `;` exports of decimal commas, which are far commoner, and was withdrawn.
+
+A view can always name its dialect (`CsvOptions`: the delimiter and the decimal comma written
+into its reader), and then reads right.
+- (a) Keep the weighing as it is, its limits stated in C-041; the operator names the dialect when
+  a preview reads wrong.
+- (b) Keep refining the weighing. Fourteen rounds suggest each rule moves the misreads elsewhere.
+- (c) When two dialects fit, portal returns both readings (each dialect with its first rows), and
+  the link's page (Oficina's, supervisão's) shows them and lets the operator pick; the pick is
+  written into the view. Portal's share is small: the candidates already exist in `fitting`.
+
+**Recommended**: (c), with (a) as its fallback for a file no person looks at. **Taken
+meanwhile**: (a).
+
+**Reversible?** Yes: (c) adds a call beside `csv_fitting_dialect` and changes no reading.

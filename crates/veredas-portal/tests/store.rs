@@ -1320,26 +1320,61 @@ fn dialects_that_fit_are_weighed_by_their_numbers() {
     assert_eq!(csv_fitting_dialect(&export, &delim(",")).delim.as_deref(), Some(","));
 }
 
-/// The limit, kept after rounds 11 to 13: a file whose last column is a list of integers named
-/// by its parts (`x,y,z` over `10,20,30` in a `;` file) fits the other delimiter too, and on it
-/// the list's items type as numbers, so the weighing reads it there, the `;` file on `,`, its
-/// mirror on `;`. A rule telling a list from its cut (rounds 11 and 12) broke the far commoner `;`
-/// exports of decimal commas each time it was refined, so the numbers alone weigh, as in round 10.
+/// The weighing's limits, at their reach (rounds 11 to 14): it counts numbers and nothing else.
+/// A list of numbers on the other delimiter, in any column, integers or decimals, types its items
+/// there, so a file holding one is read on that delimiter when it gains numbers there, and as
+/// given on a tie: a `;` file of lists under `x,y,z` on `,` (decimals alike), its mirror on `;`, a
+/// `;` file with a list of four in its middle on `,`, a `,` file with a list of four between a
+/// stamp and a temperature on `;`, the stamp glued to the list's first item as a decimal; a list
+/// of three there a tie, as given. And a `;` export of decimal commas with a comma in a column's
+/// name and no column but its decimal typed (`Zeit;Temperatur, C`) ties with `,`, its fractions
+/// integers there: as given, and a cut last line makes it ragged on the sniffer's `,`, its
+/// decimals cut in two. Each reads right in the dialect a view names (`CsvOptions`), which the
+/// weighing only proposes. A rule telling a list from its cut (rounds 11 and 12) broke the far
+/// commoner `;` exports of decimal commas each time it was refined; the numbers alone weigh.
 #[test]
-fn a_list_of_integers_is_weighed_by_its_numbers_a_limit() {
+fn the_weighing_counts_numbers_alone_its_limits_and_the_dialect_a_view_names() {
     let dir = tempfile::tempdir().unwrap();
-    let lists = csv_file(dir.path(), "lists.csv", "id;name;x,y,z\n1;alpha;10,20,30\n2;beta;40,50,60\n3;gamma\n");
-    let mirror = csv_file(dir.path(), "mirror.csv", "id,name,x;y;z\n1,alpha,10;20;30\n2,beta,40;50;60\n3,gamma\n");
+    let file = |name: &str, body: &str| csv_file(dir.path(), name, body);
+    let lists = file("lists.csv", "id;name;x,y,z\n1;alpha;10,20,30\n2;beta;40,50,60\n3;gamma\n");
+    let decimals = file("decimal_lists.csv", "id;name;x,y,z\n1;alpha;1.5,2.5,3.5\n2;beta;4.5,5.5,6.5\n3;gamma\n");
+    let mirror = file("mirror.csv", "id,name,x;y;z\n1,alpha,10;20;30\n2,beta,40;50;60\n3,gamma\n");
+    let middle = file("middle4.csv", "id;x,y,z,w;name\n1;10,20,30,40;alpha\n2;50,60,70,80;beta\n3;gamma\n");
+    let stamp = file("stamp4.csv", "ts,x;y;z;w,temp\n1,10;20;30;40,21.5\n2,50;60;70;80,22.5\n3,90;11;12;13,23.0\n4,14;15\n");
     for given in [",", ";"] {
-        assert_eq!(csv_fitting_dialect(&lists, &delim(given)).delim.as_deref(), Some(","), "given {given}");
-        assert_eq!(csv_fitting_dialect(&mirror, &delim(given)).delim.as_deref(), Some(";"), "the mirror, given {given}");
+        for (path, read) in [(&lists, ","), (&decimals, ","), (&mirror, ";"), (&middle, ","), (&stamp, ";")] {
+            assert_eq!(csv_fitting_dialect(path, &delim(given)).delim.as_deref(), Some(read), "{path}, given {given}");
+        }
     }
+    let (opts, page) = read_as_sniffed(&stamp);
+    assert_eq!((opts.delim.as_deref(), opts.decimal_comma, names(&page)), (Some(";"), true, vec!["ts,x", "y", "z", "w,temp"]), "{opts:?}");
+    assert_eq!(page.rows[0][0], serde_json::json!(1.1), "the stamp glued to the list's first item");
+    let three = file("stamp3.csv", "ts,x;y;z,temp\n1,10;20;30,21.5\n2,40;50;60,22.5\n3,70;80;90,23.0\n");
+    for given in [",", ";"] {
+        assert_eq!(csv_fitting_dialect(&three, &delim(given)).delim.as_deref(), Some(given), "a tie, as given {given}");
+    }
+    // The export of one decimal, its last line cut: on the sniffer's `,`, every decimal in two.
+    let export = file("export.csv", "Zeit;Temperatur, C\n10:00:00;21,5\n10:00:01;22,0\n10:00:02;21,7\n10:00:03\n");
+    for given in [",", ";"] {
+        assert_eq!(csv_fitting_dialect(&export, &delim(given)).delim.as_deref(), Some(given), "a tie, as given {given}");
+    }
+    let (opts, page) = read_as_sniffed(&export);
+    assert_eq!((opts.delim.as_deref(), page.rows[0][1].clone()), (Some(","), serde_json::json!(5)), "{opts:?}");
+    // Named, each reads right.
+    let named = |path: &str, d: &str, comma: bool| preview_csv(path, 10, &CsvOptions { decimal_comma: comma, ..delim(d) }).unwrap();
+    let page = named(&export, ";", true);
+    assert_eq!((names(&page), page.rows[0][1].clone(), page.total), (vec!["Zeit", "Temperatur, C"], serde_json::json!(21.5), 4));
+    let page = named(&stamp, ",", false);
+    assert_eq!((names(&page), page.rows[0].clone()), (vec!["ts", "x;y;z;w", "temp"], vec![serde_json::json!(1), serde_json::json!("10;20;30;40"), serde_json::json!(21.5)]));
+    let page = named(&lists, ";", false);
+    assert_eq!(page.rows[0], vec![serde_json::json!(1), serde_json::json!("alpha"), serde_json::json!("10,20,30")]);
 }
 
 /// Round 13's files, read on their own delimiter as round 10 read them: a `;` export of decimal
 /// commas whose note column's name holds the comma (`Notiz, frei`), with a short row or a note
-/// holding a comma too, on `;` whatever the dialect given; and a `,` file whose list of `;` sits
-/// between a stamp and a temperature, on `,` as given and as the sniffer reads it.
+/// holding a comma too, on `;` whatever the dialect given (their ids give `;` the numbers); and a
+/// `,` file whose list of three on `;` sits between a stamp and a temperature, regular, read by
+/// the sniffer on `,` (to the weighing a tie, as given).
 #[test]
 fn decimal_exports_with_a_comma_in_a_note_and_a_list_between_numbers_read_on_their_own_delimiter() {
     let dir = tempfile::tempdir().unwrap();
@@ -1354,7 +1389,6 @@ fn decimal_exports_with_a_comma_in_a_note_and_a_list_between_numbers_read_on_the
         }
     }
     let middle = csv_file(dir.path(), "middle.csv", "ts,x;y;z,temp\n1,10;20;30,21.5\n2,40;50;60,22.5\n3,70;80;90,23.0\n");
-    assert_eq!(csv_fitting_dialect(&middle, &delim(",")).delim.as_deref(), Some(","));
     // Regular, it is the sniffer's to read, and the sniffer reads it on `,`.
     let (opts, page) = read_as_sniffed(&middle);
     assert_eq!(names(&page), ["ts", "x;y;z", "temp"], "{opts:?}");
