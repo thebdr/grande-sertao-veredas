@@ -1244,6 +1244,16 @@ one release a year's crop).
 
 **Reversible?** Yes: a `git mv` of the plan and the tool, and the clauses' links.
 
+**Decided** 2026-11-25, by the architect: asked "What is the release member's name (its plan
+`docs/<name>-plan.md` and its tool `tools/<name>`)? Taken meanwhile: `entrega`.", "veredas-alforge",
+a name of the architect's own, against `entrega`, `lancamento` and `safra`. Asked then "You named
+the release member `veredas-alforge`. Today it is repo tooling (`tools/entrega`, no `veredas-`
+crate, exempt from the component laws). Is alforge a component of the suite, or tooling under the
+new name?", "Tooling tools/alforge". So the member is alforge (a saddlebag: what the rider carries):
+`tools/alforge` and `docs/alforge-plan.md`, repo tooling still, exempt from the component laws, the
+crate named `alforge` since the laws keep the `veredas-` prefix for components. The rename is the
+release member's to make.
+
 ---
 
 ## Q431 - What version does a suite release carry?
@@ -1260,6 +1270,10 @@ which says when and nothing of compatibility; (c) core's version, which says not
 
 **Reversible?** Yes, until a release is published: the manifest's `release` and its file's name.
 
+**Decided** 2026-11-25, by the architect: asked "What version does a suite release carry, given each
+component keeps its own SemVer? Taken meanwhile: a SemVer of the release's own, the first
+`2.0.0-alpha.1`.", "Its own SemVer (Recommended)", (a). What was taken stands.
+
 ---
 
 ## Q432 - Does a release tag its commit in git?
@@ -1273,6 +1287,10 @@ manifest's commit; (c) a tag per component too (`veredas-portal-2.0.0-alpha.1`).
 **Taken meanwhile** (most reversible): (a). A tag pushed is public; nothing is tagged until ruled.
 
 **Reversible?** Yes, while nothing is tagged.
+
+**Decided** 2026-11-25, by the architect: asked "Does a suite release tag its commit in git? Taken
+meanwhile (most reversible): no tag, the manifest alone names the commit. A pushed tag is public.",
+"No tag", (a). What was taken stands: nothing is tagged.
 
 ---
 
@@ -1299,6 +1317,10 @@ MB, carries a kernel without VMware's display driver).
 **Reversible?** Yes: one table of the recipe's file (`tools/entrega/maquina/maquina.toml`) and the
 provisioning's package names.
 
+**Decided** 2026-11-25, by the architect: asked "Which light Linux distribution does the tester
+machine (the VMware image of a release) run? Taken meanwhile: Debian 13.", "Debian 13
+(Recommended)". What was taken stands.
+
 ---
 
 ## Q434 - Which desktop does the tester machine carry, if any?
@@ -1318,6 +1340,10 @@ Options:
 **Taken meanwhile**: Xfce, logged in automatically, the browser opened on the plant.
 
 **Reversible?** Yes: the recipe's package list and its login settings.
+
+**Decided** 2026-11-25, by the architect: asked "Which desktop does the tester machine carry, if
+any? Taken meanwhile: Xfce, logged in automatically, the browser opened on the plant.", "Xfce
+(Recommended)". What was taken stands.
 
 ---
 
@@ -1339,6 +1365,12 @@ hardware version 14, x86_64 alone; a paravirtual SCSI controller, a VMXNET3 card
 
 **Reversible?** Yes: the descriptor's version and devices are the recipe's data.
 
+**Decided** 2026-11-25, by the architect: asked "Which VMware products must the tester machine open
+in? Taken meanwhile: Workstation Pro 17, Fusion 13 on Intel Macs, ESXi 7 and 8, at virtual hardware
+version 14, x86_64 alone.", "Hardware 14, x86_64 (Recommended)", against a second image for arm64,
+hardware version 19 and hardware version 21. What was taken stands: no arm64 image, so Apple-silicon
+Macs are not served.
+
 ---
 
 ## Q436 - How is the tester machine delivered?
@@ -1356,6 +1388,12 @@ nowhere until ruled (publishing is outward-facing).
 
 **Reversible?** Yes: nothing is published.
 
+**Decided** 2026-11-25, by the architect, in two answers. Asked "In which form is the tester machine
+delivered? Taken meanwhile: one OVA file (1.09 GB for the first release).", "OVA (Recommended)",
+(a). Asked "Where is the tester machine published? Taken meanwhile: nowhere, it is built and kept on
+the development machine.", "Nowhere yet", against a GitHub release and a share of the architect's.
+What was taken stands: the image stays on the development machine and the architect hands it over.
+
 ---
 
 ## Q437 - How does a tester update the machine?
@@ -1372,6 +1410,13 @@ updater reads.
 
 **Reversible?** Yes.
 
+**Decided** 2026-11-25, by the architect: asked "How does a tester update the machine to a newer
+release? Taken meanwhile: a new OVA per release, the old machine thrown away with its plant files.",
+"Update command (Recommended)", (b): a command in the machine fetches a newer release bundle, checks
+its sums and its manifest, installs it beside the old one under `/opt/veredas/` and moves `current`,
+the plant's files left alone. Where the command fetches from waits on Q436's place, ruled "Nowhere
+yet" the same day.
+
 ---
 
 ## Q438 - What user and password does the machine ship with?
@@ -1387,6 +1432,10 @@ the automatic login.
 **Taken meanwhile**: (a).
 
 **Reversible?** Yes: the recipe's user table.
+
+**Decided** 2026-11-25, by the architect: asked "What user and password does the tester machine ship
+with? Taken meanwhile: user and password both `veredas`, logged in automatically.", "veredas /
+veredas (Recommended)", (a). What was taken stands.
 
 ---
 
@@ -2308,6 +2357,12 @@ Options:
 rulings (a download's identity) expect; (a) meanwhile, stated as a limit in C-290.
 
 **Reversible?** Yes: the check widens without changing the manifest's format.
+
+**Decided** 2026-11-25, by the architect: asked "In a release, what code does a component's version
+name? A release refuses one version pinned at two different trees; today only the component's own
+folder is judged (taken meanwhile).", "All build inputs (Recommended)", (c): the folder, the members
+it uses, the lock file's entries for its dependency closure and the workspace's manifest, everything
+the build reads but the toolchain.
 
 ---
 
