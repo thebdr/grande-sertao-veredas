@@ -2431,3 +2431,35 @@ into its reader), and then reads right.
 meanwhile**: (a).
 
 **Reversible?** Yes: (c) adds a call beside `csv_fitting_dialect` and changes no reading.
+
+---
+
+## Q319 - How a replay knows that what a session's start reads into the store has been read
+
+**Raised** 2026-11-24, by the comissionador session, from C-205's second refute round.
+
+`veredas-comissionador replay` starts a session from the project file and replays a window of its
+store, so it must wait until the start has read the logs' history into the store. Portal shows a
+log's count of lines and the last stamp it read, nothing about whether its start is done. The
+executable now takes a log that has read a line stamped after the window's end as done (portal
+reads a log in its stamps' order), and the others as done when their lines hold still across two
+of portal's refreshes (about a second). That second is a guess: portal reads each older member of
+a family whole and waits for it to hold still before the next, so a start whose family holds four
+or more empty members in a row (or members that took long to open) pauses longer, the replay
+starts before the newest member is read, and the run is kept aborted with no row of its window
+(the critic: 5 empty members aborted 2 runs of 3, 8 all of them). Options:
+- (a) Portal publishes, per log, that its start's read-in has reached the end of every file as it
+  was when the start opened it (a flag in `SourceHealth`, or a count of the files the start
+  planned and the ones read). Needs portal; the executable then waits for that flag, exactly.
+- (b) The executable waits longer for stillness (five seconds, say). Still a guess: it moves the
+  failure to more empty members, and every replay pays it.
+- (c) The claim narrowed: the limit stated, a family's empty members named, nothing else changed.
+
+The assistant recommends (a): the start's plan is portal's (`tail::plan_for`), so portal alone
+knows when it is done, and supervisão's host and any replay of a fresh session want the same.
+
+**Taken meanwhile**: (c), with the line past the window: C-205 states the limit, and `main.rs`
+marks the stillness `DECISION PENDING (Q319)`.
+
+**Reversible?** Yes: (a) replaces the stillness in one loop of `main.rs`; the line past the window
+stays as a shortcut.
