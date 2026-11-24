@@ -83,22 +83,24 @@ fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Pro
         .filter(|(k, _)| k.get_ref() != "format" && k.get_ref() != "version")
         .min_by_key(|(k, _)| k.span().start);
     if let Err(e) = stamp {
-        // The stamp alone, its two values as written (a table or an array as an empty one, which
-        // core's reader judges by its kind alone): sound, the failure was another key's; not, its
-        // fault is the stamp's own, in core's words, as with no other key.
-        let alone: String = table
-            .get_ref()
-            .iter()
-            .filter(|(k, _)| k.get_ref() == "format" || k.get_ref() == "version")
-            .map(|(k, v)| {
-                let value = match v.get_ref() {
-                    toml::de::DeValue::Table(_) => "{}",
-                    toml::de::DeValue::Array(_) => "[]",
-                    _ => head.get(v.span()).unwrap_or(""),
-                };
-                format!("{} = {value}\n", k.get_ref())
-            })
-            .collect();
+        // The stamp alone, as written: the header with every other top-level key's lines blanked,
+        // their line ends kept so what core's words place stays where it is. Sound, the failure
+        // was another key's; not, its fault is the stamp's own, in core's words, as with no other
+        // key.
+        let line_of = |at: usize| head[..at.min(head.len())].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let mut keys: Vec<(usize, bool)> =
+            table.get_ref().iter().map(|(k, _)| (line_of(k.span().start), k.get_ref() == "format" || k.get_ref() == "version")).collect();
+        keys.sort();
+        let mut alone = String::with_capacity(head.len());
+        alone.push_str(&head[..keys.first().map_or(head.len(), |k| k.0)]);
+        for (i, (from, of_stamp)) in keys.iter().enumerate() {
+            let region = &head[*from..keys.get(i + 1).map_or(head.len(), |k| k.0)];
+            if *of_stamp {
+                alone.push_str(region);
+            } else {
+                alone.extend(region.chars().filter(|c| *c == '\n'));
+            }
+        }
         match (other.is_some(), veredas_core::schema::check(&alone, noun, format, VERSION)) {
             (true, Ok(())) => {}
             (true, Err(e2)) if toml::de::DeTable::parse(&alone).is_ok() => return Err(Problem::at(file, text, 0, e2.to_string())),

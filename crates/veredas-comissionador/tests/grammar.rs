@@ -1565,23 +1565,35 @@ fn a_stamp_s_own_fault_beside_another_key_is_core_s_words_for_the_stamp() {
         format!("{}:{}: {}", e.line, e.column, e.message)
     };
     let core = |stamp: &str| format!("1:1: {}", veredas_core::schema::check(stamp, "a test file", "veredas-test", 1).unwrap_err());
+    // Each stamp's fault in core's words for the stamp as written, whether another key stands
+    // after it, before it (its line blanked, so a line core names stays where it is) or nowhere:
+    // a value core cannot read inside the stamp's own table or array among them.
     let stamps = [
-        ("format = 1\nversion = 1\n", "format = 1\nversion = 1\n"),
-        ("format = \"veredas-test\"\nversion = \"1\"\n", "format = \"veredas-test\"\nversion = \"1\"\n"),
-        ("format = \"veredas-test\"\nversion = 4294967296\n", "format = \"veredas-test\"\nversion = 4294967296\n"),
-        ("format = \"veredas-test\"\nversion = -1\n", "format = \"veredas-test\"\nversion = -1\n"),
-        ("format.a = 1\nversion = 1\n", "format = {}\nversion = 1\n"),
-        ("format = { a = 1 }\nversion = 1\n", "format = {}\nversion = 1\n"),
-        ("format = \"veredas-test\"\nversion = [\n  1,\n]\n", "format = \"veredas-test\"\nversion = []\n"),
-        ("format = \"veredas-functions\"\nversion = 1\n", "format = \"veredas-functions\"\nversion = 1\n"),
+        "format = 1\nversion = 1\n",
+        "format = \"veredas-test\"\nversion = \"1\"\n",
+        "format = \"veredas-test\"\nversion = 4294967296\n",
+        "format = \"veredas-test\"\nversion = -1\n",
+        "format.a = 1\nversion = 1\n",
+        "format = { a = 1 }\nversion = 1\n",
+        "format = \"veredas-test\"\nversion = [\n  1,\n]\n",
+        "format = \"veredas-functions\"\nversion = 1\n",
+        "format.a = 1e400\nversion = 1\n",
+        "format = [1e400]\nversion = 1\n",
+        "format = { a = 1e400 }\nversion = 1\n",
+        "format = \"veredas-test\"\nversion = { a = 340282366920938463463374607431768211456 }\n",
+        "format = \"veredas-other\"\nversion = [1e400]\n",
+        "format = \"veredas-test\"\n[version]\na = 1e400\n",
     ];
-    for (stamp, alone) in stamps {
-        let want = core(alone);
-        assert_eq!(want, core(stamp), "core's words for {stamp:?} are its words for the stamp alone");
-        // Beside a key core cannot read, and beside one it can: the stamp's fault, never the key's.
-        assert_eq!(one(&format!("{stamp}x = 1e400\n")), want, "{stamp:?}");
-        assert_eq!(one(&format!("{stamp}x = 2\n")), want, "{stamp:?}");
+    for stamp in stamps {
+        let want = core(stamp);
         assert_eq!(one(stamp), want, "{stamp:?}");
+        assert_eq!(one(&format!("x = 1e400\n{stamp}")), core(&format!("\n{stamp}")), "{stamp:?}");
+        assert_eq!(one(&format!("x = 2\n{stamp}")), core(&format!("\n{stamp}")), "{stamp:?}");
+        // After it, unless the stamp ends in a table, which the key would join.
+        if !stamp.contains("\n[") {
+            assert_eq!(one(&format!("{stamp}x = 1e400\n")), want, "{stamp:?}");
+            assert_eq!(one(&format!("{stamp}x = 2\n")), want, "{stamp:?}");
+        }
     }
 }
 
