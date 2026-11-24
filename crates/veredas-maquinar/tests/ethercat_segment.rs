@@ -1331,3 +1331,202 @@ mod round_4 {
         });
     }
 }
+
+/// C-113's fifth refute round: the critic's probes (`~/.cache/veredas/critic-c113-r5/probes`), kept
+/// as pins: INIT from every state and clearing an error there (a plant fault too), the EEPROM's
+/// mailbox words 0, a write covering 0x0910 from before it compared, outputs read in SAFE-OP and INIT.
+mod round_5 {
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_maquinar::ethercat::esc::{self, Datagram, Esc, Identity};
+    use veredas_maquinar::ethercat::*;
+
+    fn line() -> Vec<Esc> {
+        (0..3u16)
+            .map(|i| {
+                let id = Identity { vendor_id: 7, product_code: u32::from(i), revision: 1, serial: 0, name: format!("d{i}"), alias: 0 };
+                let mut e = Esc::new(esc::sii_image(&id, &[], &[]), u64::from(i) * 1_000);
+                e.mem[0x10..0x12].copy_from_slice(&(0x1000 + i).to_le_bytes());
+                e.set_link(i < 2);
+                e
+            })
+            .collect()
+    }
+
+    fn pass(line: &mut [Esc], now: u64, dgs: &[(u8, u32, Vec<u8>)]) -> Vec<(Vec<u8>, u16, u32)> {
+        let mut d: Vec<Datagram> = dgs.iter().map(|(cmd, address, data)| Datagram { cmd: *cmd, idx: 0, address: *address, circulating: false, more: false, irq: 0, data: data.clone(), wkc: 0 }).collect();
+        esc::process(line, &mut d, now);
+        d.into_iter().map(|x| (x.data, x.wkc, x.address)).collect()
+    }
+
+    fn fp(station: u16, ado: u16) -> u32 {
+        (u32::from(ado) << 16) | u32::from(station)
+    }
+
+    fn diff(l: &[Esc], i: usize) -> u32 {
+        u32::from_le_bytes(l[i].read(0x092C, 4).try_into().unwrap())
+    }
+
+    /// "a written system time, by ARMW, FRMW or a plain write covering its first byte (0x0910, as
+    /// the ESC datasheet has it), compared": a write that starts before 0x0910 and covers it (a master
+    /// writing the DC block in one datagram) is compared, the system time taken from the bytes at 0x0910.
+    #[test]
+    fn a_write_starting_before_0x0910_and_covering_it_is_compared() {
+        // Device 1 (origin 1 µs) at 5 µs: local and system time 4000. A 12-byte write from 0x090C:
+        // 4 bytes of port 3's receive time (kept), then 8 bytes of system time, 10 000.
+        let mut l = line();
+        let mut data = vec![0xEE; 4];
+        data.extend_from_slice(&10_000u64.to_le_bytes());
+        let r = pass(&mut l, 5_000, &[(5, fp(0x1001, 0x090C), data)]);
+        assert_eq!(r[0].1, 1);
+        assert_eq!(diff(&l, 1), 0x8000_0000 | 6_000, "compared over 64 bits, 6 µs behind");
+    }
+
+    /// "over the low 32 bits when none of the high four is written": an 8-byte write from 0x090C
+    /// writes 0x0910..0x0913 alone, so the comparison is over 32 bits whatever the datagram's length.
+    #[test]
+    fn a_write_from_0x090c_of_8_bytes_compares_the_low_32_bits() {
+        // Device 1's system time 2^32 + 4000 (offset 2^32): the master's low half 3000 is 1000 behind it.
+        let mut l = line();
+        pass(&mut l, 0, &[(5, fp(0x1001, 0x0920), (1u64 << 32).to_le_bytes().to_vec())]);
+        let mut data = vec![0xEE; 4];
+        data.extend_from_slice(&3_000u32.to_le_bytes());
+        pass(&mut l, 5_000, &[(5, fp(0x1001, 0x090C), data)]);
+        assert_eq!(diff(&l, 1), 1_000);
+    }
+
+    /// The DC block blanked by one broadcast write from 0x0900 (latch, then system time): every
+    /// device latches its receive times and compares a system time of 0.
+    #[test]
+    fn a_broadcast_blank_of_the_dc_block_latches_and_compares() {
+        let mut l = line();
+        let r = pass(&mut l, 50_000, &[(8, 0x0900 << 16, vec![0; 0x18])]);
+        assert_eq!(r[0].1, 3);
+        for (i, origin) in [0u32, 1_000, 2_000].iter().enumerate() {
+            assert_eq!(u32::from_le_bytes(l[i].read(0x0900, 4).try_into().unwrap()), 50_000 - origin, "device {i} latched");
+            assert_eq!(diff(&l, i), 50_000 - origin, "device {i} compared with 0: ahead by its own time");
+        }
+    }
+
+    /// "held until acknowledged, INIT clearing it": INIT clears an error from every state the
+    /// device can hold one in, and is taken from every state (ETG.1000.6: any state to INIT).
+    #[test]
+    fn init_clears_an_error_from_every_state_and_is_taken_from_each() {
+        let state = |l: &[Esc]| (l[1].mem[0x0130], u16::from_le_bytes([l[1].mem[0x0134], l[1].mem[0x0135]]));
+        let ask = |l: &mut [Esc], control: u8| {
+            pass(l, 0, &[(5, fp(0x1001, 0x0120), vec![control, 0])]);
+        };
+        // Plain: PRE-OP to INIT, SAFE-OP to INIT.
+        for path in [&[0x02u8][..], &[0x02, 0x04][..]] {
+            let mut l = line();
+            for c in path {
+                ask(&mut l, *c);
+            }
+            ask(&mut l, 0x01);
+            assert_eq!(state(&l), (0x01, 0), "{path:?} then INIT");
+        }
+        // With an error: PRE-OP (PRE-OP to OP refused), SAFE-OP and OP (to BOOT refused); INIT without
+        // the acknowledge clears it.
+        for (path, refused, held) in [(&[0x02u8][..], 0x08u8, 0x12u8), (&[0x02, 0x04][..], 0x03, 0x14), (&[0x02, 0x04, 0x08][..], 0x03, 0x18)] {
+            let mut l = line();
+            for c in path {
+                ask(&mut l, *c);
+            }
+            ask(&mut l, refused);
+            assert_eq!(state(&l), (held, 0x0011));
+            ask(&mut l, 0x01);
+            assert_eq!(state(&l), (0x01, 0), "INIT from {held:#x}");
+        }
+    }
+
+    fn wire_send(link: &veredas_aranha::wire::raw::RawLink, me: [u8; 6], cmd: u8, address: u32, data: &[u8]) {
+        let mut body = vec![cmd, 0];
+        body.extend_from_slice(&address.to_le_bytes());
+        body.extend_from_slice(&(data.len() as u16).to_le_bytes());
+        body.extend_from_slice(&[0, 0]);
+        body.extend_from_slice(data);
+        body.extend_from_slice(&[0, 0]);
+        let mut f = vec![0xFF; 6];
+        f.extend_from_slice(&me);
+        f.extend_from_slice(&0x88A4u16.to_be_bytes());
+        f.extend_from_slice(&((body.len() as u16) | 0x1000).to_le_bytes());
+        f.extend(body);
+        if f.len() < 60 {
+            f.resize(60, 0);
+        }
+        link.send(&f).unwrap();
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(2) {
+            if let Some(r) = link.recv(Duration::from_millis(100)).unwrap()
+                && r.bytes.len() > 12
+                && r.bytes[6..12] != me
+            {
+                return;
+            }
+        }
+        panic!("no answer");
+    }
+
+    /// The plant's fault recovered by INIT, as a master that restarts a faulted device does: OP,
+    /// faulted to SAFE-OP with its code, INIT requested without the acknowledge: INIT, no error.
+    #[test]
+    fn a_plant_fault_is_cleared_by_init() {
+        netns::isolated("round_5::a_plant_fault_is_cleared_by_init", &[("a0", "b0")], || {
+            use veredas_aranha::wire::raw::{Options, RawLink};
+            let segment = start(&toml::from_str("interface = \"b0\"\ndevices = [ { name = \"d0\" }, { name = \"d1\" } ]\n").unwrap()).unwrap();
+            let link = RawLink::open_with("a0", Options { ethertype: Some(0x88A4), promiscuous: true, outgoing: false }).unwrap();
+            let me = [0x10u8; 6];
+            let ap1 = (0x0120u32 << 16) | u32::from(0u16.wrapping_sub(1));
+            for c in [0x02u8, 0x04, 0x08] {
+                wire_send(&link, me, 2, ap1, &[c, 0]);
+            }
+            assert_eq!(segment.al_state("d1").unwrap(), (8, false));
+            segment.fault("d1", 0x001B).unwrap();
+            assert_eq!(segment.al_state("d1").unwrap(), (4, true));
+            wire_send(&link, me, 2, ap1, &[0x01, 0]);
+            assert_eq!(segment.al_state("d1").unwrap(), (1, false), "INIT clears the plant's error");
+        });
+    }
+
+    /// "its SII EEPROM ... no mailbox": the EEPROM's bootstrap and standard mailbox words (ETG.2010
+    /// Table 2, words 0x14 to 0x1B) and its mailbox protocols (word 0x1C) are all 0, so no master (IgH
+    /// and TwinCAT read them) looks for CoE.
+    #[test]
+    fn the_eeprom_states_no_mailbox() {
+        let id = Identity { vendor_id: 1, product_code: 2, revision: 3, serial: 4, name: "x".into(), alias: 0 };
+        let e = vec![esc::PdoEntry { index: 0x7000, subindex: 1, bits: 8 }];
+        let w = esc::sii_image(&id, &e, &e);
+        assert_eq!(&w[0x14..=0x1C], &[0u16; 9], "no bootstrap mailbox, no standard mailbox, no protocol");
+    }
+
+    /// "The plant side reads the outputs a master wrote whatever the AL state": in SAFE-OP and in
+    /// INIT as in PRE-OP and OP.
+    #[test]
+    fn the_outputs_are_read_whatever_the_al_state() {
+        netns::isolated("round_5::the_outputs_are_read_whatever_the_al_state", &[("a0", "b0")], || {
+            use veredas_aranha::wire::raw::{Options, RawLink};
+            let segment = start(&toml::from_str("interface = \"b0\"\ndevices = [ { name = \"d0\", outputs = [ { index = 0x7000, subindex = 1, bits = 8 } ] } ]\n").unwrap()).unwrap();
+            let link = RawLink::open_with("a0", Options { ethertype: Some(0x88A4), promiscuous: true, outgoing: false }).unwrap();
+            let me = [0x10u8; 6];
+            let ap0 = |ado: u16| u32::from(ado) << 16;
+            // FMMU 0: logical 0, 1 byte, onto 0x1000, written by the master, activated.
+            let mut f = 0u32.to_le_bytes().to_vec();
+            f.extend_from_slice(&1u16.to_le_bytes());
+            f.extend_from_slice(&[0, 7]);
+            f.extend_from_slice(&0x1000u16.to_le_bytes());
+            f.extend_from_slice(&[0, 2, 1, 0, 0, 0]);
+            wire_send(&link, me, 2, ap0(0x0600), &f);
+            for c in [0x02u8, 0x04] {
+                wire_send(&link, me, 2, ap0(0x0120), &[c, 0]);
+            }
+            assert_eq!(segment.al_state("d0").unwrap(), (4, false));
+            wire_send(&link, me, 11, 0, &[0xAB]);
+            assert_eq!(segment.outputs("d0").unwrap(), [0xAB], "SAFE-OP");
+            wire_send(&link, me, 2, ap0(0x0120), &[0x01, 0]);
+            assert_eq!(segment.al_state("d0").unwrap(), (1, false));
+            wire_send(&link, me, 11, 0, &[0xCD]);
+            assert_eq!(segment.outputs("d0").unwrap(), [0xCD], "INIT");
+        });
+    }
+}
