@@ -1453,6 +1453,10 @@ no code of supervisão changes. Q29's gaps hold as everywhere.
 
 **Reversible?** Yes: one line of the plant's supervisão file.
 
+**Decided** 2026-11-25, by the architect: asked "Where does supervisão listen inside the tester
+machine? Taken meanwhile: every interface, port 8902, writes disarmed in the plant.", "Every
+interface (Recommended)", (a). What was taken stands.
+
 ---
 
 ## Q440 - Does the tester machine's test run with the suite?
@@ -1468,6 +1472,10 @@ GitHub's included.
 feature, since it builds the suite in release mode.
 
 **Reversible?** Yes: a feature in the tool's manifest.
+
+**Decided** 2026-11-25, by the architect: asked "Does the tester machine's image test run with the
+suite? It downloads a 435 MB base once, needs KVM and takes minutes. Taken meanwhile: its own
+command, run at every release cut.", "Its own command (Recommended)", (a). What was taken stands.
 
 ---
 
@@ -1721,6 +1729,11 @@ flow view a reading of arbitrary Rust.
 **Reversible?** Yes, while the files are few: the engine runs a model that does not depend on the
 syntax, and the syntax is one front end (`lex`, `parse`); the worked examples would be rewritten.
 
+**Decided** 2026-11-25, by the architect: asked "In which syntax is a comissionador test file
+written? A test is a program (steps, conditions, branches, scripts). Taken meanwhile: the design's
+own language, refined.", "The design's language (Recommended)", (a), against TOML throughout and a
+subset of Rust. What was taken stands.
+
 ---
 
 ## Q311 - The script box's language
@@ -1747,6 +1760,10 @@ and waits but never writes.
 
 **Reversible?** Yes: (b) can be added beside (a) under a tagged `script` block; replacing (a)
 rewrites the scripts and functions written meanwhile.
+
+**Decided** 2026-11-25, by the architect: asked "In which language are comissionador's script boxes
+and function bodies written? Taken meanwhile: the test language's own statements.", "The test
+language (Recommended)", (a), against Rhai or Lua embedded and Python. What was taken stands.
 
 ---
 
