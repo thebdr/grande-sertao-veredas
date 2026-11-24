@@ -469,3 +469,88 @@ fn an_empty_station_name_is_no_label() {
     assert_eq!(f.devices[&DEV].label(), "plc-hall-2");
     assert_eq!(fused(&[dcp_at(DEV, blank, 100, 0)]).devices[&DEV].label(), DEV.to_string());
 }
+
+#[test]
+fn a_port_known_before_its_device_is_taken_in_whole_whatever_the_order() {
+    // The critic's cases (C-141's second round): what a port not yet known held, taken in by its
+    // device once a PDU from the same MAC names it, the same as if heard in time order.
+    let names_dev = |ttl| pn_lldp("io-device-1", "port-001", ttl);
+    let nameless = |port: &str, ttl| LldpPdu::new(ChassisId::Local { id: "io-device-1".into() }, PortId::Local { id: format!("{port}.io-device-1") }, ttl);
+    let both_orders = |obs: &[Observation]| {
+        let by_time = fused(obs);
+        assert_eq!(fused(obs.iter().rev()), by_time);
+        by_time
+    };
+    // A leaving heard before the PDU naming its device, though later: the port has left.
+    let f = both_orders(&[lldp_at(PORT, &names_dev(20), "eth1", 100, 0), lldp_at(PORT, &nameless("port-001", 0), "eth1", 200, 1)]);
+    assert_eq!(f.devices[&DEV].ports["port-001"].left_ns, Some(200));
+    // A return heard first, older than the naming PDU that leaves: the port has left.
+    let f = both_orders(&[lldp_at(PORT, &nameless("port-001", 20), "eth1", 50, 0), lldp_at(PORT, &names_dev(0), "eth1", 100, 1)]);
+    assert_eq!(f.devices[&DEV].ports["port-001"].left_ns, Some(100));
+    // The times of what was taken in: later and earlier than the naming PDU.
+    for (at, expect) in [(150, (100, 150)), (50, (50, 100))] {
+        let f = both_orders(&[lldp_at(PORT, &names_dev(20), "eth1", 100, 0), lldp_at(PORT, &nameless("port-001", 20), "eth1", at, 1)]);
+        let d = &f.devices[&DEV];
+        assert_eq!(((d.first_ns, d.last_ns), (d.ports["port-001"].first_ns, d.ports["port-001"].last_ns)), (expect, expect), "{at}");
+    }
+    // Every field a PDU naming no chassis MAC carries, taken in.
+    let mut rich = nameless("port-001", 20);
+    rich.port_desc = Some("first port".into());
+    rich.pn.port_status = Some(PortStatus { rtc2: 1, rtc3: 0 });
+    rich.pn.delays = Some(Delays { rx_local: 1, rx_remote: 2, tx_local: 3, tx_remote: 4, cable_local: 5 });
+    rich.pn.mrp = Some(MrpPortStatus { domain_uuid: [7; 16], mrrt: 2 });
+    rich.port_vlan = Some(7);
+    rich.mac_phy = Some(MacPhy { autoneg: 3, pmd_capabilities: 0x6C00, mau_type: 16 });
+    rich.sys_name = Some("io-device-1".into());
+    rich.sys_desc = Some("bench".into());
+    rich.sys_caps = Some((0x0080, 0x0080));
+    let f = both_orders(&[lldp_at(PORT, &names_dev(20), "eth1", 100, 0), lldp_at(PORT, &rich, "eth1", 150, 1)]);
+    let (d, p) = (&f.devices[&DEV], &f.devices[&DEV].ports["port-001"]);
+    assert_eq!((p.desc.current().map(String::as_str), p.pn_status.current(), p.pvid.current(), p.mau_type.current()), (Some("first port"), Some(&PortStatus { rtc2: 1, rtc3: 0 }), Some(&7), Some(&16)));
+    assert_eq!((p.delays.current(), p.mrp.current()), (rich.pn.delays.as_ref(), rich.pn.mrp.as_ref()));
+    assert_eq!((d.sys_name.current().map(String::as_str), d.sys_desc.current().map(String::as_str), d.sys_caps.current()), (Some("io-device-1"), Some("bench"), Some(&(0x0080, 0x0080))));
+    // A port of another short name, taken in beside the named one.
+    let f = both_orders(&[lldp_at(PORT, &names_dev(20), "eth1", 100, 0), lldp_at(PORT, &nameless("port-002", 20), "eth1", 150, 1)]);
+    assert_eq!(f.devices[&DEV].ports.keys().cloned().collect::<Vec<_>>(), ["port-001", "port-002"]);
+    // A host of two interfaces: its ARP from one, then that one's LLDP naming the other by a chassis
+    // id of subtype MAC. The first is a device of its own, taken in by nothing.
+    let (nic1, nic2) = (Mac([0x02, 0, 0, 0, 0, 0x31]), Mac([0x02, 0, 0, 0, 0, 0x32]));
+    let host = LldpPdu::new(ChassisId::Mac { mac: nic1 }, PortId::Local { id: "eth1".into() }, 120);
+    let f = fused(&[arp_at(nic2, ten(20), 10, 0), lldp_at(nic2, &host, "eth1", 20, 1)]);
+    assert_eq!(f.devices.keys().copied().collect::<Vec<_>>(), [nic1, nic2]);
+    assert_eq!((f.devices[&nic2].arp_ip.current(), f.devices[&nic1].arp_ip.current()), (Some(&ten(20)), None));
+}
+
+#[test]
+fn a_mac_that_is_a_device_of_its_own_and_another_s_port() {
+    // S named as the chassis of a device whose port is S2, and S itself a port of DEV: a MAC
+    // collision. A leaving from S with no chassis MAC is DEV's port's, S's own device no owner of S.
+    let (s, s2) = (Mac([0x02, 0, 0, 0, 0, 0x21]), Mac([0x02, 0, 0, 0, 0, 0x22]));
+    let mut names_s = LldpPdu::new(ChassisId::Local { id: "dev-s".into() }, PortId::Local { id: "port-001.dev-s".into() }, 20);
+    names_s.pn.chassis_mac = Some(s);
+    let names_dev = pn_lldp("io-device-1", "port-001", 20);
+    let nameless = |ttl| LldpPdu::new(ChassisId::Local { id: "io-device-1".into() }, PortId::Local { id: "port-001.io-device-1".into() }, ttl);
+    let own = lldp_at(s2, &names_s, "eth1", 60, 1);
+    let named = lldp_at(s, &names_dev, "eth1", 100, 2);
+    let gone = lldp_at(s, &nameless(0), "eth1", 150, 3);
+    let by_time = fused(&[own.clone(), named.clone(), gone.clone()]);
+    assert_eq!((by_time.devices[&DEV].ports["port-001"].left_ns, by_time.devices[&s].ports["port-001"].left_ns), (Some(150), None));
+    assert_eq!(by_time.port_owner(s), Some(DEV));
+    // A PDU of S's naming no chassis MAC heard before S was known as DEV's port stays S's; the
+    // leaving after still goes to DEV.
+    let early = lldp_at(s, &nameless(20), "eth1", 70, 4);
+    let f = fused(&[own.clone(), early, named.clone(), lldp_at(s, &nameless(0), "eth1", 300, 5)]);
+    assert_eq!((f.devices[&DEV].ports["port-001"].left_ns, f.port_owner(s)), (Some(300), Some(DEV)));
+    // The exception the clause names: S's leaving applied before anything named S stays S's, as
+    // S became a device of its own (named as a chassis) before a PDU named it DEV's port.
+    let first = fused(&[gone, own, named]);
+    assert_eq!((first.devices[&DEV].ports["port-001"].left_ns, first.devices[&s].ports["port-001"].left_ns), (None, Some(150)));
+}
+
+#[test]
+fn a_device_flagging_a_conflict_on_no_address_names_none() {
+    let flagging = DeviceIdentity { ip_status: Some(IpStatus { set: 0, conflict: true }), ..at_address("a", Ipv4Addr::UNSPECIFIED) };
+    let f = fused(&[dcp_at(DEV, flagging, 100, 0)]);
+    assert!(f.devices[&DEV].addresses().is_empty());
+    assert_eq!(f.conflicts(), [Conflict { kind: ConflictKind::ReportsIpConflict, value: String::new(), macs: vec![DEV] }]);
+}

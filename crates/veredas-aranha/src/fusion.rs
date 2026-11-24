@@ -5,9 +5,10 @@
 //! value is the one heard last. An empty station name is no name, and 0.0.0.0 no address.
 //!
 //! What is fused is read by the frames' times, never by the order they were applied in: the same
-//! observations in any order give the same devices (but for a MAC that both speaks for itself and
-//! is another device's port, [`Fusion::apply`]), so a replay of a capture reads as the listening
-//! did, and a capture merged out of order reads as one heard in order.
+//! observations in any order give the same devices (but for a MAC that is both a device of its own
+//! and another device's port, and one two devices' ports share: [`Fusion::apply`]), so a replay of
+//! a capture reads as the listening did, and a capture merged out of order reads as one heard in
+//! order.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
@@ -318,12 +319,13 @@ impl Fusion {
     }
 
     /// The device one of whose ports a MAC is (any of its LLDP frames came from it), when exactly
-    /// one is; a port not yet known as a device's ([`Device::by_source`]) is no device's.
+    /// one is. A MAC's own device is not its owner, so a port not yet known ([`Device::by_source`],
+    /// kept at its own MAC, its frames' only source) is no device's.
     pub fn port_owner(&self, port_mac: Mac) -> Option<Mac> {
         let mut owners = self
             .devices
             .values()
-            .filter(|d| !d.by_source && d.ports.values().any(|p| p.port_mac.candidates.iter().any(|c| c.value == port_mac)))
+            .filter(|d| d.mac != port_mac && d.ports.values().any(|p| p.port_mac.candidates.iter().any(|c| c.value == port_mac)))
             .map(|d| d.mac);
         let first = owners.next()?;
         owners.next().is_none().then_some(first)
@@ -333,8 +335,9 @@ impl Fusion {
     /// its chassis (a shutdown PDU holds the mandatory three alone) is the device's whose port its
     /// source is, when exactly one device's is, else its source's: kept there as a port not yet
     /// known ([`Device::by_source`]) until a PDU from that MAC names its device, which then takes
-    /// it in. So the order applied changes nothing, but where a MAC speaks for itself (DCP, ARP)
-    /// before it is known as another device's port: what it said by LLDP stays its own.
+    /// it in. So the order applied changes nothing, but where a MAC is a device of its own (it
+    /// speaks DCP or ARP, or a PDU names it as its chassis) before a PDU names it another device's
+    /// port: what it said by LLDP before then stays its own.
     pub fn apply(&mut self, o: &Observation) {
         let w = &o.witness;
         let (mac, sourced) = match &o.observed {
@@ -462,7 +465,7 @@ impl Fusion {
                 out.push(Conflict { kind: ConflictKind::IpChanged, value: ips.join(", "), macs: vec![d.mac] });
             }
             if d.ip_status.current().is_some_and(|s| s.conflict) {
-                let value = d.ip.current().map(|s| s.ip.to_string()).unwrap_or_default();
+                let value = d.ip.current().map(|s| s.ip).filter(|ip| !ip.is_unspecified()).map(|ip| ip.to_string()).unwrap_or_default();
                 out.push(Conflict { kind: ConflictKind::ReportsIpConflict, value, macs: vec![d.mac] });
             }
         }
