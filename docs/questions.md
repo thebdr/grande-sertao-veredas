@@ -1882,6 +1882,11 @@ store row per write would also show supervisão and the record who wrote what, w
 **Reversible?** Yes: (a) or (b) changes where a replay's write leaves the clock, in one place of
 the engine, and the test that pins the limit turns into one that asserts the same verdict.
 
+**Widened** 2026-11-24, from C-203's second refute round: not only a wait's timeout but every
+plant read right after a write (a read, a check, a report, a wait, an await) finds the plant as
+it stood before the write in a replay; an await with a loose bound takes an earlier row. The
+claim and the reference now exclude them all, and a second test pins it. (a) closes both.
+
 ---
 
 ## Q100 - The controller's state text: the readings its writer and reader take
