@@ -228,6 +228,12 @@ function block shows before it collapses (the design's open point, Oficina's to 
 ## Traps
 Recorded as the build meets them.
 
+- **A replay cannot see a session start's read-in end** (C-205, Q319). Portal shows a log's line
+  count and last stamp only. A log past the window's end has read the window (stamps in order,
+  lines stored before health is shown); for the rest, lines holding still across two refreshes
+  are a guess that a family's empty members beat: portal waits for each member to hold still
+  before the next.
+
 - **A word the language reads by its place is no reserved word** (C-201). `max` was reserved for
   `retry <step> max <n>` and is also a built-in call, so `max(a, b)` could not be written. The
   route reads `max` by its place; the reserved list is the reader's and the reference's at once,

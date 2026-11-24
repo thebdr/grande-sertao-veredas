@@ -14,6 +14,23 @@ fn exe(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_veredas-comissionador")).current_dir(dir).args(args).output().unwrap()
 }
 
+fn exe_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_veredas-comissionador")).current_dir(dir).args(args).envs(env.iter().copied()).output().unwrap()
+}
+
+/// A project of one log, `plant`, located by `at` (`file = ...`, or a family's `dir` and
+/// `pattern`), its `temp=` read into `readings`, its start two hours back.
+fn log_project(at: &str) -> String {
+    format!(
+        "format = \"veredas-project\"\nversion = 1\nname = \"the log\"\n\n[session]\nstart = {{ last_hours = 2 }}\n\n[[log]]\nid = \"plant\"\n{at}\ntimestamp = {{ pattern = \"^(?P<ts>\\\\S+ \\\\S+)\", formats = [\"%Y-%m-%d %H:%M:%S%.3f\"] }}\n\n[[rule]]\nname = \"readings\"\npattern = \"temp=(?P<temp>[0-9.]+)\"\nscope = \"plant\"\ntypes = {{ temp = \"float\" }}\n"
+    )
+}
+
+/// A log line stamped `at_ms` on the store's axis, carrying `temp`.
+fn stamped(at_ms: i64, temp: &str) -> String {
+    format!("{} temp={temp}\n", chrono::DateTime::from_timestamp_millis(at_ms).unwrap().naive_utc().format("%Y-%m-%d %H:%M:%S%.3f"))
+}
+
 fn out(o: &Output) -> (i32, Vec<String>, Vec<String>) {
     let lines = |b: &[u8]| String::from_utf8_lossy(b).lines().map(str::to_string).collect::<Vec<_>>();
     (o.status.code().unwrap_or(-1), lines(&o.stdout), lines(&o.stderr))
@@ -42,9 +59,9 @@ fn check_reads_a_file_and_names_its_problems() {
     assert_eq!(code, 1);
     assert!(stderr[0].starts_with("none.test:1:1: cannot be read: "), "{stderr:?}");
     // A command line that is wrong: no command, an unknown one, a missing file or option, an option
-    // without its value (the next word another option), an option given twice, a replay's option
-    // to a run.
-    let wrong: [&[&str]; 12] = [
+    // without its value (the next word another option) or with an empty one, an option given
+    // twice, a replay's option to a run.
+    let wrong: [&[&str]; 14] = [
         &[],
         &["check"],
         &["check", "a", "b"],
@@ -57,6 +74,8 @@ fn check_reads_a_file_and_names_its_problems() {
         &["run", "chk-012.test", "--project", "p.toml", "--project", "p.toml"],
         &["replay", "chk-012.test", "--project", "p.toml", "--from", "2026-11-23 10:00", "--from", "2026-11-23 10:01", "--to", "2026-11-23 10:02"],
         &["run", "chk-012.test", "--project", "p.toml", "--from", "2026-11-23 10:00"],
+        &["run", "chk-012.test", "--project", ""],
+        &["replay", "chk-012.test", "--project", "p.toml", "--from", "2026-11-23 10:00", "--to", "2026-11-23 10:01", "--runs", ""],
     ];
     for args in wrong {
         let (code, _, stderr) = out(&exe(dir.path(), args));
@@ -99,10 +118,14 @@ fn run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict() {
     assert_eq!((code, stdout.len()), (4, 0));
     assert_eq!(stderr, ["the run is refused: the test writes, and portal's write switch is off"]);
     assert!(!dir.path().join("runs/chk-012/0002").exists(), "a refused run is no run");
+    // The folders made for a refused run are removed, those that were there kept.
+    let (code, ..) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off.toml", "--runs", "fresh/deep"]));
+    assert_eq!((code, dir.path().join("fresh").exists()), (4, false));
+    assert!(dir.path().join("runs/chk-012/0001").exists());
     // A project that does not load: refused, with the project's own words.
     std::fs::write(dir.path().join("broken.toml"), "format = \"veredas-project\"\nversion = 9\nname = \"x\"\n").unwrap();
-    let (code, _, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "broken.toml"]));
-    assert_eq!(code, 4);
+    let (code, _, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "broken.toml", "--runs", "broke"]));
+    assert_eq!((code, dir.path().join("broke").exists()), (4, false));
     assert!(stderr[0].starts_with("broken.toml: "), "{stderr:?}");
 }
 
@@ -182,5 +205,53 @@ fn a_replay_waits_until_the_store_holds_what_the_start_reads() {
         let r = record::read(&dir.path().join(format!("runs/t/000{k}"))).unwrap();
         assert_eq!((r.reported[0].text.as_str(), r.evidence[0].rows), ("readings.temp = 999", 251), "replay {k}");
     }
+    // Given one second for it (its ten minutes set lower, as a test may), the read-in still moving:
+    // refused, nothing run, nothing kept, its folders removed.
+    let o = exe_env(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &from, "--to", &to, "--runs", "refused"], &[("VEREDAS_COMISSIONADOR_READ_IN", "1")]);
+    let (code, stdout, stderr) = out(&o);
+    assert_eq!((code, stdout.len(), dir.path().join("refused").exists()), (4, 0, false), "{stderr:?}");
+    assert!(stderr[0].starts_with("the store was still being read in after 1 s (") && stderr[0].ends_with(" lines): the replay is refused"), "{stderr:?}");
+}
+
+#[test]
+fn a_replay_starts_once_its_window_is_read_however_the_plant_keeps_writing() {
+    // The replay test's ten lines an hour old, and a line stamped now appended every 100 ms while
+    // the replay runs: the log has read past the window once its first live line is read, so the
+    // replay starts then, where it waited for the plant to fall silent (minutes on a loaded
+    // machine, and refused at ten on a quiet one). Beside it a second log, quiet, whose lines hold
+    // still on their own: the live one's lines no longer count. Sixty seconds is far past the
+    // seconds it takes, far short of that.
+    let dir = tempfile::tempdir().unwrap();
+    let base = veredas_portal::serve::store_now_ms() - 3_600_000;
+    let ten: String = (0..10).map(|i| stamped(base + i * 1000, &format!("{}.0", 20 + i))).collect();
+    std::fs::write(dir.path().join("plant.log"), ten).unwrap();
+    std::fs::write(dir.path().join("other.log"), (0..3).map(|i| stamped(base - 1_800_000 + i * 1000, "10.0")).collect::<String>()).unwrap();
+    let other = "\n[[log]]\nid = \"other\"\nfile = \"other.log\"\ntimestamp = { pattern = \"^(?P<ts>\\\\S+ \\\\S+)\", formats = [\"%Y-%m-%d %H:%M:%S%.3f\"] }\n";
+    std::fs::write(dir.path().join("project.toml"), log_project("file = \"plant.log\"") + other).unwrap();
+    std::fs::write(dir.path().join("t.test"), test_of("  step w wait readings.temp >= 25.0 timeout 1min\n  step r report readings.temp\n")).unwrap();
+    let (t0, t9) = (veredas_comissionador::eval::time_text(base - 500), veredas_comissionador::eval::time_text(base + 9_500));
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer = {
+        let (stop, log) = (stop.clone(), dir.path().join("plant.log"));
+        std::thread::spawn(move || {
+            use std::io::Write;
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+                f.write_all(stamped(veredas_portal::serve::store_now_ms(), "99.0").as_bytes()).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        })
+    };
+    let begun = std::time::Instant::now();
+    let o = exe_env(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9], &[("VEREDAS_COMISSIONADOR_READ_IN", "120")]);
+    let took = begun.elapsed();
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    writer.join().unwrap();
+    let (code, stdout, stderr) = out(&o);
+    assert_eq!(code, 0, "{stdout:?} {stderr:?}");
+    assert_eq!(stdout[0], "w #1 pass: readings.temp >= 25.0 held after 5500ms");
+    assert!(took < std::time::Duration::from_secs(60), "{took:?}");
+    let r = record::read(&dir.path().join("runs/t/0001")).unwrap();
+    assert_eq!((r.reported[0].text.as_str(), r.evidence[0].rows), ("readings.temp = 25", 6));
 }
 

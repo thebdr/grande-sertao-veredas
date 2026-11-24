@@ -10,18 +10,22 @@
 //!   same over the window of the session's store between the two moments (`YYYY-MM-DD HH:MM[:SS[.mmm]]`
 //!   on the plant's clock), once the store holds what the project's start reads into it.
 //!
-//! Each option is given once, followed by its value. Exit codes: 0 the file is sound or the run
-//! passed; 1 the file has problems or the run failed; 2 the command line is wrong; 3 the run was
-//! aborted; 4 the run was refused before it started (its folder cannot be made, the project or its
-//! session cannot start, the store is still being read in, the engine refuses it), nothing run and
-//! nothing kept; 5 the run ran, its verdict printed, but could not be kept.
+//! Each option is given once, followed by its value, never an empty one. Exit codes: 0 the file is
+//! sound or the run passed; 1 the file has problems or the run failed; 2 the command line is wrong;
+//! 3 the run was aborted; 4 the run was refused before it started (its folder cannot be made, the
+//! project or its session cannot start, the store is still being read in, the engine refuses it),
+//! nothing run, nothing kept and the folders made for it removed; 5 the run ran, its verdict
+//! printed, but could not be kept.
+//!
+//! `VEREDAS_COMISSIONADOR_READ_IN` sets, in seconds, how long a replay waits for the store to be
+//! read in (600 when unset), so a test can reach the refusal.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use veredas_comissionador::plant::LivePlant;
-use veredas_comissionador::run::{Event, RunOptions, RunVerdict, run};
+use veredas_comissionador::run::{Event, RunMode, RunOptions, RunVerdict, run};
 use veredas_comissionador::{Checked, Problem, load_functions, load_test, record};
 use veredas_portal::session::{HealthState, Session};
 
@@ -35,8 +39,12 @@ const USAGE: &str = "usage: veredas-comissionador check <file.test | file.fn>
 const READY: Duration = Duration::from_secs(30);
 
 /// How long a replay waits for the project's start to finish reading into the store before it is
-/// refused.
+/// refused, unless `VEREDAS_COMISSIONADOR_READ_IN` says otherwise.
 const READ_IN: Duration = Duration::from_secs(600);
+
+fn read_in() -> Duration {
+    std::env::var("VEREDAS_COMISSIONADOR_READ_IN").ok().and_then(|v| v.parse().ok()).map(Duration::from_secs).unwrap_or(READ_IN)
+}
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
@@ -112,7 +120,7 @@ fn go(args: &[String]) -> ExitCode {
         if (k >= 2 && !replay) || values[k].is_some() {
             return usage();
         }
-        let Some(value) = args.get(i + 1).filter(|v| !v.starts_with("--")) else { return usage() };
+        let Some(value) = args.get(i + 1).filter(|v| !v.is_empty() && !v.starts_with("--")) else { return usage() };
         values[k] = Some(value.clone());
         i += 2;
     }
@@ -136,45 +144,89 @@ fn go(args: &[String]) -> ExitCode {
     };
     let runs = runs.map(PathBuf::from).unwrap_or_else(|| test_path.parent().map(Path::to_path_buf).unwrap_or_default().join("runs"));
     // The test's folder made before anything runs: a run that could not be kept is refused, the
-    // plant untouched.
-    let folder = record::test_folder(&runs, &c)
-        .map_err(|e| e.to_string())
-        .and_then(|d| std::fs::create_dir_all(&d).map_err(|e| format!("{}: {e}", d.display())));
-    if let Err(e) = folder {
-        eprintln!("the run cannot be kept: {e}");
+    // plant untouched. The folders made here are removed again when the run is refused.
+    let folder = match record::test_folder(&runs, &c) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("the run cannot be kept: {e}");
+            return ExitCode::from(4);
+        }
+    };
+    let made: Vec<PathBuf> = folder.ancestors().take_while(|p| !p.as_os_str().is_empty() && !p.exists()).map(Path::to_path_buf).collect();
+    if let Err(e) = std::fs::create_dir_all(&folder) {
+        eprintln!("the run cannot be kept: {}: {e}", folder.display());
         return ExitCode::from(4);
     }
+    let code = with_session(&project, &c, &runs, &mode);
+    if code == 4 {
+        // Deepest first; a folder something else has filled meanwhile stays.
+        for p in &made {
+            if std::fs::remove_dir(p).is_err() {
+                break;
+            }
+        }
+    }
+    ExitCode::from(code)
+}
+
+/// The plant's session started from its project file, the test run against it and kept: the exit
+/// code.
+fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> u8 {
 
     // The plant's portal session, started from its project file in this process.
-    let loaded = match veredas_portal::project::load_file(&project) {
+    let loaded = match veredas_portal::project::load_file(project) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("{}: {e}", project.display());
-            return ExitCode::from(4);
+            return 4;
         }
     };
     let session = match Session::start(loaded.session_config(chrono::Local::now().naive_local())) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{}: the session did not start: {e}", project.display());
-            return ExitCode::from(4);
+            return 4;
         }
     };
     let live = session.live();
     let health = |id: &str, ok: &dyn Fn(&HealthState) -> bool| live.health.read().map(|h| h.get(id).is_some_and(|h| ok(&h.state))).unwrap_or(false);
     let started = Instant::now();
-    if replay {
+    if let RunMode::Replay { to_ms, .. } = &mode.mode {
         // A replay reads the store: every log has read its first line, or READY has passed (an
-        // empty log reads none); then the ingest's count of lines holds still across two of
-        // portal's refreshes, each known by a new count of the pump's passes.
+        // empty log reads none). Portal reads a log in its stamps' order, so a log that has read a
+        // line stamped after the window's end has read the window; the lines of the others hold
+        // still across two of portal's refreshes, each known by a new count of the pump's passes.
         let logs: Vec<&str> = live.sources.iter().filter(|s| s.kind == "log").map(|s| s.id.as_str()).collect();
         while started.elapsed() < READY && !logs.iter().all(|id| health(id, &|s| *s != HealthState::Waiting)) {
             std::thread::sleep(Duration::from_millis(100));
         }
+        // The logs that have read a line stamped after the window's end, once and for all (portal
+        // shows the last stamp read, which a late line can set back).
+        let mut past: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         let (mut last, mut still) = (None::<(u64, u64)>, 0);
         let begun = Instant::now();
-        while still < 2 {
-            let (lines, passes) = live.counters.read().map(|c| (c.lines, c.passes)).unwrap_or((0, 0));
+        let limit = read_in();
+        loop {
+            // The lines of the logs not yet past the window, and whether any is left.
+            let (mut lines, mut left) = (0, false);
+            if let Ok(h) = live.health.read() {
+                for id in &logs {
+                    let Some(s) = h.get(*id) else { continue };
+                    if past.contains(id) || s.last_ts.is_some_and(|t| t.and_utc().timestamp_millis() > *to_ms) {
+                        past.insert(id);
+                    } else {
+                        lines += s.count;
+                        left = true;
+                    }
+                }
+            }
+            if !left {
+                break;
+            }
+            // DECISION PENDING (Q319): lines holding still are taken for the read-in's end; a start
+            // that reads files with no line for a second or more in a row (a family's empty members)
+            // can pass for it.
+            let passes = live.counters.read().map(|c| c.passes).unwrap_or(0);
             match last {
                 Some((l, p)) if p != passes => {
                     still = if l == lines { still + 1 } else { 0 };
@@ -183,9 +235,12 @@ fn go(args: &[String]) -> ExitCode {
                 None => last = Some((lines, passes)),
                 _ => {}
             }
-            if still < 2 && begun.elapsed() >= READ_IN {
-                eprintln!("the store was still being read in after {} s ({lines} lines): the replay is refused", READ_IN.as_secs());
-                return ExitCode::from(4);
+            if still >= 2 {
+                break;
+            }
+            if begun.elapsed() >= limit {
+                eprintln!("the store was still being read in after {} s ({lines} lines): the replay is refused", limit.as_secs());
+                return 4;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -201,10 +256,10 @@ fn go(args: &[String]) -> ExitCode {
         Ok(p) => p,
         Err(e) => {
             eprintln!("{e}");
-            return ExitCode::from(4);
+            return 4;
         }
     };
-    let result = run(&c, &plant, &mode, &mut |e| match e {
+    let result = run(c, &plant, mode, &mut |e| match e {
         Event::StepEnded(s) => {
             let outcome = s.outcome.map(|o| o.to_string()).unwrap_or_else(|| "cut short".to_string());
             println!("{} #{} {outcome}: {}", s.step, s.attempt, s.detail);
@@ -220,21 +275,21 @@ fn go(args: &[String]) -> ExitCode {
         Err(refused) => {
             eprintln!("{refused}");
             session.stop();
-            return ExitCode::from(4);
+            return 4;
         }
     };
-    let kept = record::keep(&runs, &c, &r, &mode.mode, &plant);
+    let kept = record::keep(runs, c, &r, &mode.mode, &plant);
     session.stop();
     match kept {
         Ok(folder) => println!("kept: {}", folder.display()),
         Err(e) => {
             eprintln!("the run was not kept: {e}");
-            return ExitCode::from(5);
+            return 5;
         }
     }
     match r.verdict {
-        RunVerdict::Passed => ExitCode::SUCCESS,
-        RunVerdict::Failed => ExitCode::from(1),
-        RunVerdict::Aborted => ExitCode::from(3),
+        RunVerdict::Passed => 0,
+        RunVerdict::Failed => 1,
+        RunVerdict::Aborted => 3,
     }
 }
