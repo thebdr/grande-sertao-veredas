@@ -1,8 +1,8 @@
 {
   "clause": "C-200",
   "verdict": "refuted",
-  "ranAt": "2026-11-23T04:36:43.445Z",
-  "headCommit": "3c51ea208c67482d77aef74620f7e6a023a4100a",
+  "ranAt": "2026-11-24T22:44:38.584Z",
+  "headCommit": "21150c666a2979d9f24571493bbb743976248f9f",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/component.rs",
