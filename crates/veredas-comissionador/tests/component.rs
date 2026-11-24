@@ -214,6 +214,99 @@ const REFUSED: &[(&str, &str)] = &[
     ("include_bytes", "bytes from a file the reading does not see"),
 ];
 
+/// What the engine takes from portal, each a path an item of which a source may name (a method of
+/// an allowed type among them): the session and what it shows, the project's reader, the store's
+/// queries and the coercion and clock of portal's serving. Anything else of portal (its search of
+/// logs at rest, its CSV previews, its tails, its families) reaches the plant past the session.
+const PORTAL: &[&str] = &[
+    "veredas_portal::session::Session",
+    "veredas_portal::session::Live",
+    "veredas_portal::session::HealthState",
+    "veredas_portal::project::load_file",
+    "veredas_portal::SeriesType",
+    "veredas_portal::store::RowsQuery",
+    "veredas_portal::store::TableKind",
+    "veredas_portal::store::MAX_PAGE",
+    "veredas_portal::serve::store_now_ms",
+    "veredas_portal::serve::coerce",
+    "veredas_portal::serve::refused_code",
+];
+
+/// Every path into portal a source names, in full, a use tree's braces opened (`*` for a glob,
+/// the crate's name alone when nothing follows it).
+fn portal_paths(stream: proc_macro2::TokenStream, out: &mut Vec<String>) {
+    use proc_macro2::TokenTree as T;
+    let trees: Vec<T> = stream.into_iter().collect();
+    let mut i = 0;
+    while i < trees.len() {
+        match &trees[i] {
+            T::Ident(id) if id.to_string().trim_start_matches("r#") == "veredas_portal" => {
+                i = path_from(&trees, i + 1, "veredas_portal".to_string(), out);
+            }
+            T::Group(g) => {
+                portal_paths(g.stream(), out);
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+}
+
+/// The path `prefix` continued by the `::` segments from `j`: kept whole, a use tree's braces
+/// opened. Returns where it ends.
+fn path_from(trees: &[proc_macro2::TokenTree], mut j: usize, mut path: String, out: &mut Vec<String>) -> usize {
+    use proc_macro2::TokenTree as T;
+    let colon = |k: usize| matches!(trees.get(k), Some(T::Punct(p)) if p.as_char() == ':');
+    while colon(j) && colon(j + 1) {
+        match trees.get(j + 2) {
+            Some(T::Ident(seg)) => {
+                path = format!("{path}::{}", seg.to_string().trim_start_matches("r#"));
+                j += 3;
+            }
+            Some(T::Group(g)) if g.delimiter() == proc_macro2::Delimiter::Brace => {
+                use_tree(g.stream(), &path, out);
+                return j + 3;
+            }
+            Some(T::Punct(p)) if p.as_char() == '*' => {
+                out.push(format!("{path}::*"));
+                return j + 3;
+            }
+            _ => break,
+        }
+    }
+    out.push(path);
+    j
+}
+
+/// The items of a use tree's braces under `prefix`: `self` is the module itself.
+fn use_tree(stream: proc_macro2::TokenStream, prefix: &str, out: &mut Vec<String>) {
+    use proc_macro2::TokenTree as T;
+    let trees: Vec<T> = stream.into_iter().collect();
+    for item in trees.split(|t| matches!(t, T::Punct(p) if p.as_char() == ',')) {
+        match item.first() {
+            Some(T::Ident(id)) if id == "self" => out.push(prefix.to_string()),
+            Some(T::Ident(id)) => {
+                path_from(item, 1, format!("{prefix}::{}", id.to_string().trim_start_matches("r#")), out);
+            }
+            Some(T::Group(g)) if g.delimiter() == proc_macro2::Delimiter::Brace => use_tree(g.stream(), prefix, out),
+            Some(T::Punct(p)) if p.as_char() == '*' => out.push(format!("{prefix}::*")),
+            _ => {}
+        }
+    }
+}
+
+/// Every path into portal a source names that does not start with an item of [`PORTAL`].
+fn portal_breaches(text: &str) -> Vec<String> {
+    let stream: proc_macro2::TokenStream = text.parse().unwrap_or_else(|e| panic!("a source that does not lex: {e:?}"));
+    let mut paths = Vec::new();
+    portal_paths(stream, &mut paths);
+    paths
+        .into_iter()
+        .filter(|p| !PORTAL.iter().any(|a| p == a || p.starts_with(&format!("{a}::"))))
+        .map(|p| format!("{p}: portal past what the engine takes from it"))
+        .collect()
+}
+
 /// What a source holds that the rule refuses, each as `name: why`.
 fn breaches_of(text: &str) -> Vec<String> {
     let r = read(text);
@@ -275,18 +368,24 @@ fn its_sources_reach_the_plant_through_portal_alone_and_never_arm_the_switch() {
     for f in files_under(&crate_dir().join("src")) {
         let text = std::fs::read_to_string(&f).unwrap();
         assert_eq!(breaches_of(&text), Vec::<String>::new(), "{}", f.display());
+        assert_eq!(portal_breaches(&text), Vec::<String>::new(), "{}", f.display());
         assert!(!fs_outside(&f, &text), "{} reaches files of its own: `fs` is the engine's own files', in {FS_FILES:?} alone", f.display());
     }
 }
 
 /// The files that read and write the engine's own files (a test and its function files, the runs
-/// folder): `fs` is named there alone, so no other file reads a plant's file past the session.
+/// folder): `fs`, and a path's own reach to the disk, are named there alone, so no other file
+/// reads, lists or looks at a plant's file past the session.
 const FS_FILES: [&str; 3] = ["check.rs", "main.rs", "record.rs"];
 
-/// Whether a source file names `fs` (`std::fs`, `tokio::fs`) and is not one of `FS_FILES`.
+/// The names that reach the disk: `fs` (`std::fs`, `tokio::fs`) and a path's methods that list a
+/// folder or look at a file without it.
+const DISK: &[&str] = &["fs", "read_dir", "metadata", "symlink_metadata", "exists", "try_exists", "is_file", "is_dir", "is_symlink", "canonicalize", "read_link"];
+
+/// Whether a source file names one of [`DISK`] and is not one of `FS_FILES`.
 fn fs_outside(file: &Path, text: &str) -> bool {
     let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    !FS_FILES.contains(&name) && read(text).idents.iter().any(|i| i == "fs")
+    !FS_FILES.contains(&name) && read(text).idents.iter().any(|i| DISK.contains(&i.as_str()))
 }
 
 #[test]
@@ -298,10 +397,15 @@ fn files_are_reached_where_the_engine_keeps_its_own() {
     assert!(at("plant.rs", "use std::{fs as files};"));
     assert!(!at("plant.rs", "// std::fs, in a comment\nfn f() {}"));
     assert!(!at("record.rs", "fn f(p: &Path) { std::fs::write(p, \"\").unwrap(); }"));
+    // A folder listed, a file looked at, without `fs`: the same.
+    assert!(at("plant.rs", "fn f(p: &Path) { let _ = p.read_dir(); }"));
+    assert!(at("run.rs", "fn f(p: &Path) -> bool { p.exists() || p.metadata().is_ok() }"));
+    assert!(at("eval.rs", "fn f(p: &Path) -> bool { p.is_file() }"));
+    assert!(!at("main.rs", "fn f(p: &Path) -> bool { p.exists() }"));
     // Where `fs` is named today: those three files.
     let mut named: Vec<String> = files_under(&crate_dir().join("src"))
         .into_iter()
-        .filter(|f| read(&std::fs::read_to_string(f).unwrap()).idents.iter().any(|i| i == "fs"))
+        .filter(|f| read(&std::fs::read_to_string(f).unwrap()).idents.iter().any(|i| DISK.contains(&i.as_str())))
         .map(|f| f.file_name().unwrap().to_string_lossy().into_owned())
         .collect();
     named.sort();
@@ -398,4 +502,41 @@ fn the_reading_finds_every_refused_form() {
     assert_eq!(one("/// reads `Live::writes_armed`, never `writes_armed = true`\n//! allow_writes\nfn f() {}"), Vec::<String>::new());
     assert_eq!(one("fn f(path: &std::path::Path) {}"), Vec::<String>::new());
     assert_eq!(one("fn f(l: &Live) -> bool { l.writes_armed() && l.opc_handle(\"x\").is_some() }"), Vec::<String>::new());
+}
+
+#[test]
+fn portal_is_reached_through_what_the_engine_takes_from_it_alone() {
+    let one = |t: &str| portal_breaches(t);
+    let past = |p: &str| vec![format!("{p}: portal past what the engine takes from it")];
+    // Portal's search of logs at rest, its CSV previews, its families: refused, however written.
+    assert_eq!(one("fn f(p: PathBuf) { veredas_portal::grep::search(veredas_portal::grep::GrepScope::Files(vec![p]), q, d); }"), [past("veredas_portal::grep::search"), past("veredas_portal::grep::GrepScope::Files")].concat());
+    assert_eq!(one("fn f() { let r = veredas_portal::store::preview_csv(\"x\", 10, &Default::default()); }"), past("veredas_portal::store::preview_csv"));
+    assert_eq!(one("use veredas_portal::store::{RowsQuery, sniff_csv_options};"), past("veredas_portal::store::sniff_csv_options"));
+    assert_eq!(one("use veredas_portal::{grep::{self, GrepQuery}, SeriesType};"), [past("veredas_portal::grep"), past("veredas_portal::grep::GrepQuery")].concat());
+    assert_eq!(one("use veredas_portal::tail::FamilySpec as F;"), past("veredas_portal::tail::FamilySpec"));
+    // Portal whole, a glob, a module imported or renamed: every later path past the list.
+    assert_eq!(one("use veredas_portal as p;"), past("veredas_portal"));
+    assert_eq!(one("extern crate veredas_portal;"), past("veredas_portal"));
+    assert_eq!(one("use veredas_portal::*;"), past("veredas_portal::*"));
+    assert_eq!(one("use veredas_portal::store::*;"), past("veredas_portal::store::*"));
+    assert_eq!(one("use veredas_portal::store;"), past("veredas_portal::store"));
+    assert_eq!(one("use veredas_portal::store::{self};"), past("veredas_portal::store"));
+    assert_eq!(one("use r#veredas_portal::r#grep::search;"), past("veredas_portal::grep::search"));
+    assert_eq!(one("macro_rules! m { () => { veredas_portal::grep::search } }"), past("veredas_portal::grep::search"));
+    // What the engine takes: an item, a method of an allowed type, a renamed item.
+    assert_eq!(one("use veredas_portal::session::{HealthState, Session};\nuse veredas_portal::store::{RowsQuery, TableKind};"), Vec::<String>::new());
+    assert_eq!(one("fn f() { let s = veredas_portal::session::Session::start(c); let t = veredas_portal::serve::store_now_ms(); }"), Vec::<String>::new());
+    assert_eq!(one("use veredas_portal::session::Live as L;\n// veredas_portal::grep, in a comment\nconst S: &str = \"veredas_portal::grep\";"), Vec::<String>::new());
+    // Every item of the list is one the sources take today: none stands there unused.
+    let mut used = Vec::new();
+    for f in files_under(&crate_dir().join("src")) {
+        let mut paths = Vec::new();
+        portal_paths(std::fs::read_to_string(&f).unwrap().parse().unwrap(), &mut paths);
+        used.extend(PORTAL.iter().filter(|a| paths.iter().any(|p| p == *a || p.starts_with(&format!("{a}::")))).map(|a| a.to_string()));
+    }
+    used.sort();
+    used.dedup();
+    let mut listed: Vec<String> = PORTAL.iter().map(|a| a.to_string()).collect();
+    listed.sort();
+    assert_eq!(used, listed);
 }
