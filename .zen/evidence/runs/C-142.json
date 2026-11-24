@@ -14,15 +14,15 @@
     "listen"
   ],
   "exitCode": 0,
-  "outputSha": "fe918bc9d27e1a5b794bed3c22c911cdd5cc204d8f17462e0a7807e3273c5af6",
-  "outputTail": "\nrunning 6 tests\ntest a_capture_replayed_gives_the_same_devices_every_time_and_ends ... ok\ntest a_listener_keeps_every_frame_it_hears_and_fuses_what_it_says ... ok\ntest stopping_joins_every_worker_and_nothing_is_heard_after ... ok\ntest what_is_about_this_machine_is_left_out_and_counted ... ok\ntest the_kept_frames_are_bounded_and_damage_is_kept_with_its_frame ... ok\ntest sending_is_paced_bounded_and_only_where_it_listens ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running tests/listen.rs (target/debug/build/veredas-aranha/fe88abb95adfac60/out/listen-fe88abb95adfac60)",
-  "ranAt": "2026-11-24T20:40:35.207Z",
-  "headCommit": "830bf0371821353c2f9887939e4b0800cd62a6cf",
+  "outputSha": "d0e3b9fdb0321f07c5b7bb38a11bf345e1e00a3a0f3dea376c3f878064a403f0",
+  "outputTail": "test this_machine_s_own_frames_and_two_devices_of_one_name_in_the_snapshot ... ok\ntest stopping_joins_every_worker_and_nothing_is_heard_after ... ok\ntest what_is_about_this_machine_is_left_out_and_counted ... ok\ntest every_frame_is_the_interface_s_that_heard_it_and_its_account_says_so ... ok\ntest the_kept_frames_are_bounded_and_damage_is_kept_with_its_frame ... ok\ntest an_ended_worker_takes_nothing_more_and_says_what_it_never_sent ... ok\ntest sending_is_paced_bounded_and_only_where_it_listens ... ok\ntest the_defaults_and_the_pace_are_what_the_listener_promises ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.01s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running tests/listen.rs (target/debug/build/veredas-aranha/fe88abb95adfac60/out/listen-fe88abb95adfac60)",
+  "ranAt": "2026-11-24T23:08:40.712Z",
+  "headCommit": "76e5fea74e4c2aad880b26127e2e60dc1965c0e5",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/listen.rs",
       "file": "crates/veredas-aranha/tests/listen.rs",
-      "fileSha": "8f30069163dad82d1e8cc8f2bd4a7d9a93e041475e8ec7bb6626b64d23fc198c"
+      "fileSha": "4416b213f9ca5c9383f77c2c20f9e0226494638a100c210434a555a131b24436"
     }
   ]
 }
