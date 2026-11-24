@@ -73,22 +73,37 @@ fn the_record_keeps_on_the_drive_what_the_window_lets_go() {
     assert!(st.written_bytes > 0 && st.written_bytes < st.limit_bytes, "{st:?}");
     assert!(rows_of(&live, "plc_main") < c.polls, "the window let polls go");
     assert_eq!(recorded(&file, "plc_main") as u64, c.polls, "every poll on the drive");
-    // Which rows: every poll once, and the polls the window still holds the record's own, field
-    // for field.
-    let record: std::collections::BTreeMap<i64, (i64, i64, f64)> = {
+    // Which rows: every poll once, and the polls the window still holds the record's own, every
+    // column of them (the source, the key, the stamps and every tag's value).
+    type Poll = (String, Option<String>, i64, i64, i64, Option<f64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>);
+    let record: std::collections::BTreeMap<i64, Poll> = {
         let conn = duckdb::Connection::open(&file).unwrap();
-        let mut stmt = conn.prepare("SELECT CAST(seq AS BIGINT), index_ms, arrival_ms, speed FROM plc_main").unwrap();
-        stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?)))).unwrap().map(Result::unwrap).collect()
+        let mut stmt = conn.prepare("SELECT CAST(seq AS BIGINT), source, key, index_ms, epoch_ms(ts), arrival_ms, speed, run, word, word_cmd, cmd FROM plc_main").unwrap();
+        stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?))))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
     };
     assert_eq!(record.len() as u64, c.polls, "each poll once");
     let page = live.store.query_rows("plc_main", &RowsQuery { limit: 500, ..RowsQuery::default() }).unwrap();
+    assert_eq!(page.columns.len(), 11, "the columns compared: {:?}", page.columns);
     let at = |name: &str| page.columns.iter().position(|col| col.name == name).unwrap();
     assert!(!page.rows.is_empty());
     for row in &page.rows {
         let seq = row[at("seq")].as_i64().unwrap();
-        let held = (row[at("index_ms")].as_i64().unwrap(), row[at("arrival_ms")].as_i64().unwrap(), row[at("speed")].as_f64().unwrap());
+        let (text, int) = (|n: &str| row[at(n)].as_str().map(str::to_string), |n: &str| row[at(n)].as_i64());
+        let held: Poll = (text("source").unwrap(), text("key"), int("index_ms").unwrap(), int("ts").unwrap(), int("arrival_ms").unwrap(), row[at("speed")].as_f64(), int("run"), int("word"), int("word_cmd"), int("cmd"));
         assert_eq!(record.get(&seq), Some(&held), "the poll {seq} in the window and in the record");
     }
+    // Every table of the record together holds exactly the rows the store took, the
+    // announcements among them.
+    let on_drive: u64 = {
+        let conn = duckdb::Connection::open(&file).unwrap();
+        let mut stmt = conn.prepare("SELECT table_name FROM duckdb_tables() WHERE NOT internal").unwrap();
+        let tables: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        tables.iter().map(|t| conn.query_row(&format!("SELECT count(*) FROM \"{t}\""), [], |r| r.get::<_, i64>(0)).unwrap() as u64).sum()
+    };
+    assert_eq!(on_drive, c.rows, "every row the store took on the drive");
     assert!(recorded(&file, "announce") >= 1);
     assert_eq!(recorded(&file, "fast"), {
         let conn = duckdb::Connection::open(&file).unwrap();
@@ -174,8 +189,7 @@ fn at_its_size_limit_a_recording_stops_and_nothing_is_deleted() {
     let live = session.live();
     assert!(wait(Duration::from_secs(30), || status(&live).stopped_why.is_some()), "{:?}", status(&live));
     let at_stop = status(&live);
-    assert!(at_stop.stopped_why.as_deref().unwrap().starts_with("the record reached its size limit ("), "{at_stop:?}");
-    assert!(at_stop.stopped_why.as_deref().unwrap().ends_with(&format!(" of {} bytes)", 200 * 1024)), "{at_stop:?}");
+    assert_eq!(at_stop.stopped_why, Some(format!("the record reached its size limit ({} of {} bytes)", at_stop.written_bytes, 200 * 1024)), "{at_stop:?}");
     assert!(at_stop.written_bytes >= at_stop.limit_bytes, "{at_stop:?}");
     assert!(at_stop.recorded_rows > 0);
     // Fifty lines after the stop: stored, counted unrecorded, never written.
@@ -199,6 +213,12 @@ fn at_its_size_limit_a_recording_stops_and_nothing_is_deleted() {
         .unwrap();
     let want: f64 = (0..n as u32).map(temp).sum();
     assert_eq!((distinct as u64, first, last as u64, low, high, sum), (n, 0, n - 1, temp(0), temp(n as u32 - 1), want), "lines 0 to {}", n - 1);
+    // And each line's source, key and state, as the rule read them (`item=A0`, `A1`, `A2` in turn).
+    let whole: i64 = duckdb::Connection::open(&file)
+        .unwrap()
+        .query_row("SELECT count(*) FROM readings WHERE source = 'log' AND key = 'A' || CAST(seq % 3 AS VARCHAR) AND state = 'run'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(whole as u64, n, "every line's source, key and state");
     // The snapshot carries the recording whole: its file, its limit, its size, the rows recorded
     // and not, and why it stopped.
     assert_eq!(
@@ -338,7 +358,7 @@ fn the_limit_stops_the_recording_at_the_first_write_that_reaches_it() {
         }
     }
     let at_stop = status(&live);
-    assert!(at_stop.stopped_why.is_some(), "{at_stop:?}");
+    assert_eq!(at_stop.stopped_why, Some(format!("the record reached its size limit ({} of {} bytes)", at_stop.written_bytes, 400 * 1024)), "{at_stop:?}");
     // The size the stop names is the drive's once the write that reached the limit landed, the
     // session still running (a stopped record takes no write, so the drive holds still): the
     // write measured after its rows, so the stop falls at the first write past the limit.
