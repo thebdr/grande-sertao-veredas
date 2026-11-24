@@ -1556,7 +1556,7 @@ pub fn patch(
                 // the engine stores user spelling; give it that
                 let user = strip_file_prefixes(body);
                 let exists = wb.names().iter().any(|n| {
-                    n.name.eq_ignore_ascii_case(name)
+                    n.name.to_uppercase() == name.to_uppercase()
                         && n.scope.as_deref().map(str::to_lowercase)
                             == scope.as_deref().map(str::to_lowercase)
                 });
@@ -2468,10 +2468,18 @@ fn dynamic_cell_metadata(part: &str) -> Option<u32> {
     while let Some(t) = xml::find_open(part, "futureMetadata", pos) {
         let (a, b) = xml::element_span(part, &t)?;
         if xml::attr(t.text, "name").as_deref() == Some("XLDAPR") {
-            // `fDynamic` is an xsd:boolean: "1" or "true"
-            value_index = bks(&part[a..b])
-                .iter()
-                .position(|bk| bk.contains("fDynamic=\"1\"") || bk.contains("fDynamic=\"true\""));
+            // `fDynamic` is an xsd:boolean: "1" or "true", read as XML reads the attribute
+            let dynamic = |bk: &str| {
+                let mut at = 0;
+                while let Some(t) = xml::next_tag(bk, at) {
+                    at = t.end;
+                    if !t.closing && t.name == "xda:dynamicArrayProperties" {
+                        return matches!(xml::attr(t.text, "fDynamic").as_deref().map(str::trim), Some("1" | "true"));
+                    }
+                }
+                false
+            };
+            value_index = bks(&part[a..b]).iter().position(|bk| dynamic(bk));
         }
         pos = b;
     }

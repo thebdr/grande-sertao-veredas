@@ -445,7 +445,13 @@ workspace/log.txt             the log, one escaped entry per line
   the bytes for a reader that decodes OOXML's `_xHHHH_` too; a value written back from it is
   escaped for XML. The texts holding a number or an area (anchors, a note's row and column, an
   `xm:sqref`, a cached value) are decoded before they are read. `<f ca="1"></f>` is the
-  placeholder `<f ca="1"/>` is.
+  placeholder `<f ca="1"/>` is. The thirteenth round took the rest: a shared group is found
+  whatever its `t` spelling, and a child written with an end tag is a child; `remove_attr` removes
+  an attribute with spaces around its `=`; the metadata part's `fDynamic` and the content types'
+  `PartName` are read as XML reads them; an end tag with white space before `>` is refused; the
+  worksheet's tail moves its cell watches, scenarios, consolidation, smart tags, custom views and
+  publishing (a deleted changing cell, source or published range refused); names compare in
+  Unicode case, as the engine compares them.
 - **Verification runs on a copy at a short UTF-8 path** (the engine's loader takes no other): under
   the system's temporary folder, the model renamed to the destination's stem before comparing;
   the new file then goes beside the destination under a short name of its own.

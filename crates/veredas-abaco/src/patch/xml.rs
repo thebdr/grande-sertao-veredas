@@ -224,6 +224,12 @@ pub fn escape_xml_attr(s: &str) -> String {
 
 /// Byte span of attribute `name`'s value inside `tag`.
 fn attr_span(tag: &str, name: &str) -> Option<(usize, usize)> {
+    attr_bounds(tag, name).map(|(_, vs, ve)| (vs, ve))
+}
+
+/// Where attribute `name` starts in `tag`, and its value's byte span (white space around `=` as XML
+/// allows it: `t = "shared"`).
+fn attr_bounds(tag: &str, name: &str) -> Option<(usize, usize, usize)> {
     let b = tag.as_bytes();
     let mut i = 1;
     // skip the element name
@@ -252,7 +258,7 @@ fn attr_span(tag: &str, name: &str) -> Option<(usize, usize)> {
         let vs = i + 1;
         let ve = vs + tag[vs..].find(q as char)?;
         if key == name {
-            return Some((vs, ve));
+            return Some((ns, vs, ve));
         }
         i = ve + 1;
     }
@@ -275,19 +281,12 @@ pub fn set_attr(tag: &str, name: &str, value: &str) -> String {
 
 /// The tag without attribute `name`.
 pub fn remove_attr(tag: &str, name: &str) -> String {
-    let Some((vs, ve)) = attr_span(tag, name) else {
+    let Some((ks, _, ve)) = attr_bounds(tag, name) else {
         return tag.to_string();
     };
-    // back up over `name="` and the whitespace before it
+    // the attribute from its name to its closing quote, and the white space before it
     let b = tag.as_bytes();
-    let mut s = vs - 1; // the opening quote
-    while s > 0 && b[s - 1] != b'=' {
-        s -= 1;
-    }
-    s -= 1; // '='
-    while s > 0 && !b[s - 1].is_ascii_whitespace() {
-        s -= 1;
-    }
+    let mut s = ks;
     while s > 0 && b[s - 1].is_ascii_whitespace() {
         s -= 1;
     }
@@ -478,6 +477,9 @@ mod tests {
         let s = r#"<a k="x>y"><a></a><b/></a><c/>"#;
         let a = next_tag(s, 0).unwrap();
         assert_eq!(attr(a.text, "k").as_deref(), Some("x>y"));
+        // an attribute with white space around its `=` removed whole
+        assert_eq!(remove_attr(r#"<f t = "shared" si="0"/>"#, "t"), r#"<f si="0"/>"#);
+        assert_eq!(remove_attr(r#"<f si="0" t ='shared'/>"#, "t"), r#"<f si="0"/>"#);
         // a value as XML reads it: references decoded, raw white space a space; the raw kept apart
         let t = next_tag(r#"<c r="A&#53;" s="&#x31;" t="a&#9;b&#10;c" u="x
 y" v="&amp;lt;"/>"#, 0).unwrap();

@@ -2411,3 +2411,216 @@ fn a_placeholder_written_with_an_end_tag_is_a_placeholder() {
         assert_eq!(element(&sheet, "D1"), None, "verify {verify}: {sheet}");
     }
 }
+
+// ---- refute round 13 --------------------------------------------------------------------------
+
+/// The package at `path` with its part `name` passed through `edit`.
+fn rewrite_in_place(path: &Path, name: &str, edit: impl Fn(&str) -> String) {
+    let all = parts(path);
+    let mut z = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for (n, b) in all {
+        let b = if n == name { edit(&String::from_utf8(b).unwrap()).into_bytes() } else { b };
+        z.start_file(n, opts).unwrap();
+        z.write_all(&b).unwrap();
+    }
+    z.finish().unwrap();
+}
+
+#[test]
+fn a_shared_group_spelled_as_xml_allows_is_written_as_the_plain_one_is() {
+    // every member's `t` in single quotes, by a character reference, with spaces around `=`, and
+    // the children written with an end tag: each written as the group spelled plainly is, rows
+    // inserted above, inside and below it and below what it reads, and a value over its master,
+    // verification on and off
+    let dir = tempfile::tempdir().unwrap();
+    let book = |master_t: &str, child: &str| {
+        let mut data = String::new();
+        for r in 1..=12 {
+            let b = match r {
+                1 => format!(r#"<c r="B1"><f {master_t} ref="B1:B3" si="0">A10</f><v>10</v></c>"#),
+                2 | 3 => format!(r#"<c r="B{r}">{child}<v>{}</v></c>"#, 9 + r),
+                _ => String::new(),
+            };
+            data.push_str(&format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c>{b}</row>"#));
+        }
+        data
+    };
+    let run = |data: &str, edit: &Edit, verify: bool| -> Result<String, String> {
+        let src = dir.path().join("group.xlsx");
+        let dst = dir.path().join("group-out.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+        patch(&src, &dst, std::slice::from_ref(edit), &PatchOptions { verify, ..verified() })
+            .map(|_| part(&dst, "xl/worksheets/sheet1.xml"))
+            .map_err(|e| e.to_string())
+    };
+    let plain = book(r#"t="shared""#, r#"<f t="shared" si="0"/>"#);
+    let edits: Vec<Edit> = [1, 2, 4, 5, 11].iter().map(|at| rows("S", *at, 2)).chain([value("S", "B1", serde_json::json!(7))]).collect();
+    for (master_t, child) in [
+        (r#"t='shared'"#, r#"<f t='shared' si="0"/>"#),
+        (r#"t="&#115;hared""#, r#"<f t="&#115;hared" si="0"/>"#),
+        (r#"t = "shared""#, r#"<f t = "shared" si="0"/>"#),
+        (r#"t="shared""#, r#"<f t="shared" si="0"></f>"#),
+    ] {
+        let spelled = book(master_t, child);
+        for edit in &edits {
+            for verify in [true, false] {
+                let want = run(&plain, edit, verify).map_err(|_| "refused".to_string());
+                let got = run(&spelled, edit, verify)
+                    .map(|t| t.replace(master_t, r#"t="shared""#).replace(child, r#"<f t="shared" si="0"/>"#))
+                    .map_err(|_| "refused".to_string());
+                assert_eq!(got, want, "{child} {edit:?} verify {verify}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_tail_s_watches_scenarios_consolidation_smart_tags_views_and_publishing_follow_their_cells() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("tail.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    let data: String = (1..=8).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let tail = |inputs: bool| {
+        format!(
+            r#"{}<dataConsolidate><dataRefs count="1"><dataRef ref="A5:A6" sheet="S"/></dataRefs></dataConsolidate><customSheetViews><customSheetView guid="{{00000000-0000-0000-0000-000000000001}}"><pane xSplit="1" ySplit="4" topLeftCell="B5" activePane="bottomRight" state="frozen"/><selection pane="bottomRight" activeCell="A5" sqref="A5"/></customSheetView></customSheetViews><cellWatches><cellWatch r="A5"/></cellWatches><smartTags><cellSmartTags r="A5"><cellSmartTag type="0"/></cellSmartTags></smartTags><webPublishItems count="1"><webPublishItem id="1" divId="d" sourceType="range" sourceRef="A5:A6" destinationFile="x.htm"/></webPublishItems>"#,
+            if inputs { r#"<scenarios sqref="A5"><scenario name="s" count="1" user="u"><inputCells r="A5" val="9"/></scenario></scenarios>"# } else { "" }
+        )
+    };
+    plain_book(&src, &[("S", worksheet(&data, &tail(true)))], "", &[]);
+    patch(&src, &dst, &[rows("S", 1, 2)], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    for moved in [
+        r#"<scenarios sqref="A7">"#,
+        r#"<inputCells r="A7" "#,
+        r#"<dataRef ref="A7:A8" sheet="S"/>"#,
+        r#"topLeftCell="B7""#,
+        r#"<selection pane="bottomRight" activeCell="A7" sqref="A7"/>"#,
+        r#"<cellWatch r="A7"/>"#,
+        r#"<cellSmartTags r="A7">"#,
+        r#"sourceRef="A7:A8""#,
+    ] {
+        assert!(sheet.contains(moved), "{moved}: {sheet}");
+    }
+    // the row of a scenario's changing cell deleted: refused, naming it
+    let _ = std::fs::remove_file(&dst);
+    match patch(&src, &dst, &[Edit::DeleteRows { sheet: "S".into(), at: 5, count: 1 }], &verified()) {
+        Err(PatchError::Unsupported(m)) => assert!(m.contains("deletes `A5`, which a <inputCells> names"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(!dst.exists());
+    // without the scenario, the consolidation's and the publishing's areas lose a row; the watch and
+    // the smart tags go with their cell, and their lists with them
+    plain_book(&src, &[("S", worksheet(&data, &tail(false).replace(r#"ref="A5:A6""#, r#"ref="A4:A6""#).replace(r#"sourceRef="A5:A6""#, r#"sourceRef="A4:A6""#)))], "", &[]);
+    patch(&src, &dst, &[Edit::DeleteRows { sheet: "S".into(), at: 5, count: 1 }], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<dataRef ref="A4:A5" sheet="S"/>"#) && sheet.contains(r#"sourceRef="A4:A5""#), "{sheet}");
+    assert!(!sheet.contains("cellWatch") && !sheet.contains("smartTags"), "{sheet}");
+}
+
+#[test]
+fn an_end_tag_with_white_space_before_its_close_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let dst = dir.path().join("out.xlsx");
+    let data: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    for (sheet, names, part_name) in [
+        (worksheet(&data.replace("<v>2</v></c>", "<v>2</v></c >"), ""), String::new(), "xl/worksheets/sheet1.xml"),
+        (worksheet(&data, ""), r#"<definedName name="N">S!$A$1:$A$2</definedName >"#.to_string(), "xl/workbook.xml"),
+        (worksheet(&data, r#"<mergeCells count="1"><mergeCell ref="B2:C2"/></mergeCells >"#), String::new(), "xl/worksheets/sheet1.xml"),
+    ] {
+        let src = dir.path().join("spaced.xlsx");
+        plain_book(&src, &[("S", sheet)], &names, &[]);
+        for verify in [true, false] {
+            let _ = std::fs::remove_file(&dst);
+            match patch(&src, &dst, &[rows("S", 1, 1)], &PatchOptions { verify, ..verified() }) {
+                Err(PatchError::Unsupported(m)) => assert!(m.contains(part_name) && m.contains("an end tag with white space"), "{m}"),
+                other => panic!("{part_name} verify {verify}: {other:?}"),
+            }
+            assert!(!dst.exists());
+        }
+    }
+}
+
+#[test]
+fn a_cached_boolean_spelled_with_a_reference_is_read_as_xml_reads_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("bool.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1" t="b"><f>A1&gt;0</f><v>&#49;</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    for verify in [false, true] {
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[value("S", "A1", serde_json::json!(-1))], &PatchOptions { verify, ..verified() }).unwrap();
+        let b1 = element(&part(&dst, "xl/worksheets/sheet1.xml"), "B1").unwrap().to_string();
+        assert!(b1.ends_with("<v>0</v></c>"), "verify {verify}: {b1}");
+    }
+}
+
+#[test]
+fn a_dynamic_array_entry_spelled_as_xml_allows_is_taken() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("olap.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    let data: String =
+        (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{}</v></c></row>"#, r * 10)).collect();
+    let entry = r#"<metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/>"#;
+    for flag in [r#"fDynamic='1'"#, r#"fDynamic="&#49;""#] {
+        let with = olap_metadata(entry).replace(r#"<metadataTypes count="1">"#, r#"<metadataTypes count="2">"#).replace(
+            "<cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata>",
+            &format!(r#"<futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}}"><xda:dynamicArrayProperties {flag} fCollapsed="0"/></ext></extLst></bk></futureMetadata><cellMetadata count="2"><bk><rc t="1" v="0"/></bk><bk><rc t="2" v="0"/></bk></cellMetadata>"#),
+        );
+        write_package(
+            &src,
+            &[
+                ("xl/workbook.xml", workbook(&["S"], "")),
+                ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml"), rel("rId2", "sheetMetadata", "metadata.xml")])),
+                ("xl/worksheets/sheet1.xml", worksheet(&data, "")),
+                ("xl/metadata.xml", with.clone()),
+            ],
+        );
+        let _ = std::fs::remove_file(&dst);
+        let edit = Edit::Formula { sheet: "S".into(), cell: "D1".into(), formula: "=SUM(A1:A3*B1:B3)".into(), expect: None };
+        patch(&src, &dst, &[edit], &verified()).unwrap_or_else(|e| panic!("{flag}: {e}"));
+        assert!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "D1").unwrap().contains(r#"cm="2""#), "{flag}");
+        assert_eq!(part(&dst, "xl/metadata.xml"), with, "{flag}");
+    }
+}
+
+#[test]
+fn a_calculation_chain_s_override_spelled_as_xml_allows_goes_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("chain.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    let data: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><f>A{r}*2</f><v>{}</v></c></row>"#, r * 2)).collect();
+    for spelled in [r#"PartName='/xl/calcChain.xml'"#, r#"PartName="&#47;xl/calcChain.xml""#] {
+        write_package(
+            &src,
+            &[
+                ("xl/workbook.xml", workbook(&["S"], "")),
+                ("xl/_rels/workbook.xml.rels", rels(&[rel("rId1", "worksheet", "worksheets/sheet1.xml"), rel("rId2", "calcChain", "calcChain.xml")])),
+                ("xl/worksheets/sheet1.xml", worksheet(&data, "")),
+                ("xl/calcChain.xml", format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><calcChain xmlns="{MAIN}"><c r="B1" i="1"/><c r="B2"/><c r="B3"/></calcChain>"#)),
+            ],
+        );
+        rewrite_in_place(&src, "[Content_Types].xml", |t| {
+            t.replace("</Types>", &format!(r#"<Override {spelled} ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"/></Types>"#))
+        });
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[rows("S", 1, 1)], &verified()).unwrap();
+        assert!(!parts(&dst).contains_key("xl/calcChain.xml"), "{spelled}");
+        assert!(!part(&dst, "[Content_Types].xml").contains("calcChain"), "{spelled}: {}", part(&dst, "[Content_Types].xml"));
+    }
+}
+
+#[test]
+fn a_name_set_in_another_case_of_a_letter_beyond_ascii_replaces_the_one_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("names.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row>"#, ""))], r#"<definedName name="Ação">S!$A$1</definedName>"#, &[]);
+    patch(&src, &dst, &[Edit::SetName { name: "AÇÃO".into(), formula: "=S!$A$2".into(), scope: None }], &verified()).unwrap();
+    let book = part(&dst, "xl/workbook.xml");
+    assert_eq!(book.matches("<definedName ").count(), 1, "{book}");
+    assert!(book.contains("S!$A$2</definedName>"), "{book}");
+}

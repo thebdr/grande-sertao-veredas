@@ -17,12 +17,13 @@ use super::xml::{self, attr, decode_text, escape_text, next_tag, set_attr};
 use super::PatchError;
 
 /// The namespaces whose references the patcher re-spells, each with the prefix Excel writes it under.
-const FOREIGN_PREFIXES: [(&str, &str); 11] = [
+const FOREIGN_PREFIXES: [(&str, &str); 12] = [
     ("http://schemas.openxmlformats.org/drawingml/2006/chart", "c"),
     ("http://purl.oclc.org/ooxml/drawingml/chart", "c"),
     ("http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing", "xdr"),
     ("http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments", ""),
     ("urn:schemas-microsoft-com:vml", "v"),
+    ("http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray", "xda"),
     ("http://schemas.microsoft.com/office/drawing/2014/chartex", "cx"),
     ("http://schemas.microsoft.com/office/drawing/2012/chart", "c15"),
     ("http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing", "xdr"),
@@ -118,6 +119,15 @@ impl Package {
             Some(after) => after,
             None => body,
         };
+        // an end tag with white space before its `>` (`</c >`), legal XML no part Excel writes holds:
+        // the patcher's element spans end at `</name>`
+        let spaced_end = body.match_indices("</").any(|(i, _)| {
+            let rest = &body[i + 2..];
+            rest[..rest.find('>').unwrap_or(rest.len())].contains(char::is_whitespace)
+        });
+        if spaced_end {
+            return Err(PatchError::Unsupported(format!("{name} holds an end tag with white space before its `>`, which no part Excel writes holds")));
+        }
         if body.contains("<!--") || body.contains("<?") {
             return Err(PatchError::Unsupported(format!(
                 "{name} holds an XML comment or a processing instruction, which no part Excel writes holds and the patcher does not read"
@@ -288,10 +298,11 @@ fn rid_attr(tag: &str) -> Option<String> {
 
 /// `[Content_Types].xml` without the override for `part`.
 pub(crate) fn remove_override(ct: &str, part: &str) -> String {
-    let needle = format!("PartName=\"/{part}\"");
+    // the part's name as XML reads the attribute, and as OPC compares names (in any ASCII case)
+    let name = format!("/{part}");
     let mut pos = 0;
     while let Some(t) = xml::find_open(ct, "Override", pos) {
-        if t.text.contains(&needle) {
+        if attr(t.text, "PartName").is_some_and(|p| p.eq_ignore_ascii_case(&name)) {
             return format!("{}{}", &ct[..t.start], &ct[t.end..]);
         }
         pos = t.end;

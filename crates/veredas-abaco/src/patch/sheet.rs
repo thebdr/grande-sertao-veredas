@@ -132,10 +132,10 @@ fn addr(row: i32, col: i32) -> String {
 fn cached_value(t: Option<&str>, v: Option<&str>) -> Value {
     match (t.unwrap_or("n"), v) {
         ("str", v) | ("inlineStr", v) => Value::Text(v.map(decode_text).unwrap_or_default()),
-        ("b", Some(v)) => Value::Bool(v.trim() == "1"),
+        ("b", Some(v)) => Value::Bool(xml::unescape(v).trim() == "1"),
         ("e", Some(v)) => Value::Error(decode_text(v)),
         (_, None) => Value::Empty,
-        (_, Some(v)) => v
+        (_, Some(v)) => xml::unescape(v)
             .trim()
             .parse::<f64>()
             .map(Value::Number)
@@ -362,8 +362,9 @@ pub(crate) fn rewrite(
     let col_styles = column_styles(new_head.as_deref().unwrap_or(head));
 
     // ---- shared groups ---------------------------------------------------
+    // (read as XML reads the `t` of every formula: `t='shared'` and `t="&#115;hared"` are one)
     let mut groups: HashMap<String, Group> = HashMap::new();
-    if body.contains("t=\"shared\"") {
+    if body.contains("<f") {
         scan_shared(body, &mut groups);
     }
     let mut expand: HashSet<String> = HashSet::new();
@@ -507,6 +508,9 @@ pub(crate) fn rewrite(
     let new_tail = if job.shifts.is_empty() {
         None
     } else {
+        if let Some(why) = tail_refusal(tail, job, &own) {
+            return Err(PatchError::Unsupported(format!("sheet {:?}: {why}", job.name)));
+        }
         rewrite_tail(tail, job, &own)
     };
 
@@ -582,6 +586,12 @@ fn scan_shared(body: &str, groups: &mut HashMap<String, Group>) {
                 continue;
             };
             let text = decode_text(&body[t.end..close.start]);
+            // a child written with an end tag (`<f t="shared" si="0"></f>`) holds no text, as a
+            // self-closing one: the group's master is the one with the formula
+            if text.is_empty() {
+                pos = close.end;
+                continue;
+            }
             let bounds = attr(t.text, "ref")
                 .and_then(|v| refs::parse_area(&v))
                 .map(|a| a.bounds());
@@ -1114,6 +1124,58 @@ fn rewrite_cell(
     Ok(CellOut::New(format!("{t}{new_inner}</c>")))
 }
 
+/// A view's `<selection>` or `<pane>` (a sheet view's, a custom view's) with what it points at
+/// moved: a deleted cell clamps to where the deletion started, as a view must point somewhere.
+fn move_view_tag(text: &str, own: &[Shift]) -> String {
+    let mut text = text.to_string();
+    for a in ["activeCell", "topLeftCell"] {
+        if let Some(v) = attr(&text, a)
+            && let Some((r, c)) = parse_addr(&v.replace('$', ""))
+        {
+            let nv = addr(clamp_index(own, true, r), clamp_index(own, false, c));
+            text = set_attr(&text, a, &xml::escape_xml_attr(&nv));
+        }
+    }
+    if let Some(v) = attr(&text, "sqref") {
+        let nv = shift_sqref_text(&v, own).unwrap_or_else(|| v.to_string());
+        let nv = if nv.is_empty() { attr(&text, "activeCell").map_or_else(|| "A1".to_string(), |a| a.into_owned()) } else { nv };
+        text = set_attr(&text, "sqref", &xml::escape_xml_attr(&nv));
+    }
+    text
+}
+
+/// The moves of the sheet named `sheet` (a `dataRef`'s), in any case.
+fn shifts_of(job: &SheetJob, sheet: &str) -> Vec<Shift> {
+    job.shifts.iter().filter(|(s, _)| s.to_uppercase() == sheet.to_uppercase()).map(|(_, s)| *s).collect()
+}
+
+/// What of the tail a move would delete that nothing can drop in its place: a scenario's changing
+/// cell, a data consolidation's source area, a published range.
+pub(crate) fn tail_refusal(tail: &str, job: &SheetJob, own: &[Shift]) -> Option<String> {
+    let mut pos = 0;
+    while let Some(t) = next_tag(tail, pos) {
+        pos = t.end;
+        if t.closing {
+            continue;
+        }
+        let (key, shifts) = match t.name {
+            "inputCells" => ("r", own.to_vec()),
+            "webPublishItem" => ("sourceRef", own.to_vec()),
+            "dataRef" => match attr(t.text, "sheet") {
+                Some(sheet) => ("ref", shifts_of(job, &sheet)),
+                None => continue,
+            },
+            _ => continue,
+        };
+        if let Some(v) = attr(t.text, key)
+            && shift_area_text(&v, &shifts) == Some(None)
+        {
+            return Some(format!("a structural edit deletes `{v}`, which a <{}> names", t.name));
+        }
+    }
+    None
+}
+
 /// `<dimension>`, `<sheetViews>`, `<cols>`, `<sheetFormatPr>`; `None` when
 /// unchanged.
 fn rewrite_head(head: &str, job: &SheetJob, own: &[Shift]) -> Result<Option<String>, PatchError> {
@@ -1127,22 +1189,7 @@ fn rewrite_head(head: &str, job: &SheetJob, own: &[Shift]) -> Result<Option<Stri
             rebuilt.push_str(&src[pos..t.start]);
             let mut text = t.text.to_string();
             if !t.closing && (t.name == "selection" || t.name == "pane") {
-                for a in ["activeCell", "topLeftCell"] {
-                    if let Some(v) = attr(&text, a)
-                        && let Some((r, c)) = parse_addr(&v.replace('$', "")) {
-                            let nv = addr(clamp_index(own, true, r), clamp_index(own, false, c));
-                            text = set_attr(&text, a, &xml::escape_xml_attr(&nv));
-                        }
-                }
-                if let Some(v) = attr(&text, "sqref") {
-                    let nv = shift_sqref_text(&v, own).unwrap_or_else(|| v.to_string());
-                    let nv = if nv.is_empty() {
-                        attr(&text, "activeCell").map_or_else(|| "A1".to_string(), |a| a.into_owned())
-                    } else {
-                        nv
-                    };
-                    text = set_attr(&text, "sqref", &xml::escape_xml_attr(&nv));
-                }
+                text = move_view_tag(&text, own);
             }
             rebuilt.push_str(&text);
             pos = t.end;
@@ -1396,6 +1443,8 @@ const CONTAINERS: &[(&str, &str)] = &[
     ("x14:dataValidations", "x14:dataValidation"),
     ("x14:protectedRanges", "x14:protectedRange"),
     ("x14:ignoredErrors", "x14:ignoredError"),
+    ("cellWatches", "cellWatch"),
+    ("smartTags", "cellSmartTags"),
     ("ext", ""),
     ("extLst", "ext"),
 ];
@@ -1528,6 +1577,49 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
             out.push_str(&walk_tail(inner, job, own, sq.as_deref()));
             out.push_str(&format!("</{name}>"));
             pos = b;
+            continue;
+        }
+        // a custom view's pane and selection, as the sheet view's
+        if (name == "selection" || name == "pane") && !own.is_empty() {
+            out.push_str(&move_view_tag(t.text, own));
+            continue;
+        }
+        // a watched cell and a cell's smart tags go with their cell, and with it when it goes
+        if (name == "cellWatch" || name == "cellSmartTags")
+            && let Some(v) = attr(t.text, "r")
+        {
+            match shift_area_text(&v, own) {
+                Some(Some(n)) => out.push_str(&set_attr(t.text, "r", &xml::escape_xml_attr(&n))),
+                Some(None) => pos = if t.self_closing { t.end } else { xml::element_span(s, &t).map(|(_, b)| b).unwrap_or(t.end) },
+                None => out.push_str(t.text),
+            }
+            continue;
+        }
+        // a scenario's changing cells and a published range follow them (their deletion refused
+        // before the walk); the scenarios' selection follows, gone with its cells
+        if let Some(key) = match name {
+            "inputCells" => Some("r"),
+            "webPublishItem" => Some("sourceRef"),
+            _ => None,
+        } && let Some(v) = attr(t.text, key)
+            && let Some(Some(n)) = shift_area_text(&v, own)
+        {
+            out.push_str(&set_attr(t.text, key, &xml::escape_xml_attr(&n)));
+            continue;
+        }
+        if name == "scenarios"
+            && let Some(v) = attr(t.text, "sqref")
+            && let Some(n) = shift_sqref_text(&v, own)
+        {
+            out.push_str(&if n.is_empty() { xml::remove_attr(t.text, "sqref") } else { set_attr(t.text, "sqref", &xml::escape_xml_attr(&n)) });
+            continue;
+        }
+        // a consolidation's source area moves with the sheet it names
+        if name == "dataRef"
+            && let (Some(sheet), Some(v)) = (attr(t.text, "sheet"), attr(t.text, "ref"))
+            && let Some(Some(n)) = shift_area_text(&v, &shifts_of(job, &sheet))
+        {
+            out.push_str(&set_attr(t.text, "ref", &xml::escape_xml_attr(&n)));
             continue;
         }
         if DROP_IF_GONE_TAG.contains(&name) || DROP_IF_GONE_ELEMENT.contains(&name) {
