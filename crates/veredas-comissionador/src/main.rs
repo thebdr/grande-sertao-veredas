@@ -152,21 +152,38 @@ fn go(args: &[String]) -> ExitCode {
             return ExitCode::from(4);
         }
     };
-    let made: Vec<PathBuf> = folder.ancestors().take_while(|p| !p.as_os_str().is_empty() && !p.exists()).map(Path::to_path_buf).collect();
-    if let Err(e) = std::fs::create_dir_all(&folder) {
-        eprintln!("the run cannot be kept: {}: {e}", folder.display());
-        return ExitCode::from(4);
-    }
-    let code = with_session(&project, &c, &runs, &mode);
+    let (made, folder_made) = make_folders(&folder);
+    let code = match folder_made {
+        Err(e) => {
+            eprintln!("the run cannot be kept: {}: {e}", folder.display());
+            4
+        }
+        Ok(()) => with_session(&project, &c, &runs, &mode),
+    };
     if code == 4 {
         // Deepest first; a folder something else has filled meanwhile stays.
-        for p in &made {
+        for p in made.iter().rev() {
             if std::fs::remove_dir(p).is_err() {
                 break;
             }
         }
     }
     ExitCode::from(code)
+}
+
+/// The folders of `path` made one by one, outermost first, and those this call made: a folder
+/// already there (a `..` reaching one among them) is never counted as made, so never removed.
+fn make_folders(path: &Path) -> (Vec<PathBuf>, std::io::Result<()>) {
+    let mut made = Vec::new();
+    let chain: Vec<&Path> = path.ancestors().filter(|p| !p.as_os_str().is_empty()).collect();
+    for p in chain.into_iter().rev() {
+        match std::fs::create_dir(p) {
+            Ok(()) => made.push(p.to_path_buf()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && p.is_dir() => {}
+            Err(e) => return (made, Err(e)),
+        }
+    }
+    (made, Ok(()))
 }
 
 /// The plant's session started from its project file, the test run against it and kept: the exit
@@ -181,7 +198,9 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
             return 4;
         }
     };
-    let session = match Session::start(loaded.session_config(chrono::Local::now().naive_local())) {
+    // The session's start on the store's axis: a log stamped at or after it has read its history.
+    let begun_at = chrono::Local::now().naive_local();
+    let session = match Session::start(loaded.session_config(begun_at)) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{}: the session did not start: {e}", project.display());
@@ -193,15 +212,19 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
     let started = Instant::now();
     if let RunMode::Replay { to_ms, .. } = &mode.mode {
         // A replay reads the store: every log has read its first line, or READY has passed (an
-        // empty log reads none). Portal reads a log in its stamps' order, so a log that has read a
-        // line stamped after the window's end has read the window; the lines of the others hold
-        // still across two of portal's refreshes, each known by a new count of the pump's passes.
+        // empty log reads none). A log that has read a line stamped at or after the session's
+        // start has read its history up to the present (its files read whole, the newest last); a
+        // log with no stamps indexes its lines on their arrival, none of them in a window that
+        // ended before the session started; the lines of the others hold still across two of
+        // portal's refreshes, each known by a new count of the pump's passes.
         let logs: Vec<&str> = live.sources.iter().filter(|s| s.kind == "log").map(|s| s.id.as_str()).collect();
+        let unstamped: std::collections::BTreeSet<&str> = live.sources.iter().filter(|s| s.kind == "log" && !s.has_timestamp).map(|s| s.id.as_str()).collect();
         while started.elapsed() < READY && !logs.iter().all(|id| health(id, &|s| *s != HealthState::Waiting)) {
             std::thread::sleep(Duration::from_millis(100));
         }
-        // The logs that have read a line stamped after the window's end, once and for all (portal
-        // shows the last stamp read, which a late line can set back).
+        let begun_ms = begun_at.and_utc().timestamp_millis();
+        // The logs read up to the present, once and for all (portal shows the last stamp read,
+        // which a late line can set back).
         let mut past: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         let (mut last, mut still) = (None::<(u64, u64)>, 0);
         let begun = Instant::now();
@@ -212,7 +235,8 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
             if let Ok(h) = live.health.read() {
                 for id in &logs {
                     let Some(s) = h.get(*id) else { continue };
-                    if past.contains(id) || s.last_ts.is_some_and(|t| t.and_utc().timestamp_millis() > *to_ms) {
+                    let present = s.last_ts.is_some_and(|t| t.and_utc().timestamp_millis() >= begun_ms);
+                    if past.contains(id) || present || (unstamped.contains(id) && *to_ms < begun_ms) {
                         past.insert(id);
                     } else {
                         lines += s.count;

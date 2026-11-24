@@ -229,8 +229,10 @@ function block shows before it collapses (the design's open point, Oficina's to 
 Recorded as the build meets them.
 
 - **A replay cannot see a session start's read-in end** (C-205, Q319). Portal shows a log's line
-  count and last stamp only. A log past the window's end has read the window (stamps in order,
-  lines stored before health is shown); for the rest, lines holding still across two refreshes
+  count and last stamp only. A log that has read a line stamped at or after the session's start
+  has read its history (files read whole, the newest last, lines stored before health is shown);
+  a stamp past the window is not enough, a rotated member's late line being one. A log with no
+  stamps holds nothing of a past window. For the rest, lines holding still across two refreshes
   are a guess that a family's empty members beat: portal waits for each member to hold still
   before the next.
 

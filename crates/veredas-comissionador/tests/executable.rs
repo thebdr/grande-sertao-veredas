@@ -255,3 +255,99 @@ fn a_replay_starts_once_its_window_is_read_however_the_plant_keeps_writing() {
     assert_eq!((r.reported[0].text.as_str(), r.evidence[0].rows), ("readings.temp = 25", 6));
 }
 
+
+// ---- refute round 3 ------------------------------------------------------------------------
+
+/// The replay test's window, `t.test` waiting for 25.0, and its two moments.
+fn window_test(dir: &Path, base: i64) -> (String, String) {
+    std::fs::write(dir.join("t.test"), test_of("  step w wait readings.temp >= 25.0 timeout 1min\n  step r report readings.temp\n")).unwrap();
+    (veredas_comissionador::eval::time_text(base - 500), veredas_comissionador::eval::time_text(base + 9_500))
+}
+
+#[test]
+fn a_late_line_in_a_rotated_member_does_not_end_the_read_in() {
+    // A family: its oldest member three lines a minute before the window and then a late one 20 s
+    // past it, an empty member (half a second of portal's pauses after it, which a refresh falls
+    // in), the newest the window's ten lines. A line past the window but before the session's start
+    // is history, not the present: the replay waits for the newest member, every time.
+    let dir = tempfile::tempdir().unwrap();
+    let base = veredas_portal::serve::store_now_ms() - 3_600_000;
+    let fam = dir.path().join("fam");
+    std::fs::create_dir(&fam).unwrap();
+    let mut rotated: String = (0..3).map(|i| stamped(base - 60_000 + i * 1000, "10.0")).collect();
+    rotated.push_str(&stamped(base + 20_000, "40.0"));
+    std::fs::write(fam.join("plant1.log"), rotated).unwrap();
+    std::fs::write(fam.join("plant2.log"), "").unwrap();
+    std::fs::write(fam.join("plant3.log"), (0..10).map(|i| stamped(base + i * 1000, &format!("{}.0", 20 + i))).collect::<String>()).unwrap();
+    std::fs::write(dir.path().join("project.toml"), log_project("dir = \"fam\"\npattern = \"plant(?P<idx>\\\\d+)\\\\.log\"")).unwrap();
+    let (t0, t9) = window_test(dir.path(), base);
+    // Twelve replays at once, each its own session and its own runs folder.
+    let runs: Vec<(i32, Vec<String>, u64)> = std::thread::scope(|sc| {
+        let handles: Vec<_> = (0..12)
+            .map(|k| {
+                let (dir, t0, t9) = (dir.path(), &t0, &t9);
+                sc.spawn(move || {
+                    let folder = format!("r{k}");
+                    let (code, stdout, _) = out(&exe(dir, &["replay", "t.test", "--project", "project.toml", "--from", t0, "--to", t9, "--runs", &folder]));
+                    let rows = record::read(&dir.join(&folder).join("t/0001")).map(|r| r.evidence[0].rows).unwrap_or(0);
+                    (code, stdout, rows)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    for (code, stdout, rows) in &runs {
+        assert_eq!((code, rows, stdout[0].as_str()), (&0, &6, "w #1 pass: readings.temp >= 25.0 held after 5500ms"), "{runs:?}");
+    }
+}
+
+#[test]
+fn a_log_with_no_stamps_written_live_does_not_hold_a_replay() {
+    // Beside the window's log, a console log with no stamps, a line every 100 ms: its lines are
+    // indexed on their arrival, none in a window that ended before the session started, so the
+    // replay does not wait for it to fall silent (it was refused after its ten minutes).
+    let dir = tempfile::tempdir().unwrap();
+    let base = veredas_portal::serve::store_now_ms() - 3_600_000;
+    std::fs::write(dir.path().join("plant.log"), (0..10).map(|i| stamped(base + i * 1000, &format!("{}.0", 20 + i))).collect::<String>()).unwrap();
+    std::fs::write(dir.path().join("console.log"), "started\n").unwrap();
+    std::fs::write(dir.path().join("project.toml"), log_project("file = \"plant.log\"") + "\n[[log]]\nid = \"console\"\nfile = \"console.log\"\n").unwrap();
+    let (t0, t9) = window_test(dir.path(), base);
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer = {
+        let (stop, log) = (stop.clone(), dir.path().join("console.log"));
+        std::thread::spawn(move || {
+            use std::io::Write;
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                std::fs::OpenOptions::new().append(true).open(&log).unwrap().write_all(b"a line with no stamp\n").unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        })
+    };
+    let begun = std::time::Instant::now();
+    let o = exe_env(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9], &[("VEREDAS_COMISSIONADOR_READ_IN", "120")]);
+    let took = begun.elapsed();
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    writer.join().unwrap();
+    let (code, stdout, stderr) = out(&o);
+    assert_eq!(code, 0, "{stdout:?} {stderr:?}");
+    assert_eq!(stdout[0], "w #1 pass: readings.temp >= 25.0 held after 5500ms");
+    assert!(took < std::time::Duration::from_secs(60), "{took:?}");
+}
+
+#[test]
+fn the_folders_made_for_a_refused_run_are_removed_and_no_other() {
+    let dir = tempfile::tempdir().unwrap();
+    // A run folder that cannot be made, part of the way made: the part made removed.
+    let long = "a".repeat(300);
+    std::fs::write(dir.path().join("long.test"), format!("{HEAD}test \"t\" {{\n  id {long}\n  step a stop pass\n}}\n")).unwrap();
+    let (code, stdout, stderr) = out(&exe(dir.path(), &["run", "long.test", "--project", "nothere.toml", "--runs", "fresh/deep"]));
+    assert_eq!((code, stdout.len(), dir.path().join("fresh").exists()), (4, 0, false), "{stderr:?}");
+    assert!(stderr[0].starts_with(&format!("the run cannot be kept: {}", Path::new("fresh/deep").join(&long).display())), "{stderr:?}");
+    // A `..` reaching a folder already there: that folder kept, only the ones the run made gone.
+    std::fs::write(dir.path().join("t.test"), test_of("  step a stop pass\n")).unwrap();
+    std::fs::create_dir(dir.path().join("existing")).unwrap();
+    let (code, ..) = out(&exe(dir.path(), &["run", "t.test", "--project", "nothere.toml", "--runs", "new/../existing"]));
+    assert_eq!(code, 4);
+    assert!(dir.path().join("existing").is_dir(), "the folder already there kept");
+    assert_eq!((dir.path().join("new").exists(), dir.path().join("existing/t").exists()), (false, false));
+}
