@@ -1,0 +1,3 @@
+# cxx-qt writes the QML language server's settings beside the QML module at each build: a
+# build output naming this machine's folders.
+.qmlls.ini

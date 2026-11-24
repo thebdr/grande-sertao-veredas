@@ -1,0 +1,58 @@
+[package]
+name = "veredas-oficina"
+# Its own SemVer (law L3), starting at core's current MAJOR (the plan, "Versioning").
+version = "2.0.0-alpha.1"
+edition.workspace = true
+publish = false
+description = "The workshop of Veredas 2 (Oficina): the one native application through which a person sets up, programs, monitors and commissions every component"
+# No licence stated yet: docs/questions.md Q35 (taken meanwhile: none in any manifest).
+
+# A library whose model builds anywhere, with no Qt: the project tree and which component reads
+# each format. The window behind the `shell` feature (Qt Quick through cxx-qt, KDDockWidgets), the
+# tests' driver behind `driver` (Spix's server, compiled only into what the tests start). Neither is
+# on by default, so the suite's `cargo build --workspace` needs no Qt (docs/questions.md Q370, taken
+# meanwhile). Depends on core alone (law L5: a component outside the map uses core alone).
+
+[features]
+# DECISION PENDING (Q370): nothing on by default, so no member's build needs Qt.
+default = []
+# The window: Qt 6.12, whose qmake `QMAKE` names in cargo's environment, KDDockWidgets in
+# `OFICINA_DEPS` (`~/.local/opt/oficina-deps` by default).
+shell = ["dep:cxx", "dep:cxx-qt", "dep:cxx-qt-lib", "dep:cxx-qt-build"]
+# The tests' driver: Spix's server inside the window, started only when `OFICINA_SPIX_PORT` names
+# a port; Spix and AnyRPC in `OFICINA_DEPS`. Never in a build that ships.
+driver = ["shell"]
+
+[dependencies]
+# The one header reader every file of the suite shares (the tree names a file by its stamp), with
+# none of core's plant-facing layers (C-073: without its default features, the reader alone).
+veredas-core = { path = "../veredas-core", default-features = false }
+# Typed errors on the public surface.
+thiserror = { workspace = true }
+# The bridge between QML and Rust (the `shell` feature).
+cxx = { workspace = true, optional = true }
+cxx-qt = { workspace = true, optional = true }
+cxx-qt-lib = { workspace = true, optional = true }
+
+[build-dependencies]
+# Builds the QML module, the bridge and the C++ side of the seam (the `shell` feature).
+cxx-qt-build = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Scratch project folders, removed when a test ends.
+tempfile = { workspace = true }
+# cargo's own description of the package, read by the component test.
+serde_json = { workspace = true }
+
+[[bin]]
+name = "veredas-oficina"
+required-features = ["shell"]
+
+# The tests that drive the window: they need the driver (tests/common/mod.rs).
+[[test]]
+name = "component"
+required-features = ["driver"]
+
+[[test]]
+name = "tree"
+required-features = ["driver"]

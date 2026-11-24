@@ -1,7 +1,8 @@
 # veredas-oficina: the plan
 
 The workshop of Veredas 2; screens say Oficina. `docs/veredas-plan.md` ("veredas-oficina: the
-workshop") wins on intent; `.zen/contract.md` (P-015) wins on status. Nothing is built. This file
+workshop") wins on intent; `.zen/contract.md` (P-015, and C-250 on) wins on status. Its crate began
+on 2026-11-25 ("The crate", below), after the own-shell spike's verdict. This file
 holds what the architect decided in the briefing of 13 to 16 November 2026 and in the rulings of
 15 November on its adversarial review. The list that was reviewed and the review itself are kept as
 they were delivered (`docs/briefing/deliverables.md`, `docs/briefing/review.md`); where they differ
@@ -161,12 +162,40 @@ only. The architect kept it on 2026-11-15, under three rules:
   (Windows on Hyper-V, VMware and VirtualBox, and Linux guests); one headless test that drives the
   interface. How each point is judged, and the spike's verdict, are below ("The own-shell
   spike").
-- **Repository changes owed with the first code:** `crates/veredas-oficina` at core's MAJOR,
-  listed; its row in `MAP` (`tools/leis`), a contract change written with the crate (portal at
-  least, and controlador if the laptop IO check's session is linked in);
-  in `docs/design/README.md` (which holds the accent's tones since 2026-11-19) the syntax
-  palette's number colour
-  (`#D2A8FF`) moves, sitting too close to the accent; licence files (Q35); P-015 becomes clauses.
+- **Repository changes owed with the first code**, as they stand since the crate began
+  (2026-11-25): `crates/veredas-oficina` at core's MAJOR, listed (done, C-250); P-015 becomes
+  clauses (C-250 and C-251 so far). Its row in `MAP` (`tools/leis`), a contract change (portal at
+  least, and controlador if the laptop IO check's session is linked in), comes with its first edge
+  to portal: law L5 lets a component outside the map use core alone, and the first code does. In
+  `docs/design/README.md` (which holds the accent's tones since 2026-11-19) the syntax palette's
+  number colour (`#D2A8FF`) moves, sitting too close to the accent: with the code editor's clause,
+  the first code that draws it. Licence files wait for Q35 (taken meanwhile: none).
+
+## The crate
+`crates/veredas-oficina`, from 2026-11-25 (C-250): a library whose model builds on any machine the
+suite builds on, and the window behind two features, neither on by default, so no member's build
+needs Qt (docs/questions.md Q370, taken meanwhile).
+- **The model**, no Qt: `tree` (the project tree) and `formats` (which component reads each
+  format). Its members are core alone, without core's default features: the header reader, with
+  none of core's plant-facing layers (C-073).
+- **`shell`**, the window and the executable `veredas-oficina`: Qt Quick, its logic in Rust through
+  cxx-qt, the seam a private module (`src/shell`) with one C++ file beside it (`cpp/shell.cpp`),
+  KDDockWidgets docking. It needs `QMAKE` naming Qt 6.12's qmake in cargo's environment (cxx-qt's
+  own build scripts read it, not only Oficina's) and `OFICINA_DEPS` (`~/.local/opt/oficina-deps` by
+  default) holding KDDockWidgets.
+- **`driver`**, the tests' driver: Spix's server inside the window, started only when
+  `OFICINA_SPIX_PORT` names a port; Spix and AnyRPC in `OFICINA_DEPS`. Only the tests build it:
+  what ships carries no test server.
+- **Its tests.** A clause's test drives the window through Spix, on Qt's `offscreen` platform
+  unless `OFICINA_TEST_PLATFORM` names another (`xcb` for X11, `windows`):
+  `QMAKE=$HOME/.local/opt/Qt/6.12.0/gcc_64/bin/qmake cargo nextest run -p veredas-oficina --features driver`.
+  The model's own tests (`tests/tree_model.rs`) run in the suite's default build and prove no
+  clause. The whole-suite run holds the window's tests with `--features veredas-oficina/driver`
+  and `QMAKE` set.
+- **Brought from the spike**, as its verdict kept them: the project tree (its model and its bridge),
+  the formats' table, the window's docking and the test driver. The TOML document, the code editor
+  and its language-server client, the table, the embedded pages and the drawing probe come over
+  with their clauses; the spike's folder stays as its record.
 
 ## The own-shell spike
 The spike answers one question before `crates/veredas-oficina` exists: does Qt Quick, with its

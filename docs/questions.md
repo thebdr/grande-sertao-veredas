@@ -2523,3 +2523,34 @@ marks the stillness `DECISION PENDING (Q319)`.
 
 **Reversible?** Yes: (a) replaces the stillness in one loop of `main.rs`; the line past the window
 stays as a shortcut.
+
+---
+
+## Q370 - Does the suite's build need Qt for Oficina's window?
+
+**Raised** 2026-11-25, by the oficina session, starting `crates/veredas-oficina` on the
+architect's word ("start the oficina crate").
+
+Oficina's window links Qt 6.12 (Qt Quick, through cxx-qt) and KDDockWidgets, and its tests Spix
+and AnyRPC: Qt from its installer and three C++ libraries built from source. Built by default,
+every member's `cargo build --workspace` and pre-push run, the orchestrator's whole-suite run and
+GitHub's run would need all of them installed and `QMAKE` naming Qt's qmake, and would compile the
+bridge's C++ (about a minute on this machine). Options:
+- (a) The window behind a cargo feature of Oficina's, `shell`, off by default, and the tests'
+  driver behind `driver`. The suite's default build compiles Oficina's model alone, with no Qt;
+  Oficina's window tests, the ones that prove its clauses, run where Qt is, with
+  `--features veredas-oficina/driver` and `QMAKE` set. The orchestrator's whole-suite run adds
+  both; GitHub's run does not, until it has Qt.
+- (b) The window built by default: every machine that builds the suite installs Qt 6.12,
+  KDDockWidgets, Spix and AnyRPC (the Windows guest has them through
+  `spikes/oficina/install-windows-tools.ps1`), and GitHub's run installs them too.
+- (c) Oficina outside the suite's workspace, as its spike is: refused by L1 (a `veredas-*` crate is
+  a member under a root or nothing).
+
+The assistant recommends (a) now, and (b) once Oficina has several surfaces and the suite's runs
+should hold its tests without being asked.
+
+**Taken meanwhile**: (a). The tests' driver stays a feature of its own whichever is ruled: what
+ships carries no test server.
+
+**Reversible?** Yes: (b) is `default = ["shell"]` in Oficina's manifest, and Qt on the machines.

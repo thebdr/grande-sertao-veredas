@@ -53,6 +53,11 @@ members = [
     # the machine, on its fork of IronCalc (forks/ironcalc, excluded below); depends on no member yet
     # (law L5 allows core and portal).
     "crates/veredas-abaco",
+    # The workshop (docs/oficina-plan.md): the one native application through which a person sets
+    # up, programs, monitors and commissions every component. Its model builds anywhere; its window
+    # (Qt Quick through cxx-qt) only behind its `shell` feature, so no other member's build needs Qt
+    # (docs/questions.md Q370). Depends on core alone (law L5: a component outside the map).
+    "crates/veredas-oficina",
 ]
 # Not the suite's crates: Ábaco's copy of IronCalc (the engine and its file layer), a cargo workspace
 # of its own for upstream's tests, reached by veredas-abaco by path (docs/abaco-plan.md, "The fork";
@@ -139,6 +144,14 @@ roxmltree = "0.20"
 # The Rust lexer, for supervisão's test that reads its own sources as tokens (tests/writes.rs):
 # a raw identifier read as its name, comments gone, so no spelling hides a path from the reading.
 proc-macro2 = "1"
+# Oficina's window (docs/oficina-plan.md, "Foundations"): Qt Quick with its logic in Rust through
+# the cxx-qt bridge, the versions its own-shell spike passed on. Optional in Oficina, behind its
+# `shell` feature: no member's default build compiles them (docs/questions.md Q370).
+cxx = "1"
+cxx-qt = "0.10"
+# Qt's own types alone (Gui, Qml, QuickControls), none of the third-party integrations `full` brings.
+cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
+cxx-qt-build = { version = "0.10", features = ["link_qt_object_files"] }
 # Ábaco's oracle: an independent reader of a workbook's cached values, to cross-check its own
 # reading of the sheet XML (the version Veredas 1's oracle used), and the zip both read through
 # (the major the engine's file layer uses).
