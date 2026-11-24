@@ -368,6 +368,16 @@ The architect's decisions of 13 to 16 November 2026 that touch the bench
 ## Traps
 Recorded as the port meets them.
 
+- **A Linux-only `cfg` used everywhere breaks Windows unseen** (2026-11-24, found by Oficina's
+  Windows run): the PROFINET device's neighbour deadline used `Instant` on every target while its
+  import sat under `#[cfg(target_os = "linux")]`, from 8d445e9 to the fix; nothing on the Linux
+  machine builds for Windows. The raw-interface parts (PROFINET, EtherCAT) exist on every target as
+  configuration, validation, bench-file parts and handles, and `start` refuses off Linux
+  (`Unsupported`); what is Linux-only is their link and their loop. Before a push that touches a
+  `cfg`, the crate is checked for Windows from here (the target in the home folder,
+  `rustup target add x86_64-pc-windows-msvc`): `cargo clippy -p veredas-maquinar --all-targets
+  --target x86_64-pc-windows-msvc`, clean, no C dependency stopping it.
+
 - **Check the disk before the first build.** Core's OPC phase filled C: twice (`docs/core-plan.md`,
   "Traps"); each OPC test binary carries a PDB of about 200 MB, and this crate adds a server
   and a client per test file. 52 GB were free when this plan was written, the target at 6 GB;

@@ -20,7 +20,9 @@ use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 #[cfg(target_os = "linux")]
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// The neighbour's deadline is part of the device's state on every target.
+use std::time::Instant;
 
 use serde::Deserialize;
 use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpStatus};

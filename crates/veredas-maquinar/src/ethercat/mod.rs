@@ -20,7 +20,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Deserialize;
 
-use esc::{Esc, Identity, PdoEntry};
+use esc::Esc;
+#[cfg(target_os = "linux")]
+use esc::{Identity, PdoEntry};
 
 /// One process-data entry, as the bench file writes it.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -255,6 +257,7 @@ impl Drop for EthercatHandle {
 
 /// The segment's ESCs, each with its EEPROM image and a local clock of its own (origins 1 µs
 /// apart, as devices powered at slightly different instants).
+#[cfg(target_os = "linux")]
 fn segment(cfg: &EthercatConfig) -> Vec<Esc> {
     let n = cfg.devices.len();
     cfg.devices
