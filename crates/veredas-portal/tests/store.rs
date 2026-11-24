@@ -627,6 +627,52 @@ fn a_snapshot_refuses_an_existing_file_and_a_refusal_leaves_the_next_one_free() 
 /// A linked file gone between a removal and its replacement breaks its own view alone: every
 /// base table still lists, pages and charts, the view is listed with no columns, and the
 /// replacement is seen on the next query.
+/// Round 15's four. An open refused on disk (a view over a file not there, a reserved table name)
+/// leaves nothing at its path, so the same open, its cause fixed, is not refused for a database
+/// of its own failed start. The last value of a series is its last point by stamp then sequence,
+/// two keys sharing a stamp (a keyed poll), the window's last alike, in a base table and in the
+/// samples. A key whose rows hold only holes in a column is no key of that column. And a page's
+/// window holds both its ends.
+#[test]
+fn a_refused_open_leaves_nothing_the_last_value_at_a_shared_stamp_keys_with_holes_and_a_page_s_edges() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("store").join("session.duckdb");
+    let wal = std::path::PathBuf::from(format!("{}.wal", path.display()));
+    let csv = dir.path().join("ref.csv");
+    let view = || [TableDef { name: "refv".into(), sql: format!("SELECT * FROM {}", csv_scan_sql(&csv.display().to_string(), &CsvOptions::default())) }];
+    let disk = Residency::Disk { path: path.clone(), memory_limit_mb: 0 };
+    assert!(matches!(DuckStore::open(&disk, &[capture_spec()], &view()), Err(StoreError::Definition { .. })));
+    assert!(!path.exists() && !wal.exists(), "a refused open leaves no file");
+    let reserved = BaseTableSpec { name: "samples".into(), ..capture_spec() };
+    assert!(matches!(DuckStore::open(&disk, &[reserved], &[]), Err(StoreError::TableName(_))));
+    assert!(!path.exists() && !wal.exists(), "a refused name leaves no file");
+    std::fs::write(&csv, "sensor,label\n1,inlet\n").unwrap();
+    let store = DuckStore::open(&disk, &[capture_spec()], &view()).expect("the cause fixed, the same open");
+    drop(store);
+
+    // Two keys at one stamp: the last value the second appended, as the window's last point.
+    let store = DuckStore::open(&Residency::Ram, &[capture_spec()], &[]).unwrap();
+    store
+        .append_wide(0, &[wide("a", Some("A"), 1000, 1, vec![Some(Value::Float(20.0)), Some(Value::Text("ok".into()))]), wide("a", Some("B"), 1000, 2, vec![Some(Value::Float(30.0)), None])])
+        .unwrap();
+    let infos = store.list();
+    let temp = infos.iter().find(|i| i.series == SeriesRef::new("a", "temp")).unwrap();
+    let last = *store.query_numeric(&SeriesRef::new("a", "temp"), None, 0, i64::MAX).last().unwrap();
+    assert_eq!((temp.last_index_ms, temp.last_value.as_str(), last.seq, last.value), (1000, "30", 2, 30.0));
+    // A key holding only holes in `tag` is no key of it.
+    let tag = infos.iter().find(|i| i.series == SeriesRef::new("a", "tag")).unwrap();
+    assert_eq!((temp.keys, tag.keys, tag.count), (2, 1, 1));
+    // The samples alike: two at one stamp, the second's kind and text the last.
+    let ram = ram();
+    ram.append_samples(&[sample("x", 1000, 1, Value::Text("first".into()), Some("A")), sample("x", 1000, 2, Value::Int(7), Some("B"))]).unwrap();
+    let x = ram.list().into_iter().find(|i| i.series == r("x")).unwrap();
+    assert_eq!((x.ty, x.last_value.as_str(), x.keys), (SeriesType::Int, "7", 2));
+    // A page's window holds both its ends.
+    store.append_wide(0, &[wide("a", Some("A"), 2000, 3, vec![Some(Value::Float(21.0)), None])]).unwrap();
+    let page = |from_ms, to_ms| store.query_rows("readings", &RowsQuery { from_ms, to_ms, limit: 10, offset: 0 }).unwrap().total;
+    assert_eq!((page(Some(1000), Some(2000)), page(Some(1001), Some(2000)), page(Some(1000), Some(1999)), page(Some(2000), Some(2000))), (3, 1, 2, 1));
+}
+
 #[test]
 fn a_missing_linked_csv_hides_no_other_table() {
     let dir = tempfile::tempdir().unwrap();

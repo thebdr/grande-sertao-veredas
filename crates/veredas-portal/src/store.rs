@@ -254,24 +254,38 @@ impl DuckStore {
     pub fn open(residency: &Residency, specs: &[BaseTableSpec], defs: &[TableDef]) -> Result<DuckStore, StoreError> {
         let conn = match residency {
             Residency::Ram => Connection::open_in_memory()?,
-            Residency::Disk { path, memory_limit_mb } => {
+            Residency::Disk { path, .. } => {
                 // A session store is fresh: a database already at the path is refused by name,
                 // never a second session's rows beside the first's (docs/questions.md Q16).
                 fresh_at(path)?;
                 if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
                     std::fs::create_dir_all(parent).map_err(|e| StoreError::Open(format!("create {}: {e}", parent.display())))?;
                 }
-                let c = Connection::open(path).map_err(|e| StoreError::Open(format!("open {}: {e}", path.display())))?;
-                if *memory_limit_mb > 0 {
-                    c.execute_batch(&format!("SET memory_limit='{}MiB';", memory_limit_mb))?;
-                }
-                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-                    c.execute_batch(&format!("SET temp_directory='{}';", sql_str(&parent.display().to_string())))?;
-                }
-                c
+                Connection::open(path).map_err(|e| StoreError::Open(format!("open {}: {e}", path.display())))?
             }
         };
+        let built = Self::build(conn, residency, specs, defs);
+        if built.is_err()
+            && let Residency::Disk { path, .. } = residency
+        {
+            // A refused open leaves nothing at its path: the store was fresh there, so the file
+            // and its log are its own, and the next open, its cause fixed, is not refused for them.
+            let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(format!("{}.wal", path.display()));
+        }
+        built
+    }
 
+    /// The store over its fresh connection, which a failure drops (closing the file).
+    fn build(conn: Connection, residency: &Residency, specs: &[BaseTableSpec], defs: &[TableDef]) -> Result<DuckStore, StoreError> {
+        if let Residency::Disk { path, memory_limit_mb } = residency {
+            if *memory_limit_mb > 0 {
+                conn.execute_batch(&format!("SET memory_limit='{}MiB';", memory_limit_mb))?;
+            }
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                conn.execute_batch(&format!("SET temp_directory='{}';", sql_str(&parent.display().to_string())))?;
+            }
+        }
         Self::create_samples(&conn)?;
         let bases = Self::create_bases(&conn, specs)?;
         Self::apply_views(&conn, defs)?;
@@ -581,15 +595,16 @@ impl DuckStore {
             let qc = quote_ident(&col);
             let union = tables
                 .iter()
-                .map(|t| format!("SELECT source, key, index_ms, {qc} AS v FROM {}", quote_ident(t)))
+                .map(|t| format!("SELECT source, key, index_ms, seq, {qc} AS v FROM {}", quote_ident(t)))
                 .collect::<Vec<_>>()
                 .join(" UNION ALL ");
-            // The last value typed, never cast by the engine: the suite's own display of it.
+            // The last value typed, never cast by the engine: the suite's own display of it. The
+            // last by stamp, then by sequence among rows at one stamp, as a window orders them.
             let sql = format!(
                 "SELECT source, count(v) AS cnt, \
                  count(DISTINCT key) FILTER (WHERE v IS NOT NULL) AS keys, \
                  max(CASE WHEN v IS NOT NULL THEN index_ms END) AS last_ms, \
-                 arg_max(v, index_ms) AS last \
+                 arg_max(v, (index_ms, seq)) AS last \
                  FROM ({union}) GROUP BY source HAVING count(v) > 0"
             );
             let Ok(mut stmt) = conn.prepare(&sql) else { continue };
@@ -619,11 +634,12 @@ impl DuckStore {
                 }
             }
         }
-        let sql = "SELECT source, series, \
-                   arg_max(v_kind, index_ms) AS kind, count(*) AS cnt, \
-                   count(DISTINCT key) AS keys, max(index_ms) AS last_ms, \
-                   arg_max(v_disp, index_ms) AS last_disp \
-                   FROM samples GROUP BY source, series";
+        // The last sample's kind and display from one row, the last by stamp then sequence.
+        let sql = "SELECT source, series, last.k, cnt, keys, last_ms, last.d FROM ( \
+                   SELECT source, series, \
+                   arg_max({'k': v_kind, 'd': v_disp}, (index_ms, seq)) AS last, count(*) AS cnt, \
+                   count(DISTINCT key) AS keys, max(index_ms) AS last_ms \
+                   FROM samples GROUP BY source, series)";
         if let Ok(mut stmt) = conn.prepare(sql) {
             let rows = stmt.query_map([], |r| {
                 Ok((
