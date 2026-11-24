@@ -63,18 +63,27 @@ fn an_orcl_file_is_marked_where_rust_analyzer_says_and_an_edit_typed_in_monaco_c
     assert_eq!(shell.property("oficina/codeStatus", "text"), "ready");
     assert_eq!(shell.eval(PANE, "location.protocol"), r#""file:""#, "the page is shipped with Oficina, not fetched");
 
-    // Completion, asked as a person asks it (Ctrl+Space), offers the timer's methods.
+    // Completion, asked as a person asks it (Ctrl+Space), offers the timer's methods. A busy
+    // server may answer an ask with nothing (seen under load, here and in the Windows guest), so
+    // the ask is made again every 2 s, as a person presses again, and the number of asks printed.
     focus_at(&shell, 23, 36);
-    shell.key("oficina/codeView", KEY_SPACE, CONTROL);
     let offered = |shell: &Shell| shell.eval(PANE, "Array.from(document.querySelectorAll('.suggest-widget .monaco-list-row .label-name')).map(function (e) { return e.textContent; })");
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + Duration::from_secs(20);
+    let mut asked: Option<Instant> = None;
+    let mut asks = 0;
     let labels = loop {
+        if asked.is_none_or(|at| at.elapsed() >= Duration::from_secs(2)) {
+            shell.key("oficina/codeView", KEY_SPACE, CONTROL);
+            asks += 1;
+            asked = Some(Instant::now());
+        }
+        std::thread::sleep(Duration::from_millis(100));
         let l = offered(&shell);
         if l.contains(r#""scan""#) || Instant::now() > until {
             break l;
         }
-        std::thread::sleep(Duration::from_millis(100));
     };
+    eprintln!("completion offered after {asks} ask(s)");
     for method in [r#""scan""#, r#""q""#, r#""et""#] {
         assert!(labels.contains(method), "{method} offered: {labels}");
     }
