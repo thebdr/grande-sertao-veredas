@@ -1,0 +1,26 @@
+{
+  "clause": "C-143",
+  "command": "cargo test -j 8 -p veredas-aranha --test bench_device",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-j",
+    "8",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "bench_device"
+  ],
+  "exitCode": 0,
+  "outputSha": "02de686eefb74d68a63bed33fcf2201a7b9f00fd2ea0fa781dcb7c1a85ab7ba7",
+  "outputTail": "\nrunning 1 test\ntest the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.24s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s\n     Running tests/bench_device.rs (target/debug/build/veredas-aranha/072447e12d0aca48/out/bench_device-072447e12d0aca48)",
+  "ranAt": "2026-11-24T21:44:24.998Z",
+  "headCommit": "ef1f943d3bab1f0264adf299a3fe5cb698849365",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/bench_device.rs",
+      "file": "crates/veredas-aranha/tests/bench_device.rs",
+      "fileSha": "9cdd6352f65916421af98bfaae52bc252f5486a3b3fc577932722d1d389b3498"
+    }
+  ]
+}
