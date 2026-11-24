@@ -1,0 +1,26 @@
+{
+  "clause": "C-141",
+  "command": "cargo test -j 8 -p veredas-aranha --test fusion",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-j",
+    "8",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "fusion"
+  ],
+  "exitCode": 0,
+  "outputSha": "30b61d24a78ab05be04da123f383d892d2396df42298e47f4f7cc0e4385c6c45",
+  "outputTail": "\nrunning 5 tests\ntest an_lldp_frame_describes_its_device_s_port_and_its_leaving ... ok\ntest every_conflict_is_on_record_once_ordered_by_kind_and_value ... ok\ntest every_value_is_kept_with_its_witnesses_and_the_one_heard_last_is_current ... ok\ntest a_device_is_its_mac_and_holds_what_its_dcp_says ... ok\ntest an_arp_sender_s_address_is_a_second_witness ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.04s\n     Running tests/fusion.rs (target/debug/build/veredas-aranha/7364670412f9cd57/out/fusion-7364670412f9cd57)",
+  "ranAt": "2026-11-24T20:12:05.102Z",
+  "headCommit": "f31f19695f6a9904e46529bc64a6e4c30c1979eb",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/fusion.rs",
+      "file": "crates/veredas-aranha/tests/fusion.rs",
+      "fileSha": "7154f31588a915f5e136fe8a8adff979ae173a61babac5bcd7236e0c1af4da9f"
+    }
+  ]
+}
