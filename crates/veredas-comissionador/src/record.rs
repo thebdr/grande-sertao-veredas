@@ -46,6 +46,9 @@ pub enum RecordError {
     Signed { path: String },
     #[error("{0}")]
     BadSignature(String),
+    /// The test's folder holds a run numbered as high as a number goes.
+    #[error("{path}: no run number is left past {last}")]
+    NoNumber { path: String, last: u32 },
 }
 
 fn io(path: &Path) -> impl Fn(std::io::Error) -> RecordError + '_ {
@@ -210,21 +213,23 @@ fn run_name(n: u32) -> String {
 }
 
 /// The run numbers kept in a test's folder, as written (`0001`, and past `9999` without a leading
-/// zero), in order.
-fn numbers(dir: &Path) -> Vec<u32> {
-    let mut out: Vec<u32> = match std::fs::read_dir(dir) {
-        Ok(entries) => entries
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().into_string().ok()?;
-                let n: u32 = name.parse().ok().filter(|_| name.bytes().all(|b| b.is_ascii_digit()))?;
-                (run_name(n) == name).then_some(n)
-            })
-            .collect(),
-        Err(_) => Vec::new(),
+/// zero), from 1, in order; none when the folder is not there, and why when it cannot be read.
+fn numbers(dir: &Path) -> Result<Vec<u32>, RecordError> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(io(dir)(e)),
     };
+    let mut out = Vec::new();
+    for entry in entries {
+        let name = entry.map_err(io(dir))?.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if let Some(n) = name.parse::<u32>().ok().filter(|n| *n >= 1 && name.bytes().all(|b| b.is_ascii_digit()) && run_name(*n) == name) {
+            out.push(n);
+        }
+    }
     out.sort_unstable();
-    out
+    Ok(out)
 }
 
 /// Keep a run: the next number in the test's folder, the exact text of the test and of every
@@ -234,12 +239,14 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
     let dir = test_folder(runs, c)?;
     std::fs::create_dir_all(&dir).map_err(io(&dir))?;
     // The next free number: a folder created, never one another keeper made meanwhile.
-    let mut number = numbers(&dir).last().copied().unwrap_or(0) + 1;
+    let last = numbers(&dir)?.last().copied().unwrap_or(0);
+    let next = |n: u32| n.checked_add(1).ok_or_else(|| RecordError::NoNumber { path: dir.display().to_string(), last: n });
+    let mut number = next(last)?;
     let folder = loop {
         let f = dir.join(run_name(number));
         match std::fs::create_dir(&f) {
             Ok(()) => break f,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => number += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => number = next(number)?,
             Err(e) => return Err(io(&f)(e)),
         }
     };
@@ -378,9 +385,15 @@ fn changed(folder: &Path, change: impl FnOnce(&mut Report) -> Result<(), RecordE
     Ok(r)
 }
 
-/// Whether a text is a moment in the reference's form, `YYYY-MM-DD HH:MM:SS.mmm`.
+/// Whether a text is a moment in the reference's form, `YYYY-MM-DD HH:MM:SS.mmm`: its 23 bytes
+/// digits but for the separators in their places, the seconds under 60, a day the calendar has.
 fn is_moment(text: &str) -> bool {
-    text.len() == 23 && chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%.3f").is_ok()
+    const FORM: &[u8; 23] = b"dddd-dd-dd dd:dd:dd.ddd";
+    let b = text.as_bytes();
+    b.len() == 23
+        && FORM.iter().zip(b).all(|(f, c)| if *f == b'd' { c.is_ascii_digit() } else { f == c })
+        && &text[17..19] < "60"
+        && chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%.3f").is_ok()
 }
 
 /// Every value of a report the reference gives a set or a form: the mode, the verdict, the
@@ -424,11 +437,16 @@ fn judge(r: &Report) -> Result<(), String> {
     for w in &r.writes {
         from_one("write.attempt", w.attempt)?;
     }
-    for e in &r.evidence {
-        let plain = format!("evidence/{}.csv", e.table);
-        let placed = e.file.strip_prefix("evidence/table-").and_then(|n| n.strip_suffix(".csv")).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-        if e.file != plain && !placed {
-            return Err(format!("`evidence.file` is `{}`: `{plain}`, or `evidence/table-<n>.csv` for a name that is not plain", e.file));
+    // Each table once, its file where the run's folder keeps it: by its name when plain, by its
+    // place among the evidence otherwise.
+    let mut tables = std::collections::BTreeSet::new();
+    for (i, e) in r.evidence.iter().enumerate() {
+        if !tables.insert(e.table.as_str()) {
+            return Err(format!("`evidence.table` `{}` is given twice", e.table));
+        }
+        let kept = evidence_name(i, &e.table);
+        if e.file != kept {
+            return Err(format!("`evidence.file` is `{}`: `{kept}`", e.file));
         }
     }
     for g in &r.signatures {
@@ -474,7 +492,7 @@ pub type Listed = (PathBuf, Result<Report, RecordError>);
 pub fn list(runs: &Path, c: &Checked) -> Result<Vec<Listed>, RecordError> {
     let dir = test_folder(runs, c)?;
     let mut out = Vec::new();
-    for n in numbers(&dir).into_iter().rev() {
+    for n in numbers(&dir)?.into_iter().rev() {
         let folder = dir.join(run_name(n));
         if folder.join(REPORT_FILE).exists() {
             let report = read(&folder);

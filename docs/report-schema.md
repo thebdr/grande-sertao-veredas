@@ -220,8 +220,8 @@ is the plant's clock on the store's axis, `YYYY-MM-DD HH:MM:SS.mmm`.
 
 **The evidence** (`[[evidence]]`): one table per table the test reads.
 - `table` (required): the portal table.
-- `file` (required): its CSV in the run's folder, `evidence/<table>.csv` (`evidence/table-<n>.csv`
-  for a name that is not plain): a header of `time`, `arrival`, `source`, `key`, `seq` and the
+- `file` (required): its CSV in the run's folder, `evidence/<table>.csv` for a plain name (letters,
+  digits, `_` and `-`), else `evidence/table-<n>.csv`, `n` its place among the evidence from 1: a header of `time`, `arrival`, `source`, `key`, `seq` and the
   table's columns, then every row stamped in the run's window, oldest first, each cell as the
   suite shows its value and a hole empty. `time` is the row's stamp and `arrival` when it reached
   portal, both moments on the store's axis.
@@ -237,7 +237,9 @@ is the plant's clock on the store's axis, `YYYY-MM-DD HH:MM:SS.mmm`.
 A report with another stamp, a key the format does not know, a key missing or of another type. A
 value outside the ones its key names (a mode, a verdict, an outcome, a role), a moment not in its
 form, an attempt or a run's number below 1, a file named otherwise than the run's folder keeps it
-(`test.test`, `functions/<n>.fn` in the order of the uses, the evidence's names). A note or a
+(`test.test`, `functions/<n>.fn` in the order of the uses, the evidence's names), a table's
+evidence given twice. A run past the last number a run can take (4294967295). A test's folder
+that cannot be read, which `list` names rather than list no run. A note or a
 signature on a report already signed: a signed report is frozen, a correction being a new run
 (Q312, (d) taken meanwhile). This is the engine's refusal, nothing sealed in the file. A signature
 whose role is neither `tester` nor `witness`, or whose name holds no letter or digit. A run of a
