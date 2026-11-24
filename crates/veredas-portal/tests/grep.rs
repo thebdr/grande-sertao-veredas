@@ -577,6 +577,29 @@ fn a_cap_of_zero_gives_no_line() {
     assert_eq!((s.stats.matches, s.stopped), (0, GrepStop::MatchCap));
 }
 
+/// A cancel is heard at every slice while the rest of a line past the limit is read past, where
+/// no slice completes a line: a log padded with NULs after a power cut, its few lines then 4 GiB
+/// of one endless line (sparse, so it takes no room), no size limit, a pattern matching nothing,
+/// cancelled 300 ms in, heard within 500 ms (a check once per line reads the 4 GiB first).
+/// Linux only, where the file is sparse; another system may give it the room it names.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_cancel_is_heard_while_a_cut_line_is_read_past() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let padded = dir.path().join("padded.log");
+    std::fs::write(&padded, "hit line\n".repeat(1_000)).unwrap();
+    std::fs::OpenOptions::new().write(true).open(&padded).unwrap().set_len(4 << 30).unwrap();
+    let s = search(GrepScope::Files(vec![padded]), &GrepQuery::single("zzz"), GrepOptions::default()).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let cancelled = std::time::Instant::now();
+    s.handle.cancel();
+    let done = s.events.iter().find_map(|e| if let GrepEvent::Done(summary) = e { Some(summary) } else { None }).expect("a done event");
+    let took = cancelled.elapsed();
+    s.worker.join().unwrap();
+    assert_eq!(done.stopped, GrepStop::Cancelled, "{done:?}");
+    assert!(took < Duration::from_millis(500), "the cancel heard {took:?} after it was asked");
+}
+
 /// With no size limit, what a search holds is a slice and a line, whatever the file: a file of
 /// 256 MiB, nearly all of it one endless line of NULs past its text, searched whole with the next
 /// file after it, the process's peak memory far below the file's size.
