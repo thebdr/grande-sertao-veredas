@@ -113,7 +113,11 @@ plant in production.
 - **Fixture first.** The scanner's clauses are proven against maquinar's PROFINET bench device on
   a real link, never against frames aranha's own test writes (P-020; the bench uses these codecs,
   so the drift it rules out is between the bench's device and the scanner's reading, and the
-  dissectors rule out the drift of both from the standard).
+  dissectors rule out the drift of both from the standard). The bench runs as its executable on a
+  bench file, built by the test into a target folder of its own and started in the private
+  network: maquinar depends on aranha, so a dev-dependency on it would be a cycle the codecs'
+  split build cannot hold, and a build of maquinar alone into the workspace's target would put
+  its executable in place again under maquinar's own tests (C-143).
 - **The real wire in tests, without privilege.** A test that sends frames runs in a private user
   and network namespace, where it may, with a veth pair between the bench's device and the
   scanner: the kernel's own Ethernet path, nothing of the host's touched, gone when the test ends
@@ -289,6 +293,9 @@ is pinned by a test when its phase lands.
   fixture waits for a numbered probe to cross each pair each way (`netns::wait_pairs`); a test that
   raises a pair again calls it too. The raw link's tests wait on deadlines: they run one at a time
   on the machine, under the suite lock, as maquinar's timed tests do.
+- **A private network's `/sys` is the host's.** The namespace is a network of its own, but sysfs
+  stays mounted as the host's, so its interfaces are not in `/sys/class/net`: a test reads an
+  interface's MAC from a raw link on it (C-143), or asks the kernel by netlink (`ip`).
 - **tshark reads PROFINET security into a plain cyclic frame** (measured, 4.6.6): when the data's
   bytes 6 and 7 are the data's length less 20, it takes bytes 0 to 7 for a security header and the
   status from other bytes, or none, with no complaint. Only the connection says a frame is
