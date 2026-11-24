@@ -119,12 +119,8 @@ pub fn identify(listener: &Listener, iface: &str, ask: &Identify) -> Result<Aske
     let (index, sent_ns) = match told.recv_timeout(waited) {
         Ok(Outcome::Sent { index, at_ns }) => (index, at_ns),
         Ok(Outcome::Refused(reason)) => return Err(AskError::Refused { iface: iface.to_string(), reason }),
-        Err(_) => {
-            if let Some(reason) = listener.interface(iface).and_then(|a| a.ended) {
-                return Err(AskError::Ended { iface: iface.to_string(), reason });
-            }
-            return Err(AskError::NotSent { iface: iface.to_string(), waited });
-        }
+        Ok(Outcome::Unsent(reason)) => return Err(AskError::Ended { iface: iface.to_string(), reason }),
+        Err(_) => return Err(AskError::NotSent { iface: iface.to_string(), waited }),
     };
 
     // The devices' spread, and the wait past it.

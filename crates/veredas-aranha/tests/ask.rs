@@ -279,6 +279,31 @@ impl Wire for Stalling {
     }
 }
 
+/// A wire that fails on its first read after it has sent a frame (a tenth of a second later).
+struct FailsAfterSend {
+    sent: bool,
+}
+impl Wire for FailsAfterSend {
+    fn name(&self) -> &str {
+        "fails"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, _: &[u8]) -> Result<(), WireError> {
+        self.sent = true;
+        Ok(())
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        if self.sent {
+            std::thread::sleep(Duration::from_millis(100));
+            return Err(WireError::TooShort(2));
+        }
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
 /// A wire whose every read fails: its worker ends.
 struct Broken;
 impl Wire for Broken {
@@ -328,6 +353,13 @@ fn asking_is_refused_where_it_cannot_be_heard_sent_or_bounded() {
     let frame = dcp::identify_request(LAN0, 1, 1, &Filter::All).unwrap();
     while full.send("lan1", frame.clone()).is_ok() {}
     assert!(matches!(ask::identify(&full, "lan1", &Identify::default()), Err(AskError::Listen(ListenError::QueueFull { queued: 1, .. }))));
+    // A worker that ends while the request waits its turn: the request never sent, said at once.
+    let ending = Listener::start(vec![Box::new(FailsAfterSend { sent: false })], Options { rate: 1, ..Options::default() }).unwrap();
+    ending.send("fails", frame.clone()).unwrap();
+    let start = Instant::now();
+    assert_eq!(msg(ask::identify(&ending, "fails", &Identify::default())), "\"fails\" is heard no more (a frame of 2 bytes is shorter than an Ethernet header): nothing is asked on it");
+    assert!(start.elapsed() < Duration::from_millis(900), "{:?}", start.elapsed());
+    assert_eq!(ending.interface("fails").unwrap().unsent, 1);
     let slow = Listener::start(vec![Box::new(Stalling)], Options::default()).unwrap();
     let start = Instant::now();
     assert_eq!(msg(ask::identify(&slow, "stalling", &Identify::default())), "\"stalling\" did not send the Identify within 1.05s");

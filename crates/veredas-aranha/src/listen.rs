@@ -2,11 +2,12 @@
 //! every active step bounded and paced, frames kept verbatim): one worker per wire, hearing
 //! everything it carries; every frame kept verbatim with its interface and time, up to a bound (the
 //! oldest let go past it, counted); each decoded (C-140), its observations fused (C-141) unless
-//! they are about one of this machine's own interfaces (counted apart), its class counted and its
-//! damage kept. Each worker is the only sender on its wire: a frame handed to the listener is queued
-//! for that interface and sent paced (a rate per interface), the queue bounded (a frame past it
-//! refused, never a flood); what it sends is kept too, marked sent. Nothing is sent on an interface
-//! no worker hears.
+//! they are this machine's own (sent from one of its interfaces or about one: counted apart), its
+//! class counted and its damage kept. Each worker is the only sender on its wire: a frame handed to
+//! the listener is queued for that interface and sent paced (a rate per interface), the queue
+//! bounded (a frame past it refused, never a flood); what it sends is kept too, marked sent.
+//! Nothing is sent on an interface no worker hears, nor once its worker has ended: what was queued
+//! then is said unsent.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::fusion::{Conflict, Fusion};
 use crate::observe::{self, Class};
+use crate::profinet::ether;
 use crate::profinet::mac::Mac;
 use crate::wire::{Frame, MAX_FRAME, Wire, WireError, stamp};
 
@@ -48,6 +50,8 @@ impl Default for Options {
 pub enum Outcome {
     Sent { index: u64, at_ns: u64 },
     Refused(String),
+    /// Never sent: its worker ended (or the listener stopped) first, for this reason.
+    Unsent(String),
 }
 
 /// A kept frame: heard, or sent by the listener.
@@ -66,6 +70,8 @@ pub struct Interface {
     /// Frames its wire refused to send, and the last reason.
     pub refused: u64,
     pub queued: usize,
+    /// Frames still queued when its worker ended or the listener stopped: never sent.
+    pub unsent: u64,
     /// Why its worker stopped hearing, when it did: a capture read to its end, or the wire's error.
     pub ended: Option<String>,
 }
@@ -105,6 +111,8 @@ pub enum ListenError {
     TwoWires(String),
     #[error("no wire is heard on {0:?}: nothing is sent where the listener does not listen")]
     NotListening(String),
+    #[error("{iface:?} is heard no more ({reason}): nothing is sent on it")]
+    Ended { iface: String, reason: String },
     #[error("{iface:?} has {queued} frames queued, its bound: the frame is refused")]
     QueueFull { iface: String, queued: usize },
     #[error("{0}")]
@@ -225,6 +233,9 @@ impl Listener {
             return Err(ListenError::Frame(WireError::TooLong(frame.len())));
         }
         let mut st = lock(&self.shared.state);
+        if let Some(reason) = st.stats.interfaces.get(iface).and_then(|i| i.ended.clone()) {
+            return Err(ListenError::Ended { iface: iface.to_string(), reason });
+        }
         let bound = self.shared.options.queue;
         let q = st.queues.get_mut(iface).ok_or_else(|| ListenError::NotListening(iface.to_string()))?;
         if q.len() >= bound {
@@ -313,8 +324,30 @@ impl Drop for Listener {
 }
 
 /// One wire's worker: hear, keep, decode, fuse; send what is queued, paced.
-fn work(mut wire: Box<dyn Wire>, s: Arc<Shared>) {
+/// A worker: its wire heard and sent on until the listener stops or the wire ends; then what is
+/// still queued for it said unsent, and nothing queued for it again.
+fn work(wire: Box<dyn Wire>, s: Arc<Shared>) {
     let iface = wire.name().to_string();
+    let ended = run(wire, &s, &iface);
+    let mut st = lock(&s.state);
+    let why = ended.clone().unwrap_or_else(|| "the listener stopped".to_string());
+    let left: Vec<Queued> = st.queues.get_mut(&iface).map(|q| q.drain(..).collect()).unwrap_or_default();
+    if let Some(i) = st.stats.interfaces.get_mut(&iface) {
+        i.ended = ended;
+        i.unsent += left.len() as u64;
+        i.queued = 0;
+    }
+    drop(st);
+    for (_, tell) in left {
+        if let Some(tx) = tell {
+            let _ = tx.send(Outcome::Unsent(why.clone()));
+        }
+    }
+}
+
+/// Hear and send until stopped (`None`) or the wire ends (why).
+fn run(mut wire: Box<dyn Wire>, s: &Shared, iface: &str) -> Option<String> {
+    let iface = iface.to_string();
     let gap = Duration::from_secs(1) / s.options.rate;
     let mut next_send = Instant::now();
     while !s.stop.load(Ordering::SeqCst) {
@@ -361,20 +394,13 @@ fn work(mut wire: Box<dyn Wire>, s: Arc<Shared>) {
         let queued = lock(&s.state).queues.get(&iface).is_some_and(|q| !q.is_empty());
         let wait = if queued { s.options.poll.min(next_send.saturating_duration_since(Instant::now())) } else { s.options.poll };
         match wire.recv(wait) {
-            Ok(Some(frame)) => hear(&s, frame),
+            Ok(Some(frame)) => hear(s, &iface, frame),
             Ok(None) => {}
-            Err(e) => {
-                let reason = match e {
-                    WireError::Ended(_) => "its capture is read to the end".to_string(),
-                    other => other.to_string(),
-                };
-                if let Some(i) = lock(&s.state).stats.interfaces.get_mut(&iface) {
-                    i.ended = Some(reason);
-                }
-                return;
-            }
+            Err(WireError::Ended(_)) => return Some("its capture is read to the end".to_string()),
+            Err(e) => return Some(e.to_string()),
         }
     }
+    None
 }
 
 fn push_damage(stats: &mut Stats, line: String) {
@@ -384,19 +410,23 @@ fn push_damage(stats: &mut Stats, line: String) {
     }
 }
 
-/// A frame heard: kept, decoded, its observations fused but for those about this machine.
-fn hear(s: &Shared, frame: Frame) {
+/// A frame heard by the worker of `iface`: kept under that interface's name, decoded, its
+/// observations fused but for those of this machine (sent from one of its MACs, or about one).
+fn hear(s: &Shared, iface: &str, mut frame: Frame) {
+    if frame.iface != iface {
+        frame.iface = iface.to_string();
+    }
     let mut st = lock(&s.state);
     let index = st.base + st.frames.len() as u64;
     let decoded = observe::decode(&frame, index);
-    let iface = frame.iface.clone();
+    let from_here = ether::parse(&frame.bytes).is_ok_and(|e| s.own.contains(&e.src));
     let at = frame.at_ns;
     st.keep(Kept { frame, sent: false }, s.options.max_frames);
     st.stats.heard += 1;
     *st.stats.by_class.entry(decoded.class).or_default() += 1;
     st.stats.first_ns = Some(st.stats.first_ns.map_or(at, |f| f.min(at)));
     st.stats.last_ns = Some(st.stats.last_ns.map_or(at, |l| l.max(at)));
-    if let Some(i) = st.stats.interfaces.get_mut(&iface) {
+    if let Some(i) = st.stats.interfaces.get_mut(iface) {
         i.heard += 1;
     }
     if !decoded.damage.is_empty() {
@@ -406,7 +436,7 @@ fn hear(s: &Shared, frame: Frame) {
         }
     }
     for o in &decoded.observations {
-        if s.own.contains(&o.observed.subject()) {
+        if from_here || s.own.contains(&o.observed.subject()) {
             st.stats.own += 1;
             continue;
         }

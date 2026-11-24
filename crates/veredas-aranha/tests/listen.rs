@@ -5,7 +5,7 @@
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
-use veredas_aranha::listen::{ListenError, Listener, Options};
+use veredas_aranha::listen::{ListenError, Listener, Options, Outcome};
 use veredas_aranha::observe::{self, Class, Probe};
 use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpSuite};
 use veredas_aranha::profinet::ether;
@@ -255,4 +255,180 @@ fn stopping_joins_every_worker_and_nothing_is_heard_after() {
     drop(dropped);
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_eq!(hub.ports(), 1);
+}
+
+/// A wire with a MAC that records when each frame was handed to it, and hears nothing.
+struct Recording {
+    sends: std::sync::Arc<std::sync::Mutex<Vec<Instant>>>,
+}
+impl Wire for Recording {
+    fn name(&self) -> &str {
+        "rec"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, _: &[u8]) -> Result<(), WireError> {
+        self.sends.lock().unwrap().push(Instant::now());
+        Ok(())
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
+/// A wire that fails on every read once it has sent a frame, counting its reads.
+struct FailsAfterSend {
+    sent: bool,
+    reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+impl Wire for FailsAfterSend {
+    fn name(&self) -> &str {
+        "fails"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN1)
+    }
+    fn send(&mut self, _: &[u8]) -> Result<(), WireError> {
+        self.sent = true;
+        Ok(())
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        if self.sent {
+            // (A tenth of a second first, so every frame the test queues is queued.)
+            std::thread::sleep(Duration::from_millis(100));
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return Err(WireError::TooShort(1));
+        }
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
+#[test]
+fn the_defaults_and_the_pace_are_what_the_listener_promises() {
+    assert_eq!(Options::default(), Options { max_frames: 200_000, rate: 20, queue: 100, poll: Duration::from_millis(20) });
+    // Measured where the wire is handed each frame: the first at once, then one a gap, no slower.
+    for (rate, n) in [(2u32, 4usize), (20, 10)] {
+        let sends = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let l = Listener::start(vec![Box::new(Recording { sends: std::sync::Arc::clone(&sends) })], Options { rate, ..Options::default() }).unwrap();
+        let gap = Duration::from_secs(1) / rate;
+        let start = Instant::now();
+        for _ in 0..n {
+            l.send("rec", vec![0; 60]).unwrap();
+        }
+        assert!(l.until(WAIT, |s| s.stats.interfaces["rec"].sent == n as u64));
+        let at = sends.lock().unwrap().clone();
+        assert_eq!(at.len(), n);
+        assert!(at[0] - start < gap / 2, "at {rate} a second the first went after {:?}", at[0] - start);
+        for w in at.windows(2) {
+            assert!(w[1] - w[0] >= gap - Duration::from_millis(1), "at {rate} a second a gap of {:?}", w[1] - w[0]);
+        }
+        let span = at[n - 1] - at[0];
+        assert!(span <= gap * (n as u32 - 1) + gap.max(Duration::from_millis(150)), "at {rate} a second {n} frames spanned {span:?}");
+    }
+}
+
+#[test]
+fn an_ended_worker_takes_nothing_more_and_says_what_it_never_sent() {
+    // A capture read to its end: nothing is queued on it any more.
+    let l = Listener::start(vec![Box::new(Replay::new("cap", Vec::new()))], Options::default()).unwrap();
+    assert!(l.until(WAIT, |s| s.stats.interfaces["cap"].ended.is_some()));
+    let refused = l.send("cap", vec![0; 60]).unwrap_err();
+    assert!(matches!(&refused, ListenError::Ended { iface, reason } if iface == "cap" && reason == "its capture is read to the end"));
+    assert_eq!(refused.to_string(), "\"cap\" is heard no more (its capture is read to the end): nothing is sent on it");
+    assert_eq!(l.interface("cap").unwrap().queued, 0);
+    // A wire that fails once it has sent its first frame, four more queued at one a second: the
+    // four are said unsent, the queue empty, its worker read once after the failure and no more.
+    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let l = Listener::start(vec![Box::new(FailsAfterSend { sent: false, reads: std::sync::Arc::clone(&reads) })], Options { rate: 1, ..Options::default() }).unwrap();
+    for _ in 0..4 {
+        l.send("fails", vec![0; 60]).unwrap();
+    }
+    let told = l.send_tracked("fails", vec![1; 60]).unwrap();
+    assert!(l.until(WAIT, |s| s.stats.interfaces["fails"].ended.is_some()));
+    let reason = "a frame of 1 bytes is shorter than an Ethernet header".to_string();
+    assert_eq!(told.recv_timeout(WAIT), Ok(Outcome::Unsent(reason.clone())));
+    let i = l.interface("fails").unwrap();
+    assert_eq!((i.sent, i.queued, i.unsent, i.refused, i.ended), (1, 0, 4, 0, Some(reason)));
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // Stopping says unsent what was still queued, its interface not ended.
+    let hub = Hub::new();
+    let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options { rate: 1, ..Options::default() }).unwrap();
+    l.send("lan0", vec![0; 60]).unwrap();
+    assert!(l.until(WAIT, |s| s.stats.interfaces["lan0"].sent == 1));
+    let told = l.send_tracked("lan0", vec![0; 60]).unwrap();
+    l.send("lan0", vec![0; 60]).unwrap();
+    let s = l.stop();
+    let i = &s.stats.interfaces["lan0"];
+    assert_eq!((i.sent, i.queued, i.unsent, i.ended.clone()), (1, 0, 2, None));
+    assert_eq!(told.recv_timeout(WAIT), Ok(Outcome::Unsent("the listener stopped".into())));
+}
+
+#[test]
+fn every_frame_is_the_interface_s_that_heard_it_and_its_account_says_so() {
+    // A capture whose frames were recorded as "eth0", replayed as "plant.pcap", stamps out of
+    // order, one frame with two damages.
+    let mut frames: Vec<Frame> = device_frames().into_iter().enumerate().map(|(i, b)| Frame::new([300, 100, 200, 250][i], "eth0", b)).collect();
+    let mut twice = dcp::hello(DEV, 1, &identity()).unwrap();
+    let len = u16::from_be_bytes([twice[24], twice[25]]) as usize;
+    twice.truncate(26 + len);
+    twice.extend_from_slice(&[0xAB, 0xCD, 0xEF]);
+    twice[24..26].copy_from_slice(&((len + 3) as u16).to_be_bytes());
+    twice[6] |= 0x01;
+    frames.push(Frame::new(150, "eth0", twice));
+    let l = Listener::start(vec![Box::new(Replay::new("plant.pcap", frames))], Options::default()).unwrap();
+    assert!(l.until(WAIT, |s| s.stats.interfaces["plant.pcap"].ended.is_some()));
+    let s = l.snapshot();
+    assert_eq!(s.stats.interfaces.keys().cloned().collect::<Vec<_>>(), ["plant.pcap"]);
+    assert_eq!((s.stats.interfaces["plant.pcap"].heard, s.stats.heard), (5, 5));
+    assert!(l.frames().iter().all(|k| k.frame.iface == "plant.pcap"));
+    assert!(s.fusion.devices[&DEV].heard_on.iter().eq(["plant.pcap"]));
+    assert_eq!((s.stats.first_ns, s.stats.last_ns), (Some(100), Some(300)), "the earliest and the latest stamps");
+    assert_eq!(s.stats.damaged_frames, 1);
+    assert_eq!(s.stats.damage.iter().filter(|d| d.starts_with("#4 plant.pcap: ")).count(), 2, "{:?}", s.stats.damage);
+    // A frame sent: its account sent once, nothing heard, nothing queued, the frame stamped when
+    // it went; frames of 14 and 65 536 bytes go.
+    let hub = Hub::new();
+    let mut dev = hub.port("dev", DEV);
+    let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options::default()).unwrap();
+    let before = veredas_aranha::wire::stamp(std::time::SystemTime::now());
+    for n in [14, 65_536] {
+        l.send("lan0", vec![0; n]).unwrap();
+    }
+    assert!(l.until(WAIT, |s| s.stats.interfaces["lan0"].sent == 2));
+    let after = veredas_aranha::wire::stamp(std::time::SystemTime::now());
+    let s = l.snapshot();
+    let i = &s.stats.interfaces["lan0"];
+    assert_eq!((i.heard, i.sent, i.queued, s.stats.heard), (0, 2, 0, 0));
+    assert!(l.frames().iter().all(|k| k.sent && (before..=after).contains(&k.frame.at_ns)));
+    assert_eq!([dev.recv(WAIT).unwrap().unwrap().bytes.len(), dev.recv(WAIT).unwrap().unwrap().bytes.len()], [14, 65_536]);
+}
+
+#[test]
+fn this_machine_s_own_frames_and_two_devices_of_one_name_in_the_snapshot() {
+    // Two of this machine's interfaces, lan1 on a segment where lan0's frames arrive too.
+    let (quiet, hub) = (Hub::new(), Hub::new());
+    let mut other = hub.port("other", Mac([0x02, 0, 0, 0, 0, 0xEE]));
+    let l = Listener::start(vec![Box::new(quiet.port("lan0", LAN0)), Box::new(hub.port("lan1", LAN1))], Options::default()).unwrap();
+    // This machine's own LLDP agent, its frame from one of its listened MACs naming another of
+    // its MACs for its chassis: this machine's, left out.
+    let agent = LldpPdu::new(ChassisId::Mac { mac: Mac([0x02, 0, 0, 0, 0, 0xEE]) }, PortId::Local { id: "lan0".into() }, 120);
+    let mut from_lan0 = hub.port("lan0-as-sent", LAN0);
+    from_lan0.send(&lldp::frame(LAN0, &agent).unwrap()).unwrap();
+    // A neighbour's frame naming one of this machine's MACs for its chassis: about this machine.
+    let mut naming = LldpPdu::new(ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 120);
+    naming.pn.chassis_mac = Some(LAN1);
+    other.send(&lldp::frame(PORT, &naming).unwrap()).unwrap();
+    // Two devices of one name.
+    other.send(&dcp::hello(DEV, 1, &DeviceIdentity { name: Some("same".into()), ..identity() }).unwrap()).unwrap();
+    other.send(&dcp::hello(PORT, 1, &DeviceIdentity { name: Some("same".into()), ..identity() }).unwrap()).unwrap();
+    assert!(l.until(WAIT, |s| s.stats.heard == 4));
+    let s = l.snapshot();
+    assert_eq!((s.stats.own, s.stats.observations), (2, 2));
+    assert_eq!(s.fusion.devices.keys().copied().collect::<Vec<_>>(), [DEV, PORT]);
+    assert_eq!(s.conflicts, s.fusion.conflicts());
+    assert_eq!(s.conflicts.iter().map(|c| (c.kind, c.value.as_str())).collect::<Vec<_>>(), [(veredas_aranha::fusion::ConflictKind::DuplicateName, "same"), (veredas_aranha::fusion::ConflictKind::DuplicateIp, "192.168.0.10")]);
 }
