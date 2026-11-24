@@ -1,8 +1,8 @@
 {
   "clause": "C-203",
   "verdict": "refuted",
-  "ranAt": "2026-11-23T03:48:38.536Z",
-  "headCommit": "8fe024b3a69a2f2032933ce32d41fc735bf1d2e4",
+  "ranAt": "2026-11-24T22:21:03.690Z",
+  "headCommit": "53e6bf13e919959b3a51dc0f002bcb47056e59c8",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/replay.rs",
