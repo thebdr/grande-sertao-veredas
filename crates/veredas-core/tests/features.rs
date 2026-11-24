@@ -712,7 +712,12 @@ fn every_feature_gate_is_where_it_belongs() {
             // A mention of a feature in a cfg, an attribute or the macro; and what would make
             // rustdoc see an item otherwise than the build (`doc(hidden)`, a cfg on `doc`), of
             // which core has none.
-            let squeezed: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+            // A raw identifier (`r#doc`) is the identifier itself.
+            let squeezed: String = line
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+                .replace("r#", "");
             let hides = squeezed.contains("doc(hidden")
                 || ["cfg(doc", "(doc)", "(doc,", ",doc)", ",doc,"]
                     .iter()
@@ -796,8 +801,8 @@ fn consumer(name: &str, form: &[&str], main: &str) -> PathBuf {
     root
 }
 
-/// Every plain string literal of a Rust source that starts with a capital letter, as written
-/// (escapes kept), so it can be pasted into another source.
+/// Every string literal of a Rust source, plain or raw, that starts with a capital letter, as
+/// written (escapes and hashes kept), so it can be pasted into another source.
 fn capitalized_literals(source: &str) -> Vec<String> {
     let chars: Vec<char> = source.chars().collect();
     let mut found = Vec::new();
@@ -839,7 +844,17 @@ fn capitalized_literals(source: &str) -> Vec<String> {
                 while j < chars.len() && chars[j..].iter().take(close.len()).ne(close.iter()) {
                     j += 1;
                 }
-                i = j + close.len();
+                // A raw string is kept as written too: the state lines with quoted arguments
+                // are raw in the state-text tests.
+                let end = (j + close.len()).min(chars.len());
+                let body_start = i + 1 + hashes + 1;
+                if chars
+                    .get(body_start)
+                    .is_some_and(|c| c.is_ascii_uppercase())
+                {
+                    found.push(chars[i..end].iter().collect());
+                }
+                i = end;
             }
             '"' => {
                 let byte = i > 0 && chars[i - 1] == 'b';
@@ -879,7 +894,7 @@ fn the_slim_layer_behaves_the_same_in_every_form() {
     let core = Path::new(env!("CARGO_MANIFEST_DIR"));
     let lines =
         capitalized_literals(&std::fs::read_to_string(core.join("tests/state_text.rs")).unwrap());
-    assert!(lines.len() > 100, "{} state lines", lines.len());
+    assert!(lines.len() > 120, "{} state lines", lines.len());
     let headers = [
         "format = \"veredas-x\"\nversion = 1\n[body]\nk = 2\n",
         "format = \"veredas-x\"\nversion = 2\n",
@@ -981,6 +996,8 @@ fn main() {{
         match l.parse::<ControllerState>() {{
             Ok(s) => {{
                 let _ = writeln!(out, "line {{l:?}} = {{s:?}} / {{s}} / {{:?}} / {{}}", s.health(), s.clone().normalized());
+                let again = s.to_string().parse::<ControllerState>();
+                let _ = writeln!(out, "  again {{:?}} {{}}", again, again.as_ref().map(|a| a == &s).unwrap_or(false));
                 let st = &s.state;
                 let reason = match st {{
                     State::Stop(r) => format!("{{:?}}", r.as_ref().map(|r| (r.number(), r.word()))),

@@ -152,6 +152,11 @@ Core's layers come by cargo feature, so a component carries what it uses (C-073)
 - `demo-server` (the OPC UA demo plant, with `net`), `modbus` and `enip` (the fieldbus masters,
   each standing alone on its framing and a runtime), all off by default.
 
+A form is what a crate built alone gets (`cargo build -p <member>`). A build of the whole
+workspace unifies features across members, so there a member asking for core without its default
+features gets the plant-facing layers too when another member keeps them (ábaco's Q345, measured
+after C-073 landed). That is cargo's doing, and C-073's promise is stated for the crate built alone.
+
 ## Module map
 ```
 veredas_core
