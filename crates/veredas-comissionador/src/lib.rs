@@ -59,10 +59,14 @@ pub struct Lines<'a> {
     starts: Vec<usize>,
     /// Whether each line is ASCII: its column is then its byte's distance from the line's start.
     ascii: Vec<bool>,
-    /// The last place counted on a line past ASCII (line, byte, column), so the next one on it is
-    /// counted on from there.
-    last: std::cell::Cell<(usize, usize, usize)>,
+    /// For each line past ASCII, once a place on it is asked for: every [`MARK`] bytes from its
+    /// start, the first character's byte at or past that and the characters before it, so a place
+    /// is counted from the mark before it, in any order.
+    marks: Vec<std::cell::OnceCell<Vec<(usize, usize)>>>,
 }
+
+/// How far apart a line's marks are, in bytes.
+const MARK: usize = 64;
 
 impl<'a> Lines<'a> {
     pub fn new(text: &'a str) -> Lines<'a> {
@@ -74,11 +78,12 @@ impl<'a> Lines<'a> {
                 text.as_bytes()[starts[i]..end].is_ascii()
             })
             .collect();
-        Lines { text, starts, ascii, last: std::cell::Cell::new((0, 0, 0)) }
+        let marks = (0..starts.len()).map(|_| std::cell::OnceCell::new()).collect();
+        Lines { text, starts, ascii, marks }
     }
 
-    /// The place of byte `at`: its line found by a search, its column counted on that line alone,
-    /// at once on an ASCII line, from the last place counted on it otherwise.
+    /// The place of byte `at`: its line found by a search, its column at once on an ASCII line and
+    /// counted from the mark before it otherwise, the line's marks made the first time.
     pub fn place(&self, at: usize) -> Place {
         let mut at = at.min(self.text.len());
         while !self.text.is_char_boundary(at) {
@@ -89,14 +94,20 @@ impl<'a> Lines<'a> {
         if self.ascii[line - 1] {
             return Place { line, column: at - start + 1 };
         }
-        let (l, byte, col) = self.last.get();
-        let column = if l == line && byte <= at {
-            col + self.text[byte..at].chars().count()
-        } else {
-            self.text[start..at].chars().count() + 1
-        };
-        self.last.set((line, at, column));
-        Place { line, column }
+        let marks = self.marks[line - 1].get_or_init(|| {
+            let end = self.starts.get(line).copied().unwrap_or(self.text.len());
+            let mut out = Vec::with_capacity((end - start) / MARK + 1);
+            for (n, (i, _)) in self.text[start..end].char_indices().enumerate() {
+                while out.len() * MARK <= i {
+                    out.push((start + i, n));
+                }
+            }
+            out
+        });
+        // The mark at or before `at`: its byte is a character's start at or past a multiple of
+        // `MARK`, and `at` is one too, past the same multiple.
+        let (byte, before) = marks[((at - start) / MARK).min(marks.len().saturating_sub(1))];
+        Place { line, column: before + self.text[byte.min(at)..at].chars().count() + 1 }
     }
 
     /// A problem at byte `at`.

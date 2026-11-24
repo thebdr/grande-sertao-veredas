@@ -169,6 +169,7 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
         functions.entry(f.name.value.clone()).or_insert(f);
     }
     let fnames: BTreeSet<&str> = functions.keys().map(String::as_str).collect();
+    let inputs_of: BTreeMap<&str, Inputs> = functions.iter().map(|(n, f)| (n.as_str(), Inputs::of(f))).collect();
 
     // The test's variables: its constants, and every name a step assigns.
     let mut vars = lets.clone();
@@ -234,7 +235,7 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
                         None => push(function.span, format!("`{}` is no function of the files this test uses", function.value)),
                         Some(f) => {
                             called.insert(function.value.clone());
-                            check_call(function, args, outputs, f, &mut push);
+                            check_call(function, args, outputs, f, &inputs_of[function.value.as_str()], &mut push);
                         }
                     }
                 }
@@ -449,21 +450,44 @@ fn plant(e: &Expr, plants: &Plants, push: &mut dyn FnMut(Span, String)) {
     }
 }
 
-/// A call's inputs and outputs against the function it calls.
-fn check_call(function: &Spanned<String>, args: &[Arg], outputs: &[Spanned<String>], f: &Function, push: &mut dyn FnMut(Span, String)) {
-    let inputs: BTreeSet<&str> = f.inputs.iter().map(|i| i.name.value.as_str()).collect();
-    let mut given = BTreeSet::new();
+/// A function's inputs as its calls are checked against them, made once per function: their names
+/// as a set, and each once in the order the function declares them.
+struct Inputs<'a> {
+    set: BTreeSet<&'a str>,
+    order: Vec<&'a str>,
+}
+
+impl<'a> Inputs<'a> {
+    fn of(f: &'a Function) -> Inputs<'a> {
+        let mut set = BTreeSet::new();
+        let order = f.inputs.iter().map(|i| i.name.value.as_str()).filter(|n| set.insert(*n)).collect();
+        Inputs { set, order }
+    }
+}
+
+/// A call's inputs and outputs against the function it calls, in a time its own arguments bound:
+/// the inputs it leaves out are one problem, named by the first five and counted.
+fn check_call(function: &Spanned<String>, args: &[Arg], outputs: &[Spanned<String>], f: &Function, inputs: &Inputs, push: &mut dyn FnMut(Span, String)) {
+    let mut given: BTreeSet<&str> = BTreeSet::new();
     for a in args {
-        if !inputs.contains(a.name.value.as_str()) {
+        if !inputs.set.contains(a.name.value.as_str()) {
             push(a.name.span, format!("`{}` has no input `{}`", function.value, a.name.value));
-        } else if !given.insert(a.name.value.clone()) {
+        } else if !given.insert(a.name.value.as_str()) {
             push(a.name.span, format!("input `{}` is given twice", a.name.value));
         }
     }
-    for i in &f.inputs {
-        if !given.contains(&i.name.value) {
-            push(function.span, format!("`{}` needs its input `{}`", function.value, i.name.value));
-        }
+    // Every input given is one of the function's, so the rest are left out; the first five are
+    // found past the given ones alone.
+    let missing = inputs.order.len() - given.len();
+    if missing > 0 {
+        let shown: Vec<String> = inputs.order.iter().filter(|i| !given.contains(*i)).take(5).map(|i| format!("`{i}`")).collect();
+        let msg = match missing {
+            1 => format!("`{}` needs its input {}", function.value, shown[0]),
+            2..=5 => format!("`{}` needs its inputs {}", function.value, shown.join(", ")),
+            6 => format!("`{}` needs its inputs {} and 1 other", function.value, shown.join(", ")),
+            n => format!("`{}` needs its inputs {} and {} others", function.value, shown.join(", "), n - 5),
+        };
+        push(function.span, msg);
     }
     if outputs.len() > f.outputs.len() {
         push(
@@ -482,6 +506,8 @@ enum StmtCtx<'a> {
         inputs: &'a BTreeSet<&'a str>,
         reads: &'a BTreeSet<&'a str>,
         file_functions: &'a BTreeMap<String, Function>,
+        /// The inputs of each of the file's functions, made once for the file.
+        file_inputs: &'a BTreeMap<&'a str, Inputs<'a>>,
         names: &'a BTreeSet<&'a str>,
     },
 }
@@ -559,7 +585,7 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
                 StmtCtx::Script { .. } => {
                     push(function.span, format!("a script box calls no function: `{}` is called by a step (`call`)", function.value));
                 }
-                StmtCtx::Function { f, inputs, file_functions, .. } => {
+                StmtCtx::Function { f, inputs, file_functions, file_inputs, .. } => {
                     for a in args.iter_mut() {
                         resolve_expr(&mut a.value, vars, &plants, &fnames, push);
                     }
@@ -570,7 +596,7 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
                     }
                     match file_functions.get(&function.value) {
                         None => push(function.span, format!("`{}` is no function of this file", function.value)),
-                        Some(g) => check_call(function, args, outputs, g, push),
+                        Some(g) => check_call(function, args, outputs, g, &file_inputs[function.value.as_str()], push),
                     }
                 }
             },
@@ -597,6 +623,7 @@ fn check_function_file(ff: &mut FunctionFile, file: &str, text: &str, out: &mut 
         }
     }
     let file_names: BTreeSet<&str> = by_name.keys().map(String::as_str).collect();
+    let file_inputs: BTreeMap<&str, Inputs> = by_name.iter().map(|(n, g)| (n.as_str(), Inputs::of(g))).collect();
     for f in &mut ff.functions {
         let mut push = |span: Span, msg: String| out.push(lines.problem(file, span.start, msg));
         let mut ports = BTreeSet::new();
@@ -617,7 +644,7 @@ fn check_function_file(ff: &mut FunctionFile, file: &str, text: &str, out: &mut 
         let snapshot = f.clone();
         let inputs: BTreeSet<&str> = snapshot.inputs.iter().map(|i| i.name.value.as_str()).collect();
         let reads: BTreeSet<&str> = snapshot.reads.iter().map(|t| t.value.as_str()).collect();
-        let ctx = StmtCtx::Function { f: &snapshot, inputs: &inputs, reads: &reads, file_functions: &by_name, names: &file_names };
+        let ctx = StmtCtx::Function { f: &snapshot, inputs: &inputs, reads: &reads, file_functions: &by_name, file_inputs: &file_inputs, names: &file_names };
         check_stmts(&mut f.body, &scope, &ctx, &mut push);
     }
     // No function calls itself, directly or through others: the cycles are the strongly

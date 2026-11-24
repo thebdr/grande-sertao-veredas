@@ -388,8 +388,9 @@ digits, `-` and `_`; a setting given twice, a path `use`d twice, a constant defi
 made of anything but literals and the constants above it (a call among them); a used file that cannot be read; two
 functions of one name; a step's name given twice; a route to no step; `retry ... max 0`; an
 outcome routed twice by one step; `on pass` on a branch; a `send`'s field given twice; a call to
-no function, an input not given, given twice or not the function's, more names than outputs; a
-built-in call given the wrong number of values, a call to no built-in, a function called inside
+no function, inputs not given (one problem a call, a long list by its first five and counted), an
+input given twice or not the function's, more names than outputs; a built-in call given the wrong
+number of values, a call to no built-in, a function called inside
 an expression; a name read that nothing assigns; a `let` constant or a
 function's input assigned; a port named twice; an output nothing assigns; a function calling
 itself (each function on the cycle named, with its way back, a long one by its first five); plant data in a script

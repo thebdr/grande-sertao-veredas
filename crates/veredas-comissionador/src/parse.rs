@@ -83,18 +83,25 @@ fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Pro
         .filter(|(k, _)| k.get_ref() != "format" && k.get_ref() != "version")
         .min_by_key(|(k, _)| k.span().start);
     if let Err(e) = stamp {
-        // The stamp alone, its two values as written: sound, the failure was another key's.
+        // The stamp alone, its two values as written (a table or an array as an empty one, which
+        // core's reader judges by its kind alone): sound, the failure was another key's; not, its
+        // fault is the stamp's own, in core's words, as with no other key.
         let alone: String = table
             .get_ref()
             .iter()
             .filter(|(k, _)| k.get_ref() == "format" || k.get_ref() == "version")
-            .map(|(k, v)| format!("{} = {}\n", k.get_ref(), head.get(v.span()).unwrap_or("")))
+            .map(|(k, v)| {
+                let value = match v.get_ref() {
+                    toml::de::DeValue::Table(_) => "{}",
+                    toml::de::DeValue::Array(_) => "[]",
+                    _ => head.get(v.span()).unwrap_or(""),
+                };
+                format!("{} = {value}\n", k.get_ref())
+            })
             .collect();
         match (other.is_some(), veredas_core::schema::check(&alone, noun, format, VERSION)) {
             (true, Ok(())) => {}
-            (true, Err(e2)) if !matches!(e2, veredas_core::schema::HeaderError::NotToml { .. }) => {
-                return Err(Problem::at(file, text, 0, e2.to_string()));
-            }
+            (true, Err(e2)) if toml::de::DeTable::parse(&alone).is_ok() => return Err(Problem::at(file, text, 0, e2.to_string())),
             _ => return Err(Problem::at(file, text, 0, e.to_string())),
         }
     }

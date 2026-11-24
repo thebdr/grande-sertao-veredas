@@ -1471,6 +1471,120 @@ fn a_function_s_inputs_reads_and_calls_are_looked_up_at_once() {
     linear(&[("n inputs, n statements", 2_500, &inputs), ("a call of n inputs", 2_500, &call), ("2n tables read", 2_500, &tables), ("n constants", 5_000, &constants)]);
 }
 
+// ---- refute round 7 ------------------------------------------------------------------------
+
+#[test]
+fn places_on_a_line_past_ascii_are_counted_in_any_order() {
+    // A line of calls each naming an input the function lacks and leaving its input out: the
+    // problems' places jump back and forth on one line past ASCII (a comment at its end), each
+    // counted from the line's mark before it, in a time linear in the line: 20 000 calls, then
+    // 160 000.
+    let calls = |n: usize| {
+        let f = format!("{FHEAD}function F(a: int) -> (x: int) {{\n  x = a\n}}\nfunction G() -> (y: int) {{\n  {}y = 0 # é\n}}\n", "y = F(b: 1); ".repeat(n));
+        let mut ps = Vec::new();
+        let took = on_cpu(|| ps = fproblems(&f));
+        assert_eq!(ps.len(), 2 * n);
+        // The last call: its function's name at 5 + 13 (n - 1) + 4, the input it names at 6 more.
+        let at = 3 + 13 * (n - 1) + 4;
+        let last: Vec<&String> = ps.iter().filter(|p| p.starts_with(&format!("8:{}:", at)) || p.starts_with(&format!("8:{}:", at + 2))).collect();
+        assert_eq!(last, [&format!("8:{}: `F` has no input `b`", at + 2), &format!("8:{at}: `F` needs its input `a`")], "{:?}", &ps[ps.len() - 2..]);
+        took
+    };
+    // Places on two lines past ASCII taken in turn, from their ends back to their starts, so each
+    // returns to a line the one before left: each counted from its line's mark before it, 80 000
+    // characters a line, then 640 000.
+    let turns = |n: usize| {
+        let text = format!("{}\n{}\n", "é".repeat(n), "€".repeat(n));
+        let lines = veredas_comissionador::Lines::new(&text);
+        let second = 2 * n + 1;
+        let mut got = Vec::with_capacity(2 * n);
+        let took = on_cpu(|| {
+            for k in (0..n).rev() {
+                got.push(lines.place(2 * k));
+                got.push(lines.place(second + 3 * k));
+            }
+        });
+        let at = |line: usize, column: usize| veredas_comissionador::Place { line, column };
+        assert_eq!((got[0], got[1], got[2 * n - 2], got[2 * n - 1]), (at(1, n), at(2, n), at(1, 1), at(2, 1)));
+        took
+    };
+    linear(&[("calls on one line past ASCII", 20_000, &calls), ("places on two lines in turn", 80_000, &turns)]);
+    // The same places counted from the line's start, in every order, on lines of characters of one,
+    // two, three and four bytes, a place inside a character taken as that character's.
+    let text = "aé€𝄞b\r\n𝄞€éa\nlast é";
+    let lines = veredas_comissionador::Lines::new(text);
+    let mut at: Vec<usize> = (0..=text.len()).collect();
+    at.reverse();
+    at.rotate_left(7);
+    for &i in &at {
+        let mut b = i.min(text.len());
+        while !text.is_char_boundary(b) {
+            b -= 1;
+        }
+        let start = text[..b].rfind('\n').map_or(0, |n| n + 1);
+        let want = veredas_comissionador::Place { line: text[..b].matches('\n').count() + 1, column: text[start..b].chars().count() + 1 };
+        assert_eq!(lines.place(i), want, "byte {i}");
+    }
+}
+
+#[test]
+fn the_inputs_a_call_leaves_out_are_one_problem_named_by_the_first_five() {
+    let one = |call: &str| fproblems(&format!("{FHEAD}function F(a: int, b: int, c: int, d: int, e: int, f: int, g: int) -> (r: int) {{\n  r = a\n}}\nfunction G() -> (y: int) {{\n  y = {call}\n}}\n"));
+    assert_eq!(one("F(a: 1, b: 1, c: 1, d: 1, e: 1, f: 1)"), ["8:7: `F` needs its input `g`"]);
+    assert_eq!(one("F(a: 1, b: 1, c: 1, d: 1, e: 1)"), ["8:7: `F` needs its inputs `f`, `g`"]);
+    assert_eq!(one("F(a: 1, g: 1)"), ["8:7: `F` needs its inputs `b`, `c`, `d`, `e`, `f`"]);
+    assert_eq!(one("F(d: 1)"), ["8:7: `F` needs its inputs `a`, `b`, `c`, `e`, `f` and 1 other"]);
+    assert_eq!(one("F()"), ["8:7: `F` needs its inputs `a`, `b`, `c`, `d`, `e` and 2 others"]);
+    // An input given twice or not the function's leaves the count of those left out as it is.
+    assert_eq!(one("F(a: 1, a: 2, z: 1, b: 1, c: 1, d: 1, e: 1, f: 1)"), ["8:15: input `a` is given twice", "8:21: `F` has no input `z`", "8:7: `F` needs its input `g`"]);
+    // A function naming one input twice is called with it once.
+    let twice = fproblems(&format!("{FHEAD}function F(a: int, a: int, b: int) -> (r: int) {{\n  r = 1\n}}\nfunction G() -> (y: int) {{\n  y = F()\n}}\n"));
+    assert_eq!(twice, ["4:20: `a` is named twice in `F`'s ports", "8:7: `F` needs its inputs `a`, `b`"]);
+    // A step's call the same.
+    let f = format!("{FHEAD}function F(a: int, b: int, c: int, d: int, e: int, f: int, g: int) -> (r: int) {{\n  r = a\n}}\n");
+    assert_eq!(problems_with(&test_of("  use f.fn\n  step a call F(c: 1)\n    -> x\n  step b stop pass\n"), &[("f.fn", &f)]), ["7:15: `F` needs its inputs `a`, `b`, `d`, `e`, `f` and 1 other"]);
+    // Many calls of a function of many inputs, each giving none: a problem a call, in a time linear
+    // in the file, 1 000 inputs and calls, then 8 000.
+    let empty = |n: usize| {
+        let inputs: Vec<String> = (0..n).map(|i| format!("i{i}: int")).collect();
+        let f = format!("{FHEAD}function F({}) -> (x: int) {{\n  x = 1\n}}\nfunction G() -> (y: int) {{\n{}}}\n", inputs.join(", "), "  y = F()\n".repeat(n));
+        let mut ps = Vec::new();
+        let took = on_cpu(|| ps = fproblems(&f));
+        assert_eq!(ps.len(), n);
+        assert_eq!(ps[n - 1], format!("{}:7: `F` needs its inputs `i0`, `i1`, `i2`, `i3`, `i4` and {} others", 7 + n, n - 5));
+        took
+    };
+    linear(&[("calls giving none of many inputs", 1_000, &empty)]);
+}
+
+#[test]
+fn a_stamp_s_own_fault_beside_another_key_is_core_s_words_for_the_stamp() {
+    let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    let one = |head: &str| {
+        let e = parse_test(&format!("{head}{body}"), "t").unwrap_err();
+        format!("{}:{}: {}", e.line, e.column, e.message)
+    };
+    let core = |stamp: &str| format!("1:1: {}", veredas_core::schema::check(stamp, "a test file", "veredas-test", 1).unwrap_err());
+    let stamps = [
+        ("format = 1\nversion = 1\n", "format = 1\nversion = 1\n"),
+        ("format = \"veredas-test\"\nversion = \"1\"\n", "format = \"veredas-test\"\nversion = \"1\"\n"),
+        ("format = \"veredas-test\"\nversion = 4294967296\n", "format = \"veredas-test\"\nversion = 4294967296\n"),
+        ("format = \"veredas-test\"\nversion = -1\n", "format = \"veredas-test\"\nversion = -1\n"),
+        ("format.a = 1\nversion = 1\n", "format = {}\nversion = 1\n"),
+        ("format = { a = 1 }\nversion = 1\n", "format = {}\nversion = 1\n"),
+        ("format = \"veredas-test\"\nversion = [\n  1,\n]\n", "format = \"veredas-test\"\nversion = []\n"),
+        ("format = \"veredas-functions\"\nversion = 1\n", "format = \"veredas-functions\"\nversion = 1\n"),
+    ];
+    for (stamp, alone) in stamps {
+        let want = core(alone);
+        assert_eq!(want, core(stamp), "core's words for {stamp:?} are its words for the stamp alone");
+        // Beside a key core cannot read, and beside one it can: the stamp's fault, never the key's.
+        assert_eq!(one(&format!("{stamp}x = 1e400\n")), want, "{stamp:?}");
+        assert_eq!(one(&format!("{stamp}x = 2\n")), want, "{stamp:?}");
+        assert_eq!(one(stamp), want, "{stamp:?}");
+    }
+}
+
 /// How long `f` keeps this thread on a processor: its CPU time as Linux's scheduler counts it, so
 /// the machine's other work is left out; the wall clock where that count is not kept.
 fn on_cpu(f: impl FnOnce()) -> std::time::Duration {
@@ -1948,8 +2062,9 @@ digits, `-` and `_`; a setting given twice, a path `use`d twice, a constant defi
 made of anything but literals and the constants above it (a call among them); a used file that cannot be read; two
 functions of one name; a step's name given twice; a route to no step; `retry ... max 0`; an
 outcome routed twice by one step; `on pass` on a branch; a `send`'s field given twice; a call to
-no function, an input not given, given twice or not the function's, more names than outputs; a
-built-in call given the wrong number of values, a call to no built-in, a function called inside
+no function, inputs not given (one problem a call, a long list by its first five and counted), an
+input given twice or not the function's, more names than outputs; a built-in call given the wrong
+number of values, a call to no built-in, a function called inside
 an expression; a name read that nothing assigns; a `let` constant or a
 function's input assigned; a port named twice; an output nothing assigns; a function calling
 itself (each function on the cycle named, with its way back, a long one by its first five); plant data in a script
