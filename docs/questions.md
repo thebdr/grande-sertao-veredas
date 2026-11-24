@@ -1799,6 +1799,14 @@ screen the design gives it to (A6.2).
 **Reversible?** Yes: the record is the source; a PDF or a page is a drawing of it. Freezing a
 signed report is the one thing a later answer could not undo for reports already signed.
 
+**Decided** 2026-11-25, by the architect, in two answers. Asked "In which form does comissionador
+keep a run's acceptance report? Taken meanwhile: a TOML record per run with the evidence as CSV
+files beside it.", "TOML record (Recommended)", (a). Asked "Who signs an acceptance report? There
+are no accounts (Q20). Taken meanwhile: anyone signs by a typed name, and a signed report is
+frozen.", "Roles named by the test (Recommended)", (e): anyone signs by a typed name and a signed
+report is frozen, and a test may name the roles that must sign, the report reading "awaiting
+witness" until they have. (e) is now to be built.
+
 ---
 
 ## Q313 - How comissionador reaches portal
@@ -1820,6 +1828,11 @@ come through (b) once portal's link between two portals exists.
 **Taken meanwhile**: (a), behind the interface (`Plant`) that (b) would implement.
 
 **Reversible?** Yes: the interface is the engine's one door to portal.
+
+**Decided** 2026-11-25, by the architect: asked "How does comissionador reach portal to read and
+write the plant? Taken meanwhile: in process, behind an interface a second way could implement.",
+"Both, in process first (Recommended)", (c): in process now, then over portal's HTTP interface once
+the link between two portals exists (P-019).
 
 ---
 
@@ -1846,6 +1859,13 @@ holds that by reading them as tokens, as supervisão's does.
 
 **Reversible?** Yes: (b) or (c) is a call added at the run's start or end.
 
+**Decided** 2026-11-25, by the architect: asked "Who arms portal's write switch for a comissionador
+run whose test writes to the plant? Taken meanwhile: never comissionador; a live run that writes is
+refused while the switch is off.", "The run arms and disarms", (b), against the recommendation: the
+run arms the switch at its start, once the person has confirmed the list of the test's gated writes,
+and disarms it at its end. What was taken meanwhile (no call that arms the switch, and the test that
+reads the sources for one) gives way.
+
 ---
 
 ## Q315 - What a write does in a replay
@@ -1866,6 +1886,11 @@ never polled, and a message sent is not a row of the store.
 **Taken meanwhile**: (a).
 
 **Reversible?** Yes: one action's behaviour in one mode.
+
+**Decided** 2026-11-25, by the architect: asked "What does a write do when comissionador replays a
+test over a stored window, where the plant cannot be written? Taken meanwhile: not sent, the step
+passes with a note.", "Not sent, step passes (Recommended)", (a). What was taken stands; where the
+clock stands after it is Q318's.
 
 ---
 
@@ -1892,6 +1917,10 @@ fresh budget per outer pass writes a second route.
 
 **Reversible?** Yes: a counter's scope.
 
+**Decided** 2026-11-25, by the architect: asked "How do retries count in a comissionador run? Taken
+meanwhile: each retry route counts its own uses over the whole run, never reset.", "Per route, whole
+run (Recommended)", (a), with the report's rows as the entry draws them. What was taken stands.
+
 ---
 
 ## Q317 - How a test names plant data
@@ -1917,6 +1946,11 @@ portal stores.
 
 **Reversible?** Yes: (b) adds a resolution step before (a); the files written with (a) keep
 working.
+
+**Decided** 2026-11-25, by the architect: asked "How does a comissionador test name plant data? The
+design writes `Chute[12].ForceFull`; portal knows tables and columns. Taken meanwhile: portal's own
+names, `<table>.<column>`.", "Portal's names (Recommended)", (a), aliases (b) to be added when tests
+over many alike objects need them. What was taken stands.
 
 ---
 
@@ -1952,6 +1986,13 @@ the engine, and the test that pins the limit turns into one that asserts the sam
 plant read right after a write (a read, a check, a report, a wait, an await) finds the plant as
 it stood before the write in a replay; an await with a loose bound takes an earlier row. The
 claim and the reference now exclude them all, and a second test pins it. (a) closes both.
+
+**Decided** 2026-11-25, by the architect: asked "In a replay, where does the clock stand after a
+write? Live it moves to the plant's answer; replayed it stays, so a read or a tight wait right after
+a write can pass live and fail replayed. Taken meanwhile: the limit is stated.", "Portal stores each
+write (Recommended)", (a): portal keeps every gated write and send in the store with the moment it
+was answered, and a replay's write moves its clock to that moment when the window holds it. The
+table of writes is portal's to build; until it lands the stated limit (c) holds.
 
 ---
 
@@ -2540,6 +2581,13 @@ marks the stillness `DECISION PENDING (Q319)`.
 
 **Reversible?** Yes: (a) replaces the stillness in one loop of `main.rs`; the line past the window
 stays as a shortcut.
+
+**Decided** 2026-11-25, by the architect: asked "How does a comissionador replay know that a fresh
+portal session has finished reading the logs' history into the store? Today it guesses from the
+lines holding still for a second, and a family with several empty log files defeats the guess. Taken
+meanwhile: the limit is stated.", "Portal says so (Recommended)", (a): portal publishes, per log,
+that its start's read-in has reached the end of every file as it was when the start opened it, and
+the replay waits for that. The flag is portal's to build; until it lands the stated limit (c) holds.
 
 ---
 
