@@ -285,7 +285,7 @@ fn frames_through_the_seam_keep_their_witness_and_any_bytes_decode_without_a_pan
 
     // Noise: frames of every observed kind with a few bytes flipped and cut at random lengths, and a
     // quarter of it random bytes under seven types: a class, observations about unicast stations
-    // only (an LLDP PDU's chassis id aside), damage named or none, never a panic.
+    // only, damage named or none, never a panic.
     let mut pn = LldpPdu::new(ChassisId::Local { id: "io-device-1".into() }, PortId::Local { id: "port-001".into() }, 20);
     pn.pn.chassis_mac = Some(DEV);
     let seeds = [
@@ -319,10 +319,148 @@ fn frames_through_the_seam_keep_their_witness_and_any_bytes_decode_without_a_pan
         };
         let d = observe::decode(&Frame::new(0, "n", f), 0);
         for o in &d.observations {
-            assert!(!o.observed.subject().is_multicast() || matches!(o.observed, Observed::Lldp { .. }), "{o:?}");
+            assert!(!o.observed.subject().is_multicast(), "{o:?}");
         }
         observed += d.observations.len();
         damaged += usize::from(!d.damage.is_empty());
     }
     assert!(observed > 1_000 && damaged > 1_000, "{observed} observations, {damaged} damaged frames");
+}
+
+#[test]
+fn only_what_dcp_defines_is_observed_and_a_request_is_known_by_its_selection_bit() {
+    // Every service and service type byte, on a request's shape and an answer's: a service DCP does
+    // not define, or a service type that is none of 0, 1 and 5, says nothing and is named; a request
+    // (service type 0, Hello aside) is its asker with nothing said of it; the rest is heard.
+    let request = ether::parse(&dcp::identify_request(ME, 1, 1, &Filter::Name("io-device-1".into())).unwrap()).unwrap().payload.to_vec();
+    let answer = ether::parse(&dcp::identify_response(ME, DEV, 7, &identity()).unwrap()).unwrap().payload.to_vec();
+    let mut heard_with_identity = 0;
+    for shape in [&request, &answer] {
+        for service in 0..=255u8 {
+            for service_type in 0..=255u8 {
+                let mut p = shape.clone();
+                p[2] = service;
+                p[3] = service_type;
+                let d = observe::decode(&frame(ether::build(DEV, ME, ether::ETHERTYPE_PROFINET, &p).unwrap()), 0);
+                assert_eq!(d.class, Class::Dcp);
+                if !(3..=6).contains(&service) {
+                    assert_eq!(d.observations.len(), 0, "{service} {service_type}");
+                    assert_eq!(d.damage, [format!("DCP service {service} is none of DCP's (3 Get, 4 Set, 5 Identify, 6 Hello)")]);
+                    continue;
+                }
+                if ![0, 1, 5].contains(&service_type) {
+                    assert_eq!(d.observations.len(), 0, "{service} {service_type}");
+                    assert_eq!(d.damage, [format!("DCP service type {service_type} is none of DCP's (0 request, 1 success, 5 unsupported)")]);
+                    continue;
+                }
+                assert_eq!(d.observations.len(), 1, "{service} {service_type}: {:?}", d.damage);
+                let asking = service_type == 0 && service != 6;
+                let o = &d.observations[0];
+                assert_eq!(o.witness.probe, if asking { Probe::DcpRequestHeard } else { Probe::DcpHeard }, "{service} {service_type}");
+                if let Observed::Dcp { identity, .. } = &o.observed {
+                    if asking {
+                        assert!(identity.is_empty(), "{service} {service_type}");
+                    } else if !identity.is_empty() {
+                        heard_with_identity += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(heard_with_identity > 0);
+    // The critic's four: a name filter under service type 4 and a Set under 2 (requests DCP does not
+    // define, tshark leaves undecoded), service 7, and a frame id with nothing after it but zeros.
+    for (hex_frame, damage) in [
+        ("010ecf0000000200000000aa8892fefe050400000001000100100202000b696f2d6465766963652d31", "DCP service type 4 is none of DCP's (0 request, 1 success, 5 unsupported)"),
+        ("0200000000010200000000aa8892fefd040200000003000000120202000d0001696f2d6465766963652d32", "DCP service type 2 is none of DCP's (0 request, 1 success, 5 unsupported)"),
+        ("010ecf0000000200000000aa8892fefe070100000001000100100202000b696f2d6465766963652d31", "DCP service 7 is none of DCP's (3 Get, 4 Set, 5 Identify, 6 Hello)"),
+        ("010ecf0000000200000000aa8892fefe", "DCP service 0 is none of DCP's (3 Get, 4 Set, 5 Identify, 6 Hello)"),
+    ] {
+        let mut bytes: Vec<u8> = (0..hex_frame.len()).step_by(2).map(|i| u8::from_str_radix(&hex_frame[i..i + 2], 16).unwrap()).collect();
+        bytes.resize(60, 0);
+        let d = observe::decode(&frame(bytes), 0);
+        assert_eq!((d.observations.len(), d.damage), (0, vec![damage.to_string()]), "{hex_frame}");
+    }
+    // Bytes after the last block are named; the PDU still says what its blocks say.
+    let mut p = answer.clone();
+    let n = u16::from_be_bytes([p[10], p[11]]) + 3;
+    p[10..12].copy_from_slice(&n.to_be_bytes());
+    p.extend_from_slice(&[1, 2, 3]);
+    let d = observe::decode(&frame(ether::build(ME, DEV, ether::ETHERTYPE_PROFINET, &p).unwrap()), 0);
+    assert_eq!(d.damage, ["DCP: 3 bytes after its last block make none"]);
+    assert_eq!(d.observations.len(), 1);
+}
+
+#[test]
+fn a_cut_frame_says_nothing_and_a_group_chassis_is_no_device() {
+    // The critic's LLDP frame cut by its capture at 55 of 120 bytes, its chassis MAC TLV left out:
+    // named, nothing observed, from bytes and through a capture file.
+    let mut pn = LldpPdu::new(ChassisId::Local { id: "io-device-1".into() }, PortId::Local { id: "port-001.io-device-1".into() }, 20);
+    pn.port_desc = Some("port description".into());
+    pn.sys_name = Some("a-long-system-name-for-the-test".into());
+    pn.pn.chassis_mac = Some(DEV);
+    let whole = lldp::frame(PORT, &pn).unwrap();
+    assert_eq!(observe::decode(&frame(whole.clone()), 0).observations[0].observed.subject(), DEV);
+    for cut in [55usize, 56, 73, whole.len() - 1] {
+        let f = Frame { length: whole.len(), ..frame(whole[..cut].to_vec()) };
+        let d = observe::decode(&f, 0);
+        assert_eq!((d.class, d.observations.len()), (Class::Lldp, 0), "{cut}");
+        assert_eq!(d.damage, [format!("the capture kept {cut} of the frame's {} bytes", whole.len())]);
+        let read = pcap::read(&pcap::write(&[f]).unwrap(), "x").unwrap();
+        assert_eq!(observe::decode(&read.frames[0], 0).observations.len(), 0);
+    }
+    // A cut DCP frame and a cut cyclic frame keep their classes.
+    let dcp_frame = dcp::hello(DEV, 1, &identity()).unwrap();
+    assert_eq!(observe::decode(&Frame { length: 200, ..frame(dcp_frame) }, 0).class, Class::Dcp);
+    let cyclic = CyclicFrame { frame_id: 0x8001, data: vec![0; 40], cycle_counter: 1, data_status: DataStatus::GOOD, transfer_status: 0 }.frame(DEV, ME, None).unwrap();
+    assert_eq!(observe::decode(&Frame { length: 100, ..frame(cyclic[..40].to_vec()) }, 0).class, Class::Cyclic);
+    // A group address named for the chassis (the chassis MAC TLV, or a MAC chassis id) is never one
+    // device: named, nothing observed.
+    let mut tlv = pn.clone();
+    tlv.pn.chassis_mac = Some(Mac([0x01, 0x00, 0x5E, 0, 0, 1]));
+    let by_id = LldpPdu::new(ChassisId::Mac { mac: Mac([0x01, 0x80, 0xC2, 0, 0, 0x0E]) }, PortId::Local { id: "p".into() }, 20);
+    for (pdu, mac) in [(tlv, "01:00:5e:00:00:01"), (by_id, "01:80:c2:00:00:0e")] {
+        let d = observe::decode(&frame(lldp::frame(PORT, &pdu).unwrap()), 0);
+        assert_eq!((d.observations.len(), d.damage), (0, vec![format!("LLDP names a group address for its chassis, {mac}")]));
+    }
+    // An answer under two tags is classed by the second tag's type, and says nothing.
+    let answer = dcp::identify_response(ME, DEV, 7, &identity()).unwrap();
+    let inner = tagged(&answer, VlanTag { priority: 6, drop_eligible: false, id: 0 });
+    let e = ether::parse(&inner).unwrap();
+    let double = ether::build_tagged(e.dst, e.src, Some(VlanTag { priority: 0, drop_eligible: false, id: 5 }), 0x8100, &inner[14..]).unwrap_or_else(|_| {
+        let mut f = inner[..12].to_vec();
+        f.extend_from_slice(&[0x81, 0x00, 0x00, 0x05]);
+        f.extend_from_slice(&inner[12..]);
+        f
+    });
+    let d = observe::decode(&frame(double), 0);
+    assert_eq!((d.class, d.observations.len()), (Class::Other(0x8100), 0));
+}
+
+#[test]
+fn every_arp_rule_and_every_class_name_is_held() {
+    let ip = Ipv4Addr::new(192, 168, 0, 10);
+    let good = observe::arp_frame(DEV, ip, Mac::BROADCAST, Ipv4Addr::new(192, 168, 0, 1), false).unwrap();
+    // An ARP frame as a host captures its own, unpadded (42 bytes): observed.
+    let unpadded = good[..42].to_vec();
+    let d = observe::decode(&frame(unpadded), 0);
+    assert_eq!((d.observations.len(), d.damage.len()), (1, 0));
+    let with = |at: usize, v: u8| {
+        let mut f = good.clone();
+        f[14 + at] = v;
+        observe::decode(&frame(f), 0)
+    };
+    assert_eq!(with(7, 0).damage, ["ARP operation 0 is neither a request (1) nor a reply (2)"]);
+    let mut v6 = good.clone();
+    v6[16..18].copy_from_slice(&0x86DDu16.to_be_bytes());
+    assert_eq!(observe::decode(&frame(v6), 0).damage, ["an ARP packet of hardware type 1, protocol 0x86dd, address lengths 6 and 4: not Ethernet's and IPv4's"]);
+    assert_eq!(with(4, 8).damage, ["an ARP packet of hardware type 1, protocol 0x0800, address lengths 8 and 4: not Ethernet's and IPv4's"]);
+    for d in [with(7, 0), with(4, 8)] {
+        assert_eq!(d.observations.len(), 0);
+    }
+    // A class name is a class's own name exactly; an unknown type's only when it has no class.
+    for bad in ["\"other:0x+123\"", "\"other:0x12AB\"", "\"other:0x0800\"", "\"other:0x88cc\"", "\"other:0x8892\"", "\"other:0x86dd\""] {
+        assert!(serde_json::from_str::<Class>(bad).is_err(), "{bad}");
+    }
+    assert_eq!(serde_json::from_str::<Class>("\"other:0x8100\"").unwrap(), Class::Other(0x8100));
 }

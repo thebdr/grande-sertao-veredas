@@ -175,9 +175,12 @@ impl<'de> Deserialize<'de> for Class {
         if let Some(c) = named.iter().find(|c| c.to_string() == text) {
             return Ok(*c);
         }
+        // Another type's name, exactly as written (four lower-case digits), and only a type with no
+        // class of its own.
         text.strip_prefix("other:0x")
-            .filter(|h| h.len() == 4)
+            .filter(|h| h.len() == 4 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
             .and_then(|h| u16::from_str_radix(h, 16).ok())
+            .filter(|t| Class::of_ethertype(*t) == Class::Other(*t))
             .map(Class::Other)
             .ok_or_else(|| serde::de::Error::custom(format!("{text:?} is no frame class")))
     }
@@ -204,6 +207,15 @@ pub fn decode(frame: &Frame, index: u64) -> Decoded {
         }
     };
     out.class = Class::of_ethertype(e.ethertype);
+    // A frame a capture cut is classed and named, and says nothing: what it would say may be what
+    // the cut left out (an LLDP PDU's chassis MAC TLV, say).
+    if frame.is_cut() {
+        out.damage.push(format!("the capture kept {} of the frame's {} bytes", frame.bytes.len(), frame.length));
+        if e.ethertype == ETHERTYPE_PROFINET {
+            out.class = e.payload.get(..2).map_or(Class::ProfinetOther, |b| profinet_class(u16::from_be_bytes([b[0], b[1]])));
+        }
+        return out;
+    }
     let witness = |probe| Witness { probe, iface: frame.iface.clone(), at_ns: frame.at_ns, frame: index };
     match e.ethertype {
         ETHERTYPE_PROFINET => {
@@ -211,12 +223,7 @@ pub fn decode(frame: &Frame, index: u64) -> Decoded {
                 out.damage.push("a PROFINET frame too short for its frame id".to_string());
                 return out;
             };
-            out.class = match FrameClass::of(id) {
-                FrameClass::Rtc3 | FrameClass::Rtc1 | FrameClass::Rtc1Legacy => Class::Cyclic,
-                FrameClass::AlarmHigh | FrameClass::AlarmLow => Class::Alarm,
-                FrameClass::Dcp => Class::Dcp,
-                FrameClass::Other => Class::ProfinetOther,
-            };
+            out.class = profinet_class(id);
             if out.class != Class::Dcp {
                 return out;
             }
@@ -227,16 +234,31 @@ pub fn decode(frame: &Frame, index: u64) -> Decoded {
                     return out;
                 }
             };
+            // A service or a service type DCP does not define says nothing (tshark leaves it
+            // undecoded).
+            if matches!(pdu.service, Service::Other(_)) {
+                out.damage.push(format!("DCP service {} is none of DCP's (3 Get, 4 Set, 5 Identify, 6 Hello)", pdu.service.to_u8()));
+                return out;
+            }
+            if !matches!(pdu.service_type.to_u8(), 0 | 1 | 5) {
+                out.damage.push(format!("DCP service type {} is none of DCP's (0 request, 1 success, 5 unsupported)", pdu.service_type.to_u8()));
+                return out;
+            }
             for b in &pdu.blocks {
                 if let BlockBody::Damaged { damage, .. } = &b.body {
                     out.damage.push(format!("DCP block {}/{}: {damage:?}", b.option, b.suboption));
                 }
             }
+            if !pdu.trailing.is_empty() {
+                out.damage.push(format!("DCP: {} bytes after its last block make none", pdu.trailing.len()));
+            }
             if e.src.is_multicast() {
                 out.damage.push(format!("DCP from a group address, {}", e.src));
                 return out;
             }
-            let asking = pdu.service_type == ServiceType::Request && pdu.service != Service::Hello;
+            // A request by its selection bit (as the codec reads one), a Hello aside: the station
+            // describing itself.
+            let asking = !pdu.service_type.is_response() && pdu.service != Service::Hello;
             let identity = if asking { DeviceIdentity::default() } else { DeviceIdentity::from_blocks(&pdu.blocks) };
             let probe = if asking { Probe::DcpRequestHeard } else { Probe::DcpHeard };
             out.observations.push(Observation {
@@ -256,7 +278,13 @@ pub fn decode(frame: &Frame, index: u64) -> Decoded {
                 out.damage.push(format!("LLDP from a group address, {}", e.src));
                 return out;
             }
-            out.observations.push(Observation { witness: witness(Probe::LldpHeard), observed: Observed::Lldp { src: e.src, pdu } });
+            let observed = Observed::Lldp { src: e.src, pdu };
+            // A group address is never one device: a chassis named by one says nothing.
+            if observed.subject().is_multicast() {
+                out.damage.push(format!("LLDP names a group address for its chassis, {}", observed.subject()));
+                return out;
+            }
+            out.observations.push(Observation { witness: witness(Probe::LldpHeard), observed });
         }
         ETHERTYPE_ARP => match arp_sender(e.payload) {
             Ok(Some((mac, ip))) => out.observations.push(Observation { witness: witness(Probe::ArpHeard), observed: Observed::Arp { mac, ip } }),
@@ -266,6 +294,16 @@ pub fn decode(frame: &Frame, index: u64) -> Decoded {
         _ => {}
     }
     out
+}
+
+/// A PROFINET frame's class, by its frame id's range.
+fn profinet_class(id: u16) -> Class {
+    match FrameClass::of(id) {
+        FrameClass::Rtc3 | FrameClass::Rtc1 | FrameClass::Rtc1Legacy => Class::Cyclic,
+        FrameClass::AlarmHigh | FrameClass::AlarmLow => Class::Alarm,
+        FrameClass::Dcp => Class::Dcp,
+        FrameClass::Other => Class::ProfinetOther,
+    }
 }
 
 /// An ARP packet's sender, when it claims an address: hardware type Ethernet (1), protocol IPv4
