@@ -1403,7 +1403,7 @@ fn another_header_key_is_named_whatever_value_core_s_reader_cannot_hold() {
     assert_eq!(one(&format!("{stamp}x = 1e400\n")), not("3:1", "x"));
     assert_eq!(one(&format!("{stamp}x = [1e400]\n")), not("3:1", "x"));
     assert_eq!(one(&format!("{stamp}[x]\ny = 340282366920938463463374607431768211456\n")), not("3:1", "x"));
-    assert_eq!(one(&format!("\"format\" = \"veredas-test\"\n'version' = 1\n  x = 1e400\n")), not("3:3", "x"));
+    assert_eq!(one("\"format\" = \"veredas-test\"\n'version' = 1\n  x = 1e400\n"), not("3:3", "x"));
     // The stamp decided first all the same: another format, no version, by core's own texts.
     let wrong = "format = \"veredas-functions\"\nversion = 1\n";
     let core = |h: &str| veredas_core::schema::check(h, "a test file", "veredas-test", 1).unwrap_err().to_string();
@@ -1640,20 +1640,23 @@ fn growth(n: usize, check: &dyn Fn(usize) -> std::time::Duration) -> (std::time:
 
 /// Cases each timed by `growth`, every one run before any is judged: each grows as a linear check
 /// does, under twenty times at eight times the size.
-fn linear(cases: &[(&str, usize, &dyn Fn(usize) -> std::time::Duration)]) {
+fn linear(cases: &[Case]) {
     grows_under(20, cases);
 }
 
 /// Cases each timed by `growth`: each grows no faster than the square of its size, as the search of
 /// every function's way back inside its own cycle does (C-201), up to sixty-four times at eight
 /// times the size, where a cubic one grows up to 512. Two hundred is between.
-fn quadratic(cases: &[(&str, usize, &dyn Fn(usize) -> std::time::Duration)]) {
+fn quadratic(cases: &[Case]) {
     grows_under(200, cases);
 }
 
+/// A case timed by `growth`: what it is, its smaller size, and the check run at a size.
+type Case<'a> = (&'a str, usize, &'a dyn Fn(usize) -> std::time::Duration);
+
 /// Cases each timed by `growth`, every one run before any is judged: each takes under `bound` times
 /// as long at eight times its size.
-fn grows_under(bound: u32, cases: &[(&str, usize, &dyn Fn(usize) -> std::time::Duration)]) {
+fn grows_under(bound: u32, cases: &[Case]) {
     let grown: Vec<(&str, usize, std::time::Duration, std::time::Duration)> = cases
         .iter()
         .map(|(what, n, check)| {

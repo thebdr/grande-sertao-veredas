@@ -529,11 +529,11 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
                         }
                     }
                 }
-                resolve_expr(value, vars, &plants, &fnames, push);
+                resolve_expr(value, vars, &plants, fnames, push);
             }
             StmtKind::If { arms, otherwise } => {
                 for (cond, b) in arms.iter_mut() {
-                    resolve_expr(cond, vars, &plants, &fnames, push);
+                    resolve_expr(cond, vars, &plants, fnames, push);
                     check_stmts(b, vars, ctx, push);
                 }
                 if let Some(b) = otherwise {
@@ -549,18 +549,18 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
                 if let StmtCtx::Script { consts, .. } = ctx {
                     constant_assigned(var, consts, push);
                 }
-                resolve_expr(from, vars, &plants, &fnames, push);
-                resolve_expr(to, vars, &plants, &fnames, push);
+                resolve_expr(from, vars, &plants, fnames, push);
+                resolve_expr(to, vars, &plants, fnames, push);
                 check_stmts(body, vars, ctx, push);
             }
             StmtKind::Fail { reason } => {
                 if let Some(r) = reason {
-                    resolve_expr(r, vars, &plants, &fnames, push);
+                    resolve_expr(r, vars, &plants, fnames, push);
                 }
             }
             StmtKind::Wait { condition, .. } => match ctx {
                 StmtCtx::Script { .. } => push(span, "a script box does not wait: `wait`".to_string()),
-                StmtCtx::Function { .. } => resolve_expr(condition, vars, &plants, &fnames, push),
+                StmtCtx::Function { .. } => resolve_expr(condition, vars, &plants, fnames, push),
             },
             StmtKind::Delay { .. } => {
                 if let StmtCtx::Script { .. } = ctx {
@@ -577,7 +577,7 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
                         push(table.span, format!("`{}` is not among `{}`'s `reads`", table.value, f.name.value));
                     }
                     if let Some(c) = filter {
-                        resolve_expr(c, vars, &plants, &fnames, push);
+                        resolve_expr(c, vars, &plants, fnames, push);
                     }
                 }
             },
@@ -587,7 +587,7 @@ fn check_stmts(body: &mut [Stmt], vars: &BTreeSet<String>, ctx: &StmtCtx, push: 
                 }
                 StmtCtx::Function { f, inputs, file_functions, file_inputs, .. } => {
                     for a in args.iter_mut() {
-                        resolve_expr(&mut a.value, vars, &plants, &fnames, push);
+                        resolve_expr(&mut a.value, vars, &plants, fnames, push);
                     }
                     for o in outputs.iter() {
                         if inputs.contains(o.value.as_str()) {

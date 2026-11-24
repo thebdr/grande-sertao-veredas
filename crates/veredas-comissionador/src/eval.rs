@@ -268,7 +268,7 @@ pub fn arith(op: BinOp, l: &Value, r: &Value) -> E {
 fn whole(x: f64) -> Option<i64> {
     let r = x.round();
     // 2^63 is the first float past the range; every float below it in magnitude fits.
-    (r.is_finite() && r >= -9_223_372_036_854_775_808.0 && r < 9_223_372_036_854_775_808.0).then_some(r as i64)
+    (r.is_finite() && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&r)).then_some(r as i64)
 }
 
 /// A text read as a number, trimmed.

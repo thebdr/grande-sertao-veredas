@@ -466,9 +466,12 @@ pub fn parse(text: &str) -> Result<Report, String> {
     Ok(r)
 }
 
+/// A run's folder with its report, or why the report cannot be read.
+pub type Listed = (PathBuf, Result<Report, RecordError>);
+
 /// The runs of a test, newest first: each folder with its report, or why it cannot be read (a
 /// folder without one, a run being kept or cut short, is passed over).
-pub fn list(runs: &Path, c: &Checked) -> Result<Vec<(PathBuf, Result<Report, RecordError>)>, RecordError> {
+pub fn list(runs: &Path, c: &Checked) -> Result<Vec<Listed>, RecordError> {
     let dir = test_folder(runs, c)?;
     let mut out = Vec::new();
     for n in numbers(&dir).into_iter().rev() {

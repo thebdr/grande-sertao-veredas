@@ -228,10 +228,10 @@ fn stmt_exprs<'a>(body: &'a [Stmt], f: &mut dyn FnMut(&'a Expr)) {
                 f(to);
                 stmt_exprs(body, f);
             }
-            StmtKind::Fail { reason } => reason.iter().for_each(|r| f(r)),
+            StmtKind::Fail { reason } => reason.iter().for_each(&mut *f),
             StmtKind::Wait { condition, .. } => f(condition),
             StmtKind::Delay { .. } => {}
-            StmtKind::Await { filter, .. } => filter.iter().for_each(|x| f(x)),
+            StmtKind::Await { filter, .. } => filter.iter().for_each(&mut *f),
             StmtKind::Call { args, .. } => args.iter().for_each(|a| f(&a.value)),
         }
     }
@@ -243,7 +243,7 @@ fn action_exprs<'a>(a: &'a Action, f: &mut dyn FnMut(&'a Expr)) {
         ActionKind::Write { value, .. } => f(value),
         ActionKind::Send { fields, .. } => fields.iter().for_each(|x| f(&x.value)),
         ActionKind::Wait { condition, .. } | ActionKind::Check { condition, .. } => f(condition),
-        ActionKind::Await { filter, .. } => filter.iter().for_each(|x| f(x)),
+        ActionKind::Await { filter, .. } => filter.iter().for_each(&mut *f),
         ActionKind::Call { args, .. } => args.iter().for_each(|x| f(&x.value)),
         ActionKind::Branch { value, arms, .. } => {
             f(value);
@@ -259,8 +259,8 @@ fn action_exprs<'a>(a: &'a Action, f: &mut dyn FnMut(&'a Expr)) {
                 }
             }
         }
-        ActionKind::Report { items } => items.iter().for_each(|x| f(x)),
-        ActionKind::Stop { reason, .. } => reason.iter().for_each(|x| f(x)),
+        ActionKind::Report { items } => items.iter().for_each(&mut *f),
+        ActionKind::Stop { reason, .. } => reason.iter().for_each(&mut *f),
         ActionKind::Script { body } => stmt_exprs(body, f),
         ActionKind::Read { .. } | ActionKind::Delay { .. } => {}
     }
@@ -298,7 +298,7 @@ const ROW_FIELDS: [&str; 5] = ["time", "arrival", "source", "key", "seq"];
 
 /// Every column read through a row an `await` binds (`a.x`), against the table it is a row of:
 /// `(table, column, base)` for each one that table lacks.
-fn row_columns<'a>(exprs: &[&'a Expr], rows: &HashMap<String, BTreeSet<String>>, tables: &HashMap<String, Table>, out: &mut Vec<(String, String, String)>) {
+fn row_columns(exprs: &[&Expr], rows: &HashMap<String, BTreeSet<String>>, tables: &HashMap<String, Table>, out: &mut Vec<(String, String, String)>) {
     for e in exprs {
         e.walk(&mut |x: &Expr| {
             if let ExprKind::Field { base, field } = &x.kind
@@ -1365,7 +1365,7 @@ impl Runner<'_> {
             return Ok(Some(StmtFlow::Out(Outcome::Error, format!("more than {MAX_STATEMENTS} statements"))));
         }
         self.check_stop()?;
-        if self.statements % BOUND_EVERY == 0 && self.past_bound() {
+        if self.statements.is_multiple_of(BOUND_EVERY) && self.past_bound() {
             return Err(Halt::Bound);
         }
         Ok(None)
