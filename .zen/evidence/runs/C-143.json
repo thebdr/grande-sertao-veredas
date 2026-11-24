@@ -12,15 +12,15 @@
     "bench_device"
   ],
   "exitCode": 0,
-  "outputSha": "02de686eefb74d68a63bed33fcf2201a7b9f00fd2ea0fa781dcb7c1a85ab7ba7",
-  "outputTail": "\nrunning 1 test\ntest the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.24s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s\n     Running tests/bench_device.rs (target/debug/build/veredas-aranha/072447e12d0aca48/out/bench_device-072447e12d0aca48)",
-  "ranAt": "2026-11-24T21:44:24.998Z",
-  "headCommit": "ef1f943d3bab1f0264adf299a3fe5cb698849365",
+  "outputSha": "2f59f26d9c2826ffd4a4763800dbac7d768bb8e1bf36d3dc8efeef24e8ce2c43",
+  "outputTail": "\nrunning 1 test\ntest the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s\n     Running tests/bench_device.rs (target/debug/build/veredas-aranha/072447e12d0aca48/out/bench_device-072447e12d0aca48)",
+  "ranAt": "2026-11-24T22:20:22.373Z",
+  "headCommit": "c4e9a4a870d563350eea14c3abe380ce04e20fb3",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/bench_device.rs",
       "file": "crates/veredas-aranha/tests/bench_device.rs",
-      "fileSha": "9cdd6352f65916421af98bfaae52bc252f5486a3b3fc577932722d1d389b3498"
+      "fileSha": "d83878096f18935a7496b41acd054c578195e3b26ee06e432e586cfcd8cf7483"
     }
   ]
 }

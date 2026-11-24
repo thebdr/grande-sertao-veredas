@@ -1,0 +1,26 @@
+{
+  "clause": "C-144",
+  "command": "cargo test -j 8 -p veredas-aranha --test ask",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-j",
+    "8",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "ask"
+  ],
+  "exitCode": 0,
+  "outputSha": "0939b0cf796f6c3004f500da1f350ee3d0d8cd4b836f8bf621dd1ad111463a33",
+  "outputTail": "running 5 tests\ntest answers_let_go_past_the_listener_s_bound_are_counted_lost ... ok\ntest an_identify_is_answered_by_what_it_matches_and_only_its_answers_count ... ok\ntest asking_is_refused_where_it_cannot_be_heard_sent_or_bounded ... ok\ntest an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer ... ok\ntest the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_segment ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.88s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.84s\n     Running tests/ask.rs (target/debug/build/veredas-aranha/79e8d25a70a9eddf/out/ask-79e8d25a70a9eddf)",
+  "ranAt": "2026-11-24T22:20:21.036Z",
+  "headCommit": "c4e9a4a870d563350eea14c3abe380ce04e20fb3",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/ask.rs",
+      "file": "crates/veredas-aranha/tests/ask.rs",
+      "fileSha": "ecb3ceedd93b1db1ff7c8c3d877bb74ce58b0cae4274b92fde8df67544990b47"
+    }
+  ]
+}
