@@ -198,8 +198,8 @@ begins. It is not the crate: it proves no clause (its tests are evidence for P-0
   KDDockWidgets 2.5.1 (its Qt Quick side), Spix 0.14 over AnyRPC's master at b1949b3 (its 1.0.2
   forces AddressSanitizer on), Monaco 0.57.0,
   rust-analyzer from rustup, CMake 4.5.1 for the C++ libraries. How the machine gets Qt is the
-  architect's (the measured routes are in the evidence). Everything is built on Linux here; the
-  Windows runs are asked for through the orchestrator.
+  architect's (the measured routes are in the evidence). Everything is built on Linux here, and
+  on Windows in the `win11` guest on this machine (below).
 
 ### The seven points
 Each point is judged by a Rust test that drives the shell through Spix with no display, unless
@@ -290,9 +290,9 @@ and a file to read back.
   -ExpectAdapter "Microsoft Basic Render"` (no GPU) or `-Expect gpu`. It builds what is missing
   (AnyRPC, Spix and KDDockWidgets as here, Monaco from npm, supervisão's host), runs the suite on
   `offscreen` and on `windows`, point 7 twenty times, and the release timings. Result:
-  `spikes\oficina\target\windows-run.txt`, its last lines each step's exit code. Written here,
-  never run: no PowerShell and no Windows compiler on this machine, so neither the script nor the
-  Direct3D 11 probe (`cpp/shell.cpp`) has been parsed or compiled. What it needs installed first,
+  `spikes\oficina\target\windows-run.txt`, its last lines each step's exit code. Run in the
+  `win11` guest on 2026-11-24, started in the signed-in user's desktop session (the `windows`
+  platform needs a desktop, which an SSH logon has not). What it needs installed first,
   in the versions this machine used where they apply, is installed by one command run elevated,
   `powershell -ExecutionPolicy Bypass -File spikes\oficina\install-windows-tools.ps1`, each piece
   from its publisher and checked before it runs (in the `win11` guest on 2026-11-24: 49 minutes,
@@ -310,10 +310,10 @@ and a file to read back.
     crates.io during the run; about 40 GB free and 16 GB of memory (the database engine's C++,
     built for supervisão's host, is the largest part).
 
-### Results so far
-On this machine, Qt 6.12.0 on its `offscreen` platform, through Spix, and again on X11 (below);
-the numbers and what was learnt on the way are in the evidence. A test run names its platform with
-`OFICINA_TEST_PLATFORM` (`offscreen` when unnamed).
+### Results
+On this machine, Qt 6.12.0 on its `offscreen` platform, through Spix, and again on X11 and in
+Windows 11 (below); the numbers and what was learnt on the way are in the evidence. A test run
+names its platform with `OFICINA_TEST_PLATFORM` (`offscreen` when unnamed).
 
 1. **Passed** (2026-11-22). The planted project drawn row for row; a folder read when it opens
    and not before; a refresh keeps the open folders and the selection; a name holding markup drawn
@@ -327,11 +327,12 @@ the numbers and what was learnt on the way are in the evidence. A test run names
    kept its last state and saving was refused, and once mended the form followed; saved, the file's
    bytes were the CR LF and the byte-order mark it was read with. The text view is Qt Quick's own
    text editor, so the plan's fallback where Chromium cannot draw passed with it.
-3. **Passed** (2026-11-22), but for its frame times. A table of 1 000 000 rows of 8 columns, each
-   cell computed from its row when the view asks: open in about 40 ms, its last row drawn in 22 to
-   28 ms after the jump, every cell of it the model's own, and the process's memory with a million
-   rows within 0.2 MB of its memory with a thousand (release, three runs). The scrolling frame
-   times, with a GPU and without, are taken with point 6, where the drawing paths are set.
+3. **Passed** (2026-11-22; its frame times recorded with point 6). A table of 1 000 000 rows of 8
+   columns, each cell computed from its row when the view asks: open in about 40 ms, its last row
+   drawn in 22 to 28 ms after the jump, every cell of it the model's own, and the process's memory
+   with a million rows within 0.2 MB of its memory with a thousand (release, three runs). The
+   scrolling frame times, with a GPU and without, are under point 6, where the drawing paths are
+   set.
 4. **Passed** (2026-11-22). An ORCL file opened from the tree shows in Monaco, in a page Oficina
    ships, joined by Qt's web channel to a language-server client of Oficina's own (the review's
    entry 28, its first option, written in the model so ábaco's Python can share it). rust-analyzer
@@ -349,7 +350,7 @@ the numbers and what was learnt on the way are in the evidence. A test run names
    Oficina's hook (in a script world of Oficina's own, the page carrying no script for it) equal
    to what the bench held, 0.16 to 0.34 s after each change; the served page found no bridge
    object, where the page Oficina ships found its own.
-6. **Passed on this machine and in a Linux guest; Windows not yet run** (2026-11-23). With Mesa's
+6. **Passed** (2026-11-23, Windows 2026-11-24), but for its stated remainder. With Mesa's
    software rasteriser forced here (`LIBGL_ALWAYS_SOFTWARE=1`, on X11), and by itself in a Linux
    guest on QEMU/KVM with no display device (Ubuntu 26.10's cloud image, 4 cores, 4 GB, on X11
    under Xvfb), Oficina named llvmpipe as what draws it before its first window, switched its
@@ -361,9 +362,12 @@ the numbers and what was learnt on the way are in the evidence. A test run names
    times, scrolling 500 rows a second for 3 s (median, 95th percentile and worst interval, ms): on
    this machine's GPU 17, 29 to 40, 41 to 105; over llvmpipe here 25 to 31, 42 to 54, 54 to 67;
    on `offscreen` 16, 17 to 24, 18 to 45; in the guest over llvmpipe under Xvfb, which holds no
-   frame to a display's rate, 12, 20, 31. **Not run yet:** Windows 11 over WARP, where the probe
-   asks Direct3D 11's adapter (written, not compiled), and the stated remainder, Hyper-V, VMware
-   and VirtualBox.
+   frame to a display's rate, 12, 20, 31. In Windows 11 on QEMU/KVM with no GPU (the `win11`
+   guest), Oficina asked Direct3D 11 for its adapter before the first window and named WARP, the
+   Microsoft Basic Render Driver; Qt Quick drew through Direct3D 11 over it, effects off, pages
+   without WebGL, and the footer said so; points 1, 2, 3, 5 and 7 passed there on `windows` and on
+   `offscreen`; the frame times over WARP 31 to 32, 49 to 51, 56 to 67. **Not run:** the stated
+   remainder, Hyper-V, VMware and VirtualBox.
 7. **Passed** (2026-11-23). One test, run by cargo nextest with no display, its exit code the
    verdict: a value typed into the form and the text following it, an edit typed into Monaco and
    read back through Oficina's hook, and a named layout saved by KDDockWidgets' own saver, the
@@ -376,19 +380,43 @@ On X11 too (2026-11-22, once the architect installed the seven libraries Qt's X1
 the same tests passed on Qt's `xcb` platform, through this machine's display (the desktop's
 XWayland, OpenGL 4.6 on its Intel GPU), and the timings held in release (a million rows open in
 47 to 63 ms, 100 000 files in 154 to 226 ms); on 2026-11-23 the spike's 40 tests, points 4, 5 and
-7 among them, passed there with the GPU and over llvmpipe. Windows waits for its runs.
+7 among them, passed there with the GPU and over llvmpipe.
+
+In Windows 11 (2026-11-24, the `win11` guest on this machine: QEMU/KVM, 8 cores, 16 GB, no GPU, so
+Direct3D 11 over WARP), Qt 6.12.0 for MSVC 2022: the spike's 40 tests (Linux's 43 but for three of
+Unix's own: an unreadable folder, a symbolic link, a name that is not UTF-8) passed on Qt's
+`windows` platform in the signed-in desktop and on `offscreen`, every point among them, from one
+command (`run-windows.ps1`) that built the C++ libraries from nothing; point 7 20 times in a row,
+about 2.3 s a run. Release, three runs: a million rows open in 46 to 88 ms, the last row drawn in
+23 to 50 ms, its memory within 2.3 to 7.1 MB of a thousand rows'; 100 000 files in 160 to 228 ms.
+In the run of record point 4 marked the planted error in 5.0 and 5.1 s and cleared it 0.13 and 0.16
+s after the edit; once, with this machine loaded by other sessions, the mark came after its 10 s,
+and five runs straight after marked in 3.6 to 5.2 s. Point 5's page read 0.11 to 0.31 s after each
+change. "Nothing of the folder ran" says less there of the planted toolchain file, whose scripts
+Windows does not run.
 
 ### Verdict
-Not given: it waits for Windows.
-- **Proven:** on Linux, every point. Points 1 to 5 and 7 on Qt's `offscreen` platform and on X11,
-  with this machine's GPU and over llvmpipe, and again in a Linux guest on QEMU/KVM with no GPU
-  (point 4 there on X11; on the guest's first, cold start its completions came after the test's
-  10 s, the standard library's sources read over the share); point 6 here with the rasteriser
-  forced and in that guest by itself.
-- **Still lacking:** every point on Windows 11, point 6 there over WARP with the Direct3D 11 probe
-  compiled and run (`spikes\oficina\run-windows.ps1`, one command, one result file; what it
-  needs installed is under "The runs elsewhere"); and the stated remainder, Windows on Hyper-V,
-  VMware and VirtualBox, which waits for the architect.
+Given 2026-11-25, on the seven points' evidence: **Qt Quick, its logic in Rust through cxx-qt
+behind one seam, KDDockWidgets, Qt WebEngine for Monaco and the embedded pages, and Spix for the
+tests carry the workbench, on Linux with a GPU and without, and on Windows 11 without one.** Every
+point passed on Linux (`offscreen`, X11 with this machine's GPU and over llvmpipe, a Linux guest on
+QEMU/KVM with no GPU) and in Windows 11 on QEMU/KVM over WARP (`windows` and `offscreen`), each
+from one command whose exit code is the verdict, and no failing branch of any point was taken: the
+bridge expresses the lazy models in Rust alone, the C++ stays one file inside the seam, Monaco is
+kept, rust-analyzer is held to running nothing of the folder, and the embedded browser stays.
+- **What it does not cover:** the stated remainder, Windows on Hyper-V, VMware and VirtualBox,
+  needs machines this one has not (the architect's); Windows with a GPU was not run, the guest
+  having none, and no point asked for it (Qt Quick takes Direct3D 11 there too, on the GPU's
+  adapter instead of WARP); panes floated to another monitor are not judged headless; on Windows
+  the planted toolchain file proves less (its scripts do not run there). The review's entries the
+  spike measured (28, 29, 32, 34 among them) stay unruled under Q31: the spike gives their answers,
+  not their rulings.
+- **What is kept:** the model (`tree`, `document`, `formats`, `lsp`) and the bridge's shape (one
+  seam, one C++ file) are the crate's starting point, each part entering as its clause is
+  written; the test driver (Spix through the tests' `common`) and the runs elsewhere
+  (`run-guest.sh`, `install-windows-tools.ps1`, `run-windows.ps1`) carry on as the crate's. The
+  QML panes are the spike's and are rewritten under the design system. P-015 becomes clauses
+  with the crate (Before the code).
 
 ## Open
 - **Q31, the review's majors and minors**, none ruled. Those that touch Oficina: 22 (Oficina
