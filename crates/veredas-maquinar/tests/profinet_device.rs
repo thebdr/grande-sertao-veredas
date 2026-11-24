@@ -1387,3 +1387,147 @@ mod round_3 {
         assert!(validate(&cfg).is_ok());
     }
 }
+
+/// C-112's fourth refute round: the critic's probes (`~/.cache/veredas/critic-c112-r4/probes`), kept
+/// as pins: an Identify read before a mute and not taken after it, a Set whose answer would not fit
+/// one frame, the Get's and the Set's answers to the asker as a success, the configuration's
+/// refusals and defaults read directly.
+mod round_4 {
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::dcp::{self, DcpPdu, Filter, Service, ServiceType};
+    use veredas_aranha::profinet::ether;
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::*;
+
+    const DEVICE: &str = "interface = \"b0\"\nstation = \"io-device-1\"\nalias = \"port-001.switch-1\"\nvendor_id = 7\ndevice_id = 9\nip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\nlldp_interval_ms = 200\nseed = 3\nhello = false\n";
+
+    fn config(text: &str) -> ProfinetConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn link(iface: &str, ethertype: u16) -> RawLink {
+        RawLink::open_with(iface, Options { ethertype: Some(ethertype), promiscuous: false, outgoing: false }).unwrap()
+    }
+
+    /// The next DCP frame: its source, its destination and its PDU.
+    fn next_dcp(link: &RawLink, within: Duration) -> Option<(Mac, Mac, DcpPdu)> {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            let r = link.recv(within.saturating_sub(started.elapsed())).unwrap()?;
+            let f = ether::parse(&r.bytes).unwrap();
+            if f.ethertype == ether::ETHERTYPE_PROFINET {
+                return Some((f.src, f.dst, dcp::decode(f.payload).unwrap()));
+            }
+        }
+        None
+    }
+
+    /// A DCP PDU from its parts, each block padded to an even length.
+    fn raw_pdu(frame_id: u16, service: u8, xid: u32, blocks: &[(u8, u8, Vec<u8>)]) -> Vec<u8> {
+        let mut data = Vec::new();
+        for (o, s, d) in blocks {
+            data.extend_from_slice(&[*o, *s]);
+            data.extend_from_slice(&(d.len() as u16).to_be_bytes());
+            data.extend_from_slice(d);
+            if d.len() % 2 == 1 {
+                data.push(0);
+            }
+        }
+        let mut pdu = frame_id.to_be_bytes().to_vec();
+        pdu.extend_from_slice(&[service, 0]);
+        pdu.extend_from_slice(&xid.to_be_bytes());
+        pdu.extend_from_slice(&0u16.to_be_bytes());
+        pdu.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        pdu.extend_from_slice(&data);
+        pdu
+    }
+
+    fn spin(us: u64) {
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_micros(us) {
+            std::hint::spin_loop();
+        }
+    }
+
+    /// On the machine's lock: bursts of Identify requests no filter matches, the mute set at
+    /// spread moments into them; none is counted passed once `set_muted(true)` has returned.
+    #[test]
+    fn an_identify_read_before_a_mute_is_not_taken_after_it() {
+        netns::isolated("round_4::an_identify_read_before_a_mute_is_not_taken_after_it", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            let mut moved = Vec::new();
+            for round in 0..1500u32 {
+                for i in 0..20u32 {
+                    ctl.send(&dcp::identify_request(me, round * 1000 + i, 1, &Filter::Name("nobody".into())).unwrap()).unwrap();
+                }
+                spin(u64::from((round * 37) % 150));
+                dev.set_muted(true);
+                let before = dev.status().identify_passed;
+                std::thread::sleep(Duration::from_millis(3));
+                let after = dev.status().identify_passed;
+                dev.set_muted(false);
+                std::thread::sleep(Duration::from_millis(1));
+                while ctl.recv(Duration::from_millis(1)).unwrap().is_some() {}
+                if after != before {
+                    moved.push((round, after - before));
+                }
+            }
+            assert_eq!(moved, Vec::<(u32, u64)>::new(), "Identify requests taken after the mute returned (round, how many)");
+        });
+    }
+
+    #[test]
+    fn a_set_whose_answer_would_not_fit_a_frame_is_neither_applied_answered_nor_counted() {
+        netns::isolated("round_4::a_set_whose_answer_would_not_fit_a_frame_is_neither_applied_answered_nor_counted", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            // The name and 185 blocks more: 186 control responses, 12 + 186 x 8 = 1500 bytes.
+            // 186 more: 1508 bytes, past one frame.
+            for (xid, extra, name, answered) in [(1u32, 185usize, "renamed-a", true), (2, 186, "renamed-b", false), (3, 200, "renamed-c", false)] {
+                let mut blocks = vec![(2u8, 2u8, [1u16.to_be_bytes().to_vec(), name.as_bytes().to_vec()].concat())];
+                blocks.extend((0..extra).map(|i| (3u8, (i % 250) as u8 + 1, Vec::new())));
+                ctl.send(&ether::build(dev.mac, me, ether::ETHERTYPE_PROFINET, &raw_pdu(dcp::FRAME_ID_GET_SET, 4, xid, &blocks)).unwrap()).unwrap();
+                let r = next_dcp(&ctl, Duration::from_millis(500));
+                if answered {
+                    assert_eq!(r.map(|(_, _, p)| dcp::control_responses(&p).len()), Some(186));
+                    assert_eq!((dev.station(), dev.status().sets), ("renamed-a".to_string(), 1));
+                } else {
+                    assert!(r.is_none(), "{extra} blocks more answered");
+                    assert_eq!((dev.station(), dev.status().sets), ("renamed-a".to_string(), 1), "{extra} blocks more applied or counted");
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn a_get_and_a_set_are_answered_to_the_asker_as_a_success() {
+        netns::isolated("round_4::a_get_and_a_set_are_answered_to_the_asker_as_a_success", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            ctl.send(&dcp::get_request(dev.mac, me, 7, &[(2, 2)]).unwrap()).unwrap();
+            let (src, dst, get) = next_dcp(&ctl, Duration::from_millis(500)).expect("the Get's answer");
+            ctl.send(&dcp::signal_request(dev.mac, me, 8).unwrap()).unwrap();
+            let (ssrc, sdst, set) = next_dcp(&ctl, Duration::from_millis(500)).expect("the Set's answer");
+            assert_eq!((src, dst, get.service, get.service_type, get.xid), (dev.mac, me, Service::Get, ServiceType::Success, 7));
+            assert_eq!((ssrc, sdst, set.service, set.service_type, set.xid), (dev.mac, me, Service::Set, ServiceType::Success, 8));
+        });
+    }
+
+    #[test]
+    fn the_configuration_refuses_an_empty_interface_and_a_bad_station_and_defaults_every_key() {
+        let mut cfg = ProfinetConfig::new("");
+        assert_eq!(validate(&cfg).err().map(|e| e.to_string()).as_deref(), Some("profinet.interface is empty"));
+        cfg.interface = "b0".into();
+        cfg.station = "Bad_Name".into();
+        let station = validate(&cfg).err().map(|e| e.to_string());
+        assert!(station.as_deref().is_some_and(|s| s.starts_with("profinet.station `Bad_Name`: ")), "{station:?}");
+        assert_eq!(config("interface = \"b0\"\n"), ProfinetConfig::new("b0"), "a file's defaults are the configuration's own");
+    }
+}

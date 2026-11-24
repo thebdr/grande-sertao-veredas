@@ -554,6 +554,10 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
         match pdu.service {
             Service::Identify => {
                 let mut state = shared.lock();
+                // Read before the mute and taken after it: neither matched, counted nor queued.
+                if shared.muted.load(Ordering::SeqCst) {
+                    continue;
+                }
                 if !matches(&state.identity, &pdu.blocks) {
                     state.status.identify_passed += 1;
                     continue;
@@ -568,10 +572,16 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                 pending.push((Instant::now() + Duration::from_micros(spread), answer, mutes));
             }
             // A Set and a Get are taken and answered under the lock `set_muted` takes, as an
-            // Identify answer is sent: a mute that returned first leaves the request untaken.
+            // Identify is taken and its answer sent: a mute that returned first leaves the request
+            // untaken.
             Service::Set if frame.dst == mac => {
                 let mut state = shared.lock();
                 if shared.muted.load(Ordering::SeqCst) {
+                    continue;
+                }
+                // Each block is answered by a control response of 8 bytes on the wire: a Set whose
+                // answer would not fit one frame is neither applied, answered nor counted.
+                if 12 + 8 * pdu.blocks.len() > ether::MAX_PAYLOAD {
                     continue;
                 }
                 let answers = set(&mut state, &pdu);
