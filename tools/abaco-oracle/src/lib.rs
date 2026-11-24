@@ -362,6 +362,8 @@ struct CellXml {
     reference: Option<String>,
     /// The `r` of the row the cell stands in.
     row_r: Option<String>,
+    /// Which `row` element of `sheetData` it stands in, counted from 0.
+    row_n: usize,
     t: Option<String>,
     vm: Option<String>,
     formula: Option<(Option<String>, Option<String>, String)>,
@@ -374,8 +376,8 @@ struct CellXml {
 /// Every cell of a worksheet part, streamed (a sheet may be large), read by an XML parser: the
 /// cells of `sheetData` alone, each element known by its namespace and local name; an element in
 /// another namespace (one an Excel reading by Markup Compatibility ignores) is passed over with all
-/// it holds.
-fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
+/// it holds. With the cells, the `r` of every `row` element in order, an empty one's too.
+fn sheet_cells(xml: &str) -> Result<(Vec<CellXml>, Vec<Option<String>>), String> {
     use quick_xml::events::Event;
     let mut reader = quick_xml::Reader::from_str(xml);
     let mut scopes = Scopes::default();
@@ -394,8 +396,9 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
         Value,
     }
     let mut into = Into::Nothing;
-    // the `r` of the row being read
+    // the `r` of the row being read, and every row's
     let mut row_r: Option<String> = None;
+    let mut rows: Vec<Option<String>> = Vec::new();
     // a cell is `worksheet/sheetData/row/c` exactly, its formula, values and inline string its own
     // children: one inside an extension (an `ext` Excel does not know) is none
     let at = |path: &[String], want: &[&str]| path.len() == want.len() && path.iter().zip(want).all(|(p, w)| p == w);
@@ -449,10 +452,12 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
                 }
                 if name == "row" && at(&path, &["worksheet", "sheetData"]) {
                     row_r = attrs.iter().find(|(ns, l, _)| ns.is_empty() && l == "r").map(|(_, _, v)| v.clone());
+                    rows.push(row_r.clone());
                 }
                 start(&name, &attrs, &path, &mut cell, false, &mut into);
                 if name == "c" && at(&path, &["worksheet", "sheetData", "row"]) && let Some(c) = cell.as_mut() {
                     c.row_r = row_r.clone();
+                    c.row_n = rows.len().saturating_sub(1);
                 }
                 path.push(name);
             }
@@ -463,9 +468,14 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
                 if foreign > 0 || !MAIN.contains(&ns.as_str()) {
                     continue;
                 }
+                // an empty row still replaces a row stated before it
+                if name == "row" && at(&path, &["worksheet", "sheetData"]) {
+                    rows.push(attrs.iter().find(|(ns, l, _)| ns.is_empty() && l == "r").map(|(_, _, v)| v.clone()));
+                }
                 start(&name, &attrs, &path, &mut cell, true, &mut into);
                 if name == "c" && at(&path, &["worksheet", "sheetData", "row"]) && let Some(mut c) = cell.take() {
                     c.row_r = row_r.clone();
+                    c.row_n = rows.len().saturating_sub(1);
                     cells.push(c);
                 }
             }
@@ -515,7 +525,15 @@ fn sheet_cells(xml: &str) -> Result<Vec<CellXml>, String> {
     if depth != 0 {
         return Err("an element not closed".into());
     }
-    Ok(cells)
+    Ok((cells, rows))
+}
+
+/// A cell's reference as the engine reads it: its column's letters and its row (`B02` is B2).
+fn cell_place(reference: &str) -> Option<(&str, u32)> {
+    let split = reference.find(|ch: char| ch.is_ascii_digit())?;
+    let (letters, digits) = reference.split_at(split);
+    (!letters.is_empty() && letters.bytes().all(|b| b.is_ascii_uppercase())).then_some(())?;
+    Some((letters, digits.parse().ok()?))
 }
 
 /// XSD's whitespace (space, tab, line feed, carriage return) taken off both ends, and no other
@@ -910,9 +928,35 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
     for (sheet_name, part) in &sheets {
         let Some(xml) = read_part(&mut archive, part) else { continue };
         let mut shared_masters: HashMap<u32, String> = HashMap::new();
-        let cells = sheet_cells(&xml).map_err(|e| bad_xml(part, e))?;
-        // where each reference is stated last in the sheet, which the engine keeps
-        let last: HashMap<String, usize> = cells.iter().enumerate().map(|(i, c)| (c.reference.clone().unwrap_or_default(), i)).collect();
+        let (cells, rows) = sheet_cells(&xml).map_err(|e| bad_xml(part, e))?;
+        // The place the engine gives a cell: its row element's `r` (a row without one takes its
+        // first cell's row), the column its own reference names. A row stated again later is
+        // replaced whole, and of two cells at one place the last stays.
+        let mut first_row: Vec<Option<u32>> = vec![None; rows.len()];
+        for c in &cells {
+            if let Some(slot) = first_row.get_mut(c.row_n)
+                && slot.is_none()
+            {
+                *slot = c.reference.as_deref().and_then(cell_place).map(|(_, row)| row);
+            }
+        }
+        let row_number: Vec<Option<u32>> = rows
+            .iter()
+            .zip(&first_row)
+            .map(|(r, first)| r.as_deref().map(|r| xsd_trim(r).parse::<u32>().ok()).unwrap_or(*first))
+            .collect();
+        let mut last_statement: HashMap<u32, usize> = HashMap::new();
+        for (k, n) in row_number.iter().enumerate() {
+            if let Some(n) = n {
+                last_statement.insert(*n, k);
+            }
+        }
+        let mut last_at: HashMap<(u32, &str), usize> = HashMap::new();
+        for (i, c) in cells.iter().enumerate() {
+            if let (Some(Some(n)), Some((letters, _))) = (row_number.get(c.row_n), c.reference.as_deref().and_then(cell_place)) {
+                last_at.insert((*n, letters), i);
+            }
+        }
         for (i, c) in cells.iter().enumerate() {
             let reference = c.reference.clone().unwrap_or_default();
             let split = reference.find(|ch: char| ch.is_ascii_digit()).unwrap_or(reference.len());
@@ -944,13 +988,16 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
             } else {
                 expected_of(&c, &rich)
             };
-            let in_row = c.row_r.as_deref().and_then(|r| xsd_trim(r).parse::<u32>().ok());
-            let not_held = if in_row.is_some_and(|r| r != row) {
-                Some(format!("a cell `{reference}` in row {}, which the engine places by its row", in_row.unwrap_or_default()))
-            } else if last.get(&reference) != Some(&i) {
-                Some(format!("a cell `{reference}` the sheet states again later, which the engine keeps"))
-            } else {
-                None
+            let in_row = row_number.get(c.row_n).copied().flatten();
+            let not_held = match in_row {
+                Some(n) if n != row => Some(format!("a cell `{reference}` in row {n}, which the engine places by its row")),
+                Some(n) if last_statement.get(&n) != Some(&c.row_n) => {
+                    Some(format!("a cell `{reference}` of a row the sheet states again later, which the engine takes whole"))
+                }
+                Some(n) if last_at.get(&(n, col_letters)) != Some(&i) => {
+                    Some(format!("a cell `{reference}` the sheet states again later, which the engine keeps"))
+                }
+                _ => None,
             };
             formula_cells.push(FormulaCell {
                 sheet: sheet_name.clone(),
@@ -1351,9 +1398,19 @@ fn read_actual(model: &ironcalc_base::Model, si: u32, cell: &FormulaCell) -> Act
     // spilled cell (an empty `<f ca="1"/>` outside every array, which the importer reads as no
     // formula), or does not hold at all: its value is the file's cache, or nothing, not anything
     // the engine computed
-    let computed = model.workbook.worksheet(si).ok().and_then(|ws| ws.cell(row, col)).is_some_and(|c| {
-        c.get_formula().is_some() || matches!(c.as_ref(), ironcalc_base::types::Cell::SpillCell { .. })
-    });
+    // A spill cell holds a computed value only under an array formula of the engine's own at its
+    // anchor whose area covers it: the evaluator rewrites no other, and one whose anchor the
+    // engine holds otherwise (stated again as a constant, placed in another row) keeps the file's.
+    use ironcalc_base::types::Cell;
+    let Ok(ws) = model.workbook.worksheet(si) else { return Actual::NotComputed };
+    let computed = match ws.cell(row, col).as_deref() {
+        Some(Cell::SpillCell { a, .. }) => matches!(
+            ws.cell(a.0, a.1).as_deref(),
+            Some(Cell::ArrayFormula { r: (width, height), .. }) if (a.0..a.0 + height).contains(&row) && (a.1..a.1 + width).contains(&col)
+        ),
+        Some(c) => c.get_formula().is_some(),
+        None => false,
+    };
     if !computed {
         return Actual::NotComputed;
     }

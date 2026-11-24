@@ -1343,3 +1343,86 @@ fn the_binary_seeds_its_measures_and_measures_a_baseline_on_its_day() {
     ]);
     assert_eq!(code, 2);
 }
+
+#[test]
+fn an_array_whose_anchor_the_engine_holds_otherwise_computes_none_of_its_cells() {
+    // the engine rewrites a spill cell only under an array formula of its own at the anchor: an
+    // anchor stated again (as a constant, as a plain formula) or placed in another row leaves the
+    // file's caches in the cells it spilled into, which are none the engine computed
+    let b = baseline();
+    let source = corpus_dir(&b).join("DynamicArrays.xlsx");
+    let mut probe = Probe::default();
+    let planted = tempfile::tempdir().unwrap();
+    let sheet = sheet_of(&source, "A19", |_| true);
+    let (_, cells, matched) = mismatches(&source, &mut probe);
+    let spilled = ["B19", "C19", "A20", "B20", "C20", "A21", "B21", "C21"];
+    let row19 = r#"<c r="E19" t="s"><v>4</v></c></row>"#;
+    for (what, edit, want) in [
+        ("the anchor stated again as a constant", (row19, r#"<c r="E19" t="s"><v>4</v></c><c r="A19" s="3"><v>52</v></c></row>"#), (cells, matched)),
+        ("the anchor stated again as a formula", (row19, r#"<c r="E19" t="s"><v>4</v></c><c r="A19" s="3"><f>52</f><v>52</v></c></row>"#), (cells + 1, matched + 1)),
+        ("the anchor's row numbered 99", (r#"<row r="19" "#, r#"<row r="99" "#), (cells, matched)),
+    ] {
+        let path = planted.path().join("arrays.xlsx");
+        rewrite_part(&source, &path, "xl/worksheets/sheet1.xml", |t| {
+            assert!(t.contains(edit.0), "{what}");
+            t.replacen(edit.0, edit.1, 1)
+        });
+        let (wrong, cells_now, matched_now) = mismatches(&path, &mut probe);
+        assert_eq!((cells_now, matched_now), want, "{what}: {wrong:?}");
+        for r in spilled {
+            assert!(wrong.contains(&format!("{sheet}!{r}")), "{what}: {r} {wrong:?}");
+        }
+    }
+}
+
+#[test]
+fn a_row_without_its_number_or_stated_twice_places_its_cells_as_the_engine_does() {
+    let b = baseline();
+    let abs = corpus_dir(&b).join("calc_tests/MATH_AND_TRIGONOMETRY/ABS.xlsx");
+    let mut probe = Probe::default();
+    let planted = tempfile::tempdir().unwrap();
+    let (_, cells, matched) = mismatches(&abs, &mut probe);
+    let row9 = r#"<row r="9" spans="1:2" x14ac:dyDescent="0.2">"#;
+    let a10 = r#"<c r="A10" t="e"><f>NA()</f><v>#N/A</v></c>"#;
+    let path = planted.path().join("rows.xlsx");
+    // a row without `r` takes its first cell's row: alone in it, the sheet measures as before
+    rewrite_part(&abs, &path, "xl/worksheets/sheet1.xml", |t| t.replacen(row9, r#"<row spans="1:2" x14ac:dyDescent="0.2">"#, 1));
+    let (wrong, cells_now, matched_now) = mismatches(&path, &mut probe);
+    assert_eq!((cells_now, matched_now), (cells, matched), "{wrong:?}");
+    assert!(scan_raw(&path).unwrap().formula_cells.iter().all(|c| c.not_held.is_none()));
+    // A10 moved into that row after A9, each caching what the other computes: the engine holds
+    // A10's NA() at A9, so A9 is a cell it does not hold, and A10 one it places in row 9
+    rewrite_part(&abs, &path, "xl/worksheets/sheet1.xml", |t| {
+        t.replacen(row9, r#"<row spans="1:2" x14ac:dyDescent="0.2">"#, 1)
+            .replacen(r#"<c r="A9" t="e"><f>1/0</f><v>#DIV/0!</v></c>"#, r#"<c r="A9" t="e"><f>1/0</f><v>#N/A</v></c>"#, 1)
+            .replacen(a10, "", 1)
+            .replacen(r#"<f t="shared" si="0"/><v>#DIV/0!</v></c></row>"#, r#"<f t="shared" si="0"/><v>#DIV/0!</v></c><c r="A10" t="e"><f>NA()</f><v>#DIV/0!</v></c></row>"#, 1)
+    });
+    let raw = scan_raw(&path).unwrap();
+    for (r, why) in [("A9", "states again later"), ("A10", "places by its row")] {
+        let c = raw.formula_cells.iter().find(|c| c.reference == r).unwrap();
+        assert!(c.not_held.as_deref().is_some_and(|w| w.contains(why)), "{r}: {:?}", c.not_held);
+    }
+    // (B9 and B10 read A9 and A10, which hold other cells now: two real mismatches more)
+    let (wrong, cells_now, matched_now) = mismatches(&path, &mut probe);
+    assert_eq!((cells_now, matched_now), (cells, matched - 4), "{wrong:?}");
+    assert_eq!(wrong, ["Sheet1!A10", "Sheet1!A9", "Sheet1!B10", "Sheet1!B9"].map(String::from).into(), "{wrong:?}");
+    // row 9 stated again, empty, at the end: the engine takes the later row whole, A9 and B9 gone
+    rewrite_part(&abs, &path, "xl/worksheets/sheet1.xml", |t| t.replacen("</sheetData>", r#"<row r="9" spans="1:2"/></sheetData>"#, 1));
+    let raw = scan_raw(&path).unwrap();
+    for r in ["A9", "B9"] {
+        let c = raw.formula_cells.iter().find(|c| c.reference == r).unwrap();
+        assert!(c.not_held.as_deref().is_some_and(|w| w.contains("takes whole")), "{r}: {:?}", c.not_held);
+    }
+    let (wrong, cells_now, matched_now) = mismatches(&path, &mut probe);
+    assert_eq!((cells_now, matched_now), (cells, matched - 2), "{wrong:?}");
+    // B2 stated twice, the first spelled `B02` (or `B002`), which the engine reads as B2
+    let b2 = r#"<c r="B2" s="2"><f>ABS(A2)</f><v>1</v></c>"#;
+    for spelled in ["B02", "B002"] {
+        rewrite_part(&abs, &path, "xl/worksheets/sheet1.xml", |t| t.replacen(b2, &format!(r#"<c r="{spelled}"><f>A2+41</f><v>1</v></c>{b2}"#), 1));
+        let raw = scan_raw(&path).unwrap();
+        assert!(raw.formula_cells.iter().find(|c| c.reference == "B2").unwrap().not_held.as_deref().is_some_and(|w| w.contains("states again later")), "{spelled}");
+        let (wrong, cells_now, matched_now) = mismatches(&path, &mut probe);
+        assert_eq!((cells_now, matched_now), (cells + 1, matched), "{spelled}: {wrong:?}");
+    }
+}
