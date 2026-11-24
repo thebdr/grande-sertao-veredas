@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
-use rapier3d::glamx::{EulerRot, Quat};
-use rapier3d::prelude::*;
+use rapier3d_f64::glamx::{DQuat as Quat, EulerRot};
+use rapier3d_f64::prelude::*;
 
 use super::FisicaError;
 use super::scene::{self, Body, Placement, Scene};
@@ -49,16 +49,16 @@ pub struct BodyState {
     /// `Kind::Body` or `Kind::Mover`.
     pub kind: Kind,
     /// Its centre, in metres.
-    pub at: [f32; 3],
+    pub at: [f64; 3],
     /// Its rotation, a unit quaternion (x, y, z, w).
-    pub rotation: [f32; 4],
+    pub rotation: [f64; 4],
     /// Its centre's velocity, in m/s.
-    pub velocity: [f32; 3],
+    pub velocity: [f64; 3],
 }
 
 impl BodyState {
     /// Its rotation as the scene file states one: yaw, pitch and roll in degrees.
-    pub fn angles(&self) -> [f32; 3] {
+    pub fn angles(&self) -> [f64; 3] {
         let [x, y, z, w] = self.rotation;
         let (yaw, pitch, roll) = Quat::from_xyzw(x, y, z, w).to_euler(EulerRot::ZYX);
         [yaw.to_degrees(), pitch.to_degrees(), roll.to_degrees()]
@@ -152,8 +152,8 @@ pub struct World {
 
 /// An angle in degrees as the engine takes it: reduced to a turn in double precision first, so a
 /// huge finite angle is the angle it names, never NaN.
-fn radians(deg: f64) -> f32 {
-    deg.rem_euclid(360.0).to_radians() as f32
+fn radians(deg: f64) -> f64 {
+    deg.rem_euclid(360.0).to_radians()
 }
 
 fn rotation(yaw: f64, pitch: f64, roll: f64) -> Quat {
@@ -161,11 +161,11 @@ fn rotation(yaw: f64, pitch: f64, roll: f64) -> Quat {
 }
 
 fn pose(at: [f64; 3], yaw: f64, pitch: f64, roll: f64) -> Pose {
-    Pose::from_parts(Vector::new(at[0] as f32, at[1] as f32, at[2] as f32), rotation(yaw, pitch, roll))
+    Pose::from_parts(Vector::new(at[0], at[1], at[2]), rotation(yaw, pitch, roll))
 }
 
-fn half(size: [f64; 3]) -> (f32, f32, f32) {
-    ((size[0] / 2.0) as f32, (size[1] / 2.0) as f32, (size[2] / 2.0) as f32)
+fn half(size: [f64; 3]) -> (f64, f64, f64) {
+    (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0)
 }
 
 impl World {
@@ -173,8 +173,12 @@ impl World {
     pub fn new(scene: &Scene) -> Result<World, FisicaError> {
         scene::validate(scene)?;
         let mut w = PhysicsWorld::new();
-        w.gravity = Vector::new(0.0, 0.0, -(scene.gravity as f32));
-        w.integration_parameters.dt = scene.step_ms as f32 / 1000.0;
+        w.gravity = Vector::new(0.0, 0.0, -scene.gravity);
+        w.integration_parameters.dt = f64::from(scene.step_ms) / 1000.0;
+        // Contacts worked out anew at every step: recycled ones let a body falling from beyond the
+        // prediction distance cross a fixed part whole at a long step (7 of 840 drops at 10 to
+        // 100 ms; C-114's fourth refute round). Continuous collision detection changes nothing.
+        w.integration_parameters.contact_recycling = false;
         let ground = w.insert_body(RigidBodyBuilder::fixed());
         let (ctx, collisions) = channel();
         let (ftx, forces) = channel();
@@ -203,7 +207,7 @@ impl World {
         }
         for f in &scene.fixed {
             let (x, y, z) = half(f.size);
-            world.w.insert_collider(ColliderBuilder::cuboid(x, y, z).position(pose(f.at, f.yaw, f.pitch, f.roll)).friction(f.friction as f32), Some(ground));
+            world.w.insert_collider(ColliderBuilder::cuboid(x, y, z).position(pose(f.at, f.yaw, f.pitch, f.roll)).friction(f.friction), Some(ground));
             world.kinds.insert(f.name.clone(), Kind::Fixed);
         }
         for b in &scene.belts {
@@ -212,7 +216,7 @@ impl World {
             let collider = world.w.insert_collider(
                 ColliderBuilder::cuboid(x, y, z)
                     .position(pose(b.at, b.yaw, b.pitch, b.roll))
-                    .friction(b.friction as f32)
+                    .friction(b.friction)
                     .active_hooks(ActiveHooks::MODIFY_SOLVER_CONTACTS),
                 Some(ground),
             );
@@ -222,7 +226,7 @@ impl World {
         for m in &scene.movers {
             let (x, y, z) = half(m.size);
             let body = world.w.insert_body(RigidBodyBuilder::kinematic_position_based().pose(pose(m.at, m.yaw, m.pitch, m.roll)));
-            let collider = world.w.insert_collider(ColliderBuilder::cuboid(x, y, z).friction(m.friction as f32), Some(body));
+            let collider = world.w.insert_collider(ColliderBuilder::cuboid(x, y, z).friction(m.friction), Some(body));
             world.owners.insert(collider, m.name.clone());
             world.moving.insert(m.name.clone(), (body, Kind::Mover));
             world.kinds.insert(m.name.clone(), Kind::Mover);
@@ -233,7 +237,7 @@ impl World {
                     let (x, y, z) = half(size);
                     ColliderBuilder::cuboid(x, y, z)
                 }
-                (None, Some(r)) => ColliderBuilder::ball(r as f32),
+                (None, Some(r)) => ColliderBuilder::ball(r),
                 (None, None) => unreachable!("validated: a sensor has a size or a radius"),
             };
             let collider = world.w.insert_collider(
@@ -255,7 +259,7 @@ impl World {
     fn insert_body(&mut self, b: &Body) {
         let (x, y, z) = half(b.size);
         let body = self.w.insert_body(RigidBodyBuilder::dynamic().pose(pose(b.at, b.yaw, b.pitch, b.roll)));
-        let collider = self.w.insert_collider(ColliderBuilder::cuboid(x, y, z).mass(b.mass as f32).friction(b.friction as f32), Some(body));
+        let collider = self.w.insert_collider(ColliderBuilder::cuboid(x, y, z).mass(b.mass).friction(b.friction), Some(body));
         self.owners.insert(collider, b.name.clone());
         self.moving.insert(b.name.clone(), (body, Kind::Body));
         self.kinds.insert(b.name.clone(), Kind::Body);
@@ -282,7 +286,7 @@ impl World {
         for body in wake {
             self.w.wake_up(body, true);
         }
-        let hooks = BeltHooks { belts: self.belts.values().map(|b| (b.collider, (b.axis * b.speed as f32, b.up))).collect() };
+        let hooks = BeltHooks { belts: self.belts.values().map(|b| (b.collider, (b.axis * b.speed, b.up))).collect() };
         self.w.step_with_events(&hooks, &self.collector);
         self.steps += 1;
         let mut seen = Vec::new();

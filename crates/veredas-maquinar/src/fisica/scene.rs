@@ -14,8 +14,13 @@ pub const VERSION: u32 = 1;
 
 /// The longest side a box may have, and the farthest a centre may be from the origin, in metres.
 pub const MAX_LENGTH: f64 = 10_000.0;
+/// The shortest side a box may have, and the smallest ball, in metres: a millimetre (the engine
+/// rests a smaller part sunk into what it lies on).
+pub const MIN_LENGTH: f64 = 0.001;
 /// The heaviest body, in kilograms.
 pub const MAX_MASS: f64 = 100_000.0;
+/// The lightest body, in kilograms: a milligram (the engine leaves a body of 1e-38 kg unmoved).
+pub const MIN_MASS: f64 = 0.000_001;
 /// The fastest belt, either way, in metres per second.
 pub const MAX_SPEED: f64 = 100.0;
 /// The highest friction coefficient a part may state.
@@ -258,8 +263,8 @@ pub fn validate(scene: &Scene) -> Result<(), FisicaError> {
         match (s.size, s.radius) {
             (Some(size), None) => check_box(&place, size, s.at, [s.yaw, s.pitch, s.roll])?,
             (None, Some(r)) => {
-                if !r.is_finite() || r <= 0.0 || r > MAX_LENGTH {
-                    return Err(invalid(format!("{place}.radius: {r} m, not over 0 and up to {MAX_LENGTH}")));
+                if !r.is_finite() || r < MIN_LENGTH || r > MAX_LENGTH {
+                    return Err(invalid(format!("{place}.radius: {r} m, not from {MIN_LENGTH} to {MAX_LENGTH}")));
                 }
                 check_pose(&place, s.at, [s.yaw, s.pitch, s.roll])?;
             }
@@ -293,15 +298,15 @@ pub(super) fn check_name(names: &[(String, &'static str)], kind: &str, place: &s
 
 pub(super) fn check_body(place: &str, b: &Body) -> Result<(), FisicaError> {
     check_box(place, b.size, b.at, [b.yaw, b.pitch, b.roll])?;
-    if !b.mass.is_finite() || b.mass <= 0.0 || b.mass > MAX_MASS {
-        return Err(invalid(format!("{place}.mass: {} kg, not over 0 and up to {MAX_MASS}", b.mass)));
+    if !b.mass.is_finite() || b.mass < MIN_MASS || b.mass > MAX_MASS {
+        return Err(invalid(format!("{place}.mass: {} kg, not from {MIN_MASS} to {MAX_MASS}", b.mass)));
     }
     check_friction(place, b.friction)
 }
 
 fn check_box(place: &str, size: [f64; 3], at: [f64; 3], angles: [f64; 3]) -> Result<(), FisicaError> {
-    if size.iter().any(|s| !s.is_finite() || *s <= 0.0 || *s > MAX_LENGTH) {
-        return Err(invalid(format!("{place}.size: {size:?} m, each side over 0 and up to {MAX_LENGTH}")));
+    if size.iter().any(|s| !s.is_finite() || *s < MIN_LENGTH || *s > MAX_LENGTH) {
+        return Err(invalid(format!("{place}.size: {size:?} m, each side from {MIN_LENGTH} to {MAX_LENGTH}")));
     }
     check_pose(place, at, angles)
 }

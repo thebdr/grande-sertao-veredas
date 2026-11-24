@@ -455,14 +455,15 @@ Recorded as the port meets them.
   | test(round_3::the_same_neighbour_heard_again_is_kept_to_its_last_frame_s_ttl)
   | test(round_7::the_read_ahead_stops_at_64_kib_and_a_request_past_it_is_judged_when_it_is_read)
   | test(round_7::a_connection_past_the_limit_is_closed_within_300_ms)
-  | test(round_4::an_identify_read_before_a_mute_is_not_taken_after_it)`
+  | test(round_4::an_identify_read_before_a_mute_is_not_taken_after_it)
+  | test(round_4::the_runner_keeps_its_scene_s_own_step)`
   (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23; the adapter's
   multiplier at 3 and its restart within a second; the PROFINET neighbour aged out by its TTL, and
   kept to its last frame's when heard again; the Modbus server's read-ahead filled during a delay
   and its refusal at the limit within 300 ms; the
   executable's status lines a second apart; the Modbus server's delays side by side and a close
   behind many requests seen at once; the PROFINET device's strict mute, whose bursts meet the mute
-  as the load lets them, and an Identify read before a mute not taken after it; `fisica`'s late count against the steps' own starts).
+  as the load lets them, and an Identify read before a mute not taken after it; `fisica`'s late count against the steps' own starts, and its runner at a 10 and a 20 ms step).
   Free, by that rule: the bench file, the channels, the controller's rules, the component, the
   EtherCAT segment (ethercrab's own timeouts are deadlines), `fisica` but its runner, and every
   other test of the files above. A new test that measures time joins this list in its commit, and
@@ -473,6 +474,13 @@ Recorded as the port meets them.
   the penetration a contact may keep; in Rapier 0.36.1 only the CCD solver uses it, and contacts
   are corrected to zero penetration. A body on a lighter one sinks into it with the mass ratio
   (2.6 mm at ten times). Measure a setting's effect before claiming it (C-114, round 2).
+- **Rapier's default build is single precision.** `rapier3d` computes in f32: at 1000 m from the
+  origin a position's step is 61 µm, past what a slow belt moves in a step, so a belt there carried
+  nothing while its velocity read right. The bench runs on `rapier3d-f64` (C-114, round 4).
+- **Recycled contacts let a body cross a floor at a long step.** A body falling from beyond the 2 cm
+  prediction distance has no contact that step; Rapier keeps the empty set the next step while the
+  body moved less than the 5 cm recycle distance, and the body crosses whole (CCD does not help).
+  `contact_recycling` is off (C-114, round 4).
 - **A peek sees only the first byte.** The Modbus server watched a delayed answer's client with a
   one-byte peek; a request pipelined behind made the peek ready for good, and a close behind it went
   unseen till the delay ended. Read ahead into the connection's own buffer instead: the end of the

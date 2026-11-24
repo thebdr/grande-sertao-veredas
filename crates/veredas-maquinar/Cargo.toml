@@ -34,7 +34,7 @@ toml = { workspace = true }
 # its stop (src/main.rs).
 tokio = { workspace = true, features = ["signal"] }
 # fisica's bodies, contacts and sensors (docs/questions.md Q160); named only in src/fisica/world.rs.
-rapier3d = { workspace = true }
+rapier3d-f64 = { workspace = true }
 
 [dev-dependencies]
 # The OPC server is driven by the same client library portal will use.

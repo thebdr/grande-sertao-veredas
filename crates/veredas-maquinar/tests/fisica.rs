@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use veredas_maquinar::fisica::{self, Body, BodyState, FisicaError, Kind, Placement, Scene, SensorEvent, World};
 
-const G: f32 = 9.81;
+const G: f64 = 9.81;
 
 /// The reference's worked example, as the test finds it in `docs/cena-schema.md`.
 fn reference() -> String {
@@ -24,7 +24,7 @@ fn world(body: &str) -> World {
     World::new(&scene(body)).unwrap()
 }
 
-fn at(w: &World, name: &str) -> [f32; 3] {
+fn at(w: &World, name: &str) -> [f64; 3] {
     w.body(name).unwrap().at
 }
 
@@ -35,7 +35,7 @@ fn steps(w: &mut World, n: u64) {
 }
 
 /// Steps until `done`, keeping each step's pose of `name`; at most `max` steps.
-fn run_until(w: &mut World, name: &str, max: u64, mut done: impl FnMut(&mut World, &[SensorEvent]) -> bool) -> (Vec<[f32; 3]>, Vec<SensorEvent>) {
+fn run_until(w: &mut World, name: &str, max: u64, mut done: impl FnMut(&mut World, &[SensorEvent]) -> bool) -> (Vec<[f64; 3]>, Vec<SensorEvent>) {
     let mut poses = vec![at(w, name)];
     for _ in 0..max {
         w.step();
@@ -77,7 +77,7 @@ fn the_documented_scene_loads_with_its_numbers_and_runs_as_the_reference_says() 
     assert_eq!(events, [SensorEvent { step: w.steps(), sensor: "B1".into(), body: "carton-1".into(), entered: true }]);
     let n = poses.len();
     assert!(poses[n - 2][0] + 0.15 >= 1.995 && poses[n - 3][0] + 0.15 < 1.995, "{:?}", &poses[n - 3..]);
-    let t = w.time().as_secs_f32();
+    let t = w.time().as_secs_f64();
     assert!((3.0..3.25).contains(&t), "{t}");
     assert_eq!(w.sensor("B1").unwrap().inside, ["carton-1"]);
     // It leaves when its back edge has passed the beam, one step late the same way.
@@ -109,7 +109,7 @@ fn a_free_fall_keeps_to_gravity_within_a_step_and_a_body_comes_to_rest_within_a_
     let mut w = world("[[body]]\nname = \"ball\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 100.0]\n");
     steps(&mut w, 250);
     let b = w.body("ball").unwrap();
-    let t = w.time().as_secs_f32();
+    let t = w.time().as_secs_f64();
     assert_eq!(t, 1.0);
     // The velocity is g t exactly as the steps add it; the drop is g t²/2 to within the step's
     // share an integrator that moves after it accelerates takes (g dt t / 2).
@@ -192,7 +192,7 @@ fn a_mover_reaches_each_pose_at_the_next_step_and_pushes_without_being_pushed() 
         w.place("blade", Placement::at([x, 0.0, 0.2])).unwrap();
         w.step();
         let b = w.body("blade").unwrap();
-        assert!((b.at[0] as f64 - x).abs() < 1e-5 && b.at[1] == 0.0 && b.at[2] == 0.2, "{i}: {b:?}");
+        assert!((b.at[0] - x).abs() < 1e-5 && b.at[1] == 0.0 && b.at[2] == 0.2, "{i}: {b:?}");
     }
     // Ahead of the blade's face (0.525) at the blade's speed, 1.5 m/s, its back face into the
     // blade within 7 mm: one step's travel (6 mm) and a millimetre (2.04 mm measured).
@@ -208,7 +208,7 @@ fn a_mover_reaches_each_pose_at_the_next_step_and_pushes_without_being_pushed() 
 
 /// A slab pitched by `angle` degrees and a body resting on its top face; how far the body moves in
 /// a second.
-fn slide(angle: f64) -> f32 {
+fn slide(angle: f64) -> f64 {
     let p = angle.to_radians();
     // The slab's top normal is its own z turned by the pitch about y: (sin p, 0, cos p).
     let (nx, nz) = (p.sin(), p.cos());
@@ -235,7 +235,7 @@ fn friction_holds_a_body_on_a_gentle_slope_and_lets_it_slide_on_a_steep_one() {
     let slid = slide(40.0);
     // On 40° it accelerates at g (sin 40° - 0.6 cos 40°), about 1.80 m/s². Measured from 0.1 s to
     // 1.1 s, it covers a (0.1 × 1 + 1²/2), about 1.08 m.
-    let a = G * (40f32.to_radians().sin() - 0.6 * 40f32.to_radians().cos());
+    let a = G * (40f64.to_radians().sin() - 0.6 * 40f64.to_radians().cos());
     let expected = a * (0.1 + 0.5);
     assert!((slid - expected).abs() < 0.03 * expected, "{slid} against {expected}");
 }
@@ -297,12 +297,12 @@ fn scripted_run() -> (Vec<Vec<BodyState>>, Vec<SensorEvent>) {
     (states, events)
 }
 
-fn bits(states: &[Vec<BodyState>]) -> Vec<(String, [u32; 10])> {
+fn bits(states: &[Vec<BodyState>]) -> Vec<(String, [u64; 10])> {
     states
         .iter()
         .flatten()
         .map(|b| {
-            let v: Vec<u32> = b.at.iter().chain(b.rotation.iter()).chain(b.velocity.iter()).map(|f| f.to_bits()).collect();
+            let v: Vec<u64> = b.at.iter().chain(b.rotation.iter()).chain(b.velocity.iter()).map(|f| f.to_bits()).collect();
             (b.name.clone(), v.try_into().unwrap())
         })
         .collect()
@@ -368,20 +368,20 @@ fn every_refusal_is_named_by_its_place() {
         ("[[fixed]]\nname = \"\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n".into(), "fixed[0]: the fixed has no name"),
         ("[[belt]]\nname = \" b\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n".into(), "belt[0]: the name ` b` has surrounding whitespace"),
         (format!("{}{}", part("body", ""), part("sensor", "").replace("size = [1.0, 1.0, 1.0]", "radius = 1.0")), "sensor[0]: `p` is already the name of a body"),
-        (part("fixed", "").replace("[1.0, 1.0, 1.0]", "[1.0, 0.0, 1.0]"), "fixed[0] (`p`).size: [1.0, 0.0, 1.0] m, each side over 0 and up to 10000"),
-        (part("belt", "").replace("[1.0, 1.0, 1.0]", "[-1.0, 1.0, 1.0]"), "belt[0] (`p`).size: [-1.0, 1.0, 1.0] m, each side over 0 and up to 10000"),
-        (part("body", "").replace("[1.0, 1.0, 1.0]", "[10001.0, 1.0, 1.0]"), "body[0] (`p`).size: [10001.0, 1.0, 1.0] m, each side over 0 and up to 10000"),
+        (part("fixed", "").replace("[1.0, 1.0, 1.0]", "[1.0, 0.0, 1.0]"), "fixed[0] (`p`).size: [1.0, 0.0, 1.0] m, each side from 0.001 to 10000"),
+        (part("belt", "").replace("[1.0, 1.0, 1.0]", "[-1.0, 1.0, 1.0]"), "belt[0] (`p`).size: [-1.0, 1.0, 1.0] m, each side from 0.001 to 10000"),
+        (part("body", "").replace("[1.0, 1.0, 1.0]", "[10001.0, 1.0, 1.0]"), "body[0] (`p`).size: [10001.0, 1.0, 1.0] m, each side from 0.001 to 10000"),
         (part("mover", "").replace("at = [0.0, 0.0, 0.0]", "at = [0.0, 0.0, -10001.0]"), "mover[0] (`p`).at: [0.0, 0.0, -10001.0] m, each coordinate within 10000 of the origin"),
         (part("fixed", "yaw = inf\n"), "fixed[0] (`p`).yaw: inf, not a finite angle"),
         (part("fixed", "roll = nan\n"), "fixed[0] (`p`).roll: NaN, not a finite angle"),
         (part("fixed", "friction = -0.1\n"), "fixed[0] (`p`).friction: -0.1, not 0 to 10"),
         (part("mover", "friction = 11\n"), "mover[0] (`p`).friction: 11, not 0 to 10"),
-        (part("body", "mass = 0\n"), "body[0] (`p`).mass: 0 kg, not over 0 and up to 100000"),
-        (part("body", "mass = 100001\n"), "body[0] (`p`).mass: 100001 kg, not over 0 and up to 100000"),
+        (part("body", "mass = 0\n"), "body[0] (`p`).mass: 0 kg, not from 0.000001 to 100000"),
+        (part("body", "mass = 100001\n"), "body[0] (`p`).mass: 100001 kg, not from 0.000001 to 100000"),
         (part("belt", "speed = -100.5\n"), "belt[0] (`p`).speed: -100.5 m/s, not within 100 either way"),
         (part("sensor", "radius = 1.0\n"), "sensor[0] (`p`): a sensor is a box (`size`) or a ball (`radius`), not both"),
         ("[[sensor]]\nname = \"s\"\nat = [0.0, 0.0, 0.0]\n".into(), "sensor[0] (`s`): a sensor is a box (`size`) or a ball (`radius`); it has neither"),
-        ("[[sensor]]\nname = \"s\"\nradius = 0.0\nat = [0.0, 0.0, 0.0]\n".into(), "sensor[0] (`s`).radius: 0 m, not over 0 and up to 10000"),
+        ("[[sensor]]\nname = \"s\"\nradius = 0.0\nat = [0.0, 0.0, 0.0]\n".into(), "sensor[0] (`s`).radius: 0 m, not from 0.001 to 10000"),
         ("[[sensor]]\nname = \"s\"\nradius = 1.0\nat = [0.0, 0.0, 0.0]\npitch = inf\n".into(), "sensor[0] (`s`).pitch: inf, not a finite angle"),
     ];
     for (body, message) in cases {
@@ -397,7 +397,7 @@ fn every_refusal_is_named_by_its_place() {
     assert_eq!(w.place("floor", Placement::at([0.0; 3])), Err(FisicaError::Invalid("`floor` is a fixed shape, not a mover".into())));
     assert_eq!(w.place("pusher", Placement::at([f64::NAN, 0.0, 0.0])), Err(FisicaError::Invalid("mover `pusher`.at: [NaN, 0.0, 0.0] m, each coordinate within 10000 of the origin".into())));
     assert_eq!(w.add_body(&Body::new("B1", [0.1; 3], [0.0; 3])), Err(FisicaError::Invalid("body `B1`: `B1` is already the name of a sensor".into())));
-    assert_eq!(w.add_body(&Body { mass: -1.0, ..Body::new("n", [0.1; 3], [0.0; 3]) }), Err(FisicaError::Invalid("body `n`.mass: -1 kg, not over 0 and up to 100000".into())));
+    assert_eq!(w.add_body(&Body { mass: -1.0, ..Body::new("n", [0.1; 3], [0.0; 3]) }), Err(FisicaError::Invalid("body `n`.mass: -1 kg, not from 0.000001 to 100000".into())));
     assert_eq!(w.remove_body("pusher"), Err(FisicaError::Invalid("`pusher` is a mover, not a body".into())));
     assert_eq!(w.remove_body("ghost"), Err(FisicaError::Unknown { kind: "body", name: "ghost".into() }));
     assert_eq!(FisicaError::Unknown { kind: "body", name: "ghost".into() }.to_string(), "no body is named `ghost`");
@@ -419,7 +419,9 @@ fn the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene() {
     let (steps, elapsed) = (h.steps() - first, begun.elapsed());
     let due = (elapsed.as_millis() / 4) as u64;
     assert!(steps + 3 >= due && steps <= due + 2, "{steps} steps in {elapsed:?}");
-    assert_eq!(h.time(), Duration::from_millis(4 * h.steps()));
+    // Read under one lock: a step between two reads would part them.
+    let (time, taken) = h.with(|w| (w.time(), w.steps()));
+    assert_eq!(time, Duration::from_millis(4 * taken));
     let s = h.status();
     assert_eq!((s.bodies, s.sensors), (1, 2));
     // A calm second: a step is late only past one step behind its time (refute round 2: every
@@ -614,7 +616,7 @@ mod round_1 {
     }
 
     /// The slab-and-part slide of the repository's test, with frictions of the critic's choosing.
-    fn slide(angle: f64, slab_friction: f64, part_friction: f64) -> f32 {
+    fn slide(angle: f64, slab_friction: f64, part_friction: f64) -> f64 {
         let p = angle.to_radians();
         let (nx, nz) = (p.sin(), p.cos());
         let d = 0.05 + 0.1 + 0.0005;
@@ -637,8 +639,8 @@ mod round_1 {
         let held = slide(20.0, 1.0, 0.2);
         let held2 = slide(20.0, 0.2, 1.0);
         let slid = slide(40.0, 1.0, 0.2);
-        let g = 9.81f32;
-        let a = g * (40f32.to_radians().sin() - 0.6 * 40f32.to_radians().cos());
+        let g = 9.81f64;
+        let a = g * (40f64.to_radians().sin() - 0.6 * 40f64.to_radians().cos());
         let expected = a * (0.1 + 0.5);
         println!("P5 held {held} {held2} slid {slid} expected {expected}");
         assert!(held < 0.002 && held2 < 0.002, "{held} {held2}");
@@ -799,7 +801,7 @@ mod round_1 {
         let mut w = world("gravity = 0\n[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 0.0]\nyaw = 90\npitch = 30\n");
         w.step();
         let s = w.body("b").unwrap();
-        let [x, y, z, ww] = s.rotation.map(|v| v as f64);
+        let [x, y, z, ww] = s.rotation.map(|v| v);
         // The quaternion's rotation of (1, 0, 0): the first column of its matrix.
         let col = [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + ww * z), 2.0 * (x * z - ww * y)];
         let c = 30f64.to_radians();
@@ -812,7 +814,7 @@ mod round_1 {
         );
         steps(&mut w, 250);
         let p = w.body("p").unwrap();
-        let t = 10f32.to_radians();
+        let t = 10f64.to_radians();
         println!("P11 ramp {p:?}");
         assert!(p.velocity[0].abs() < 0.01 && (p.velocity[1] - 0.5 * t.cos()).abs() < 0.01 && (p.velocity[2] - 0.5 * t.sin()).abs() < 0.01, "{p:?}");
     }
@@ -1105,7 +1107,7 @@ mod round_2 {
             assert!(matches!(fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")), Err(FisicaError::NotToml(_))), "{body}");
         }
         let e = fisica::load("format = \"veredas-cena\"\nversion = 1\n[[body]]\nname = \"a\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n[[body]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\nmass = 0\n").unwrap_err();
-        assert_eq!(e.to_string(), "body[1] (`b`).mass: 0 kg, not over 0 and up to 100000");
+        assert_eq!(e.to_string(), "body[1] (`b`).mass: 0 kg, not from 0.000001 to 100000");
     }
 
     #[test]
@@ -1127,7 +1129,7 @@ mod round_2 {
                 w.step();
                 for b in w.bodies() {
                     for f in b.at.iter().chain(b.rotation.iter()).chain(b.velocity.iter()) {
-                        h = (h ^ u64::from(f.to_bits())).wrapping_mul(0x100_0000_01b3);
+                        h = (h ^ f.to_bits()).wrapping_mul(0x100_0000_01b3);
                     }
                 }
                 for e in w.take_events() {
@@ -1152,7 +1154,7 @@ mod round_2 {
                 half + 0.05
             ));
             steps(&mut w, 500);
-            let deep = f64::from(half as f32 - w.body("box").unwrap().at[2]);
+            let deep = half - w.body("box").unwrap().at[2];
             assert!((0.0..1e-4).contains(&deep), "{mass} kg of {size} m: {deep} m deep");
         }
         // On a 1 kg box: ten times its mass sinks 2.6 mm into it, a hundred times 26 mm.
@@ -1164,7 +1166,7 @@ mod round_2 {
             ));
             steps(&mut w, 1000);
             let (l, h) = (w.body("light").unwrap().at[2], w.body("heavy").unwrap().at[2]);
-            f64::from(0.2 - (h - l))
+            0.2 - (h - l)
         };
         let (ten, hundred) = (on_light(10.0), on_light(100.0));
         assert!((0.002..0.0035).contains(&ten) && (0.02..0.035).contains(&hundred), "{ten} m, {hundred} m");
@@ -1411,7 +1413,7 @@ mod round_3 {
         let depth = |step_ms: u32, gravity: f64| {
             let mut w = world(&format!("step_ms = {step_ms}\ngravity = {gravity}\n[[fixed]]\nname = \"floor\"\nsize = [40.0, 40.0, 0.2]\nat = [0.0, 0.0, -0.1]\n[[body]]\nname = \"box\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.11]\n"));
             steps(&mut w, u64::from(5000 / step_ms));
-            f64::from(0.1f32 - w.body("box").unwrap().at[2])
+            0.1 - w.body("box").unwrap().at[2]
         };
         for step_ms in [1, 4, 10, 100] {
             let d = depth(step_ms, 9.81);
@@ -1427,11 +1429,13 @@ mod round_3 {
     fn the_engine_is_rapier_0_36_1_with_enhanced_determinism_named_in_the_world_module_alone() {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
         let workspace = std::fs::read_to_string(format!("{root}/Cargo.toml")).unwrap();
-        assert!(workspace.lines().any(|l| l.trim() == "rapier3d = { version = \"=0.36.1\", features = [\"enhanced-determinism\"] }"), "the workspace's rapier3d line");
+        // In double precision (round 4: in single, a slow belt far from the origin carried nothing).
+        assert!(workspace.lines().any(|l| l.trim() == "rapier3d-f64 = { version = \"=0.36.1\", features = [\"enhanced-determinism\"] }"), "the workspace's rapier3d-f64 line");
         let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
-        assert!(manifest.lines().any(|l| l.trim() == "rapier3d = { workspace = true }"));
+        assert!(manifest.lines().any(|l| l.trim() == "rapier3d-f64 = { workspace = true }"));
         let lock = std::fs::read_to_string(format!("{root}/Cargo.lock")).unwrap();
-        assert!(lock.contains("name = \"rapier3d\"\nversion = \"0.36.1\""));
+        assert!(lock.contains("name = \"rapier3d-f64\"\nversion = \"0.36.1\""));
+        assert!(!lock.contains("name = \"rapier3d\"\n"), "no single-precision build beside it");
         // Named in `src/fisica/world.rs` alone.
         let mut naming = Vec::new();
         let mut dirs = vec![std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))];
@@ -1447,4 +1451,179 @@ mod round_3 {
         }
         assert!(naming.len() == 1 && naming[0].ends_with(std::path::Path::new("src").join("fisica").join("world.rs")), "{naming:?}");
     }
+}
+
+/// C-114's fourth refute round: the critic's probes (`~/.cache/veredas/critic-c114-r4/probes`), kept
+/// as pins: double precision far from the origin, drops at long steps resting on what they fall on,
+/// the size and mass bounds, the refusals of every rule by kind, every kind's defaults, the runner
+/// at a step of its scene's own.
+mod round_4 {
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::fisica::{self, Body, FisicaError};
+
+    use super::{scene, steps, world};
+
+    /// How far a carton on a belt at `x` moves in 5 s, and its velocity then.
+    fn carried(x: f64, speed: f64, step_ms: u32) -> (f64, f64) {
+        let mut w = world(&format!(
+            "step_ms = {step_ms}\n[[belt]]\nname = \"belt\"\nsize = [6.0, 0.6, 0.1]\nat = [{x}, 0.0, 0.75]\nspeed = {speed}\n\
+             [[body]]\nname = \"carton\"\nsize = [0.3, 0.3, 0.3]\nat = [{x}, 0.0, 0.95]\nmass = 2.5\n"
+        ));
+        let per_s = u64::from(1000 / step_ms);
+        steps(&mut w, per_s / 5);
+        let a = w.body("carton").unwrap();
+        steps(&mut w, per_s * 5);
+        let b = w.body("carton").unwrap();
+        (b.at[0] - a.at[0], b.velocity[0])
+    }
+
+    #[test]
+    fn a_belt_far_from_the_origin_carries_what_lies_on_it_as_one_near_it() {
+        // In single precision a 0.01 m/s belt at 1000 m carried nothing and one at 100 m 24 % short.
+        let mut off = Vec::new();
+        for (x, speed, step_ms) in [(0.0, 0.01, 4), (30.0, 0.01, 4), (100.0, 0.01, 4), (1000.0, 0.01, 4), (1000.0, 0.05, 4), (5000.0, 0.05, 4), (9000.0, 0.01, 4), (9000.0, 0.5, 4), (30.0, 0.01, 1), (500.0, 0.1, 1), (-9000.0, -0.01, 4)] {
+            let (moved, v) = carried(x, speed, step_ms);
+            let expected = speed * 5.0;
+            if ((moved - expected) / expected).abs() >= 0.02 || (v - speed).abs() > speed.abs() * 0.02 {
+                off.push((x, speed, step_ms, moved, v));
+            }
+        }
+        assert!(off.is_empty(), "(x, speed, step_ms, moved in 5 s, velocity) {off:?}");
+    }
+
+    #[test]
+    fn far_from_the_origin_a_fall_keeps_to_gravity_and_a_body_rests_as_deep() {
+        let mut w = world("[[body]]\nname = \"ball\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 9000.0]\n");
+        steps(&mut w, 250);
+        let exact = 9000.0 - 9.81 / 2.0;
+        let z = w.body("ball").unwrap().at[2];
+        assert!((z - exact).abs() <= 9.81 * 0.004 / 2.0 + 1e-4, "{z} against {exact}");
+        // A 0.2 m box on floors whose tops are from 0 to 9000 m up: 0.05 to 0.1 mm deep on each.
+        for top in [0.0f64, 8.0, 10.0, 20.0, 50.0, 1000.0, 9000.0] {
+            let mut w = world(&format!(
+                "[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [3000.0, -4000.0, {}]\n[[body]]\nname = \"box\"\nsize = [0.2, 0.2, 0.2]\nat = [3000.0, -4000.0, {}]\n",
+                top - 0.1,
+                top + 0.11
+            ));
+            steps(&mut w, 1250);
+            let depth = top + 0.1 - w.body("box").unwrap().at[2];
+            assert!((0.00005..0.0001).contains(&depth), "on a floor at {top} m: {depth} m deep");
+        }
+    }
+
+    #[test]
+    fn a_mover_far_from_the_origin_reaches_each_pose_within_10_um() {
+        let mut w = world("[[mover]]\nname = \"pusher\"\nsize = [0.05, 0.6, 0.3]\nat = [9000.0, 9000.0, 1.0]\n");
+        for k in 1..=250u32 {
+            let target = [9000.0 + 0.004 * f64::from(k), 9000.0 - 0.002 * f64::from(k), 1.0];
+            w.place("pusher", fisica::Placement::at(target)).unwrap();
+            w.step();
+            let at = w.body("pusher").unwrap().at;
+            let off = (0..3).map(|i| (at[i] - target[i]).abs()).fold(0.0, f64::max);
+            assert!(off < 1e-5, "pose {k}: {at:?} against {target:?}");
+        }
+    }
+
+    #[test]
+    fn a_body_dropped_at_a_long_step_rests_on_what_it_falls_on() {
+        // The seven drops of the round's sweep that crossed a fixed part whole (contacts recycled
+        // from a step that found none): (step, side, floor's thickness, drop as 0.05 m times n).
+        for (step_ms, size, floor, n) in [(10u32, 0.1f64, 0.02f64, 46u32), (20, 0.1, 0.02, 12), (20, 0.1, 0.02, 18), (75, 0.3, 0.1, 57), (75, 0.1, 0.02, 57), (100, 0.3, 0.1, 10), (100, 0.1, 0.02, 10)] {
+            let drop = 0.05 * f64::from(n);
+            let mut w = world(&format!(
+                "step_ms = {step_ms}\n[[fixed]]\nname = \"floor\"\nsize = [10.0, 4.0, {floor}]\nat = [0.0, 0.0, {}]\n\
+                 [[body]]\nname = \"b\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\nmass = 2.5\n",
+                -floor / 2.0,
+                size / 2.0 + drop
+            ));
+            steps(&mut w, u64::from(5000 / step_ms));
+            let b = w.body("b").unwrap();
+            assert!((b.at[2] - size / 2.0).abs() < 0.002 && b.velocity[2].abs() < 0.01, "{step_ms} ms, {size} m dropped {drop} m onto {floor} m: {b:?}");
+        }
+    }
+
+    #[test]
+    fn a_millimetre_and_a_milligram_are_the_least_and_rest_on_a_floor() {
+        for (mass, size) in [(0.000_001, 0.2), (1.0, 0.001), (0.000_001, 0.001)] {
+            let half = size / 2.0;
+            let mut w = world(&format!(
+                "[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n[[body]]\nname = \"box\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\nmass = {mass}\n",
+                half + 0.05
+            ));
+            steps(&mut w, 500);
+            let b = w.body("box").unwrap();
+            let deep = half - b.at[2];
+            assert!((0.0..0.0001).contains(&deep) && b.velocity.iter().all(|v| v.abs() < 1e-3), "{mass} kg of {size} m: {deep} m deep, {b:?}");
+        }
+        let refused = |body: &str| fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")).err().map(|e| e.to_string());
+        assert_eq!(refused("[[body]]\nname = \"p\"\nsize = [0.0009, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n"), Some("body[0] (`p`).size: [0.0009, 1.0, 1.0] m, each side from 0.001 to 10000".into()));
+        assert_eq!(refused("[[sensor]]\nname = \"s\"\nradius = 0.0009\nat = [0.0, 0.0, 0.0]\n"), Some("sensor[0] (`s`).radius: 0.0009 m, not from 0.001 to 10000".into()));
+        assert_eq!(refused("[[body]]\nname = \"p\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\nmass = 0.0000009\n"), Some("body[0] (`p`).mass: 0.0000009 kg, not from 0.000001 to 100000".into()));
+        assert_eq!(refused("[[sensor]]\nname = \"s\"\nradius = 0.001\nat = [0.0, 0.0, 0.0]\n"), None);
+    }
+
+    #[test]
+    fn every_range_rule_is_refused_for_every_kind() {
+        let refused = |body: &str| fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}"));
+        let part = |kind: &str, extra: &str| format!("[[{kind}]]\nname = \"p\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n{extra}");
+        let mut bad = Vec::new();
+        let cases: Vec<(String, &str)> = vec![
+            (part("belt", "friction = 11\n"), "belt[0] (`p`).friction: 11, not 0 to 10"),
+            (part("body", "friction = -1\n"), "body[0] (`p`).friction: -1, not 0 to 10"),
+            (part("mover", "").replace("[1.0, 1.0, 1.0]", "[0.0, 1.0, 1.0]"), "mover[0] (`p`).size: [0.0, 1.0, 1.0] m, each side from 0.001 to 10000"),
+            (part("sensor", "").replace("[1.0, 1.0, 1.0]", "[1.0, -1.0, 1.0]"), "sensor[0] (`p`).size: [1.0, -1.0, 1.0] m, each side from 0.001 to 10000"),
+            (part("body", "mass = nan\n"), "body[0] (`p`).mass: NaN kg, not from 0.000001 to 100000"),
+            (part("body", "").replace("[1.0, 1.0, 1.0]", "[1.0, nan, 1.0]"), "body[0] (`p`).size: [1.0, NaN, 1.0] m, each side from 0.001 to 10000"),
+            (part("belt", "speed = nan\n"), "belt[0] (`p`).speed: NaN m/s, not within 100 either way"),
+            (part("belt", "speed = inf\n"), "belt[0] (`p`).speed: inf m/s, not within 100 either way"),
+        ];
+        for (body, message) in cases {
+            match refused(&body) {
+                Err(FisicaError::Invalid(m)) if m == message => {}
+                other => bad.push(format!("{message}: {other:?}")),
+            }
+        }
+        let mut w = world("[[belt]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n");
+        assert_eq!(w.add_body(&Body { friction: 11.0, ..Body::new("n", [0.1; 3], [5.0, 0.0, 0.0]) }), Err(FisicaError::Invalid("body `n`.friction: 11, not 0 to 10".into())));
+        assert!(w.set_speed("b", f64::NAN).is_err(), "a NaN speed taken");
+        assert_eq!(w.speed("b"), Some(0.0));
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    #[test]
+    fn every_kind_s_defaults_are_the_reference_s() {
+        let s = scene("[[fixed]]\nname = \"f\"\nsize = [1.0, 1.0, 1.0]\nat = [0.0, 0.0, 0.0]\n[[belt]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\nat = [5.0, 0.0, 0.0]\n[[body]]\nname = \"c\"\nsize = [1.0, 1.0, 1.0]\nat = [9.0, 0.0, 0.0]\n[[mover]]\nname = \"m\"\nsize = [1.0, 1.0, 1.0]\nat = [12.0, 0.0, 0.0]\n[[sensor]]\nname = \"s\"\nradius = 1.0\nat = [15.0, 0.0, 0.0]\n");
+        assert_eq!((s.fixed[0].friction, s.belts[0].friction, s.bodies[0].friction, s.movers[0].friction), (0.6, 0.6, 0.6, 0.6));
+        let angles = [
+            [s.fixed[0].yaw, s.fixed[0].pitch, s.fixed[0].roll],
+            [s.belts[0].yaw, s.belts[0].pitch, s.belts[0].roll],
+            [s.bodies[0].yaw, s.bodies[0].pitch, s.bodies[0].roll],
+            [s.movers[0].yaw, s.movers[0].pitch, s.movers[0].roll],
+            [s.sensors[0].yaw, s.sensors[0].pitch, s.sensors[0].roll],
+        ];
+        assert!(angles.iter().flatten().all(|a| *a == 0.0), "{angles:?}");
+    }
+
+    /// On the machine's lock: a 10 ms and a 20 ms scene keep their own step.
+    #[test]
+    fn the_runner_keeps_its_scene_s_own_step() {
+        let mut off = Vec::new();
+        for step_ms in [10u64, 20] {
+            let s = scene(&format!("step_ms = {step_ms}\n[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 1000.0]\n"));
+            let h = fisica::start(&s).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            let (first, begun, late0) = (h.steps(), Instant::now(), h.status().late);
+            std::thread::sleep(Duration::from_millis(1000));
+            let (n, elapsed) = (h.steps() - first, begun.elapsed());
+            let late = h.status().late - late0;
+            drop(h);
+            let due = (elapsed.as_millis() / u128::from(step_ms)) as u64;
+            if !(n + 3 >= due && n <= due + 2) || late > 5 {
+                off.push((step_ms, n, due, late));
+            }
+        }
+        assert!(off.is_empty(), "(step_ms, steps, due, late) {off:?}");
+    }
+
 }

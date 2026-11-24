@@ -242,7 +242,7 @@ fn an_actuator_strokes_at_an_even_speed_between_its_poses_and_reports_its_ends()
         if k < 25 {
             assert!((p - 0.04 * f64::from(k)).abs() < 1e-9 && (m.get("back"), m.get("out")) == (0.0, 0.0), "{k}: {p}");
         }
-        assert!((f64::from(at.at[1]) - (-0.4 + 0.65 * p)).abs() < 1e-5 && (f64::from(at.angles()[0]) - 90.0 * p).abs() < 1e-3, "{k}: {at:?}");
+        assert!((at.at[1] - (-0.4 + 0.65 * p)).abs() < 1e-5 && (at.angles()[0] - 90.0 * p).abs() < 1e-3, "{k}: {at:?}");
     }
     assert_eq!((a.position("a"), m.get("back"), m.get("out")), (Some(1.0), 0.0, 1.0));
     // Back, from wherever it is.
@@ -528,7 +528,7 @@ mod round_1 {
         // A 300 ms stroke at 4 ms out in 75 steps and back in 75, the mover with it; 40 ms in 10.
         let mut w = World::new(&fisica::load(&cena()).unwrap()).unwrap();
         assert_eq!(stroke_steps(300, Some(&mut w)), (75, 75));
-        assert!((f64::from(w.body("pusher").unwrap().at[1]) + 0.4).abs() < 1e-5);
+        assert!((w.body("pusher").unwrap().at[1] + 0.4).abs() < 1e-5);
         assert_eq!(stroke_steps(40, None), (10, 10));
         // Every stroke from 1 ms to 1 s: summed in floats, one in eight came a step late.
         let late: Vec<(u32, (u32, u32))> = (1..=1000).map(|ms| (ms, stroke_steps(ms, None))).filter(|(ms, got)| *got != (ms.div_ceil(4), ms.div_ceil(4))).collect();

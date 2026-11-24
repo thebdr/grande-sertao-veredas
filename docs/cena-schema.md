@@ -73,8 +73,9 @@ by the plant side, sweeps across the belt; `S1` sees the pusher's blade at the e
 Every part has a `name` (required), unique across the whole scene, not empty and without
 surrounding whitespace; `at` (required, in metres, each coordinate within 10000 of the origin);
 `yaw`, `pitch` and `roll` (`0`, degrees, any finite value). Boxes have a `size` (required, each
-side over 0 and up to 10000 m). A contact's friction is the mean of its two parts' frictions;
-nothing bounces.
+side from 0.001 to 10000 m: the engine rests a smaller part sunk into what it lies on). A contact's
+friction is the mean of its two parts' frictions; nothing bounces. The world computes in double
+precision, so a part far from the origin moves as one near it.
 
 **A fixed shape** (`[[fixed]]`): a box that never moves, a floor, a guide, a chute's side.
 - `friction` (`0.6`): 0 to 10.
@@ -86,7 +87,7 @@ carried by friction toward the belt's speed; a part touching its side is not.
 - `friction` (`0.6`): 0 to 10.
 
 **A body** (`[[body]]`): a box that falls, slides, is carried and pushed, the carton or the part.
-- `mass` (`1`): in kilograms, over 0 and up to 100000, spread evenly through the box.
+- `mass` (`1`): in kilograms, from 0.000001 to 100000, spread evenly through the box.
 - `friction` (`0.6`): 0 to 10.
 
 **A mover** (`[[mover]]`): a box the plant side places, a pusher's blade or a lift's table. It
@@ -97,11 +98,11 @@ and gravity leaves it where it is.
 **A sensor** (`[[sensor]]`): a box or a ball that reports the bodies and movers inside it, a light
 barrier's beam or a proximity switch's field. Fixed shapes and belts are never inside it.
 - `size` or `radius` (one of them, required): a box's full lengths, or a ball's radius in metres
-  (over 0 and up to 10000).
+  (from 0.001 to 10000).
 
 ## What the reader refuses
 
-Each with its place, for example `body[0] (`carton-1`).mass: 0 kg, not over 0 and up to 100000`:
+Each with its place, for example `body[0] (`carton-1`).mass: 0 kg, not from 0.000001 to 100000`:
 the header (not TOML, another format, another version, a key missing) as core's reader states it;
 a key the reader does not know, in any table; `step_ms` outside 1 to 100; `gravity` outside 0 to
 100 or not finite; a name empty, padded or already taken; a size, a centre, an angle, a mass, a
