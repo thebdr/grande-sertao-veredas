@@ -38,6 +38,12 @@ pub const FORMATS: &[(&str, Component)] = &[
     ("veredas-supervisao", SUPERVISAO),
     ("veredas-binding", SUPERVISAO),
     ("veredas-abaco-oracle-baseline", ABACO),
+    // The parts of an `.abaco` file (docs/abaco-file.md).
+    ("veredas-abaco", ABACO),
+    ("veredas-abaco-sheet", ABACO),
+    ("veredas-abaco-references", ABACO),
+    ("veredas-abaco-records", ABACO),
+    ("veredas-abaco-state", ABACO),
     ("veredas-report", COMISSIONADOR),
     ("veredas-release", ENTREGA),
     ("veredas-machine", ENTREGA),
