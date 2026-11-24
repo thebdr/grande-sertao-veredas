@@ -10,10 +10,10 @@
     "peer"
   ],
   "exitCode": 0,
-  "outputSha": "34f881572ed5f27cfdad04d1e61825a04707a9f35f8e9e0eb416c910e5f6d1c3",
-  "outputTail": "test a_value_that_is_no_finite_number_is_read_as_none_and_the_stream_goes_on ... ok\ntest the_stream_s_opening_is_bounded_and_every_key_is_required ... ok\ntest a_portal_follows_another_s_stream_its_lag_its_end_and_a_fresh_hello ... ok\ntest a_portal_reads_another_s_snapshot_listing_windows_tables_and_tags ... ok\ntest a_chunk_split_across_calls_a_cut_answer_a_stalled_body_and_every_snapshot_field ... ok\ntest a_reader_is_bounded_in_time_size_and_shape ... ok\ntest a_stream_read_through_a_caller_s_timeouts_loses_nothing ... ok\ntest a_silence_and_the_trailers_hold_across_dropped_calls ... ok\ntest values_read_to_the_last_bit_and_a_busy_caller_on_a_living_stream_hears_it ... ok\ntest the_defaults_hold_a_dead_link_ten_seconds_and_keep_an_idle_stream_open ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.08s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s\n     Running tests/peer.rs (target/debug/build/veredas-portal/8d3dd21997e7edb9/out/peer-8d3dd21997e7edb9)",
-  "ranAt": "2026-11-24T20:29:34.881Z",
-  "headCommit": "4935ccfea0bff0010eddc3f4baed9490378a9188",
+  "outputSha": "0cee4647cb076358b93eb67898179ece5b6e4235bb8f678630a3b8f6040a9d8f",
+  "outputTail": "test a_value_that_is_no_finite_number_is_read_as_none_and_the_stream_goes_on ... ok\ntest the_stream_s_opening_is_bounded_and_every_key_is_required ... ok\ntest a_portal_follows_another_s_stream_its_lag_its_end_and_a_fresh_hello ... ok\ntest a_portal_reads_another_s_snapshot_listing_windows_tables_and_tags ... ok\ntest a_chunk_split_across_calls_a_cut_answer_a_stalled_body_and_every_snapshot_field ... ok\ntest a_reader_is_bounded_in_time_size_and_shape ... ok\ntest a_stream_read_through_a_caller_s_timeouts_loses_nothing ... ok\ntest a_silence_and_the_trailers_hold_across_dropped_calls ... ok\ntest values_read_to_the_last_bit_and_a_busy_caller_on_a_living_stream_hears_it ... ok\ntest the_defaults_hold_a_dead_link_ten_seconds_and_keep_an_idle_stream_open ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.12s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s\n     Running tests/peer.rs (target/debug/build/veredas-portal/8d3dd21997e7edb9/out/peer-8d3dd21997e7edb9)",
+  "ranAt": "2026-11-24T23:16:11.487Z",
+  "headCommit": "76716f5b78a1c4fe03a2c0a7681a02c4a066163c",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/peer.rs",
