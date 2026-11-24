@@ -707,6 +707,16 @@ fn cells_text(book: &Workbook, sheet: u32, part: &str) -> Result<String, ModelEr
         {
             return Err(bad("an empty formula, which the engine enters none of".into()));
         }
+        // a formula the engine could not read (`SUM(A1:A3` from a malformed `.xlsx`): entered again,
+        // the engine repairs it (`SUM(A1:A3)`), so the file would read back another formula
+        if matches!(content, Content::Formula(_) | Content::ArrayFormula { .. } | Content::DynamicFormula(_)) {
+            let model = book.model();
+            let index = model.workbook.worksheet(sheet).ok().and_then(|ws| ws.cell(addr.row, addr.column)).and_then(|c| c.get_formula());
+            let parsed = index.and_then(|f| model.parsed_formulas.get(sheet as usize)?.get(usize::try_from(f).ok()?));
+            if parsed.is_some_and(|(node, _)| matches!(**node, ironcalc_base::expressions::parser::Node::ParseErrorKind { .. })) {
+                return Err(bad("a formula the engine cannot read, which it would read back repaired or as another".into()));
+            }
+        }
         if !matches!(content, Content::Spill | Content::Empty | Content::Value(Value::Empty))
             && let Some(anchor) = array_holding(&arrays, addr)
         {
@@ -1077,6 +1087,19 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
             }
         }
     }
+    // a style's font, fill and border are each one the workbook holds (the engine indexes them
+    // unchecked when a formula reads the cell, or enters one in it)
+    for (i, xf) in ewb.styles.cell_xfs.iter().enumerate() {
+        for (what, id, len) in [
+            ("font_id", xf.font_id, ewb.styles.fonts.len()),
+            ("fill_id", xf.fill_id, ewb.styles.fills.len()),
+            ("border_id", xf.border_id, ewb.styles.borders.len()),
+        ] {
+            if usize::try_from(id).map_or(true, |id| id >= len) {
+                return Err(format!("{WORKBOOK}: `styles.cell_xfs.{i}.{what}` {id} is none of the workbook's {len}"));
+            }
+        }
+    }
     for (i, d) in ewb.defined_names.iter().enumerate() {
         if d.name.is_empty() || crate::book::name_reads_as_a_cell(&d.name) {
             return Err(format!("{WORKBOOK}: `defined_names.{i}` `{}` is no name (it reads as a cell)", d.name));
@@ -1365,9 +1388,10 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
     check_book(&engine, &sheet_parts).map_err(|e| parts.bad(e))?;
     // the engine refuses a workbook only for its settings (its locale, its time zone)
     let mut model = Model::from_workbook(engine, LANGUAGE).map_err(|e| parts.bad(format!("{WORKBOOK}: `settings`: {e}")))?;
-    // Entering a formula in a quote-prefixed cell derives a new style; every formula cell gets its
-    // own style back below, so the derived ones are orphans, cut back to what the file holds.
-    let styles_in_file = model.workbook.styles.cell_xfs.len();
+    // Entering a formula derives styles the file does not hold (a quote prefix's plain copy, a
+    // number format from the units of what an array reads: `$#,##0.00`, a date's): every cell gets
+    // the style the file states below, and the styles are put back whole, as the file holds them.
+    let file_styles = model.workbook.styles.clone();
     for (sheet, key, addr, formula, style) in formulas {
         let (row, column) = (addr.row, addr.column);
         let bad = |e: String| ModelError::file(path, format!("{} {key}: {e}", manifest.sheets[sheet as usize].part));
@@ -1432,7 +1456,8 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
     // The styles the file states, set again once every array has spilled (a legacy one on entering,
     // a dynamic one on evaluating; either gives a cell it creates its row's or column's style, a
     // legacy one a quote prefix's plain copy): a spilled cell the file states keeps its style, one it
-    // does not state holds style 0. The styles entering derived are orphans then, cut back.
+    // does not state holds style 0. The styles entering derived are orphans then: the styles are
+    // the file's again, every list of them (formats, fonts, fills, borders) as it was read.
     let mut spilled_unstated = Vec::new();
     for sheet in 0..manifest.sheets.len() as u32 {
         for (addr, style) in book.cells(sheet)? {
@@ -1446,7 +1471,7 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
         let ws = model.workbook.worksheet_mut(sheet).map_err(|e| ModelError::file(path, e))?;
         ws.set_cell_style(row, column, style).map_err(|e| ModelError::file(path, e))?;
     }
-    model.workbook.styles.cell_xfs.truncate(styles_in_file);
+    model.workbook.styles = file_styles;
     Ok(AbacoFile { book, macros, workspace, kept: parts.all })
 }
 

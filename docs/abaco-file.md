@@ -65,14 +65,17 @@ engine's, refused by its path. A sheet part's structure is written the same way.
 
 Both ends hold the workbook to what the engine takes: sheet names of 1 to 31 characters with none
 of `\ / * ? : [ ]`, told apart in any case, each sheet's id its own; a row's `s` and a column's
-`style` one of the workbook's styles; at least one sheet; a defined name spelled as Excel spells
+`style` one of the workbook's styles; each style's font, fill and border one of the workbook's; at
+least one sheet; a defined name spelled as Excel spells
 one (a letter of any script, `_` or `\` first, then letters, digits, `_` and `.`, so no `@B1`,
 `(B1)` or `B1+0`, and neither `TRUE` nor `FALSE`) that does not read as a cell (`B1`, `$B$1`,
-`R1C1`, `R[1]C[-1]`, in any case, `Sheet1!B1`, a range such as `A:A`, one with white space),
+`R1C1`, `R[1]C[-1]`, in any case, Unicode's capitals among them, `ß1` being SS1, `Sheet1!B1`, a
+range such as `A:A`, one with white space),
 stated once in its scope. The writer refuses, by the cell's address, what the reader would refuse
 of a cell (a style the workbook does not hold, a legacy array formula over merged cells, which the
 engine lets a merge leave but never enters, of no size, past the sheet's edge or over another's
-area, a cell with content inside another's area, an empty formula), and a reference not
+area, a cell with content inside another's area, an empty formula, a formula the engine cannot
+read, which it would read back repaired: `SUM(A1:A3` as `SUM(A1:A3)`), and a reference not
 in its form, settings the engine refuses, a workspace part TOML's reader would not read back (a
 tool's table nested past its depth), and a part it kept that a written one would overwrite, so
 every file it writes reads back. A name local to a sheet the workbook does not hold is kept: the engine
@@ -98,7 +101,11 @@ table, each keyed by its address:
 
 `style` is an index into the workbook part's `styles.cell_xfs`, written when it is not 0. A cell an
 array spills into is written only for its style; one not written holds style 0, whatever style its
-row or column has (which the engine would give a cell it creates). A cell
+row or column has (which the engine would give a cell it creates). A formula's number is spelled
+so it reads back the same: Excel's 15 digits when they hold it, otherwise the shortest spelling that
+does (`0.30000000000000004`). Of two dynamic arrays whose spills meet, the one that spills is decided
+on reading row by row, as the engine opens any workbook, not by the order they were entered in (a
+limit). A cell
 states exactly one of `n`, `s`, `b`, `e`, `f`, `array` and `dynamic`, or none (a style alone); `v`
 goes only with `f`, `size` only with `array`. A formula's `v` is a finite number, a text or a
 boolean, and never stands beside its `e`. An integer `n` or `v` is one a double holds exactly

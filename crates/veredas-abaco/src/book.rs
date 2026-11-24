@@ -123,7 +123,13 @@ pub enum ModelError {
 /// alone, one qualified by a sheet (`Sheet1!B1`), a range (`A1:B2`, `A:A`, `1:1`) or one with white
 /// space. Excel takes none of them as a name; the engine's own check sees only capitals.
 pub fn name_reads_as_a_cell(name: &str) -> bool {
-    let upper = name.to_ascii_uppercase();
+    // in ASCII capitals, and in Unicode's, which the engine's lexer takes before it reads a
+    // reference (`ß1` is SS1, `ı1` I1, `ﬁ1` FI1)
+    name_reads_as_a_cell_in(name, &name.to_ascii_uppercase()) || name_reads_as_a_cell_in(name, &name.to_uppercase())
+}
+
+fn name_reads_as_a_cell_in(name: &str, upper: &str) -> bool {
+    let upper = upper.to_string();
     let letters: String = upper.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
     let digits = &upper[letters.len()..];
     let a1 = !letters.is_empty()

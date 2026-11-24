@@ -586,6 +586,13 @@ fn names_the_engine_refuses_are_refused_by_the_writer_and_the_reader() {
         (Box::new(|w| w.defined_names[0].name = "1:1".into()), "workbook.toml", "name = \"Spam\"", "name = \"1:1\"", "is no name (it reads as a cell)"),
         (Box::new(|w| w.defined_names[0].name = " B1".into()), "workbook.toml", "name = \"Spam\"", "name = \" B1\"", "is no name (it reads as a cell)"),
         (Box::new(|w| w.defined_names[1].name = "SPAN".into()), "workbook.toml", "name = \"Spam\"", "name = \"SPAN\"", "is stated in its scope already, as `defined_names."),
+        // a name whose Unicode capitals read as a cell (the engine's lexer capitalises so: `ß1` is SS1)
+        (Box::new(|w| w.defined_names[0].name = "ß1".into()), "workbook.toml", "name = \"Spam\"", "name = \"ß1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "ı1".into()), "workbook.toml", "name = \"Spam\"", "name = \"ı1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "ſ1".into()), "workbook.toml", "name = \"Spam\"", "name = \"ſ1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "ﬀ1".into()), "workbook.toml", "name = \"Spam\"", "name = \"ﬀ1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "ﬁ1".into()), "workbook.toml", "name = \"Spam\"", "name = \"ﬁ1\"", "is no name (it reads as a cell)"),
+        (Box::new(|w| w.defined_names[0].name = "ﬃ1".into()), "workbook.toml", "name = \"Spam\"", "name = \"ﬃ1\"", "is no name (it reads as a cell)"),
         // a name opening with an operator or holding one, which a formula reads as the cell
         (Box::new(|w| w.defined_names[0].name = "@B1".into()), "workbook.toml", "name = \"Spam\"", "name = \"@B1\"", "is no name (a letter, `_` or `\\` first"),
         (Box::new(|w| w.defined_names[0].name = "(B1)".into()), "workbook.toml", "name = \"Spam\"", "name = \"(B1)\"", "is no name (a letter, `_` or `\\` first"),
@@ -761,6 +768,16 @@ fn what_the_reader_refuses_the_writer_refuses_by_its_place() {
     patched_xlsx(&mut book, &xlsx, "xl/worksheets/sheet1.xml", |t| t.replace("<f>1+1</f>", "<f></f>"));
     let got = refused(&mut AbacoFile::new(open(&xlsx)));
     assert!(got.contains("sheets/01-Sheet1.toml A1: an empty formula"), "{got}");
+    // a formula the engine cannot read (`<f>SUM(A1:A3</f>`), which it would read back repaired
+    let xlsx = dir.path().join("unclosed.xlsx");
+    let mut book = Workbook::new("Unclosed").unwrap();
+    for r in 1..=3 {
+        book.set_value(0, Addr::new(r, 1), &Value::Number(f64::from(r))).unwrap();
+    }
+    book.set_formula(0, Addr::parse("B1").unwrap(), "=SUM(A1:A3)").unwrap();
+    patched_xlsx(&mut book, &xlsx, "xl/worksheets/sheet1.xml", |t| t.replace("<f>SUM(A1:A3)</f>", "<f>SUM(A1:A3</f>"));
+    let got = refused(&mut AbacoFile::new(open(&xlsx)));
+    assert!(got.contains("sheets/01-Sheet1.toml B1: a formula the engine cannot read"), "{got}");
     // two legacy arrays whose areas overlap, neither anchor in the other's (`ref` widened)
     let xlsx = dir.path().join("overlap.xlsx");
     let mut book = Workbook::new("Overlap").unwrap();
@@ -887,6 +904,133 @@ fn a_spilled_cell_of_style_0_reads_back_with_style_0() {
             back.book.set_value(0, Addr::parse(a).unwrap(), &Value::Number(9.0)).unwrap();
         }
     }
+}
+
+#[test]
+fn a_legacy_array_reading_currency_and_a_percentage_reads_back_with_the_formats_the_file_holds() {
+    // entering the array works out a number format from the units of what it reads (currency times
+    // a percentage: `$#,##0.00`), which the engine adds to its formats: reading puts the file's
+    // styles back whole, so the workbook reads back as written and writes the same bytes
+    let mut book = Workbook::new("Units").unwrap();
+    let (a1, b1) = (Addr::parse("A1").unwrap(), Addr::parse("B1").unwrap());
+    book.set_value(0, a1, &Value::Number(10.0)).unwrap();
+    book.set_value(0, b1, &Value::Number(0.5)).unwrap();
+    book.model_mut().set_user_array_formula(0, 1, 3, 1, 1, "=A1*B1").unwrap();
+    for (at, format) in [(a1, "$#,##0"), (b1, "0%")] {
+        let mut style = book.style(0, at).unwrap();
+        style.num_fmt = format.into();
+        book.set_style(0, at, &style).unwrap();
+    }
+    let mut file = AbacoFile::new(book);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("units.abaco");
+    abacofile::write(&mut file, &path).unwrap();
+    let mut back = abacofile::read(&path).unwrap();
+    assert!(differences(&file.book, &back.book).is_empty(), "{:?}", differences(&file.book, &back.book));
+    let again = dir.path().join("again.abaco");
+    abacofile::write(&mut back, &again).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), std::fs::read(&again).unwrap());
+}
+
+#[test]
+fn a_style_whose_font_fill_or_border_the_workbook_does_not_hold_is_refused_at_both_ends() {
+    // the engine indexes a style's font, fill and border unchecked when a formula reads its cell or
+    // is entered in it: the writer refuses such a style, and so does the reader, never a panic
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("styles.abaco");
+    let make = || {
+        let mut book = Workbook::new("Styles").unwrap();
+        let (a1, b1) = (Addr::parse("A1").unwrap(), Addr::parse("B1").unwrap());
+        book.set_value(0, a1, &Value::Number(2.0)).unwrap();
+        book.set_formula(0, b1, "=1+1").unwrap();
+        book.model_mut().set_user_array_formula(0, 2, 2, 1, 1, "=A1*3").unwrap();
+        let mut bold = book.style(0, a1).unwrap();
+        bold.font.b = true;
+        book.set_style(0, a1, &bold).unwrap();
+        book.set_style(0, b1, &bold).unwrap();
+        AbacoFile::new(book)
+    };
+    for (what, set) in [("fill_id", 99), ("font_id", 99), ("border_id", -1)] {
+        let mut file = make();
+        let xfs = &mut file.book.model_mut().workbook.styles.cell_xfs;
+        let last = xfs.len() - 1;
+        xfs[last].quote_prefix = true;
+        match what {
+            "fill_id" => xfs[last].fill_id = set,
+            "font_id" => xfs[last].font_id = set,
+            _ => xfs[last].border_id = set,
+        }
+        let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| abacofile::write(&mut file, &path))).expect("no panic");
+        let got = got.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(got.contains(&format!("workbook.toml: `styles.cell_xfs.{last}.{what}` {set} is none of the workbook's")), "{got}");
+        assert!(!path.exists());
+    }
+    // the reader: a file whose bold style names a font the workbook does not hold, A1 read by an array
+    let mut file = make();
+    abacofile::write(&mut file, &path).unwrap();
+    let parts: Vec<(String, Vec<u8>)> = abacofile::parts(&file)
+        .unwrap()
+        .into_iter()
+        .map(|(n, b)| {
+            if n == "workbook.toml" {
+                let t = String::from_utf8(b).unwrap();
+                assert!(t.contains("font_id = 1"), "{t}");
+                (n, t.replacen("font_id = 1", "font_id = 99", 1).into_bytes())
+            } else {
+                (n, b)
+            }
+        })
+        .collect();
+    std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
+    let got = std::panic::catch_unwind(|| abacofile::read(&path).err().map(|e| e.to_string())).expect("no panic").unwrap_or_default();
+    assert!(got.contains("workbook.toml: `styles.cell_xfs.") && got.contains(".font_id` 99 is none of the workbook's"), "{got}");
+}
+
+#[test]
+fn a_number_in_a_formula_reads_back_exactly() {
+    // the engine spells a formula's number in 15 digits when they hold it, and otherwise in the
+    // shortest spelling that does (fork change 29): each formula reads back to the same content and
+    // value, and writes the same bytes again
+    let mut book = Workbook::new("Literals").unwrap();
+    let literals = ["=0.30000000000000004", "=1.0000000000000002", "=1.2345678901234567", "=9007199254740993", "=1.7976931348623157e308", "=0.1+0.2", "=5e-324"];
+    for (i, f) in literals.iter().enumerate() {
+        book.set_formula(0, Addr::new(i as i32 + 1, 1), f).unwrap();
+    }
+    book.recalc();
+    let mut file = AbacoFile::new(book);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("literals.abaco");
+    abacofile::write(&mut file, &path).unwrap();
+    let mut back = abacofile::read(&path).unwrap();
+    assert!(differences(&file.book, &back.book).is_empty(), "{:?}", differences(&file.book, &back.book));
+    assert_eq!(back.book.value_now(0, Addr::new(1, 1)).unwrap(), Value::Number(0.30000000000000004));
+    assert_eq!(back.book.value_now(0, Addr::new(5, 1)).unwrap(), Value::Number(f64::MAX));
+    let again = dir.path().join("again.abaco");
+    abacofile::write(&mut back, &again).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), std::fs::read(&again).unwrap());
+}
+
+#[test]
+fn two_dynamic_arrays_meeting_spill_on_reading_in_the_order_the_engine_opens_a_workbook_in() {
+    // a limit, pinned: which of two dynamic arrays whose spills meet spills is the engine's order
+    // of evaluation, the order they were entered in while the workbook is open; the file does not
+    // carry it, and a workbook read spills them row by row, as the engine opens any
+    let mut book = Workbook::new("Meeting").unwrap();
+    book.set_formula(0, Addr::parse("A2").unwrap(), "=SEQUENCE(1,3)").unwrap();
+    book.recalc();
+    book.set_formula(0, Addr::parse("C1").unwrap(), "=SEQUENCE(3)").unwrap();
+    book.set_formula(0, Addr::parse("E5").unwrap(), "=C2").unwrap();
+    book.recalc();
+    let at = |b: &Workbook, a: &str| b.value_now(0, Addr::parse(a).unwrap()).unwrap();
+    assert_eq!((at(&book, "C2"), at(&book, "E5")), (Value::Number(3.0), Value::Number(3.0)));
+    assert_eq!(at(&book, "C1"), Value::Error("#SPILL!".into()));
+    let mut file = AbacoFile::new(book);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meeting.abaco");
+    abacofile::write(&mut file, &path).unwrap();
+    let back = abacofile::read(&path).unwrap();
+    assert_eq!(at(&back.book, "A2"), Value::Error("#SPILL!".into()));
+    assert_eq!((at(&back.book, "C1"), at(&back.book, "C2"), at(&back.book, "E5")), (Value::Number(1.0), Value::Number(2.0), Value::Number(2.0)));
 }
 
 #[test]
