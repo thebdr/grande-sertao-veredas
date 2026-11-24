@@ -293,7 +293,10 @@ and a file to read back.
   `spikes\oficina\target\windows-run.txt`, its last lines each step's exit code. Written here,
   never run: no PowerShell and no Windows compiler on this machine, so neither the script nor the
   Direct3D 11 probe (`cpp/shell.cpp`) has been parsed or compiled. What it needs installed first,
-  in the versions this machine used where they apply:
+  in the versions this machine used where they apply, is installed by one command run elevated,
+  `powershell -ExecutionPolicy Bypass -File spikes\oficina\install-windows-tools.ps1`, each piece
+  from its publisher and checked before it runs (in the `win11` guest on 2026-11-24: 49 minutes,
+  Build Tools 17.14.45, Git 2.56.1, uv 0.13.9 running aqtinstall's master at 4c75985):
   - Visual Studio 2022 Build Tools 17.14 or later, workload "Desktop development with C++" (MSVC
     v143 for x64 and a Windows 11 SDK): Qt's `msvc2022_64` build is made with it.
   - Qt 6.12.0 for MSVC 2022 64-bit in `C:\Qt\6.12.0\msvc2022_64` (`-Qt` names another place),
