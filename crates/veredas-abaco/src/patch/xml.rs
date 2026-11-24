@@ -179,10 +179,47 @@ pub fn element_span(s: &str, open: &Tag<'_>) -> Option<(usize, usize)> {
     Some((open.start, close.end))
 }
 
-/// The raw (still escaped) value of attribute `name` in a tag's text.
-pub fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+/// The raw (still escaped) value of attribute `name` in a tag's text: for a reader that decodes it
+/// itself ([`decode_attr`], OOXML's `_xHHHH_` escapes too).
+pub fn raw_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     let (vs, ve) = attr_span(tag, name)?;
     Some(&tag[vs..ve])
+}
+
+/// The value of attribute `name` as XML reads it: a raw tab, line feed or carriage return a space
+/// (a CR LF pair one), then the character and entity references (`A&#53;` is `A5`, `&#9;` a tab).
+/// A value written back from it goes through [`escape_xml_attr`].
+pub fn attr<'a>(tag: &'a str, name: &str) -> Option<Cow<'a, str>> {
+    raw_attr(tag, name).map(xml_attr_value)
+}
+
+/// A raw attribute value as XML reads it (see [`attr`]); OOXML's `_xHHHH_` escapes are left as they
+/// are, as an XML reader leaves them.
+pub fn xml_attr_value(raw: &str) -> Cow<'_, str> {
+    if !raw.contains(['&', '\t', '\n', '\r']) {
+        return Cow::Borrowed(raw);
+    }
+    let spaced = raw.replace("\r\n", " ").replace(['\t', '\n', '\r'], " ");
+    Cow::Owned(unescape(&spaced).into_owned())
+}
+
+/// A string as a double-quoted attribute value XML reads back as it: `&`, `<`, `>` and `"`
+/// escaped, a tab, a line feed and a carriage return as character references; nothing of OOXML's.
+pub fn escape_xml_attr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\t' => out.push_str("&#9;"),
+            '\n' => out.push_str("&#10;"),
+            '\r' => out.push_str("&#13;"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Byte span of attribute `name`'s value inside `tag`.
@@ -417,7 +454,7 @@ mod tests {
         let s = r#"<?xml version="1.0"?><!-- x --><row r="5" spans="1:3" x14ac:dyDescent="0.2"><c r="A5" s="2"/></row>"#;
         let t = next_tag(s, 0).unwrap();
         assert_eq!((t.name, t.closing, t.self_closing), ("row", false, false));
-        assert_eq!(attr(t.text, "spans"), Some("1:3"));
+        assert_eq!(attr(t.text, "spans").as_deref(), Some("1:3"));
         assert_eq!(attr(t.text, "s"), None);
         assert_eq!(
             set_attr(t.text, "r", "6"),
@@ -440,7 +477,17 @@ mod tests {
     fn nesting_and_quoted_gt() {
         let s = r#"<a k="x>y"><a></a><b/></a><c/>"#;
         let a = next_tag(s, 0).unwrap();
-        assert_eq!(attr(a.text, "k"), Some("x>y"));
+        assert_eq!(attr(a.text, "k").as_deref(), Some("x>y"));
+        // a value as XML reads it: references decoded, raw white space a space; the raw kept apart
+        let t = next_tag(r#"<c r="A&#53;" s="&#x31;" t="a&#9;b&#10;c" u="x
+y" v="&amp;lt;"/>"#, 0).unwrap();
+        assert_eq!(attr(t.text, "r").as_deref(), Some("A5"));
+        assert_eq!(attr(t.text, "s").as_deref(), Some("1"));
+        assert_eq!(attr(t.text, "t").as_deref(), Some("a\tb\nc"));
+        assert_eq!(attr(t.text, "u").as_deref(), Some("x y"));
+        assert_eq!(attr(t.text, "v").as_deref(), Some("&lt;"));
+        assert_eq!(raw_attr(t.text, "r"), Some("A&#53;"));
+        assert_eq!(escape_xml_attr("a&b<\"\t_x0041_"), "a&amp;b&lt;&quot;&#9;_x0041_");
         let (st, en) = element_span(s, &a).unwrap();
         assert_eq!(&s[st..en], r#"<a k="x>y"><a></a><b/></a>"#);
     }

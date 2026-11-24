@@ -150,7 +150,7 @@ pub fn read_sheets(
                 continue;
             }
             let (r, c) = attr(t.text, "r")
-                .and_then(parse_addr)
+                .and_then(|v| parse_addr(&v))
                 .unwrap_or((row, col + 1));
             col = c;
             let end = if t.self_closing {
@@ -160,7 +160,7 @@ pub fn read_sheets(
             };
             let body = &s[t.end.min(end)..end];
             pos = end;
-            let kind = attr(t.text, "t").unwrap_or("n");
+            let kind = attr(t.text, "t").unwrap_or(std::borrow::Cow::Borrowed("n"));
             let v = xml::find_open(body, "v", 0).and_then(|v| {
                 if v.self_closing {
                     Some(String::new())
@@ -171,9 +171,9 @@ pub fn read_sheets(
             let mut resolved: Option<String> = None;
             let (formula, shared) = match xml::find_open(body, "f", 0) {
                 Some(f) => {
-                    let shared = attr(f.text, "t") == Some("shared");
+                    let shared = attr(f.text, "t").as_deref() == Some("shared");
                     if shared {
-                        let si = attr(f.text, "si").unwrap_or("").to_string();
+                        let si = attr(f.text, "si").unwrap_or_default().into_owned();
                         let own = if f.self_closing {
                             None
                         } else {
@@ -203,8 +203,10 @@ pub fn read_sheets(
                 }
                 None => (None, false),
             };
-            let value = match kind {
-                "s" => v
+            // a value's text as XML reads it (`&#49;` is 1)
+            let plain = v.as_deref().map(xml::unescape);
+            let value = match &*kind {
+                "s" => plain
                     .as_deref()
                     .and_then(|i| i.trim().parse::<usize>().ok())
                     .and_then(|i| sst.get(i).cloned())
@@ -218,11 +220,11 @@ pub fn read_sheets(
                 ),
                 // No `<v>` at all is "no cached value" (Empty), not empty text.
                 "str" => v.as_deref().map(|t| Value::Text(decode_text(t))).unwrap_or(Value::Empty),
-                "b" => Value::Bool(v.as_deref().map(str::trim) == Some("1")),
+                "b" => Value::Bool(plain.as_deref().map(str::trim) == Some("1")),
                 "e" => Value::Error(v.as_deref().map(decode_text).unwrap_or_default()),
                 _ => match v.as_deref() {
                     None | Some("") => Value::Empty,
-                    Some(n) => n
+                    Some(n) => xml::unescape(n)
                         .trim()
                         .parse()
                         .map(Value::Number)
@@ -281,7 +283,7 @@ pub fn read_elements(bytes: &[u8]) -> Result<Vec<(String, String, SheetElements)
                 continue;
             }
             let (r, c) = attr(t.text, "r")
-                .and_then(parse_addr)
+                .and_then(|v| parse_addr(&v))
                 .unwrap_or((row, col + 1));
             col = c;
             let end = if t.self_closing {

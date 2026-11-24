@@ -2457,7 +2457,7 @@ fn dynamic_cell_metadata(part: &str) -> Option<u32> {
     let mut type_index = None;
     while let Some(t) = xml::find_open(types, "metadataType", pos) {
         index += 1;
-        if xml::attr(t.text, "name") == Some("XLDAPR") {
+        if xml::attr(t.text, "name").as_deref() == Some("XLDAPR") {
             type_index = Some(index);
         }
         pos = t.end;
@@ -2467,7 +2467,7 @@ fn dynamic_cell_metadata(part: &str) -> Option<u32> {
     let mut value_index = None;
     while let Some(t) = xml::find_open(part, "futureMetadata", pos) {
         let (a, b) = xml::element_span(part, &t)?;
-        if xml::attr(t.text, "name") == Some("XLDAPR") {
+        if xml::attr(t.text, "name").as_deref() == Some("XLDAPR") {
             // `fDynamic` is an xsd:boolean: "1" or "true"
             value_index = bks(&part[a..b])
                 .iter()
@@ -2481,7 +2481,8 @@ fn dynamic_cell_metadata(part: &str) -> Option<u32> {
         .iter()
         .position(|bk| {
             xml::find_open(bk, "rc", 0).is_some_and(|rc| {
-                xml::attr(rc.text, "t") == Some(&type_index.to_string()) && xml::attr(rc.text, "v") == Some(&value_index.to_string())
+                xml::attr(rc.text, "t").as_deref() == Some(type_index.to_string().as_str())
+                    && xml::attr(rc.text, "v").as_deref() == Some(value_index.to_string().as_str())
             })
         })
         .map(|i| i as u32 + 1)
@@ -2695,10 +2696,10 @@ fn rewrite_defined_names(
             let (a, b) = xml::element_span(inner, &t)
                 .ok_or_else(|| PatchError::Malformed("<definedName> not closed".into()))?;
             pos = b;
-            let name = xml::attr(t.text, "name")
+            let name = xml::raw_attr(t.text, "name")
                 .map(xml::decode_attr)
                 .unwrap_or_default();
-            let scope = scope_of(xml::attr(t.text, "localSheetId"));
+            let scope = scope_of(xml::attr(t.text, "localSheetId").as_deref());
             // a name local to a chart sheet, which the engine cannot scope: the file's alone, its
             // references moved as text and nothing else
             let on_a_chart_sheet = xml::attr(t.text, "localSheetId")

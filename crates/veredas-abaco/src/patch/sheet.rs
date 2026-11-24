@@ -514,8 +514,8 @@ pub(crate) fn rewrite(
     let mut head_text = new_head.clone().unwrap_or_else(|| head.to_string());
     if let Some(d) = xml::find_open(&head_text, "dimension", 0)
         && let Some(r) = attr(d.text, "ref") {
-            let mut bounds = refs::parse_area(r).map(|a| a.bounds());
-            if let Some(Some(s)) = shift_area_text(r, &own) {
+            let mut bounds = refs::parse_area(&r).map(|a| a.bounds());
+            if let Some(Some(s)) = shift_area_text(&r, &own) {
                 bounds = refs::parse_area(&s).map(|a| a.bounds());
             }
             if let Some((mut r1, mut c1, mut r2, mut c2)) = bounds {
@@ -530,7 +530,7 @@ pub(crate) fn rewrite(
                 } else {
                     format!("{}:{}", addr(r1, c1), addr(r2, c2))
                 };
-                if spelled != r {
+                if spelled != *r {
                     let nd = set_attr(d.text, "ref", &spelled);
                     head_text = format!("{}{}{}", &head_text[..d.start], nd, &head_text[d.end..]);
                 }
@@ -569,8 +569,8 @@ fn scan_shared(body: &str, groups: &mut HashMap<String, Group>) {
             continue;
         }
         if t.name == "c" {
-            cell = attr(t.text, "r").and_then(parse_addr);
-        } else if t.name == "f" && attr(t.text, "t") == Some("shared") {
+            cell = attr(t.text, "r").and_then(|v| parse_addr(&v));
+        } else if t.name == "f" && attr(t.text, "t").as_deref() == Some("shared") {
             let (Some(si), Some(at)) = (attr(t.text, "si"), cell) else {
                 continue;
             };
@@ -583,7 +583,7 @@ fn scan_shared(body: &str, groups: &mut HashMap<String, Group>) {
             };
             let text = decode_text(&body[t.end..close.start]);
             let bounds = attr(t.text, "ref")
-                .and_then(refs::parse_area)
+                .and_then(|v| refs::parse_area(&v))
                 .map(|a| a.bounds());
             groups.insert(
                 si.to_string(),
@@ -727,7 +727,8 @@ fn rewrite_row(
 ) -> Result<Option<String>, PatchError> {
     let bad = |m: String| PatchError::Malformed(format!("sheet {:?} row {orig_r}: {m}", job.name));
     // the row's own format, which a cell new in it takes (`customFormat` an xsd:boolean)
-    let row_style = attr(row_tag.text, "s").filter(|_| matches!(attr(row_tag.text, "customFormat"), Some("1" | "true")));
+    let row_style = attr(row_tag.text, "s").filter(|_| matches!(attr(row_tag.text, "customFormat").as_deref(), Some("1" | "true")));
+    let row_style = row_style.as_deref();
     let has_cols = own.iter().any(|s| !s.is_rows());
     let mut changed = new_r != orig_r || attr(row_tag.text, "r").is_none();
     let mut cells_added_or_dropped = false;
@@ -757,7 +758,7 @@ fn rewrite_row(
         };
         let cell_xml = &inner[t.start..cell_end];
         let orig_c = attr(t.text, "r")
-            .and_then(parse_addr)
+            .and_then(|v| parse_addr(&v))
             .map(|a| a.1)
             .unwrap_or(implicit_col + 1);
         implicit_col = orig_c;
@@ -874,10 +875,14 @@ fn rewrite_cell(
 ) -> Result<CellOut, PatchError> {
     // Excel writes the cells a volatile array spills into with an empty `<f ca="1"/>`: a
     // placeholder, no formula of the cell's own (a shared child's `<f t="shared" …/>` is one)
-    let placeholder = xml::find_open(cell_xml, "f", 0)
-        .is_some_and(|f| f.self_closing && attr(f.text, "t") != Some("shared"));
+    // (`<f ca="1"></f>` is the same element to XML)
+    let placeholder = xml::find_open(cell_xml, "f", 0).is_some_and(|f| {
+        let empty = f.self_closing || xml::find_close(cell_xml, &f).is_some_and(|c| c.start == f.end);
+        empty && attr(f.text, "t").as_deref() != Some("shared")
+    });
     let had_formula = cell_xml.contains("<f") && !placeholder;
     let old_style = attr(tag.text, "s");
+    let old_style = old_style.as_deref();
     if let Some(w) = write
         && w.content.is_some() {
             if had_formula {
@@ -921,9 +926,10 @@ fn rewrite_cell(
                 })?;
                 (f.start, close.end, Some(&inner[f.end..close.start]))
             };
-            let shared_si = (attr(f.text, "t") == Some("shared"))
+            let shared_si = (attr(f.text, "t").as_deref() == Some("shared"))
                 .then(|| attr(f.text, "si"))
                 .flatten();
+            let shared_si = shared_si.as_deref();
             let mut f_tag = f.text.to_string();
             let mut text: Option<String> = None; // the new formula text, when it changes
             match shared_si {
@@ -950,8 +956,8 @@ fn rewrite_cell(
                     {
                         let own: Vec<Shift> =
                             job.shifts.iter().filter(|(s, _)| s.eq_ignore_ascii_case(job.name)).map(|(_, s)| *s).collect();
-                        if let Some(Some(nr)) = shift_area_text(r, &own)
-                            && nr != r
+                        if let Some(Some(nr)) = shift_area_text(&r, &own)
+                            && nr != *r
                         {
                             f_tag = set_attr(&f_tag, "ref", &nr);
                             text = f_text_raw.map(decode_text);
@@ -965,7 +971,7 @@ fn rewrite_cell(
                             text = Some(s);
                         }
                     }
-                    if attr(f.text, "t") == Some("array")
+                    if attr(f.text, "t").as_deref() == Some("array")
                         && let Some(r) = attr(f.text, "ref") {
                             let own: Vec<Shift> = job
                                 .shifts
@@ -978,7 +984,7 @@ fn rewrite_cell(
                             // (Excel spills it again). Where the engine sized it otherwise than
                             // the file before the edits, the file's size stands unless the edits
                             // changed the engine's; a CSE array covers what it covered, moved
-                            let size = refs::parse_area(r).map(|a| {
+                            let size = refs::parse_area(&r).map(|a| {
                                 let (r1, c1, r2, c2) = a.bounds();
                                 (r2 - r1 + 1, c2 - c1 + 1)
                             });
@@ -993,10 +999,10 @@ fn rewrite_cell(
                                 Some((then, now)) if then.is_none() || then == size || then != Some(now) => {
                                     Some(spell(now))
                                 }
-                                _ => shift_area_text(r, &own).flatten(),
+                                _ => shift_area_text(&r, &own).flatten(),
                             };
                             if let Some(nr) = wanted
-                                && nr != r {
+                                && nr != *r {
                                     f_tag = set_attr(&f_tag, "ref", &nr);
                                     if text.is_none() {
                                         text = f_text_raw.map(decode_text);
@@ -1038,7 +1044,7 @@ fn rewrite_cell(
                     }
                 }
             });
-            let cached = cached_value(attr(&new_tag, "t"), v_raw.and_then(|v| v.2));
+            let cached = cached_value(attr(&new_tag, "t").as_deref(), v_raw.and_then(|v| v.2));
             // a cell whose value moved and whose cache carries value metadata (a `#VALUE!` standing
             // for a `#SPILL!` or `#CALC!`) is rewritten whatever its cache says: the error may be
             // another now, or none
@@ -1083,7 +1089,7 @@ fn rewrite_cell(
                 return Err(engine_only_refusal(job.name, &addr(new.0, new.1), what));
             }
             out.refreshed += 1;
-            return Ok(match spilled_cell(new.0, new.1, attr(&new_tag, "s"), &live) {
+            return Ok(match spilled_cell(new.0, new.1, attr(&new_tag, "s").as_deref(), &live) {
                 Some(s) => CellOut::New(s),
                 None => CellOut::Gone,
             });
@@ -1125,17 +1131,17 @@ fn rewrite_head(head: &str, job: &SheetJob, own: &[Shift]) -> Result<Option<Stri
                     if let Some(v) = attr(&text, a)
                         && let Some((r, c)) = parse_addr(&v.replace('$', "")) {
                             let nv = addr(clamp_index(own, true, r), clamp_index(own, false, c));
-                            text = set_attr(&text, a, &nv);
+                            text = set_attr(&text, a, &xml::escape_xml_attr(&nv));
                         }
                 }
                 if let Some(v) = attr(&text, "sqref") {
-                    let nv = shift_sqref_text(v, own).unwrap_or_else(|| v.to_string());
+                    let nv = shift_sqref_text(&v, own).unwrap_or_else(|| v.to_string());
                     let nv = if nv.is_empty() {
-                        attr(&text, "activeCell").unwrap_or("A1").to_string()
+                        attr(&text, "activeCell").map_or_else(|| "A1".to_string(), |a| a.into_owned())
                     } else {
                         nv
                     };
-                    text = set_attr(&text, "sqref", &nv);
+                    text = set_attr(&text, "sqref", &xml::escape_xml_attr(&nv));
                 }
             }
             rebuilt.push_str(&text);
@@ -1475,7 +1481,7 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
         // a sparkline goes with its cell, as in Excel (its location deleted)
         if name == "x14:sparkline"
             && let Some((a, b)) = xml::element_span(s, &t)
-            && xml::inner(&s[a..b], "xm:sqref").is_some_and(|sq| shift_sqref_text(sq.trim(), own).is_some_and(|n| n.is_empty()))
+            && xml::inner(&s[a..b], "xm:sqref").is_some_and(|sq| shift_sqref_text(xml::unescape(sq).trim(), own).is_some_and(|n| n.is_empty()))
         {
             pos = b;
             continue;
@@ -1507,9 +1513,10 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
                 continue;
             };
             let el = &s[a..b];
-            let sq = xml::inner(el, "xm:sqref");
-            if let Some(sq) = sq
-                && let Some(n) = shift_sqref_text(sq.trim(), own)
+            // the area as XML reads its text
+            let sq = xml::inner(el, "xm:sqref").map(|v| xml::unescape(v).trim().to_string());
+            if let Some(sq) = sq.as_deref()
+                && let Some(n) = shift_sqref_text(sq, own)
                     && n.is_empty() {
                         pos = b;
                         continue;
@@ -1518,7 +1525,7 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
             let inner_start = t.end - a;
             let inner = &el[inner_start..el.len() - format!("</{name}>").len()];
             out.push_str(t.text);
-            out.push_str(&walk_tail(inner, job, own, sq.map(str::trim)));
+            out.push_str(&walk_tail(inner, job, own, sq.as_deref()));
             out.push_str(&format!("</{name}>"));
             pos = b;
             continue;
@@ -1532,9 +1539,9 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
             let mut text = t.text.to_string();
             if let Some(v) = attr(t.text, key) {
                 let new = if key == "sqref" {
-                    shift_sqref_text(v, own).map(Some)
+                    shift_sqref_text(&v, own).map(Some)
                 } else {
-                    shift_area_text(v, own)
+                    shift_area_text(&v, own)
                 };
                 // a merge cut down to one cell is no merge: Excel unmerges it
                 let one_cell = |n: &str| {
@@ -1544,7 +1551,7 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
                     })
                 };
                 match new {
-                    Some(Some(n)) if !n.is_empty() && !one_cell(&n) => text = set_attr(&text, key, &n),
+                    Some(Some(n)) if !n.is_empty() && !one_cell(&n) => text = set_attr(&text, key, &xml::escape_xml_attr(&n)),
                     Some(_) => {
                         // gone: drop the element (and nothing of it lives on in what follows)
                         pos = xml::element_span(s, &t).map(|(_, b)| b).unwrap_or(t.end);
@@ -1555,12 +1562,12 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
             }
             if !t.self_closing {
                 if name == "conditionalFormatting" || name == "dataValidation" {
-                    local = attr(t.text, "sqref").map(str::to_string);
+                    local = attr(t.text, "sqref").map(std::borrow::Cow::into_owned);
                 }
                 if name == "autoFilter" {
-                    filter = attr(t.text, "ref").and_then(refs::parse_area).map(|a| {
+                    filter = attr(t.text, "ref").and_then(|v| refs::parse_area(&v)).map(|a| {
                         let (_, c1, _, _) = a.bounds();
-                        let now = attr(&text, "ref").and_then(refs::parse_area).map(|b| b.bounds().1).unwrap_or(c1);
+                        let now = attr(&text, "ref").and_then(|v| refs::parse_area(&v)).map(|b| b.bounds().1).unwrap_or(c1);
                         (c1, now)
                     });
                 }
@@ -1600,7 +1607,7 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
         // a conditional format's threshold (`<cfvo val>`): a number, or a formula moved as the
         // format's own are
         if name == "cfvo"
-            && let Some(val) = attr(t.text, "val")
+            && let Some(val) = xml::raw_attr(t.text, "val")
         {
             let decoded = xml::decode_attr(val);
             let shifted = match local.as_deref().or(anchor) {
@@ -1631,7 +1638,7 @@ fn walk_tail(s: &str, job: &SheetJob, own: &[Shift], anchor: Option<&str>) -> St
         if name == "xm:sqref" && !t.self_closing
             && let Some(close) = xml::find_close(s, &t) {
                 let raw = &s[t.end..close.start];
-                let new = shift_sqref_text(raw.trim(), own).unwrap_or_else(|| raw.to_string());
+                let new = shift_sqref_text(xml::unescape(raw).trim(), own).unwrap_or_else(|| raw.to_string());
                 out.push_str(t.text);
                 out.push_str(&new);
                 out.push_str(close.text);

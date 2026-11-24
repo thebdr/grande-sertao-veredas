@@ -436,8 +436,16 @@ workspace/log.txt             the log, one escaped entry per line
   round): a namespace declaration's value is decoded (`&#109;ain` is `main`); a chart's, a
   chartEx's, a drawing's, an extension's and a form control's VML elements are matched under
   Excel's prefixes (`c:`, `cx:`, `c15:`, `xdr:`, `x14:`, `xm:`, `x:`; a form control's properties
-  x14's in the default namespace), and a part writing them under another is refused. A part
-  declaring another encoding than UTF-8, or holding CDATA, is refused.
+  x14's in the default namespace), and a part writing them under another is refused; so are
+  threaded comments (Excel's default namespace), VML (`v:`) and the strict chart and drawing
+  namespaces (`c:`, `xdr:`) (twelfth round). A part declaring another encoding than UTF-8, or
+  holding CDATA, an XML comment or a processing instruction, is refused.
+- **Attributes and texts are read as XML reads them** (C-223's twelfth round): `xml::attr` gives a
+  value with its white space normalized and its references decoded (`A&#53;` is A5), `raw_attr`
+  the bytes for a reader that decodes OOXML's `_xHHHH_` too; a value written back from it is
+  escaped for XML. The texts holding a number or an area (anchors, a note's row and column, an
+  `xm:sqref`, a cached value) are decoded before they are read. `<f ca="1"></f>` is the
+  placeholder `<f ca="1"/>` is.
 - **Verification runs on a copy at a short UTF-8 path** (the engine's loader takes no other): under
   the system's temporary folder, the model renamed to the destination's stem before comparing;
   the new file then goes beside the destination under a short name of its own.

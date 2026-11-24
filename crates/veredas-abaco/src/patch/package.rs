@@ -17,8 +17,12 @@ use super::xml::{self, attr, decode_text, escape_text, next_tag, set_attr};
 use super::PatchError;
 
 /// The namespaces whose references the patcher re-spells, each with the prefix Excel writes it under.
-const FOREIGN_PREFIXES: [(&str, &str); 7] = [
+const FOREIGN_PREFIXES: [(&str, &str); 11] = [
     ("http://schemas.openxmlformats.org/drawingml/2006/chart", "c"),
+    ("http://purl.oclc.org/ooxml/drawingml/chart", "c"),
+    ("http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing", "xdr"),
+    ("http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments", ""),
+    ("urn:schemas-microsoft-com:vml", "v"),
     ("http://schemas.microsoft.com/office/drawing/2014/chartex", "cx"),
     ("http://schemas.microsoft.com/office/drawing/2012/chart", "c15"),
     ("http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing", "xdr"),
@@ -106,6 +110,18 @@ impl Package {
         }
         if text.contains("<![CDATA[") {
             return Err(PatchError::Unsupported(format!("{name} holds a CDATA section, which no part Excel writes holds and the patcher does not read")));
+        }
+        // an XML comment or a processing instruction (but the declaration that opens the part):
+        // XML reads the text around it as one, the patcher would write it into a reference
+        let body = text.trim_start_matches('\u{feff}');
+        let body = match body.strip_prefix("<?xml").and_then(|rest| rest.find("?>").map(|e| &rest[e + 2..])) {
+            Some(after) => after,
+            None => body,
+        };
+        if body.contains("<!--") || body.contains("<?") {
+            return Err(PatchError::Unsupported(format!(
+                "{name} holds an XML comment or a processing instruction, which no part Excel writes holds and the patcher does not read"
+            )));
         }
         Ok(text)
     }
@@ -195,8 +211,8 @@ pub(crate) fn rels(owner: &str, rels_xml: &str) -> Vec<Rel> {
         ) else {
             continue;
         };
-        let external = attr(t.text, "TargetMode") == Some("External");
-        let target = xml::unescape(target).into_owned();
+        let external = attr(t.text, "TargetMode").as_deref() == Some("External");
+        let target = target.into_owned();
         out.push(Rel {
             id: id.to_string(),
             kind: ty.rsplit('/').next().unwrap_or_default().to_string(),
@@ -240,11 +256,11 @@ pub(crate) fn sheets(workbook_xml: &str, wb_rels: &[Rel]) -> Result<Vec<SheetEnt
     let mut pos = sheets.end;
     while let Some(t) = xml::find_open(&workbook_xml[..end], "sheet", pos) {
         pos = t.end;
-        let name = attr(t.text, "name").map(xml::decode_attr).unwrap_or_default();
+        let name = xml::raw_attr(t.text, "name").map(xml::decode_attr).unwrap_or_default();
         let sheet_id = attr(t.text, "sheetId")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
-        let rid = rid_attr(t.text).unwrap_or_default().to_string();
+        let rid = rid_attr(t.text).unwrap_or_default();
         let rel = wb_rels.iter().find(|r| r.id == rid).ok_or_else(|| {
             PatchError::Malformed(format!("sheet {name:?}: relationship {rid} not found"))
         })?;
@@ -261,12 +277,12 @@ pub(crate) fn sheets(workbook_xml: &str, wb_rels: &[Rel]) -> Result<Vec<SheetEnt
 
 /// The value of the `…:id` attribute (the relationships namespace prefix is
 /// usually `r`, but a file may bind another).
-fn rid_attr(tag: &str) -> Option<&str> {
-    attr(tag, "r:id").or_else(|| {
+fn rid_attr(tag: &str) -> Option<String> {
+    attr(tag, "r:id").map(std::borrow::Cow::into_owned).or_else(|| {
         let i = tag.find(":id=\"")?;
         let s = i + 5;
         let e = s + tag[s..].find('"')?;
-        Some(&tag[s..e])
+        Some(xml::xml_attr_value(&tag[s..e]).into_owned())
     })
 }
 
@@ -296,7 +312,7 @@ pub(crate) fn remove_rel_to(owner: &str, rels_xml: &str, part: &str) -> String {
     let mut pos = 0;
     while let Some(t) = xml::find_open(rels_xml, "Relationship", pos) {
         if let Some(target) = attr(t.text, "Target")
-            && resolve(owner, &xml::unescape(target)) == part {
+            && resolve(owner, &target) == part {
                 return format!("{}{}", &rels_xml[..t.start], &rels_xml[t.end..]);
             }
         pos = t.end;
@@ -350,7 +366,7 @@ pub(crate) fn shift_comments(
         pos = t.end;
         if !t.closing && t.name == tag_name
             && let Some(r) = attr(t.text, "ref")
-                && let Some(area) = refs::parse_area(r) {
+                && let Some(area) = refs::parse_area(&r) {
                     let (row, col, _, _) = area.bounds();
                     match (map_index(own, true, row), map_index(own, false, col)) {
                         (Some(nr), Some(nc)) => {
@@ -388,8 +404,9 @@ pub(crate) fn shift_vml(s: &str, own: &[Shift]) -> Option<String> {
             continue;
         };
         let shape = &s[a..b];
-        let row = xml::inner(shape, "x:Row").and_then(|v| v.trim().parse::<i32>().ok());
-        let col = xml::inner(shape, "x:Column").and_then(|v| v.trim().parse::<i32>().ok());
+        // each number as XML reads its text (`&#52;` is 4)
+        let row = xml::inner(shape, "x:Row").and_then(|v| xml::unescape(v).trim().parse::<i32>().ok());
+        let col = xml::inner(shape, "x:Column").and_then(|v| xml::unescape(v).trim().parse::<i32>().ok());
         match (row, col) {
             (Some(r), Some(c)) => {
                 // a note whose cell is gone goes with it
@@ -399,7 +416,7 @@ pub(crate) fn shift_vml(s: &str, own: &[Shift]) -> Option<String> {
                     let mut sh = replace_inner(shape, "x:Row", &(nr - 1).to_string());
                     sh = replace_inner(&sh, "x:Column", &(nc - 1).to_string());
                     if let Some(anchor) = xml::inner(&sh, "x:Anchor") {
-                        let mut nums: Vec<i32> = anchor
+                        let mut nums: Vec<i32> = xml::unescape(anchor)
                             .split(',')
                             .filter_map(|n| n.trim().parse().ok())
                             .collect();
@@ -419,7 +436,7 @@ pub(crate) fn shift_vml(s: &str, own: &[Shift]) -> Option<String> {
                 }
             }
             // a control (no cell of its own): its anchor follows the grid
-            _ => match xml::inner(shape, "x:Anchor").map(|a| a.split(',').filter_map(|n| n.trim().parse::<i32>().ok()).collect::<Vec<_>>()) {
+            _ => match xml::inner(shape, "x:Anchor").map(|a| xml::unescape(a).split(',').filter_map(|n| n.trim().parse::<i32>().ok()).collect::<Vec<_>>()) {
                 Some(mut nums) if nums.len() == 8 => {
                     for (i, rows) in [(0, false), (2, true), (4, false), (6, true)] {
                         nums[i] = clamp(own, rows, nums[i] + 1) - 1;
@@ -476,7 +493,7 @@ fn shift_sort_refs(s: &str, own: &[Shift]) -> String {
         if !t.closing
             && (t.name == "sortState" || t.name == "sortCondition")
             && let Some(r) = attr(t.text, "ref")
-            && let Some(mut area) = refs::parse_area(r)
+            && let Some(mut area) = refs::parse_area(&r)
         {
             let mut whole = true;
             for sh in own {
@@ -509,7 +526,7 @@ pub(crate) fn shift_drawing(s: &str, own: &[Shift]) -> Option<String> {
         };
         if let (Some(rows), false) = (rows, t.closing || t.self_closing)
             && let Some(close) = xml::find_close(s, &t)
-                && let Ok(v) = s[t.end..close.start].trim().parse::<i32>() {
+                && let Ok(v) = xml::unescape(&s[t.end..close.start]).trim().parse::<i32>() {
                     let n = clamp(own, rows, v + 1) - 1;
                     out.push_str(t.text);
                     out.push_str(&n.to_string());
@@ -550,7 +567,7 @@ pub(crate) fn shift_link_attributes(
         pos = t.end;
         let mut text = t.text.to_string();
         for name in names.iter().filter(|_| !t.closing) {
-            let Some(link) = attr(&text, name).filter(|l| !l.is_empty()).map(str::to_string) else { continue };
+            let Some(link) = xml::raw_attr(&text, name).filter(|l| !l.is_empty()).map(str::to_string) else { continue };
             let mut cur = xml::decode_attr(&link);
             let mut changed = false;
             for (sheet, sh) in shifts {
@@ -620,7 +637,7 @@ pub(crate) fn shift_table(s: &str, own: &[Shift]) -> Result<Option<String>, Patc
         let Some(r) = attr(t.text, "ref") else {
             continue;
         };
-        let Some(mut area) = refs::parse_area(r) else {
+        let Some(mut area) = refs::parse_area(&r) else {
             continue;
         };
         for sh in own {

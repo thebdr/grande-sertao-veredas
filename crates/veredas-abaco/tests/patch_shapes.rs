@@ -2201,3 +2201,213 @@ fn a_destination_in_a_folder_or_with_a_name_the_engine_cannot_open_is_patched_an
         assert!(left.is_empty(), "{left:?}");
     }
 }
+
+// ---- refute round 12 --------------------------------------------------------------------------
+
+#[test]
+fn references_spelled_with_character_references_move_as_xml_reads_them() {
+    // `A&#53;` is `A5` to XML: every reference the patcher moves is read as XML reads its attribute
+    // or its text, with verification on (the engine compares none of these)
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("refs.xlsx");
+    let data: String = (1..=8).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let spark = r#"<extLst><ext uri="{05C60535-1F16-4fd2-B633-F4F36F0B64E0}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:sparklineGroups xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:sparklineGroup displayEmptyCellsAs="gap"><x14:colorSeries rgb="FF376092"/><x14:sparklines><x14:sparkline><xm:f>S!A1:A2</xm:f><xm:sqref>C&#51;</xm:sqref></x14:sparkline></x14:sparklines></x14:sparklineGroup></x14:sparklineGroups></ext></extLst>"#;
+    let after = format!(
+        r#"<autoFilter ref="A&#51;:B6"/><mergeCells count="1"><mergeCell ref="C&#53;:D5"/></mergeCells><conditionalFormatting sqref="B&#53;"><cfRule type="expression" priority="1"><formula>TRUE</formula></cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="whole" allowBlank="1" sqref="C&#54;"><formula1>1</formula1><formula2>9</formula2></dataValidation></dataValidations><hyperlinks><hyperlink ref="A&#53;" location="S!A1" display="x"/></hyperlinks><drawing r:id="rId1"/>{spark}"#
+    );
+    let drawing = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>&#52;</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>&#x35;</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="2" name="Box"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr/></xdr:sp><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#;
+    let comments = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><comments xmlns="{MAIN}"><authors><author>a</author></authors><commentList><comment ref="A&#53;" authorId="0"><text><t>x</t></text></comment></commentList></comments>"#
+    );
+    plain_book(
+        &src,
+        &[("S", worksheet(&data, &after))],
+        "",
+        &[
+            ("xl/worksheets/_rels/sheet1.xml.rels", rels(&[rel("rId1", "drawing", "../drawings/drawing1.xml"), rel("rId2", "comments", "../comments1.xml")])),
+            ("xl/drawings/drawing1.xml", drawing.to_string()),
+            ("xl/comments1.xml", comments),
+        ],
+    );
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[rows("S", 1, 2)], &verified()).unwrap();
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    for moved in [
+        r#"<autoFilter ref="A5:B8"/>"#,
+        r#"<mergeCell ref="C7:D7"/>"#,
+        r#"<conditionalFormatting sqref="B7">"#,
+        r#"sqref="C8">"#,
+        r#"<hyperlink ref="A7" "#,
+        "<xm:sqref>C5</xm:sqref>",
+    ] {
+        assert!(sheet.contains(moved), "{moved}: {sheet}");
+    }
+    let d = part(&dst, "xl/drawings/drawing1.xml");
+    assert!(d.contains("<xdr:row>6</xdr:row>") && d.contains("<xdr:row>7</xdr:row>"), "{d}");
+    assert!(part(&dst, "xl/comments1.xml").contains(r#"<comment ref="A7""#));
+}
+
+#[test]
+fn a_table_a_shared_group_and_a_local_name_spelled_with_references_are_read_as_xml_reads_them() {
+    let dir = tempfile::tempdir().unwrap();
+    // a table moved whole: its `ref` and its filter's follow it
+    let src = dir.path().join("table.xlsx");
+    table_book(&src);
+    let mut parts_now: Vec<(String, String)> =
+        parts(&src).into_iter().filter(|(n, _)| !n.starts_with("[Content_Types]") && n != "_rels/.rels").map(|(n, b)| (n, String::from_utf8(b).unwrap())).collect();
+    for (n, t) in parts_now.iter_mut() {
+        if n == "xl/tables/table1.xml" {
+            *t = t.replacen(r#"ref="A2:B4""#, r#"ref="A&#50;:B4""#, 1);
+        }
+    }
+    let list: Vec<(&str, String)> = parts_now.iter().map(|(n, t)| (n.as_str(), t.clone())).collect();
+    write_package(&src, &list);
+    let dst = dir.path().join("out.xlsx");
+    patch(&src, &dst, &[rows("T", 1, 2)], &verified()).unwrap();
+    let table = part(&dst, "xl/tables/table1.xml");
+    assert!(table.contains(r#"displayName="Table1" ref="A4:B6""#) && table.contains(r#"<autoFilter ref="A4:B6"/>"#), "{table}");
+    // a shared group whose master says `t="&#115;hared"` or `ref="B1:B&#51;"`: written as the
+    // group spelled plainly is, rows inserted above it and inside it
+    let shared = |t: &str, r: &str, at: i32| -> String {
+        let data = format!(
+            r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f t="{t}" ref="{r}" si="0">A1*2</f><v>2</v></c></row><row r="2"><c r="A2"><v>2</v></c><c r="B2"><f t="shared" si="0"/><v>4</v></c></row><row r="3"><c r="A3"><v>3</v></c><c r="B3"><f t="shared" si="0"/><v>6</v></c></row>"#
+        );
+        let src = dir.path().join("shared.xlsx");
+        plain_book(&src, &[("S", worksheet(&data, ""))], "", &[]);
+        let out = dir.path().join("shared-out.xlsx");
+        let _ = std::fs::remove_file(&out);
+        patch(&src, &out, &[rows("S", at, 2)], &verified()).unwrap();
+        part(&out, "xl/worksheets/sheet1.xml")
+    };
+    for at in [1, 2, 4] {
+        let plain = shared("shared", "B1:B3", at);
+        for (t, r) in [("&#115;hared", "B1:B3"), ("shared", "B1:B&#51;"), ("&#x73;hared", "B&#x31;:B3")] {
+            // (a part nothing moves in is kept byte for byte, its spelling with it)
+            let written = shared(t, r, at).replace(&format!(r#"t="{t}" ref="{r}""#), r#"t="shared" ref="B1:B3""#);
+            assert_eq!(written, plain, "{t} {r}, rows at {at}");
+        }
+    }
+    // a name local to the second sheet, `localSheetId="&#49;"`: another name set leaves it one
+    let src = dir.path().join("local.xlsx");
+    let sheet = worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, "");
+    for id in ["&#49;", "&#x31;"] {
+        plain_book(&src, &[("S", sheet.clone()), ("T", sheet.clone())], &format!(r#"<definedName name="Loc" localSheetId="{id}">T!$A$1</definedName>"#), &[]);
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[Edit::SetName { name: "Other".into(), formula: "=S!$A$1".into(), scope: None }], &verified()).unwrap();
+        let book = part(&dst, "xl/workbook.xml");
+        assert_eq!(book.matches(r#"name="Loc""#).count(), 1, "{id}: {book}");
+        assert!(book.contains(r#"<definedName name="Other">S!$A$1</definedName>"#), "{book}");
+    }
+}
+
+#[test]
+fn threaded_comments_and_vml_notes_under_another_prefix_than_excel_s_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("notes.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    let data: String = (1..=6).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let threaded = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xltc:ThreadedComments xmlns:xltc="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"><xltc:threadedComment ref="A5" dT="2026-11-22T10:00:00.00" personId="{00000000-0000-0000-0000-000000000001}" id="{00000000-0000-0000-0000-000000000002}"><xltc:text>check</xltc:text></xltc:threadedComment></xltc:ThreadedComments>"#;
+    let vml = r##"<xml xmlns:vml="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><vml:shape id="_x0000_s1025" type="#_x0000_t202"><x:ClientData ObjectType="Note"><x:Anchor>1, 15, 3, 2, 3, 15, 7, 4</x:Anchor><x:Row>4</x:Row><x:Column>0</x:Column></x:ClientData></vml:shape></xml>"##;
+    for (kind, target, name, text, element) in [
+        ("threadedComment", "../threadedComments/threadedComment1.xml", "xl/threadedComments/threadedComment1.xml", threaded, "<legacyDrawing r:id=\"rId9\"/>"),
+        ("vmlDrawing", "../drawings/vmlDrawing1.vml", "xl/drawings/vmlDrawing1.vml", vml, "<legacyDrawing r:id=\"rId1\"/>"),
+    ] {
+        let rel_xml = if kind == "threadedComment" {
+            format!(r#"<Relationship Id="rId1" Type="http://schemas.microsoft.com/office/2017/10/relationships/threadedComment" Target="{target}"/>"#)
+        } else {
+            rel("rId1", kind, target)
+        };
+        let after = if kind == "vmlDrawing" { element } else { "" };
+        plain_book(&src, &[("S", worksheet(&data, after))], "", &[("xl/worksheets/_rels/sheet1.xml.rels", rels(&[rel_xml])), (name, text.to_string())]);
+        let _ = std::fs::remove_file(&dst);
+        match patch(&src, &dst, &[rows("S", 2, 2)], &verified()) {
+            Err(PatchError::Unsupported(m)) => assert!(m.contains(name) && m.contains("under another prefix than Excel's"), "{m}"),
+            other => panic!("{name}: {other:?}"),
+        }
+        assert!(!dst.exists());
+    }
+}
+
+#[test]
+fn a_strict_chart_or_drawing_under_another_prefix_than_excel_s_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("strict.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    let drawing = |ns: &str, p: &str| {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><{p}:wsDr xmlns:{p}="{ns}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><{p}:twoCellAnchor><{p}:from><{p}:col>1</{p}:col><{p}:colOff>0</{p}:colOff><{p}:row>1</{p}:row><{p}:rowOff>0</{p}:rowOff></{p}:from><{p}:to><{p}:col>5</{p}:col><{p}:colOff>0</{p}:colOff><{p}:row>9</{p}:row><{p}:rowOff>0</{p}:rowOff></{p}:to><{p}:graphicFrame macro=""><{p}:nvGraphicFramePr><{p}:cNvPr id="2" name="Chart 1"/><{p}:cNvGraphicFramePr/></{p}:nvGraphicFramePr><{p}:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></{p}:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="{R}" r:id="rId1"/></a:graphicData></a:graphic></{p}:graphicFrame><{p}:clientData/></{p}:twoCellAnchor></{p}:wsDr>"#
+        )
+    };
+    let chart = |ns: &str, p: &str| {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><{p}:chartSpace xmlns:{p}="{ns}"><{p}:chart><{p}:plotArea><{p}:barChart><{p}:ser><{p}:idx val="0"/><{p}:val><{p}:numRef><{p}:f>Data!$A$1:$A$3</{p}:f></{p}:numRef></{p}:val></{p}:ser></{p}:barChart></{p}:plotArea></{p}:chart></{p}:chartSpace>"#
+        )
+    };
+    let (strict_chart, strict_drawing) = ("http://purl.oclc.org/ooxml/drawingml/chart", "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing");
+    let transitional_drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+    // the strict namespaces under Excel's prefixes: moved
+    drawn_book(&src, &drawing(strict_drawing, "xdr"), &chart(strict_chart, "c"));
+    patch(&src, &dst, &[rows("Data", 1, 2)], &verified()).unwrap();
+    assert!(part(&dst, "xl/charts/chart1.xml").contains("<c:f>Data!$A$3:$A$5</c:f>"));
+    assert!(part(&dst, "xl/drawings/drawing1.xml").contains("<xdr:row>3</xdr:row>"));
+    // under `ch:` and `wsd:`: refused, naming the part
+    for (drawing_xml, chart_xml, part_name) in [
+        (drawing(transitional_drawing, "xdr"), chart(strict_chart, "ch"), "xl/charts/chart1.xml"),
+        (drawing(strict_drawing, "wsd"), chart(strict_chart, "c"), "xl/drawings/drawing1.xml"),
+    ] {
+        let _ = std::fs::remove_file(&dst);
+        drawn_book(&src, &drawing_xml, &chart_xml);
+        match patch(&src, &dst, &[rows("Data", 1, 2)], &verified()) {
+            Err(PatchError::Unsupported(m)) => assert!(m.contains(part_name) && m.contains("under another prefix than Excel's"), "{m}"),
+            other => panic!("{part_name}: {other:?}"),
+        }
+        assert!(!dst.exists());
+    }
+}
+
+#[test]
+fn a_comment_or_a_processing_instruction_inside_a_part_is_refused() {
+    // XML reads `$A$1<!-- c -->:$A$3` as `$A$1:$A$3`; the patcher, which does not read it, refuses
+    // the part (as a CDATA section), verification on or off
+    let dir = tempfile::tempdir().unwrap();
+    let dst = dir.path().join("out.xlsx");
+    let src = dir.path().join("chart.xlsx");
+    let drawing = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>9</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#;
+    for inside in ["<!-- c -->", "<?pi x?>"] {
+        let chart = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:val><c:numRef><c:f>Data!$A$1{inside}:$A$3</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#
+        );
+        drawn_book(&src, drawing, &chart);
+        let cell = dir.path().join("cell.xlsx");
+        plain_book(&cell, &[("S", worksheet(&format!(r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>A1{inside}*2</f><v>2</v></c></row>"#), ""))], "", &[]);
+        let named = dir.path().join("name.xlsx");
+        plain_book(&named, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, ""))], &format!(r#"<definedName name="N">S!$A$1{inside}:$A$3</definedName>"#), &[]);
+        for (book, sheet, part_name) in [(&src, "Data", "xl/charts/chart1.xml"), (&cell, "S", "xl/worksheets/sheet1.xml"), (&named, "S", "xl/workbook.xml")] {
+            for verify in [true, false] {
+                let _ = std::fs::remove_file(&dst);
+                match patch(book, &dst, &[rows(sheet, 1, 2)], &PatchOptions { verify, ..verified() }) {
+                    Err(PatchError::Unsupported(m)) => assert!(m.contains(part_name) && m.contains("an XML comment or a processing instruction"), "{m}"),
+                    other => panic!("{part_name} {inside} verify {verify}: {other:?}"),
+                }
+                assert!(!dst.exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn a_placeholder_written_with_an_end_tag_is_a_placeholder() {
+    // `<f ca="1"></f>` is the element `<f ca="1"/>` is: a cell the random array no longer reaches
+    // goes, verification on or off
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("rand.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    let data = r#"<row r="1"><c r="A1" cm="1"><f t="array" aca="1" ref="A1:C1" ca="1">_xlfn.RANDARRAY(1,3)</f><v>0.1</v></c><c r="B1"><f ca="1"></f><v>0.2</v></c><c r="C1"><f ca="1"></f><v>0.3</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "", &[]);
+    for verify in [true, false] {
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[Edit::InsertColumns { sheet: "S".into(), at: "B".into(), count: 1 }], &PatchOptions { verify, ..verified() }).unwrap();
+        let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+        assert_eq!(element(&sheet, "D1"), None, "verify {verify}: {sheet}");
+    }
+}
