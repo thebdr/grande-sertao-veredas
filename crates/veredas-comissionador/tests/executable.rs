@@ -175,6 +175,11 @@ fn replay_reads_the_window_the_project_s_start_fills() {
     // A moment that is none: the command line's fault.
     let (code, _, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", "yesterday", "--to", &t9]));
     assert_eq!((code, stderr[0].as_str()), (2, "a moment is `YYYY-MM-DD HH:MM[:SS[.mmm]]` on the plant's clock"));
+    // A year of anything but four digits is no moment: a run's report holds none other.
+    for m in ["+10000-01-01 00:00", "-0001-01-01 00:00", "10000-01-01 00:00", "2026-11-23T10:00", "2026-11-23 10:00:5", "２０２６-11-23 10:00"] {
+        let (code, _, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", m, "--to", &t9]));
+        assert_eq!((code, stderr[0].as_str()), (2, "a moment is `YYYY-MM-DD HH:MM[:SS[.mmm]]` on the plant's clock"), "{m}");
+    }
 }
 
 #[test]

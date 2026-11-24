@@ -49,6 +49,9 @@ pub enum RecordError {
     /// The test's folder holds a run numbered as high as a number goes.
     #[error("{path}: no run number is left past {last}")]
     NoNumber { path: String, last: u32 },
+    /// A moment of the run a report cannot hold (a year past 9999 or before 0000).
+    #[error("the run's moment `{0}` is no moment a report holds: a moment is `YYYY-MM-DD HH:MM:SS.mmm`")]
+    Moment(String),
 }
 
 fn io(path: &Path) -> impl Fn(std::io::Error) -> RecordError + '_ {
@@ -237,6 +240,14 @@ fn numbers(dir: &Path) -> Result<Vec<u32>, RecordError> {
 /// written last.
 pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn Plant) -> Result<PathBuf, RecordError> {
     let dir = test_folder(runs, c)?;
+    // Every moment the report will hold, in its form, before anything is made: a report kept is
+    // one `read` reads back.
+    for ms in [r.start_ms, r.end_ms].into_iter().chain(r.steps.iter().flat_map(|s| [s.start_ms, s.end_ms])) {
+        let t = time_text(ms);
+        if !is_moment(&t) {
+            return Err(RecordError::Moment(t));
+        }
+    }
     std::fs::create_dir_all(&dir).map_err(io(&dir))?;
     // The next free number: a folder created, never one another keeper made meanwhile.
     let last = numbers(&dir)?.last().copied().unwrap_or(0);
@@ -437,16 +448,20 @@ fn judge(r: &Report) -> Result<(), String> {
     for w in &r.writes {
         from_one("write.attempt", w.attempt)?;
     }
-    // Each table once, its file where the run's folder keeps it: by its name when plain, by its
-    // place among the evidence otherwise.
-    let mut tables = std::collections::BTreeSet::new();
+    // Each table once and each file once, whatever their case (the store's names and some file
+    // systems ignore it), its file where the run's folder keeps it: by its name when plain, by
+    // its place among the evidence otherwise.
+    let (mut tables, mut files) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
     for (i, e) in r.evidence.iter().enumerate() {
-        if !tables.insert(e.table.as_str()) {
+        if !tables.insert(e.table.to_lowercase()) {
             return Err(format!("`evidence.table` `{}` is given twice", e.table));
         }
         let kept = evidence_name(i, &e.table);
         if e.file != kept {
             return Err(format!("`evidence.file` is `{}`: `{kept}`", e.file));
+        }
+        if !files.insert(e.file.to_lowercase()) {
+            return Err(format!("`evidence.file` `{}` is named twice", e.file));
         }
     }
     for g in &r.signatures {
@@ -494,9 +509,15 @@ pub fn list(runs: &Path, c: &Checked) -> Result<Vec<Listed>, RecordError> {
     let mut out = Vec::new();
     for n in numbers(&dir)?.into_iter().rev() {
         let folder = dir.join(run_name(n));
-        if folder.join(REPORT_FILE).exists() {
-            let report = read(&folder);
-            out.push((folder, report));
+        let report = folder.join(REPORT_FILE);
+        // A folder that cannot be looked into is listed with why, never passed over.
+        match report.try_exists() {
+            Ok(true) => {
+                let read = read(&folder);
+                out.push((folder, read));
+            }
+            Ok(false) => {}
+            Err(e) => out.push((folder, Err(io(&report)(e)))),
         }
     }
     Ok(out)

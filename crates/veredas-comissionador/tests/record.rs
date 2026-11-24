@@ -102,6 +102,16 @@ fn the_reference_s_worked_example_reads_as_a_report() {
     assert!(evidence("a.b", "evidence/table-1.csv").is_ok());
     assert!(evidence("x-y_1", "evidence/x-y_1.csv").is_ok());
     assert_eq!(evidence("status", "evidence/status.csv").unwrap_err(), "`evidence.table` `status` is given twice");
+    // Two entries at one file, or one table in two cases: refused.
+    let both = |a: (&str, &str), b: (&str, &str)| {
+        let from = "table = \"outcome\"\nfile = \"evidence/outcome.csv\"\nrows = 31\n\n[[evidence]]\ntable = \"status\"\nfile = \"evidence/status.csv\"";
+        assert!(block[0].contains(from));
+        record::parse(&block[0].replacen(from, &format!("table = {:?}\nfile = {:?}\nrows = 31\n\n[[evidence]]\ntable = {:?}\nfile = {:?}", a.0, a.1, b.0, b.1), 1))
+    };
+    assert_eq!(both(("a.b", "evidence/table-1.csv"), ("table-1", "evidence/table-1.csv")).unwrap_err(), "`evidence.file` `evidence/table-1.csv` is named twice");
+    assert_eq!(both(("table-2", "evidence/table-2.csv"), ("a.b", "evidence/table-2.csv")).unwrap_err(), "`evidence.file` `evidence/table-2.csv` is named twice");
+    assert_eq!(both(("outcome", "evidence/outcome.csv"), ("Outcome", "evidence/Outcome.csv")).unwrap_err(), "`evidence.table` `Outcome` is given twice");
+    assert!(both(("outcome", "evidence/outcome.csv"), ("a.b", "evidence/table-2.csv")).is_ok());
     // A moment in any form but the reference's, to the byte: refused; a leap second too.
     for from in [
         "2026-11-22\t14:02:11.120",
@@ -255,6 +265,31 @@ fn a_run_is_kept_whole_read_back_listed_noted_and_signed() {
     std::fs::create_dir_all(dir.join("0000")).unwrap();
     std::fs::copy(third.join("report.toml"), dir.join("0000/report.toml")).unwrap();
     assert_eq!(record::list(&runs, &c).unwrap().len(), 5);
+    // A run's folder that cannot be looked into: listed with why, never passed over; every run's
+    // folder so, every run listed so, never a list of no run.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |name: &str, m: u32| std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(m)).unwrap();
+        mode("0004", 0o000);
+        let listed = record::list(&runs, &c).unwrap();
+        mode("0004", 0o755);
+        let shut: Vec<_> = listed.iter().filter(|(_, r)| matches!(r, Err(RecordError::Io { .. }))).map(|(f, _)| f.clone()).collect();
+        assert_eq!((listed.len(), shut), (5, vec![dir.join("0004")]), "{listed:?}");
+        let all = ["10000", "9999", "0004", "0002", "0001"];
+        all.iter().for_each(|n| mode(n, 0o600));
+        let listed = record::list(&runs, &c).unwrap();
+        all.iter().for_each(|n| mode(n, 0o755));
+        assert_eq!((listed.len(), listed.iter().all(|(_, r)| matches!(r, Err(RecordError::Io { .. })))), (5, true), "{listed:?}");
+    }
+    // A run whose moments a report cannot hold (a year past 9999): refused before any folder is
+    // made, so a report kept is one `read` reads back.
+    let mut far = live.clone();
+    far.start_ms = 253_402_300_800_000;
+    let before = std::fs::read_dir(&dir).unwrap().count();
+    let e = record::keep(&runs, &c, &far, &RunOptions::live().mode, &plant).unwrap_err();
+    assert_eq!(e.to_string(), "the run's moment `+10000-01-01 00:00:00.000` is no moment a report holds: a moment is `YYYY-MM-DD HH:MM:SS.mmm`");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), before);
     // A test's folder that cannot be read hides no run: `list` says why.
     #[cfg(unix)]
     {
@@ -499,8 +534,8 @@ is the plant's clock on the store's axis, `YYYY-MM-DD HH:MM:SS.mmm`.
 
 **The evidence** (`[[evidence]]`): one table per table the test reads.
 - `table` (required): the portal table.
-- `file` (required): its CSV in the run's folder, `evidence/<table>.csv` for a plain name (letters,
-  digits, `_` and `-`), else `evidence/table-<n>.csv`, `n` its place among the evidence from 1: a header of `time`, `arrival`, `source`, `key`, `seq` and the
+- `file` (required): its CSV in the run's folder, `evidence/<table>.csv` for a plain name (ASCII
+  letters, digits, `_` and `-`), else `evidence/table-<n>.csv`, `n` its place among the evidence from 1: a header of `time`, `arrival`, `source`, `key`, `seq` and the
   table's columns, then every row stamped in the run's window, oldest first, each cell as the
   suite shows its value and a hole empty. `time` is the row's stamp and `arrival` when it reached
   portal, both moments on the store's axis.
@@ -517,8 +552,9 @@ A report with another stamp, a key the format does not know, a key missing or of
 value outside the ones its key names (a mode, a verdict, an outcome, a role), a moment not in its
 form, an attempt or a run's number below 1, a file named otherwise than the run's folder keeps it
 (`test.test`, `functions/<n>.fn` in the order of the uses, the evidence's names), a table's
-evidence given twice. A run past the last number a run can take (4294967295). A test's folder
-that cannot be read, which `list` names rather than list no run. A note or a
+evidence or a file given twice, in any case. A run past the last number a run can take
+(4294967295), or with a moment a report cannot hold (a year past 9999). A test's folder, or a
+run's, that cannot be read, which `list` names rather than pass over. A note or a
 signature on a report already signed: a signed report is frozen, a correction being a new run
 (Q312, (d) taken meanwhile). This is the engine's refusal, nothing sealed in the file. A signature
 whose role is neither `tester` nor `witness`, or whose name holds no letter or digit. A run of a

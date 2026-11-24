@@ -98,11 +98,20 @@ fn check(file: &str) -> ExitCode {
     }
 }
 
-/// A moment on the plant's clock, as the store's axis reads it.
+/// A moment on the plant's clock, as the store's axis reads it: `YYYY-MM-DD HH:MM[:SS[.mmm]]`, a
+/// year of four digits (a run's report holds no other), its digits ASCII.
 fn moment(text: &str) -> Option<i64> {
+    let t = text.trim();
+    let b = t.as_bytes();
+    let form = |pattern: &[u8], at: &[u8]| pattern.len() == at.len() && pattern.iter().zip(at).all(|(p, c)| if *p == b'd' { c.is_ascii_digit() } else { p == c });
+    let rest = b.get(16..)?;
+    let rest_ok = rest.is_empty() || (rest.len() >= 3 && form(b":dd", &rest[..3]) && (rest.len() == 3 || (rest[3] == b'.' && rest.len() > 4 && rest[4..].iter().all(u8::is_ascii_digit))));
+    if !form(b"dddd-dd-dd dd:dd", &b[..16]) || !rest_ok {
+        return None;
+    }
     ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"]
         .iter()
-        .find_map(|f| chrono::NaiveDateTime::parse_from_str(text.trim(), f).ok())
+        .find_map(|f| chrono::NaiveDateTime::parse_from_str(t, f).ok())
         .map(|t| t.and_utc().timestamp_millis())
 }
 
