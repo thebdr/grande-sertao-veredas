@@ -1160,29 +1160,40 @@ fn a_long_call_chain_and_a_long_cycle_are_checked_at_once() {
         }
         f
     };
-    let text = chain(5000, false);
-    let t0 = std::time::Instant::now();
-    assert!(check_functions(&text, "f.fn").is_ok());
-    // Linear: well under the bound with the suite beside it, where a quadratic check took seconds and
-    // the cubic one minutes.
-    assert!(t0.elapsed() < std::time::Duration::from_secs(5), "a chain of 5000: {:?}", t0.elapsed());
-    let text = chain(1000, true);
-    let t0 = std::time::Instant::now();
-    let e = check_functions(&text, "f.fn").unwrap_err();
-    assert!(t0.elapsed() < std::time::Duration::from_secs(5), "a cycle of 1000: {:?}", t0.elapsed());
-    assert_eq!(e.len(), 1000, "each function on the cycle named once");
-    assert_eq!(e[0].message, "`F0` calls itself through `F1`, `F2`, `F3`, `F4`, `F5` and 994 others");
-    assert_eq!(e[999].message, "`F999` calls itself through `F0`, `F1`, `F2`, `F3`, `F4` and 994 others");
-    // Ten thousand problems in one file, each at its place, at once.
-    let mut f = String::from(FHEAD);
-    for i in 0..10_000 {
-        f.push_str(&format!("function G{i}() -> (x: int) {{\n  x = ghost{i}\n}}\n"));
-    }
-    let t0 = std::time::Instant::now();
-    let e = check_functions(&f, "f.fn").unwrap_err();
-    assert!(t0.elapsed() < std::time::Duration::from_secs(5), "{:?}", t0.elapsed());
-    assert_eq!(e.len(), 10_000);
-    assert_eq!((e[9_999].line, e[9_999].column, e[9_999].message.as_str()), (4 + 3 * 9_999 + 1, 7, "`ghost9999` is read but nothing assigns it"));
+    // A chain of calls and a file of a problem a function, each checked in a time linear in its
+    // length (1 000 functions then 8 000, 2 000 then 16 000), where a quadratic check took seconds;
+    // a cycle through every function in a time no worse than the square of its length (300, then
+    // 2 400), where the cubic check took minutes.
+    let calls = |n: usize| {
+        let text = chain(n, false);
+        let mut ok = false;
+        let took = on_cpu(|| ok = check_functions(&text, "f.fn").is_ok());
+        assert!(ok, "a chain of {n}");
+        took
+    };
+    let cycle = |n: usize| {
+        let text = chain(n, true);
+        let mut e = Vec::new();
+        let took = on_cpu(|| e = check_functions(&text, "f.fn").unwrap_err());
+        assert_eq!(e.len(), n, "each function on the cycle named once");
+        assert_eq!(e[0].message, format!("`F0` calls itself through `F1`, `F2`, `F3`, `F4`, `F5` and {} others", n - 6));
+        assert_eq!(e[n - 1].message, format!("`F{}` calls itself through `F0`, `F1`, `F2`, `F3`, `F4` and {} others", n - 1, n - 6));
+        took
+    };
+    let ghosts = |n: usize| {
+        let mut f = String::from(FHEAD);
+        for i in 0..n {
+            f.push_str(&format!("function G{i}() -> (x: int) {{\n  x = ghost{i}\n}}\n"));
+        }
+        let mut e = Vec::new();
+        let took = on_cpu(|| e = check_functions(&f, "f.fn").unwrap_err());
+        assert_eq!(e.len(), n);
+        let last = &e[n - 1];
+        assert_eq!((last.line, last.column, last.message.clone()), (4 + 3 * (n - 1) + 1, 7, format!("`ghost{}` is read but nothing assigns it", n - 1)));
+        took
+    };
+    linear(&[("a chain of calls", 1_000, &calls), ("a problem a function", 2_000, &ghosts)]);
+    quadratic(&[("a cycle through every function", 300, &cycle)]);
 }
 
 #[test]
@@ -1262,40 +1273,56 @@ fn a_function_named_twice_is_its_first_in_the_cycle_search() {
 
 #[test]
 fn a_way_back_of_five_and_six_is_counted_right() {
-    let cycle = |n: usize| {
+    let file = |n: usize| {
         let mut f = String::from(FHEAD);
         for i in 0..n {
             f.push_str(&format!("function F{i}() -> (x: int) {{\n  x = F{}()\n}}\n", (i + 1) % n));
         }
-        fproblems(&f)
+        f
     };
+    let cycle = |n: usize| fproblems(&file(n));
     assert_eq!(cycle(6)[0], "4:10: `F0` calls itself through `F1`, `F2`, `F3`, `F4`, `F5`");
     assert_eq!(cycle(7)[0], "4:10: `F0` calls itself through `F1`, `F2`, `F3`, `F4`, `F5` and 1 other");
     assert_eq!(cycle(8)[0], "4:10: `F0` calls itself through `F1`, `F2`, `F3`, `F4`, `F5` and 2 others");
-    let t0 = std::time::Instant::now();
-    assert_eq!(cycle(2000).len(), 2000);
-    assert!(t0.elapsed() < std::time::Duration::from_secs(5), "a cycle of 2000: {:?}", t0.elapsed());
+    // Each way back counted in a time no worse than the square of the cycle's length: 300
+    // functions, then 2 400.
+    let long = |n: usize| {
+        let f = file(n);
+        let mut e = Vec::new();
+        let took = on_cpu(|| e = fproblems(&f));
+        assert_eq!(e.len(), n);
+        took
+    };
+    quadratic(&[("a cycle through every function", 300, &long)]);
 }
 
 #[test]
 fn a_test_using_a_large_function_file_is_checked_at_once() {
-    // Twenty thousand functions in a used file, and ten thousand of one name: each check linear.
-    let mut f = String::from(FHEAD);
-    for i in 0..20_000 {
-        f.push_str(&format!("function G{i}() -> (x: int) {{\n  x = {i}\n}}\n"));
-    }
-    let t0 = std::time::Instant::now();
-    assert_eq!(problems_with(&test_of("  use f.fn\n  step a stop pass\n"), &[("f.fn", &f)]), Vec::<String>::new());
-    assert!(t0.elapsed() < std::time::Duration::from_secs(5), "20 000 functions used: {:?}", t0.elapsed());
-    let mut d = String::from(FHEAD);
-    for _ in 0..10_000 {
-        d.push_str("function F() -> (x: int) {\n  x = 1\n}\n");
-    }
-    let t0 = std::time::Instant::now();
-    let p = problems_with(&test_of("  use d.fn\n  step a stop pass\n"), &[("d.fn", &d)]);
-    assert!(t0.elapsed() < std::time::Duration::from_secs(5), "10 000 duplicates: {:?}", t0.elapsed());
-    assert_eq!(p.len(), 9_999);
-    assert_eq!(p[9_998], format!("d.fn:{}:10: two functions are named `F`: the other is at d.fn:4:10", 4 + 3 * 9_999));
+    // A used file of many functions, and one of many functions of one name: each checked in a time
+    // linear in the file, 4 000 functions then 32 000, 2 000 then 16 000.
+    let t = test_of("  use f.fn\n  step a stop pass\n");
+    let used = |n: usize| {
+        let mut f = String::from(FHEAD);
+        for i in 0..n {
+            f.push_str(&format!("function G{i}() -> (x: int) {{\n  x = {i}\n}}\n"));
+        }
+        let mut p = Vec::new();
+        let took = on_cpu(|| p = problems_with(&t, &[("f.fn", &f)]));
+        assert_eq!(p, Vec::<String>::new());
+        took
+    };
+    let alike = |n: usize| {
+        let mut d = String::from(FHEAD);
+        for _ in 0..n {
+            d.push_str("function F() -> (x: int) {\n  x = 1\n}\n");
+        }
+        let mut p = Vec::new();
+        let took = on_cpu(|| p = problems_with(&t, &[("f.fn", &d)]));
+        assert_eq!(p.len(), n - 1);
+        assert_eq!(p[n - 2], format!("f.fn:{}:10: two functions are named `F`: the other is at f.fn:4:10", 4 + 3 * (n - 1)));
+        took
+    };
+    linear(&[("a used file of many functions", 4_000, &used), ("a used file of functions of one name", 2_000, &alike)]);
 }
 
 // ---- refute round 5 ------------------------------------------------------------------------
@@ -1342,19 +1369,22 @@ fn a_dotted_or_table_key_with_quotes_is_named_as_toml_reads_it() {
 
 #[test]
 fn problems_sharing_one_line_are_placed_at_once() {
-    // 160 000 positions for no step on one line, ASCII and past it (a comment at its end): each
-    // placed, the last at its column, in a time linear in the line.
-    for tail in ["", " # olá, ç"] {
-        let n = 160_000;
-        let line = format!("layout {{{}}}{tail}", " a 0,0".repeat(n));
-        let text = format!("{}{line}\n", test_of("  step b stop pass\n"));
-        let t0 = std::time::Instant::now();
-        let e = check_with(&text, &[]).unwrap_err();
-        assert!(t0.elapsed() < std::time::Duration::from_secs(5), "{tail:?}: {:?}", t0.elapsed());
-        assert_eq!(e.len(), n, "{tail:?}");
-        let last = e.iter().max_by_key(|p| p.column).unwrap();
-        assert_eq!((last.line, last.column), (8, 8 + 6 * (n - 1) + 2), "{tail:?}: {}", last.message);
-    }
+    // Positions for no step on one line, ASCII and past it (a comment at its end): each placed, the
+    // last at its column, in a time linear in the line: 20 000 positions, then 160 000.
+    let placed = |tail: &'static str| {
+        move |n: usize| {
+            let line = format!("layout {{{}}}{tail}", " a 0,0".repeat(n));
+            let text = format!("{}{line}\n", test_of("  step b stop pass\n"));
+            let mut e = Vec::new();
+            let took = on_cpu(|| e = check_with(&text, &[]).unwrap_err());
+            assert_eq!(e.len(), n, "{tail:?}");
+            let last = e.iter().max_by_key(|p| p.column).unwrap();
+            assert_eq!((last.line, last.column), (8, 8 + 6 * (n - 1) + 2), "{tail:?}: {}", last.message);
+            took
+        }
+    };
+    let (ascii, past) = (placed(""), placed(" # olá, ç"));
+    linear(&[("a line of ASCII", 20_000, &ascii), ("a line past ASCII", 20_000, &past)]);
 }
 
 // ---- refute round 6 ------------------------------------------------------------------------
@@ -1389,45 +1419,56 @@ fn another_header_key_is_named_whatever_value_core_s_reader_cannot_hold() {
 
 #[test]
 fn a_function_s_inputs_reads_and_calls_are_looked_up_at_once() {
-    let n = 20_000;
-    // Each case timed on the processor and counted, every one run before the times are held to
-    // five seconds.
-    let times = std::cell::RefCell::new(Vec::new());
-    let timed = |what: &str, f: &dyn Fn() -> Vec<String>, expect: usize| {
+    // A function's inputs, a call's, the tables it reads and the test's constants, each looked up
+    // by name in a time linear in their number: 2 500 of each, then 20 000 (tables twice as many,
+    // constants 5 000, then 40 000).
+    let timed = |f: &dyn Fn() -> Vec<String>| {
         let mut ps = Vec::new();
         let took = on_cpu(|| ps = f());
-        times.borrow_mut().push((what.to_string(), took));
-        assert_eq!(ps.len(), expect, "{what}: {:?}", ps.first());
+        assert_eq!(ps.len(), 0, "{:?}", ps.first());
+        took
     };
-    // A function of 20 000 inputs, assigning its output and looping 20 000 times.
-    let inputs: Vec<String> = (0..n).map(|i| format!("i{i}: int")).collect();
-    let mut f = format!("{FHEAD}function F({}) -> (x: int) {{\n", inputs.join(", "));
-    for _ in 0..n / 2 {
-        f.push_str("  x = 1\n  for k in 1 .. 2 { x = k }\n");
-    }
-    f.push_str("}\n");
-    timed("20 000 inputs, 20 000 statements", &|| fproblems(&f), 0);
+    // A function of n inputs, assigning its output and looping n times.
+    let function = |n: usize| {
+        let inputs: Vec<String> = (0..n).map(|i| format!("i{i}: int")).collect();
+        let mut f = format!("{FHEAD}function F({}) -> (x: int) {{\n", inputs.join(", "));
+        for _ in 0..n / 2 {
+            f.push_str("  x = 1\n  for k in 1 .. 2 { x = k }\n");
+        }
+        f.push_str("}\n");
+        f
+    };
+    let inputs = |n: usize| {
+        let f = function(n);
+        timed(&|| fproblems(&f))
+    };
     // A step calling it with every input, from the last to the first.
-    let args: Vec<String> = (0..n).rev().map(|i| format!("i{i}: 1")).collect();
-    let t = test_of(&format!("  use f.fn\n  step a call F({})\n    -> x\n  step b stop pass\n", args.join(", ")));
-    timed("a call of 20 000 inputs", &|| problems_with(&t, &[("f.fn", &f)]), 0);
-    // A function reading 40 000 tables, one by one.
-    let tables: Vec<String> = (0..2 * n).map(|i| format!("t{i}")).collect();
-    let mut g = format!("{FHEAD}function G() -> (x: int) {{\n  reads {}\n", tables.join(", "));
-    for i in (0..2 * n).rev() {
-        g.push_str(&format!("  x = t{i}.c\n"));
-    }
-    g.push_str("}\n");
-    timed("40 000 tables read", &|| fproblems(&g), 0);
-    // 20 000 constants, each made of the one above it.
-    let mut lets = String::from("  let c0 = 1\n");
-    for i in 1..n {
-        lets.push_str(&format!("  let c{i} = c{} + 1\n", i - 1));
-    }
-    let t = test_of(&format!("{lets}  step a stop pass\n"));
-    timed("20 000 constants", &|| problems(&t), 0);
-    let slow: Vec<_> = times.borrow().iter().filter(|(_, t)| *t >= std::time::Duration::from_secs(5)).cloned().collect();
-    assert!(slow.is_empty(), "past five seconds: {slow:?} (all: {:?})", times.borrow());
+    let call = |n: usize| {
+        let f = function(n);
+        let args: Vec<String> = (0..n).rev().map(|i| format!("i{i}: 1")).collect();
+        let t = test_of(&format!("  use f.fn\n  step a call F({})\n    -> x\n  step b stop pass\n", args.join(", ")));
+        timed(&|| problems_with(&t, &[("f.fn", &f)]))
+    };
+    // A function reading 2n tables, one by one.
+    let tables = |n: usize| {
+        let tables: Vec<String> = (0..2 * n).map(|i| format!("t{i}")).collect();
+        let mut g = format!("{FHEAD}function G() -> (x: int) {{\n  reads {}\n", tables.join(", "));
+        for i in (0..2 * n).rev() {
+            g.push_str(&format!("  x = t{i}.c\n"));
+        }
+        g.push_str("}\n");
+        timed(&|| fproblems(&g))
+    };
+    // n constants, each made of the one above it.
+    let constants = |n: usize| {
+        let mut lets = String::from("  let c0 = 1\n");
+        for i in 1..n {
+            lets.push_str(&format!("  let c{i} = c{} + 1\n", i - 1));
+        }
+        let t = test_of(&format!("{lets}  step a stop pass\n"));
+        timed(&|| problems(&t))
+    };
+    linear(&[("n inputs, n statements", 2_500, &inputs), ("a call of n inputs", 2_500, &call), ("2n tables read", 2_500, &tables), ("n constants", 5_000, &constants)]);
 }
 
 /// How long `f` keeps this thread on a processor: its CPU time as Linux's scheduler counts it, so
@@ -1481,6 +1522,33 @@ fn cost(times: usize, limit: std::time::Duration, f: &dyn Fn()) -> Option<std::t
 fn growth(n: usize, check: &dyn Fn(usize) -> std::time::Duration) -> (std::time::Duration, std::time::Duration) {
     let best = |n: usize| (0..2).map(|_| check(n)).min().unwrap();
     (best(n), best(8 * n))
+}
+
+/// Cases each timed by `growth`, every one run before any is judged: each grows as a linear check
+/// does, under twenty times at eight times the size.
+fn linear(cases: &[(&str, usize, &dyn Fn(usize) -> std::time::Duration)]) {
+    grows_under(20, cases);
+}
+
+/// Cases each timed by `growth`: each grows no faster than the square of its size, as the search of
+/// every function's way back inside its own cycle does (C-201), up to sixty-four times at eight
+/// times the size, where a cubic one grows up to 512. Two hundred is between.
+fn quadratic(cases: &[(&str, usize, &dyn Fn(usize) -> std::time::Duration)]) {
+    grows_under(200, cases);
+}
+
+/// Cases each timed by `growth`, every one run before any is judged: each takes under `bound` times
+/// as long at eight times its size.
+fn grows_under(bound: u32, cases: &[(&str, usize, &dyn Fn(usize) -> std::time::Duration)]) {
+    let grown: Vec<(&str, usize, std::time::Duration, std::time::Duration)> = cases
+        .iter()
+        .map(|(what, n, check)| {
+            let (small, large) = growth(*n, *check);
+            (*what, *n, small, large)
+        })
+        .collect();
+    let past: Vec<_> = grown.iter().filter(|(_, _, small, large)| *large >= bound * *small).collect();
+    assert!(past.is_empty(), "grew {bound} times or more at eight times the size: {past:?} (all: {grown:?})");
 }
 
 #[test]
