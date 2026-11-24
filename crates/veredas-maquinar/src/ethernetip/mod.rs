@@ -274,7 +274,8 @@ pub struct EnipHandle {
     pub io_addr: SocketAddr,
     shared: Arc<Shared>,
     points: Vec<(String, Point)>,
-    drops: tokio::sync::watch::Sender<u64>,
+    /// A restart asked of the accept loop, which answers with the generation it ended.
+    restarts: tokio::sync::mpsc::UnboundedSender<std::sync::mpsc::Sender<u64>>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -401,19 +402,17 @@ impl EnipHandle {
         self.shared.silent.store(silent, Ordering::SeqCst);
     }
 
-    /// Close every Class 1 connection and every TCP connection, as a device's restart does; the
-    /// adapter listens on. Returns once every TCP connection open at the call is closed (or 5 s).
+    /// Close every Class 1 connection and every TCP connection, as a device's restart does: those
+    /// its sessions serve and those still in the listen queue (a client whose connect returned
+    /// before the call); the adapter listens on. Returns once every TCP connection open at the call
+    /// is closed (or 5 s).
     pub fn restart(&self) {
-        let ended = {
-            let mut state = self.shared.lock();
-            let n = state.conns.len() as u64;
-            state.conns.clear();
-            state.status.closed += n;
-            state.generation += 1;
-            state.generation
-        };
-        self.drops.send_modify(|g| *g = ended);
         let started = std::time::Instant::now();
+        let (tx, rx) = std::sync::mpsc::channel();
+        if self.restarts.send(tx).is_err() {
+            return;
+        }
+        let Ok(ended) = rx.recv_timeout(Duration::from_secs(5)) else { return };
         while started.elapsed() < Duration::from_secs(5) {
             if self.shared.lock().open.range(..ended).all(|(_, n)| *n == 0) {
                 return;
@@ -482,7 +481,7 @@ pub fn start(cfg: &EnipConfig) -> Result<EnipHandle, EnipError> {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(SocketAddr, SocketAddr), EnipError>>();
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let (drops_tx, _) = tokio::sync::watch::channel(0u64);
-    let drops = drops_tx.clone();
+    let (restarts, restarts_rx) = tokio::sync::mpsc::unbounded_channel::<std::sync::mpsc::Sender<u64>>();
     let server = Arc::clone(&shared);
     let thread = std::thread::Builder::new()
         .name("maquinar-enip".into())
@@ -535,12 +534,12 @@ pub fn start(cfg: &EnipConfig) -> Result<EnipHandle, EnipError> {
                 let io = Arc::new(io);
                 tokio::spawn(list_identity_udp(udp, Arc::clone(&server)));
                 tokio::spawn(class1(io, Arc::clone(&server)));
-                accept_loop(tcp, server, drops_tx, shutdown_rx).await;
+                accept_loop(tcp, server, drops_tx, restarts_rx, shutdown_rx).await;
             });
         })
         .map_err(EnipError::Thread)?;
     let (addr, io_addr) = ready_rx.recv().map_err(|_| EnipError::DiedOnStartup)??;
-    Ok(EnipHandle { addr, io_addr, shared, points, drops, shutdown: Some(shutdown_tx), thread: Some(thread) })
+    Ok(EnipHandle { addr, io_addr, shared, points, restarts, shutdown: Some(shutdown_tx), thread: Some(thread) })
 }
 
 /// The ListIdentity item: the encapsulation version, the adapter's socket address, its identity,
@@ -602,10 +601,34 @@ async fn list_identity_udp(udp: UdpSocket, shared: Arc<Shared>) {
     }
 }
 
-async fn accept_loop(listener: TcpListener, shared: Arc<Shared>, drops: tokio::sync::watch::Sender<u64>, mut shutdown: tokio::sync::oneshot::Receiver<()>) {
+async fn accept_loop(
+    listener: TcpListener,
+    shared: Arc<Shared>,
+    drops: tokio::sync::watch::Sender<u64>,
+    mut restarts: tokio::sync::mpsc::UnboundedReceiver<std::sync::mpsc::Sender<u64>>,
+    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+) {
     loop {
         tokio::select! {
             _ = &mut shutdown => return,
+            Some(reply) = restarts.recv() => {
+                // The kernel completes a connection before this loop takes it: a client whose
+                // connect returned before the restart may still sit in the listen queue. Take every
+                // one there now, straight from the socket, and close it with the rest.
+                while let Ok((socket, _)) = socket2::SockRef::from(&listener).accept() {
+                    drop(socket);
+                }
+                let ended = {
+                    let mut state = shared.lock();
+                    let n = state.conns.len() as u64;
+                    state.conns.clear();
+                    state.status.closed += n;
+                    state.generation += 1;
+                    state.generation
+                };
+                drops.send_modify(|g| *g = ended);
+                let _ = reply.send(ended);
+            }
             accepted = listener.accept() => {
                 let Ok((stream, peer)) = accepted else { continue };
                 let generation = {
@@ -1036,7 +1059,8 @@ fn forward_open(shared: &Shared, peer: SocketAddr, generation: u64, body: &[u8],
     // Where the produced frames go: the originator's own host (the session's), at the port its T→O
     // socket-address item gives, else at the standard I/O port. The item's address is not obeyed:
     // a session cannot send another host the adapter's frames (OpENer takes the port alone too).
-    let sends_to = SocketAddr::V4(SocketAddrV4::new(originator_ip, t_to_o.map(|a| a.port()).unwrap_or(DEFAULT_IO_PORT)));
+    // A port of 0 names none: the standard port then too, as a scanner reads a 0 in the reply's.
+    let sends_to = SocketAddr::V4(SocketAddrV4::new(originator_ip, t_to_o.map(|a| a.port()).filter(|p| *p != 0).unwrap_or(DEFAULT_IO_PORT)));
     let mut state = shared.lock();
     // A session a restart has ended (its generation past) opens nothing: the restart cleared the
     // connections under this lock, and one opened after it would outlive the device's restart.
@@ -1155,7 +1179,7 @@ async fn class1(io: Arc<UdpSocket>, shared: Arc<Shared>) {
             _ = shared.opened.notified() => {}
         }
         let now = Instant::now();
-        let mut out: Vec<(SocketAddr, Vec<u8>)> = Vec::new();
+        let mut out: Vec<(u32, SocketAddr, Vec<u8>)> = Vec::new();
         {
             let mut state = shared.lock();
             let before = state.conns.len();
@@ -1182,12 +1206,18 @@ async fn class1(io: Arc<UdpSocket>, shared: Arc<Shared>) {
                 c.produce_count = c.produce_count.wrapping_add(1);
                 let run = (c.input_header == DataHeader::RunIdle).then_some(true);
                 let data = assemblies.get(&c.status.input).cloned().unwrap_or_default();
-                out.push((c.status.sends_to, class1_frame(c.status.t_to_o_id, c.produce_sequence, c.produce_count, run, &data)));
+                out.push((c.status.t_to_o_id, c.status.sends_to, class1_frame(c.status.t_to_o_id, c.produce_sequence, c.produce_count, run, &data)));
+                // Counted as it goes out, so whoever reads the frame finds it counted; a send that
+                // fails takes it back.
                 c.status.produced += 1;
             }
         }
-        for (to, frame) in out {
-            let _ = io.send_to(&frame, to).await;
+        for (id, to, frame) in out {
+            if io.send_to(&frame, to).await.is_err()
+                && let Some(c) = shared.lock().conns.iter_mut().find(|c| c.status.t_to_o_id == id)
+            {
+                c.status.produced = c.status.produced.saturating_sub(1);
+            }
         }
     }
 }

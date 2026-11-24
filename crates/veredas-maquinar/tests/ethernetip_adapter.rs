@@ -1919,3 +1919,378 @@ fn port_0_finds_a_number_free_for_tcp_and_udp_whatever_holds_udp_ports() {
     }
     drop(held);
 }
+
+/// C-111's fifth refute round: the critic's probes (`~/.cache/veredas/critic-c111-r5/probes`), kept
+/// as pins: an exact electronic key, assemblies past 255 by 16-bit segments, other transports, a
+/// dropped handle, an odd embedded request, two connections' own ids and outputs, a client still in
+/// the listen queue at a restart, round 4's restart through an Unconnected_Send, a T->O port of 0.
+mod round_5 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream, UdpSocket};
+    use std::time::Duration;
+
+    use veredas_maquinar::ethernetip::*;
+
+    use super::{config, device, wait};
+
+    /// One session's TCP connection.
+    struct Conn {
+        s: TcpStream,
+        log: Vec<(bool, Vec<u8>)>,
+        session: u32,
+    }
+
+    fn frame(command: u16, session: u32, body: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&command.to_le_bytes());
+        f.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        f.extend_from_slice(&session.to_le_bytes());
+        f.extend_from_slice(&0u32.to_le_bytes());
+        f.extend_from_slice(b"round5!!");
+        f.extend_from_slice(&0u32.to_le_bytes());
+        f.extend_from_slice(body);
+        f
+    }
+
+    fn read_frame(s: &mut TcpStream) -> Vec<u8> {
+        let mut h = [0u8; 24];
+        s.read_exact(&mut h).unwrap();
+        let len = u16::from_le_bytes([h[2], h[3]]) as usize;
+        let mut b = vec![0u8; len];
+        s.read_exact(&mut b).unwrap();
+        [h.to_vec(), b].concat()
+    }
+
+    fn rr_body(request: &[u8], extra: &[(u16, Vec<u8>)]) -> Vec<u8> {
+        let mut b = vec![0, 0, 0, 0, 5, 0];
+        b.extend_from_slice(&(2 + extra.len() as u16).to_le_bytes());
+        b.extend_from_slice(&[0, 0, 0, 0]);
+        b.extend_from_slice(&0x00B2u16.to_le_bytes());
+        b.extend_from_slice(&(request.len() as u16).to_le_bytes());
+        b.extend_from_slice(request);
+        for (kind, data) in extra {
+            b.extend_from_slice(&kind.to_le_bytes());
+            b.extend_from_slice(&(data.len() as u16).to_le_bytes());
+            b.extend_from_slice(data);
+        }
+        b
+    }
+
+    fn items(reply: &[u8]) -> Vec<(u16, Vec<u8>)> {
+        let b = &reply[24 + 6..];
+        let n = u16::from_le_bytes([b[0], b[1]]) as usize;
+        let mut at = 2;
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let kind = u16::from_le_bytes([b[at], b[at + 1]]);
+            let len = u16::from_le_bytes([b[at + 2], b[at + 3]]) as usize;
+            out.push((kind, b[at + 4..at + 4 + len].to_vec()));
+            at += 4 + len;
+        }
+        out
+    }
+
+    impl Conn {
+        fn open(addr: SocketAddr) -> Conn {
+            let s = TcpStream::connect(addr).unwrap();
+            s.set_nodelay(true).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut c = Conn { s: s.try_clone().unwrap(), log: Vec::new(), session: 0 };
+            let r = c.ask(0x65, 0, &[1, 0, 0, 0]);
+            assert_eq!(&r[8..12], &[0, 0, 0, 0]);
+            c.session = u32::from_le_bytes(r[4..8].try_into().unwrap());
+            drop(s);
+            c
+        }
+        fn ask(&mut self, command: u16, session: u32, body: &[u8]) -> Vec<u8> {
+            let f = frame(command, session, body);
+            self.log.push((true, f.clone()));
+            self.s.write_all(&f).unwrap();
+            let r = read_frame(&mut self.s);
+            self.log.push((false, r.clone()));
+            r
+        }
+        /// A CIP request with extra items; the reply's items.
+        fn rr(&mut self, request: &[u8], extra: &[(u16, Vec<u8>)]) -> Vec<(u16, Vec<u8>)> {
+            let session = self.session;
+            let r = self.ask(0x6F, session, &rr_body(request, extra));
+            assert_eq!(&r[8..12], &[0, 0, 0, 0], "SendRRData status {r:02X?}");
+            items(&r)
+        }
+        fn cip(&mut self, request: &[u8]) -> Vec<u8> {
+            self.rr(request, &[]).into_iter().find(|i| i.0 == 0x00B2).unwrap().1
+        }
+        fn cip_with(&mut self, request: &[u8], extra: &[(u16, Vec<u8>)]) -> (Vec<u8>, Vec<(u16, Vec<u8>)>) {
+            let items = self.rr(request, extra);
+            (items.iter().find(|i| i.0 == 0x00B2).unwrap().1.clone(), items)
+        }
+    }
+
+    fn sockaddr_item(udp: &UdpSocket) -> (u16, Vec<u8>) {
+        let SocketAddr::V4(me) = udp.local_addr().unwrap() else { panic!() };
+        let mut d = 2u16.to_be_bytes().to_vec();
+        d.extend_from_slice(&me.port().to_be_bytes());
+        d.extend_from_slice(&me.ip().octets());
+        d.extend_from_slice(&[0; 8]);
+        (0x8001, d)
+    }
+
+    fn o_to_t_addr(items: &[(u16, Vec<u8>)]) -> SocketAddr {
+        let d = &items.iter().find(|i| i.0 == 0x8000).expect("an O->T item").1;
+        SocketAddr::from(([d[4], d[5], d[6], d[7]], u16::from_be_bytes([d[2], d[3]])))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fo_raw(serial: u16, vendor: u16, originator: u32, rpi: u32, multiplier: u8, o_size: u16, t_size: u16, transport: u8, path: &[u8]) -> Vec<u8> {
+        let mut b = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&(0x8000_0000u32 | u32::from(serial)).to_le_bytes());
+        b.extend_from_slice(&serial.to_le_bytes());
+        b.extend_from_slice(&vendor.to_le_bytes());
+        b.extend_from_slice(&originator.to_le_bytes());
+        b.extend_from_slice(&[multiplier, 0, 0, 0]);
+        b.extend_from_slice(&rpi.to_le_bytes());
+        b.extend_from_slice(&((2u16 << 13) | o_size).to_le_bytes());
+        b.extend_from_slice(&rpi.to_le_bytes());
+        b.extend_from_slice(&((2u16 << 13) | t_size).to_le_bytes());
+        b.push(transport);
+        b.push((path.len() / 2) as u8);
+        b.extend_from_slice(path);
+        b
+    }
+
+    fn wrap_us(inner: &[u8], route: &[u8]) -> Vec<u8> {
+        let mut r = vec![0x52, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
+        r.extend_from_slice(&(inner.len() as u16).to_le_bytes());
+        r.extend_from_slice(inner);
+        if inner.len() % 2 == 1 {
+            r.push(0);
+        }
+        r.push((route.len() / 2) as u8);
+        r.push(0);
+        r.extend_from_slice(route);
+        r
+    }
+
+    fn status_of(reply: &[u8]) -> (u8, Vec<u16>) {
+        let n = reply[3] as usize;
+        (reply[2], (0..n).map(|i| u16::from_le_bytes([reply[4 + 2 * i], reply[5 + 2 * i]])).collect())
+    }
+
+    /// A Class 1 frame: sequenced address, connected data (count, run/idle when given, data).
+    fn class1(connection: u32, sequence: u32, count: u16, run: Option<bool>, data: &[u8]) -> Vec<u8> {
+        let mut payload = count.to_le_bytes().to_vec();
+        if let Some(r) = run {
+            payload.extend_from_slice(&(r as u32).to_le_bytes());
+        }
+        payload.extend_from_slice(data);
+        let mut f = 2u16.to_le_bytes().to_vec();
+        f.extend_from_slice(&0x8002u16.to_le_bytes());
+        f.extend_from_slice(&8u16.to_le_bytes());
+        f.extend_from_slice(&connection.to_le_bytes());
+        f.extend_from_slice(&sequence.to_le_bytes());
+        f.extend_from_slice(&0x00B1u16.to_le_bytes());
+        f.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+        f.extend_from_slice(&payload);
+        f
+    }
+
+    const PATH: [u8; 8] = [0x20, 0x04, 0x24, 151, 0x2C, 150, 0x2C, 100];
+    #[test]
+    fn an_electronic_key_matching_the_device_exactly_is_taken() {
+        let adapter = start(&config(&device(201))).unwrap();
+        let mut c = Conn::open(adapter.addr);
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let key = [0x34, 0x04, 9, 0, 7, 0, 3, 0, 2, 5];
+        let path = [key.to_vec(), PATH.to_vec()].concat();
+        let (r, _) = c.cip_with(&fo_raw(0x0101, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, 0x01, &path), &[sockaddr_item(&udp)]);
+        assert_eq!(status_of(&r), (0, vec![]), "an exact key refused: {r:02X?}");
+    }
+
+    #[test]
+    fn an_assembly_past_255_is_read_and_connected_by_its_16_bit_segments() {
+        let text = "bind = \"127.0.0.202\"\nport = 0\nio_port = 0\n\
+            assemblies = [ { instance = 300, size = 8 }, { instance = 336, size = 4 }, { instance = 337, size = 2 } ]\n\
+            connections = [ { config = 337, output = 336, input = 300 } ]\n\
+            points = [ { name = \"sp\", assembly = 336, byte = 2, type = \"u16\" }, { name = \"speed\", assembly = 300, byte = 4, type = \"f32\", value = \"12.5\" } ]\n";
+        let adapter = start(&config(text)).unwrap();
+        let mut c = Conn::open(adapter.addr);
+        // Get_Attribute_Single, class 4, instance 300 (0x25 00 2C 01), attribute 3.
+        let r = c.cip(&[0x0E, 0x04, 0x20, 0x04, 0x25, 0x00, 0x2C, 0x01, 0x30, 0x03]);
+        let mut want = vec![0x8E, 0, 0, 0, 0, 0, 0, 0];
+        want.extend_from_slice(&12.5f32.to_le_bytes());
+        assert_eq!(r, want, "assembly 300 read by its 16-bit instance segment");
+        // A Forward_Open naming 337, 336, 300 in their 16-bit forms (as core's scanner writes them).
+        let path = [0x20, 0x04, 0x25, 0x00, 0x51, 0x01, 0x2D, 0x00, 0x50, 0x01, 0x2D, 0x00, 0x2C, 0x01];
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        udp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let (r, items) = c.cip_with(&fo_raw(0x0202, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, 0x01, &path), &[sockaddr_item(&udp)]);
+        assert_eq!(status_of(&r), (0, vec![]), "{r:02X?}");
+        let id = u32::from_le_bytes(r[4..8].try_into().unwrap());
+        let to = o_to_t_addr(&items);
+        udp.send_to(&class1(id, 1, 1, Some(true), &[0, 0, 0x34, 0x12]), to).unwrap();
+        assert!(wait(Duration::from_secs(2), || adapter.get("sp").unwrap() == Value::U16(0x1234)), "the run data landed in 336");
+    }
+
+    #[test]
+    fn application_triggered_and_class_0_transports_are_refused_0x0103() {
+        let adapter = start(&config(&device(203))).unwrap();
+        let mut c = Conn::open(adapter.addr);
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut seen = Vec::new();
+        for (serial, transport) in [(0x0301u16, 0x21u8), (0x0302, 0x00), (0x0303, 0x81)] {
+            let (r, _) = c.cip_with(&fo_raw(serial, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, transport, &PATH), &[sockaddr_item(&udp)]);
+            seen.push((transport, status_of(&r)));
+            if r[2] == 0 {
+                // Close it so the next one meets no owner.
+                let mut fc = vec![0x4E, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
+                fc.extend_from_slice(&serial.to_le_bytes());
+                fc.extend_from_slice(&0x00FEu16.to_le_bytes());
+                fc.extend_from_slice(&1u32.to_le_bytes());
+                fc.extend_from_slice(&[4, 0]);
+                fc.extend_from_slice(&PATH);
+                c.cip(&fc);
+            }
+        }
+        assert_eq!(seen, vec![(0x21, (1, vec![0x0103])), (0x00, (1, vec![0x0103])), (0x81, (1, vec![0x0103]))]);
+    }
+
+    #[test]
+    fn dropping_the_handle_closes_its_sessions_and_frees_every_port() {
+        let adapter = start(&config(&device(205))).unwrap();
+        let (addr, io) = (adapter.addr, adapter.io_addr);
+        let mut c = Conn::open(addr);
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (r, _) = c.cip_with(&fo_raw(0x0505, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, 0x01, &PATH), &[sockaddr_item(&udp)]);
+        assert_eq!(r[2], 0);
+        drop(adapter);
+        let mut b = [0u8; 1];
+        let closed = c.s.read(&mut b).unwrap_or(0) == 0;
+        let tcp = std::net::TcpListener::bind(addr).is_ok();
+        let enc_udp = UdpSocket::bind(addr).is_ok();
+        let io_udp = UdpSocket::bind(io).is_ok();
+        assert_eq!((closed, tcp, enc_udp, io_udp), (true, true, true, true));
+    }
+
+    #[test]
+    fn an_odd_embedded_request_is_answered_past_its_pad() {
+        let text = device(206).replace("{ instance = 151, size = 2 }", "{ instance = 151, size = 3 }");
+        let adapter = start(&config(&text)).unwrap();
+        let mut c = Conn::open(adapter.addr);
+        // Set_Attribute_Single of the 3-byte configuration assembly: 11 bytes, a pad after it.
+        let inner = [0x10, 0x03, 0x20, 0x04, 0x24, 151, 0x30, 0x03, 7, 8, 9];
+        let r = c.cip(&wrap_us(&inner, &[]));
+        let r2 = c.cip(&wrap_us(&[0x10, 0x03, 0x20, 0x04, 0x24, 151, 0x30, 0x03, 4, 5, 6], &[0x01, 0x00]));
+        assert_eq!((r, r2, adapter.assembly(151).unwrap()), (vec![0x90, 0, 0, 0], vec![0x90, 0, 0, 0], vec![4, 5, 6]));
+    }
+
+    #[test]
+    fn two_originators_sharing_a_serial_each_feed_their_own_output() {
+        let text = device(207)
+            .replace("{ instance = 151, size = 2 } ]", "{ instance = 151, size = 2 }, { instance = 152, size = 4 }, { instance = 101, size = 8 } ]")
+            .replace("connections = [ { config = 151, output = 150, input = 100 } ]", "connections = [ { config = 151, output = 150, input = 100 }, { config = 151, output = 152, input = 101 } ]");
+        let adapter = start(&config(&text)).unwrap();
+        let (mut a, mut b) = (Conn::open(adapter.addr), Conn::open(adapter.addr));
+        let (ua, ub) = (UdpSocket::bind("127.0.0.1:0").unwrap(), UdpSocket::bind("127.0.0.1:0").unwrap());
+        let path_b = [0x20, 0x04, 0x24, 151, 0x2C, 152, 0x2C, 101];
+        let (ra, ia) = a.cip_with(&fo_raw(0x0101, 0x00FE, 0x0BAD_CAFE, 20_000, 0, 4 + 6, 8 + 2, 0x01, &PATH), &[sockaddr_item(&ua)]);
+        let (rb, ib) = b.cip_with(&fo_raw(0x0101, 0x0001, 7, 20_000, 0, 4 + 6, 8 + 2, 0x01, &path_b), &[sockaddr_item(&ub)]);
+        assert_eq!((ra[2], rb[2]), (0, 0));
+        let (ida, idb) = (u32::from_le_bytes(ra[4..8].try_into().unwrap()), u32::from_le_bytes(rb[4..8].try_into().unwrap()));
+        ua.send_to(&class1(ida, 1, 1, Some(true), &[0xAA; 4]), o_to_t_addr(&ia)).unwrap();
+        ub.send_to(&class1(idb, 1, 1, Some(true), &[0xBB; 4]), o_to_t_addr(&ib)).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        let (oa, ob) = (adapter.assembly(150).unwrap(), adapter.assembly(152).unwrap());
+        assert_ne!(ida, idb, "two open connections share an O->T id");
+        assert_eq!((oa, ob), (vec![0xAA; 4], vec![0xBB; 4]));
+    }
+
+    #[test]
+    fn a_client_whose_connect_returned_before_a_restart_is_closed_by_it() {
+        let adapter = start(&config(&device(211))).unwrap();
+        let mut survived = 0;
+        let rounds = 200;
+        for _ in 0..rounds {
+            let mut late = TcpStream::connect(adapter.addr).unwrap();
+            late.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+            late.write_all(&frame(0x65, 0, &[1, 0, 0, 0])).unwrap();
+            adapter.restart();
+            let mut h = [0u8; 28];
+            if late.read_exact(&mut h).is_ok() && h[8..12] == [0, 0, 0, 0] {
+                // Registered before the restart closed it, or after it returned: does it still
+                // answer once the restart is back?
+                let mut r = [0u8; 24];
+                if late.write_all(&frame(0x63, 0, &[])).is_ok() && late.read_exact(&mut r).is_ok() && r[0] == 0x63 {
+                    survived += 1;
+                }
+            }
+            drop(late);
+            adapter.restart();
+        }
+        assert_eq!(survived, 0, "{survived} of {rounds} connections made before restart() were served after it");
+    }
+
+    fn restart_under_pipelined_wrapped_opens(adapter: &EnipHandle) -> (TcpStream, UdpSocket, std::thread::JoinHandle<()>, std::thread::JoinHandle<()>) {
+        let mut s = TcpStream::connect(adapter.addr).unwrap();
+        s.set_nodelay(true).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s.write_all(&frame(0x65, 0, &[1, 0, 0, 0])).unwrap();
+        let r = read_frame(&mut s);
+        let session = u32::from_le_bytes(r[4..8].try_into().unwrap());
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let inner = fo_raw(0x0101, 0x00FE, 0x0BAD_CAFE, 100_000, 0, 4 + 6, 8 + 2, 0x01, &PATH);
+        let one = frame(0x6F, session, &rr_body(&wrap_us(&inner, &[0x01, 0x00]), &[sockaddr_item(&udp)]));
+        let mut writer = s.try_clone().unwrap();
+        let mut reader = s.try_clone().unwrap();
+        let r = std::thread::spawn(move || {
+            let mut buf = vec![0u8; 65536];
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+            }
+        });
+        let w = std::thread::spawn(move || {
+            let batch = one.repeat(200);
+            for _ in 0..100 {
+                if writer.write_all(&batch).is_err() {
+                    break;
+                }
+            }
+        });
+        assert!(wait(Duration::from_secs(5), || adapter.status().connections.len() == 1), "the first open");
+        std::thread::sleep(Duration::from_millis(3));
+        adapter.restart();
+        (s, udp, w, r)
+    }
+
+    #[test]
+    fn a_restart_leaves_no_connection_a_wrapped_forward_open_in_flight_opened() {
+        let adapter = start(&config(&device(204))).unwrap();
+        let mut leaked = 0;
+        for _ in 0..40 {
+            let (s, _udp, w, r) = restart_under_pipelined_wrapped_opens(&adapter);
+            if !adapter.status().connections.is_empty() {
+                leaked += 1;
+            }
+            let _ = s.shutdown(std::net::Shutdown::Both);
+            let _ = w.join();
+            let _ = r.join();
+            adapter.restart();
+        }
+        assert_eq!(leaked, 0, "restart() returned with a Class 1 connection open in {leaked} of 40 rounds");
+    }
+
+    #[test]
+    fn a_t_to_o_item_of_port_0_names_the_standard_port() {
+        let adapter = start(&config(&device(209))).unwrap();
+        let mut c = Conn::open(adapter.addr);
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut item = sockaddr_item(&udp);
+        item.1[2] = 0;
+        item.1[3] = 0;
+        let (r, _) = c.cip_with(&fo_raw(0x0909, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, 0x01, &PATH), &[item]);
+        assert_eq!(r[2], 0);
+        assert_eq!(adapter.status().connections[0].sends_to, SocketAddr::from(([127, 0, 0, 1], 2222)));
+    }
+}
