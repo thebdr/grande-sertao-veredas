@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
@@ -39,6 +40,14 @@ impl Default for Options {
     fn default() -> Self {
         Options { max_frames: 200_000, rate: 20, queue: 100, poll: Duration::from_millis(20) }
     }
+}
+
+/// What became of a frame handed to the listener to send: kept as sent, with its index and stamp,
+/// or refused by its wire, with the reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Sent { index: u64, at_ns: u64 },
+    Refused(String),
 }
 
 /// A kept frame: heard, or sent by the listener.
@@ -108,13 +117,16 @@ pub enum ListenError {
 
 const DAMAGE_KEPT: usize = 50;
 
+/// A frame waiting its turn, and who is to be told what became of it.
+type Queued = (Vec<u8>, Option<Sender<Outcome>>);
+
 struct State {
     frames: VecDeque<Kept>,
     /// The index of `frames[0]`.
     base: u64,
     fusion: Fusion,
     stats: Stats,
-    queues: BTreeMap<String, VecDeque<Vec<u8>>>,
+    queues: BTreeMap<String, VecDeque<Queued>>,
 }
 
 struct Shared {
@@ -194,6 +206,18 @@ impl Listener {
     /// Queue a whole frame to send on `iface`, paced by its worker. Refused on an interface no
     /// worker hears, past the queue's bound, or of a length no wire carries.
     pub fn send(&self, iface: &str, frame: Vec<u8>) -> Result<(), ListenError> {
+        self.queue(iface, frame, None)
+    }
+
+    /// Queue a frame as [`Listener::send`] does, and be told what became of it once its worker
+    /// has sent it or its wire refused it (nothing comes if the worker ends first).
+    pub fn send_tracked(&self, iface: &str, frame: Vec<u8>) -> Result<Receiver<Outcome>, ListenError> {
+        let (tx, rx) = channel();
+        self.queue(iface, frame, Some(tx))?;
+        Ok(rx)
+    }
+
+    fn queue(&self, iface: &str, frame: Vec<u8>, tell: Option<Sender<Outcome>>) -> Result<(), ListenError> {
         if frame.len() < 14 {
             return Err(ListenError::Frame(WireError::TooShort(frame.len())));
         }
@@ -206,7 +230,7 @@ impl Listener {
         if q.len() >= bound {
             return Err(ListenError::QueueFull { iface: iface.to_string(), queued: q.len() });
         }
-        q.push_back(frame);
+        q.push_back((frame, tell));
         let queued = q.len();
         if let Some(i) = st.stats.interfaces.get_mut(iface) {
             i.queued = queued;
@@ -229,6 +253,29 @@ impl Listener {
     /// Every kept frame, in the order kept.
     pub fn frames(&self) -> Vec<Kept> {
         lock(&self.shared.state).frames.iter().cloned().collect()
+    }
+
+    /// The kept frames from this index on, each with its index.
+    pub fn frames_from(&self, index: u64) -> Vec<(u64, Kept)> {
+        let st = lock(&self.shared.state);
+        let skip = usize::try_from(index.saturating_sub(st.base)).unwrap_or(usize::MAX);
+        st.frames.iter().enumerate().skip(skip).map(|(i, k)| (st.base + i as u64, k.clone())).collect()
+    }
+
+    /// The indices of the first frame still kept and of the next to come.
+    pub fn kept(&self) -> (u64, u64) {
+        let st = lock(&self.shared.state);
+        (st.base, st.base + st.frames.len() as u64)
+    }
+
+    /// One interface's account, when a worker hears it.
+    pub fn interface(&self, iface: &str) -> Option<Interface> {
+        lock(&self.shared.state).stats.interfaces.get(iface).cloned()
+    }
+
+    /// The options it runs with.
+    pub fn options(&self) -> Options {
+        self.shared.options
     }
 
     /// Wait until `done` holds of the listening, at most `timeout`; whether it did.
@@ -282,24 +329,31 @@ fn work(mut wire: Box<dyn Wire>, s: Arc<Shared>) {
                 }
                 f
             };
-            if let Some(bytes) = out {
+            if let Some((bytes, tell)) = out {
                 next_send = Instant::now() + gap;
                 let result = wire.send(&bytes);
                 let mut st = lock(&s.state);
-                match result {
+                let outcome = match result {
                     Ok(()) => {
-                        let frame = Frame::new(stamp(SystemTime::now()), iface.clone(), bytes);
-                        st.keep(Kept { frame, sent: true }, s.options.max_frames);
+                        let at_ns = stamp(SystemTime::now());
+                        let index = st.keep(Kept { frame: Frame::new(at_ns, iface.clone(), bytes), sent: true }, s.options.max_frames);
                         if let Some(i) = st.stats.interfaces.get_mut(&iface) {
                             i.sent += 1;
                         }
+                        Outcome::Sent { index, at_ns }
                     }
                     Err(e) => {
                         if let Some(i) = st.stats.interfaces.get_mut(&iface) {
                             i.refused += 1;
                         }
                         push_damage(&mut st.stats, format!("{iface}: send refused: {e}"));
+                        Outcome::Refused(e.to_string())
                     }
+                };
+                drop(st);
+                if let Some(tx) = tell {
+                    // An asker that stopped waiting is no fault of the frame's.
+                    let _ = tx.send(outcome);
                 }
             }
         }

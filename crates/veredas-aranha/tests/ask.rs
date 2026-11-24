@@ -1,0 +1,453 @@
+//! Asking (contract: the asking clause): a DCP Identify sent through a listener already hearing
+//! its interface, from that interface's MAC, paced like any frame it sends; its answers the
+//! Identify answers kept from that interface to that MAC under its transaction id, fused by the
+//! listener; refused where it cannot be heard, sent or bounded. On the memory hub, a device of the
+//! test's own answering; and on a bridge in a private network, against the bench's PROFINET
+//! devices (maquinar's executable), a staged duplicate name among them.
+
+mod common;
+
+use std::net::Ipv4Addr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use veredas_aranha::ask::{self, AskError, Identify};
+use veredas_aranha::listen::{ListenError, Listener, Options};
+use veredas_aranha::profinet::dcp::{self, DeviceIdentity, Filter, IpSuite, Service};
+use veredas_aranha::profinet::ether::{self, ETHERTYPE_PROFINET};
+use veredas_aranha::profinet::mac::Mac;
+use veredas_aranha::wire::hub::{Hub, HubPort};
+use veredas_aranha::wire::{Frame, Wire, WireError};
+
+const DEV: Mac = Mac([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+const OTHER: Mac = Mac([0x02, 0x00, 0x00, 0x00, 0x00, 0x0B]);
+const LAN0: Mac = Mac([0x02, 0x00, 0x00, 0x00, 0x00, 0xA0]);
+const LAN1: Mac = Mac([0x02, 0x00, 0x00, 0x00, 0x00, 0xA1]);
+
+fn identity() -> DeviceIdentity {
+    DeviceIdentity {
+        name: Some("io-device-1".into()),
+        alias: Some("port-001.switch-1".into()),
+        ip: Some(IpSuite { ip: Ipv4Addr::new(192, 168, 0, 10), mask: Ipv4Addr::new(255, 255, 255, 0), gateway: Ipv4Addr::UNSPECIFIED }),
+        vendor_id: Some(0x1234),
+        device_id: Some(0x0203),
+        ..Default::default()
+    }
+}
+
+/// How the test's device answers an Identify it matches.
+#[derive(Clone, Copy, Default)]
+struct Manner {
+    /// Before answering.
+    delay: Duration,
+    /// Besides its answer, an answer under another transaction id to the asker, and one under the
+    /// same id to another station.
+    distract: bool,
+    /// Hellos sent after the answer, 50 ms later.
+    flood: usize,
+}
+
+/// A device on a hub port answering the Identify requests it matches, until stopped.
+struct Device {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Device {
+    fn start(mut port: HubPort, manner: Manner) -> Device {
+        let stop = Arc::new(AtomicBool::new(false));
+        let halt = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            let id = identity();
+            while !halt.load(Ordering::SeqCst) {
+                let Ok(Some(f)) = port.recv(Duration::from_millis(20)) else { continue };
+                let Ok(e) = ether::parse(&f.bytes) else { continue };
+                if e.ethertype != ETHERTYPE_PROFINET {
+                    continue;
+                }
+                let Ok(pdu) = dcp::decode(e.payload) else { continue };
+                if pdu.service != Service::Identify || pdu.service_type.is_response() {
+                    continue;
+                }
+                let asked = DeviceIdentity::from_blocks(&pdu.blocks);
+                let matches = match (&asked.name, &asked.alias) {
+                    (Some(n), _) => id.name.as_ref() == Some(n),
+                    (_, Some(a)) => id.alias.as_ref() == Some(a),
+                    _ => true,
+                };
+                if !matches {
+                    continue;
+                }
+                std::thread::sleep(manner.delay);
+                port.send(&dcp::identify_response(e.src, DEV, pdu.xid, &id).unwrap()).unwrap();
+                if manner.distract {
+                    port.send(&dcp::identify_response(e.src, DEV, pdu.xid.wrapping_add(1), &id).unwrap()).unwrap();
+                    port.send(&dcp::identify_response(OTHER, DEV, pdu.xid, &id).unwrap()).unwrap();
+                    // Under its xid to the asker, but no Identify answer: another frame id, and a
+                    // request's service type.
+                    let mut other_id = dcp::decode(ether::parse(&dcp::identify_response(e.src, DEV, pdu.xid, &id).unwrap()).unwrap().payload).unwrap();
+                    other_id.frame_id = dcp::FRAME_ID_GET_SET;
+                    port.send(&other_id.frame(e.src, DEV).unwrap()).unwrap();
+                    let name = dcp::Block { option: 2, suboption: 2, info: None, body: dcp::BlockBody::NameOfStation { name: "io-device-1".into() } };
+                    let asking = dcp::DcpPdu {
+                        frame_id: dcp::FRAME_ID_IDENTIFY_RES,
+                        service: Service::Identify,
+                        service_type: dcp::ServiceType::Request,
+                        xid: pdu.xid,
+                        response_delay: 0,
+                        blocks: vec![name],
+                        trailing: Vec::new(),
+                    };
+                    port.send(&asking.frame(e.src, DEV).unwrap()).unwrap();
+                }
+                if manner.flood > 0 {
+                    std::thread::sleep(Duration::from_millis(50));
+                    for i in 0..manner.flood {
+                        port.send(&dcp::hello(DEV, i as u32, &id).unwrap()).unwrap();
+                    }
+                }
+            }
+        });
+        Device { stop, thread: Some(thread) }
+    }
+}
+
+impl Drop for Device {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+fn quick(filter: Filter) -> Identify {
+    Identify { filter, response_delay: 1, wait: Duration::from_millis(300) }
+}
+
+#[test]
+fn an_identify_is_answered_by_what_it_matches_and_only_its_answers_count() {
+    let hub = Hub::new();
+    let _dev = Device::start(hub.port("dev", DEV), Manner { distract: true, ..Manner::default() });
+    // A second interface of this machine on the same hub hears the answer too: not lan0's.
+    let l = Arc::new(Listener::start(vec![Box::new(hub.port("lan0", LAN0)), Box::new(hub.port("lan1", LAN1))], Options::default()).unwrap());
+    // An Identify answer this machine itself sends while it waits is no answer, nor another's.
+    let sender = {
+        let l = Arc::clone(&l);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            l.send("lan0", dcp::identify_response(OTHER, LAN0, 9, &identity()).unwrap()).unwrap();
+        })
+    };
+    let asked = ask::identify(&l, "lan0", &quick(Filter::All)).unwrap();
+    sender.join().unwrap();
+    assert_eq!(l.interface("lan0").unwrap().sent, 2);
+    // The request as kept: sent on lan0 from its MAC to DCP's group address, an Identify of every
+    // device under the asked transaction id and delay.
+    let req = l.frame(asked.request).unwrap();
+    assert!(req.sent);
+    assert_eq!((req.frame.iface.as_str(), req.frame.at_ns), ("lan0", asked.sent_ns));
+    let e = ether::parse(&req.frame.bytes).unwrap();
+    assert_eq!((e.src, e.dst), (LAN0, Mac::DCP_MULTICAST));
+    let pdu = dcp::decode(e.payload).unwrap();
+    assert_eq!((pdu.service, pdu.service_type.is_response(), pdu.xid, pdu.response_delay), (Service::Identify, false, asked.xid, 1));
+    assert_eq!(req.frame.bytes, dcp::identify_request(LAN0, asked.xid, 1, &Filter::All).unwrap());
+    // Its one answer, after it, with what the device said; the two not to it counted apart.
+    assert_eq!(asked.iface, "lan0");
+    assert_eq!(asked.answers.len(), 1, "{asked:?}");
+    let a = &asked.answers[0];
+    assert_eq!((a.mac, a.identity.clone()), (DEV, DeviceIdentity::from_blocks(&identity().blocks())));
+    let kept = l.frame(a.frame).unwrap();
+    assert!(a.frame > asked.request);
+    assert_eq!((kept.frame.iface.as_str(), kept.sent, a.at_ns), ("lan0", false, kept.frame.at_ns));
+    assert_eq!((asked.others, asked.lost), (2, 0));
+    // The listener fused it, heard on both interfaces, its name witnessed after the request.
+    let s = l.snapshot();
+    let dev = &s.fusion.devices[&DEV];
+    assert_eq!(dev.name.current().map(String::as_str), Some("io-device-1"));
+    assert!(dev.name.candidates[0].first.frame > asked.request);
+    assert_eq!(dev.heard_on.iter().cloned().collect::<Vec<_>>(), ["lan0", "lan1"]);
+    assert_eq!(s.stats.interfaces["lan1"].heard, 7, "the request, the answer, the four not to it and the answer lan0 sent");
+    // By station name and by alias: answered; by a name it does not hold: nothing.
+    for filter in [Filter::Name("io-device-1".into()), Filter::Alias("port-001.switch-1".into())] {
+        let again = ask::identify(&l, "lan0", &quick(filter.clone())).unwrap();
+        assert_eq!(again.answers.iter().map(|a| a.mac).collect::<Vec<_>>(), [DEV], "{filter:?}");
+        assert_ne!(again.xid, asked.xid);
+        assert_eq!(l.frame(again.request).unwrap().frame.bytes, dcp::identify_request(LAN0, again.xid, 1, &filter).unwrap());
+    }
+    let none = ask::identify(&l, "lan0", &quick(Filter::Name("io-device-2".into()))).unwrap();
+    assert_eq!((none.answers.len(), none.others), (0, 0));
+}
+
+#[test]
+fn an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer() {
+    let hub = Hub::new();
+    let _dev = Device::start(hub.port("dev", DEV), Manner::default());
+    let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options { rate: 1, ..Options::default() }).unwrap();
+    // Three frames queued before it at one a second: it goes fourth, three gaps after the first.
+    let arp = |last| veredas_aranha::observe::arp_frame(LAN0, Ipv4Addr::new(192, 168, 0, 1), Mac::BROADCAST, Ipv4Addr::new(192, 168, 0, last), false).unwrap();
+    for last in [2, 3, 4] {
+        l.send("lan0", arp(last)).unwrap();
+    }
+    let start = Instant::now();
+    let asked = ask::identify(&l, "lan0", &Identify { filter: Filter::All, response_delay: 20, wait: Duration::from_millis(100) }).unwrap();
+    let took = start.elapsed();
+    let sent: Vec<_> = l.frames().into_iter().filter(|k| k.sent).collect();
+    assert_eq!(sent.len(), 4);
+    assert_eq!(sent[3].frame.at_ns, asked.sent_ns);
+    assert!(asked.sent_ns - sent[0].frame.at_ns >= 3 * 1_000_000_000 - 2_000_000, "{:?}", sent.iter().map(|k| k.frame.at_ns).collect::<Vec<_>>());
+    // Then the spread (20 × 10 ms) and the wait (100 ms): at least 0.3 s after it was sent.
+    assert!(took >= Duration::from_millis(3000 + 300 - 5), "{took:?}");
+    assert_eq!(asked.answers.len(), 1);
+    // An answer that comes after the spread and the wait is not this request's: heard and fused
+    // by the listener all the same.
+    let hub = Hub::new();
+    let _late = Device::start(hub.port("dev", DEV), Manner { delay: Duration::from_millis(400), ..Manner::default() });
+    let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options::default()).unwrap();
+    let asked = ask::identify(&l, "lan0", &quick(Filter::All)).unwrap();
+    assert_eq!(asked.answers.len(), 0);
+    assert!(l.until(Duration::from_secs(5), |s| s.fusion.devices.contains_key(&DEV)));
+}
+
+#[test]
+fn answers_let_go_past_the_listener_s_bound_are_counted_lost() {
+    let hub = Hub::new();
+    let _dev = Device::start(hub.port("dev", DEV), Manner { distract: true, flood: 10, ..Manner::default() });
+    let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options { max_frames: 3, ..Options::default() }).unwrap();
+    let asked = ask::identify(&l, "lan0", &Identify { filter: Filter::All, response_delay: 1, wait: Duration::from_millis(500) }).unwrap();
+    // The answer, the four not to it and ten Hellos came after the request; three are kept.
+    assert_eq!(l.kept(), (asked.request + 13, asked.request + 16));
+    assert_eq!((asked.lost, asked.answers.len(), asked.others), (12, 0, 0));
+    // The listener heard and fused the answer as it came.
+    assert_eq!(l.snapshot().fusion.devices[&DEV].name.current().map(String::as_str), Some("io-device-1"));
+}
+
+/// A wire with no MAC of its own that hears nothing and ends never.
+struct Nameless;
+impl Wire for Nameless {
+    fn name(&self) -> &str {
+        "nameless"
+    }
+    fn mac(&self) -> Option<Mac> {
+        None
+    }
+    fn send(&mut self, _: &[u8]) -> Result<(), WireError> {
+        Ok(())
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
+/// A wire with a MAC that refuses every frame it is given to send.
+struct Refusing;
+impl Wire for Refusing {
+    fn name(&self) -> &str {
+        "refusing"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, frame: &[u8]) -> Result<(), WireError> {
+        Err(WireError::TooLong(frame.len() * 1000))
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
+/// A wire whose every send takes two seconds.
+struct Stalling;
+impl Wire for Stalling {
+    fn name(&self) -> &str {
+        "stalling"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, _: &[u8]) -> Result<(), WireError> {
+        std::thread::sleep(Duration::from_secs(2));
+        Ok(())
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
+/// A wire whose every read fails: its worker ends.
+struct Broken;
+impl Wire for Broken {
+    fn name(&self) -> &str {
+        "broken"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, _: &[u8]) -> Result<(), WireError> {
+        Ok(())
+    }
+    fn recv(&mut self, _: Duration) -> Result<Option<Frame>, WireError> {
+        Err(WireError::TooShort(3))
+    }
+}
+
+#[test]
+fn asking_is_refused_where_it_cannot_be_heard_sent_or_bounded() {
+    let hub = Hub::new();
+    let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0)), Box::new(Nameless), Box::new(Refusing), Box::new(Broken)], Options::default()).unwrap();
+    let msg = |r: Result<ask::Asked, AskError>| r.map(|_| ()).unwrap_err().to_string();
+    // Where no worker hears, nothing is asked.
+    assert!(matches!(ask::identify(&l, "lan9", &Identify::default()), Err(AskError::Listen(ListenError::NotListening(i))) if i == "lan9"));
+    // Bounded: DCP's delays, a minute's wait, a request DCP can carry.
+    for delay in [0, 6401] {
+        assert_eq!(msg(ask::identify(&l, "lan0", &Identify { response_delay: delay, ..Identify::default() })), format!("a response delay of {delay} is outside DCP's 1 to 6400"));
+    }
+    assert!(ask::identify(&l, "lan0", &Identify { response_delay: 6400, wait: Duration::ZERO, filter: Filter::Name("x".repeat(1600)) }).is_err_and(|e| matches!(e, AskError::Request(_))));
+    assert_eq!(
+        msg(ask::identify(&l, "lan0", &Identify { wait: Duration::from_secs(61), ..Identify::default() })),
+        "a wait of 61s is past the minute an answer is waited for"
+    );
+    // A wire with no MAC of its own asks nothing; a wire whose worker ended neither.
+    assert_eq!(msg(ask::identify(&l, "nameless", &Identify::default())), "\"nameless\" has no MAC of its own (a capture replayed): nothing is asked from it");
+    assert!(l.until(Duration::from_secs(5), |s| s.stats.interfaces["broken"].ended.is_some()));
+    let start = Instant::now();
+    assert_eq!(msg(ask::identify(&l, "broken", &Identify::default())), "\"broken\" is heard no more (a frame of 3 bytes is shorter than an Ethernet header): nothing is asked on it");
+    assert!(start.elapsed() < Duration::from_millis(500), "refused at once, not after its turn");
+    // A wire that refuses the request: refused, with its reason; nothing was asked of lan0.
+    let refused = msg(ask::identify(&l, "refusing", &Identify::default()));
+    assert!(refused.starts_with("\"refusing\"'s wire refused the Identify: a frame of "), "{refused}");
+    assert_eq!((l.interface("refusing").unwrap().refused, l.interface("lan0").unwrap().sent), (1, 0));
+    // Nor is anything asked when the queue is full; and a request its worker has not sent within
+    // its turn and a second is said not sent.
+    let full = Listener::start(vec![Box::new(hub.port("lan1", Mac([2, 0, 0, 0, 0, 0xA1])))], Options { rate: 1, queue: 1, ..Options::default() }).unwrap();
+    let frame = dcp::identify_request(LAN0, 1, 1, &Filter::All).unwrap();
+    while full.send("lan1", frame.clone()).is_ok() {}
+    assert!(matches!(ask::identify(&full, "lan1", &Identify::default()), Err(AskError::Listen(ListenError::QueueFull { queued: 1, .. }))));
+    let slow = Listener::start(vec![Box::new(Stalling)], Options::default()).unwrap();
+    let start = Instant::now();
+    assert_eq!(msg(ask::identify(&slow, "stalling", &Identify::default())), "\"stalling\" did not send the Identify within 1.05s");
+    assert!(start.elapsed() >= Duration::from_millis(1050));
+}
+
+/// Two bench devices of one station name behind one bridge, a plant's segment: one announces
+/// itself, the other is silent (no Hello, no LLDP) and has an alias.
+#[cfg(target_os = "linux")]
+const SEGMENT: &str = r#"format = "veredas-bench"
+version = 1
+
+[[profinet]]
+name = "announced"
+interface = "d1"
+station = "bomba-1"
+ip = { address = "192.168.0.10", mask = "255.255.255.0" }
+lldp_interval_ms = 0
+seed = 1
+
+[[profinet]]
+name = "silent"
+interface = "d2"
+station = "bomba-1"
+alias = "port-001.switch-9"
+ip = { address = "192.168.0.11", mask = "255.255.255.0" }
+hello = false
+lldp_interval_ms = 0
+seed = 2
+"#;
+
+#[cfg(target_os = "linux")]
+mod bench;
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_segment() {
+    use veredas_aranha::netns;
+    use veredas_aranha::observe::Probe;
+    use veredas_aranha::fusion::ConflictKind;
+
+    bench::maquinar();
+    netns::isolated(
+        "the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_segment",
+        &[("a0", "b0"), ("c1", "d1"), ("c2", "d2")],
+        || {
+            // One segment: a bridge holding the near ends of the devices' pairs and the far end of
+            // the listener's, crossed each way before anything is heard.
+            netns::ip(&["link", "add", "br0", "type", "bridge"]);
+            for port in ["b0", "c1", "c2"] {
+                netns::ip(&["link", "set", port, "master", "br0"]);
+            }
+            netns::ip(&["link", "set", "br0", "up"]);
+            netns::wait_pairs(&[("a0", "d1"), ("a0", "d2")]);
+            let (here, announced, silent) = (bench::mac_of("a0"), bench::mac_of("d1"), bench::mac_of("d2"));
+
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let run = bench::start("one-segment", SEGMENT);
+            assert!(l.until(Duration::from_secs(10), |s| s.fusion.devices.contains_key(&announced)), "{:#?}", l.snapshot());
+            assert!(!l.snapshot().fusion.devices.contains_key(&silent), "the silent device says nothing until asked");
+
+            // Every device: both answer, the silent one found by asking alone.
+            let all = ask::identify(&l, "a0", &Identify { filter: Filter::All, response_delay: 1, wait: Duration::from_millis(500) }).unwrap();
+            let mut macs: Vec<Mac> = all.answers.iter().map(|a| a.mac).collect();
+            macs.sort();
+            let mut both = vec![announced, silent];
+            both.sort();
+            assert_eq!(macs, both, "{all:?}");
+            assert_eq!((all.others, all.lost), (0, 0));
+            let req = l.frame(all.request).unwrap();
+            assert_eq!(ether::parse(&req.frame.bytes).unwrap().src, here);
+            for a in &all.answers {
+                let ip = if a.mac == announced { 10 } else { 11 };
+                assert_eq!(a.identity.name.as_deref(), Some("bomba-1"));
+                assert_eq!(a.identity.ip.as_ref().map(|s| s.ip), Some(Ipv4Addr::new(192, 168, 0, ip)));
+                assert!(a.frame > all.request);
+            }
+            // Fused with what was heard before: the announced device's name witnessed first by its
+            // Hello and last by its answer; the silent one's by its answer alone.
+            let s = l.snapshot();
+            let name = &s.fusion.devices[&announced].name.candidates[0];
+            let answer = |mac| all.answers.iter().find(|a| a.mac == mac).unwrap().frame;
+            assert!(name.first.frame < all.request);
+            assert_eq!((name.count, name.last.frame), (2, answer(announced)));
+            let quiet = &s.fusion.devices[&silent];
+            assert_eq!((quiet.name.candidates[0].first.frame, quiet.name.candidates[0].count), (answer(silent), 1));
+            assert_eq!(quiet.heard.iter().copied().collect::<Vec<_>>(), [Probe::DcpHeard]);
+            // The staged duplicate: one name on two devices of one segment, the one conflict.
+            let conflicts: Vec<_> = s.conflicts.iter().map(|c| (c.kind, c.value.clone(), c.macs.clone())).collect();
+            assert_eq!(conflicts, [(ConflictKind::DuplicateName, "bomba-1".to_string(), both.clone())]);
+
+            // By name: both; by the alias: the silent one; by a name nobody holds: nobody.
+            let by = |filter: Filter| {
+                let mut m: Vec<Mac> = ask::identify(&l, "a0", &quick(filter)).unwrap().answers.iter().map(|a| a.mac).collect();
+                m.sort();
+                m
+            };
+            assert_eq!(by(Filter::Name("bomba-1".into())), both);
+            assert_eq!(by(Filter::Alias("port-001.switch-9".into())), [silent]);
+            assert_eq!(by(Filter::Name("bomba-2".into())), []);
+
+            // Every DCP frame kept read by Wireshark's dissectors without complaint, the requests'
+            // filters and the answers' names as asked and given.
+            let (status, out, err) = bench::end(run);
+            assert!(status.success(), "{out}\n{err}");
+            let frames = l.frames();
+            let dissected = common::dissect(&frames.iter().map(|k| k.frame.bytes.clone()).collect::<Vec<_>>());
+            let mut requests = 0;
+            for (k, d) in frames.iter().zip(&dissected) {
+                assert_eq!(d.complaints(), Vec::<String>::new());
+                if !d.has("pn_dcp") {
+                    continue;
+                }
+                if k.sent {
+                    requests += 1;
+                } else {
+                    assert_eq!(d.one("pn_dcp", "pn_dcp.suboption_device_nameofstation"), "bomba-1");
+                }
+            }
+            assert_eq!(requests, 4);
+        },
+    );
+}

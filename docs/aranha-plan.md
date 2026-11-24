@@ -293,6 +293,10 @@ is pinned by a test when its phase lands.
   fixture waits for a numbered probe to cross each pair each way (`netns::wait_pairs`); a test that
   raises a pair again calls it too. The raw link's tests wait on deadlines: they run one at a time
   on the machine, under the suite lock, as maquinar's timed tests do.
+- **A Linux bridge keeps LLDP to itself.** A bridge in the private network (one segment of several
+  bench devices, C-144) forwards DCP's group addresses but not `01:80:c2:00:00:0e`, as a switch
+  does not: behind it a device is heard by its DCP, and a test that needs its LLDP cables it to the
+  listener directly (C-143).
 - **A private network's `/sys` is the host's.** The namespace is a network of its own, but sysfs
   stays mounted as the host's, so its interfaces are not in `/sys/class/net`: a test reads an
   interface's MAC from a raw link on it (C-143), or asks the kernel by netlink (`ip`).

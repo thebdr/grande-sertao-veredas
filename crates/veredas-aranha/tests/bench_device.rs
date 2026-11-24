@@ -7,57 +7,20 @@
 
 #![cfg(target_os = "linux")]
 
+mod bench;
 mod common;
 
 use std::collections::BTreeSet;
-use std::io::Read;
 use std::net::Ipv4Addr;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use serde_json::Value;
 use veredas_aranha::fusion::{ConflictKind, Device};
 use veredas_aranha::listen::{Listener, Options, Snapshot};
 use veredas_aranha::netns;
 use veredas_aranha::observe::{self, Class, Observed, Probe};
 use veredas_aranha::profinet::dcp::{self, Filter, IpStatus, IpSuite, Service};
 use veredas_aranha::profinet::mac::Mac;
-use veredas_aranha::wire::Wire;
-use veredas_aranha::wire::raw::{Options as RawOptions, RawLink};
-
-/// Where the bench's executable is built: a target folder of its own under the one cargo gives
-/// integration tests, so building it never replaces the executable the bench's own tests run from
-/// the workspace's target folder (a build of one package resolves features apart from the
-/// workspace's, and cargo puts its executable in place again).
-fn bench_target() -> PathBuf {
-    Path::new(env!("CARGO_TARGET_TMPDIR")).join("bench-device/target")
-}
-
-/// The bench's executable, built from this workspace's sources (offline, eight jobs) on the host,
-/// before the private network is made; in the private network, the same path.
-fn maquinar() -> PathBuf {
-    let exe = bench_target().join("debug/veredas-maquinar");
-    if std::env::var_os(netns::INNER).is_some() {
-        return exe;
-    }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let out = Command::new(env!("CARGO"))
-        .current_dir(&root)
-        .env("CARGO_TARGET_DIR", bench_target())
-        .args(["build", "--offline", "-j", "8", "-p", "veredas-maquinar", "--bin", "veredas-maquinar", "--message-format=json"])
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "the bench does not build:\n{}", String::from_utf8_lossy(&out.stderr));
-    let reported = String::from_utf8(out.stdout)
-        .unwrap()
-        .lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == "veredas-maquinar")
-        .find_map(|m| m["executable"].as_str().map(PathBuf::from));
-    assert_eq!(reported, Some(exe.clone()), "cargo names the bench's executable");
-    exe
-}
+use bench::{link, mac_of};
 
 /// Two devices of one station name, each on its own segment, as a plant commissioned twice.
 const BENCH: &str = r#"format = "veredas-bench"
@@ -84,16 +47,6 @@ port = "port-002"
 seed = 2
 "#;
 
-/// An interface's MAC, as the kernel gives it to a raw link (the private network's `/sys` is the
-/// host's, its interfaces not there).
-fn mac_of(iface: &str) -> Mac {
-    RawLink::open_with(iface, RawOptions::default()).unwrap().mac()
-}
-
-fn link(iface: &str) -> Box<dyn Wire> {
-    Box::new(RawLink::open_with(iface, RawOptions { ethertype: None, promiscuous: false, outgoing: false }).unwrap())
-}
-
 fn device(s: &Snapshot, mac: Mac) -> &Device {
     s.fusion.devices.get(&mac).unwrap_or_else(|| panic!("no device {mac}: {:?}", s.fusion.devices.keys().collect::<Vec<_>>()))
 }
@@ -111,44 +64,20 @@ fn dcp_of(l: &Listener, index: u64) -> (Service, bool) {
     }
 }
 
-/// End the bench as its user does, closing its stdin; its exit status and what it printed.
-fn end(mut bench: Child) -> (std::process::ExitStatus, String, String) {
-    drop(bench.stdin.take());
-    let start = Instant::now();
-    let status = loop {
-        if let Some(s) = bench.try_wait().unwrap() {
-            break s;
-        }
-        if start.elapsed() > Duration::from_secs(10) {
-            let _ = bench.kill();
-            panic!("the bench did not stop within 10 s of its stdin closing");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    let mut out = String::new();
-    let mut err = String::new();
-    bench.stdout.take().unwrap().read_to_string(&mut out).unwrap();
-    bench.stderr.take().unwrap().read_to_string(&mut err).unwrap();
-    (status, out, err)
-}
-
 #[test]
 fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface() {
-    let exe = maquinar();
+    // Built on the host, before the private network is made.
+    bench::maquinar();
     netns::isolated(
         "the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface",
         &[("a0", "b0"), ("a1", "b1")],
         || {
-            let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("bench-device");
-            std::fs::create_dir_all(&dir).unwrap();
-            let file = dir.join("two-devices.toml");
-            std::fs::write(&file, BENCH).unwrap();
             let (first, second) = (mac_of("b0"), mac_of("b1"));
             let (here0, here1) = (mac_of("a0"), mac_of("a1"));
 
             // Listening first: the Hellos the devices send as they start are heard.
             let l = Listener::start(vec![link("a0"), link("a1")], Options::default()).unwrap();
-            let bench = Command::new(&exe).arg(&file).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+            let bench = bench::start("two-devices", BENCH);
 
             // Each device's Hello and LLDP, heard on its interface.
             let heard = |s: &Snapshot| {
@@ -226,7 +155,7 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
             assert_eq!((s.stats.own, s.stats.damaged_frames, s.stats.damage.len()), (0, 0, 0), "{:?}", s.stats.damage);
 
             // The bench stopped as its user stops it: each device leaving says so on its port.
-            let (status, out, err) = end(bench);
+            let (status, out, err) = bench::end(bench);
             assert!(status.success(), "the bench: {status}\n{out}\n{err}");
             assert!(out.contains("2 part(s) running"), "{out}");
             let left = |s: &Snapshot| [first, second].iter().all(|m| s.fusion.devices.get(m).is_some_and(|d| d.ports.values().all(|p| p.left_ns.is_some())));

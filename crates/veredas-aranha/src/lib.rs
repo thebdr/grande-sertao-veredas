@@ -4,11 +4,13 @@
 //!
 //! Today it holds the PROFINET codecs (`profinet`), the wire (`wire`: the raw link, the capture
 //! file, the memory hub), the private network a test makes for the raw link (`netns`), what a
-//! frame says (`observe`), the devices it adds up to (`fusion`) and the listener that hears them
-//! (`listen`); the topology and the scan file follow, phase by phase.
+//! frame says (`observe`), the devices it adds up to (`fusion`), the listener that hears them
+//! (`listen`) and the Identify asked through it (`ask`); the topology and the scan file follow,
+//! phase by phase.
 
 #[cfg(target_os = "linux")]
 pub mod netns;
+pub mod ask;
 pub mod fusion;
 pub mod listen;
 pub mod observe;
