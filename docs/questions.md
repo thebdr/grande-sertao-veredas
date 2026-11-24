@@ -2370,6 +2370,12 @@ change no release build.
 
 **Reversible?** Yes: one line of the workspace manifest, and one more rebuild.
 
+**Decided** 2026-11-24, by the architect: asked "Build development code with line tables only, to
+halve the build folders (Q47)?", "Yes, line tables", (b). The workspace manifest sets
+`debug = "line-tables-only"` for the whole development profile; the crates named one by one since
+1549cb9 no longer need their own lines, and the engine keeps its own setting (optimised, no debug
+information). Every build folder rebuilds once.
+
 ## Q130 - A time of day in nanoseconds on a page: a panic, a refusal by name, or read?
 
 **Raised** 2026-11-23, by portal, answering the orchestrator after 98acf3b1 turned supervisão's

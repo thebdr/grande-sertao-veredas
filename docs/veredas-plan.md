@@ -329,6 +329,9 @@ Q31–Q45; the list that was reviewed and its review are kept in `docs/briefing/
    push?", the architect answered "Yes, skip them". A browser test another member's push turns
    red is so found on `main`, after the push, and answered by the next one (`CLAUDE.md`,
    "Several sessions at once"; the runner's profile `no-browser`).
+6. Development builds carry line tables only, for every crate (2026-11-24: "Yes, line tables";
+   `docs/questions.md` Q47): a panic names its place and a backtrace still names file and line,
+   and a build folder grows about half as fast.
 
 ## Next steps
 1. Record each decision above where it applies (component plans, `docs/questions.md`).
