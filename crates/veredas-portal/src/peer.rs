@@ -20,6 +20,8 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
+mod json;
+
 /// The time a call waits for its answer, whole, unless the client is given another.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The largest answer read: a page of rows or a window of points is far below it.
@@ -334,7 +336,7 @@ impl PeerClient {
         self.bounded(async {
             let mut answer = refused(self.open(path, "application/json").await?).await?;
             let bytes = answer.body.whole().await?;
-            serde_json::from_slice(&bytes).map_err(|e| PeerError::Shape(format!("{path}: {e}")))
+            read_json(&bytes).map_err(|e| PeerError::Shape(format!("{path}: {e}")))
         })
         .await
     }
@@ -534,11 +536,16 @@ async fn refused(mut answer: Answer) -> Result<Answer, PeerError> {
         return Ok(answer);
     }
     let bytes = answer.body.whole().await.unwrap_or_default();
-    let text = serde_json::from_slice::<Value>(&bytes)
+    let text = read_json(&bytes)
         .ok()
         .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
         .unwrap_or_else(|| String::from_utf8_lossy(&bytes).into_owned());
     Err(PeerError::Status { code: answer.status, text })
+}
+
+/// An answer's body as JSON, every number read as its text says ([`json`]).
+fn read_json(bytes: &[u8]) -> Result<Value, String> {
+    json::parse(std::str::from_utf8(bytes).map_err(|_| "the answer is no UTF-8".to_string())?)
 }
 
 fn shaped<T: serde::de::DeserializeOwned>(v: Value, what: &str) -> Result<T, PeerError> {
@@ -649,7 +656,7 @@ impl PeerEvents {
 fn event_of(kind: &str, data: &str) -> Result<Option<PeerEvent>, PeerError> {
     match kind {
         "hello" => {
-            let v: Value = serde_json::from_str(data).map_err(|e| PeerError::Shape(format!("the hello: {e}")))?;
+            let v = json::parse(data).map_err(|e| PeerError::Shape(format!("the hello: {e}")))?;
             PeerSnapshot::from_value(v).map(|s| Some(PeerEvent::Hello(s)))
         }
         "data" => {
@@ -657,7 +664,7 @@ fn event_of(kind: &str, data: &str) -> Result<Option<PeerEvent>, PeerError> {
             struct Frame {
                 samples: Vec<PeerSample>,
             }
-            let f: Frame = serde_json::from_str(data).map_err(|e| PeerError::Shape(format!("a data event: {e}")))?;
+            let f: Frame = json::parse(data).and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string())).map_err(|e| PeerError::Shape(format!("a data event: {e}")))?;
             Ok(Some(PeerEvent::Data(f.samples)))
         }
         // `frames dropped: N`

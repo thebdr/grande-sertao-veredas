@@ -490,6 +490,12 @@ Recorded as the port meets them.
   reviewed: `CsvOptions.escape` and a session's `window` failed it (supervisão names an HTML
   `escape` and its time windows). New public names are checked against supervisão's sources, or
   run its `writes` test, before they land.
+- **serde_json reads about one double in seven a unit off** (C-095, round 6). Without its
+  `float_roundtrip` feature it rounds a decimal twice: `1.4000000000000001` (14 × 0.1) reads as
+  1.4. The feature would rebuild the database engine (serde_json is a build dependency of its
+  crate) and change every member's reading, so portal's peer reader parses JSON itself, each
+  number through Rust's correctly rounded parse. A test of exact values needs values that are
+  not exact in binary.
 - **A feature turned on in a shared crate moves other members' builds** (C-095). Portal's first
   reader used hyper's client side (`client`, `http1`): every crate sharing hyper was built anew,
   the database engine's build script among them (six minutes and the memory that kills a

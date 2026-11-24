@@ -283,6 +283,14 @@ fn the_request_names_the_peer_and_encodes_its_values() {
     let head = heads.lock().unwrap()[0].to_ascii_lowercase();
     assert!(head.starts_with("get /api/series/data?source=plc%20main&series=ns%3d2%3bs%3da%26b&key=%c3%a7&from=-5&points=10 http/1.1\r\n"), "{head}");
     assert!(head.contains(&format!("\r\nhost: {addr}\r\n")) && head.contains("\r\naccept: application/json\r\n") && head.contains("\r\nconnection: close\r\n"), "{head}");
+    // A `+`, which a query's reader takes for a space, and a `%`, each encoded.
+    let (addr, heads) = fake_peer(|s| {
+        let body = r#"{"source":"plc","tag":"x","ok":true,"status":"Good","value":"1"}"#;
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+    });
+    reader().block_on(PeerClient::new(addr.to_string()).tag_read("plc", "ns=2;s=a+b%c")).unwrap();
+    let head = heads.lock().unwrap()[0].clone();
+    assert!(head.starts_with("GET /api/opc/read?source=plc&tag=ns%3D2%3Bs%3Da%2Bb%25c HTTP/1.1\r\n"), "{head}");
 }
 
 /// An answer read by HTTP/1.1's framing as a peer may send it: chunks split anywhere, an extension
@@ -773,5 +781,57 @@ fn an_unknown_event_is_skipped_a_key_read_and_a_chunk_overrun_refused() {
     match rt.block_on(PeerClient::new(addr.to_string()).series_window(&SeriesWindow { source: "s", series: "t", ..Default::default() })) {
         Err(PeerError::Shape(text)) => assert_eq!(text, "a chunk not ended by its line end"),
         other => panic!("{other:?}"),
+    }
+}
+
+/// Round 6's three: every value read as the peer served it, to the last bit, a window's points
+/// and a stream's samples alike (14 × 0.1, √14 and others whose shortest text takes seventeen
+/// digits, which serde_json's default reading takes a unit off); and a caller busy past the
+/// silence on a stream that keeps talking hears its next event, never `Silent`.
+#[test]
+fn values_read_to_the_last_bit_and_a_busy_caller_on_a_living_stream_hears_it() {
+    let rt = reader();
+    let values: Vec<f64> = vec![14.0 * 0.1, 14f64.sqrt(), 19.0 * 0.1, 93.0 * 0.1, 108.0 * 0.1, 20.0 + 37.0 * 0.01];
+    let text = |x: f64| serde_json::to_string(&x).unwrap();
+    let points: Vec<String> = values.iter().enumerate().map(|(i, v)| format!("[{i},{}]", text(*v))).collect();
+    let window = format!("{{\"points\":[{}],\"total\":{},\"downsampled\":false}}", points.join(","), values.len());
+    let (addr, _) = fake_peer(move |s| {
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{window}", window.len());
+    });
+    let w = rt.block_on(PeerClient::new(addr.to_string()).series_window(&SeriesWindow { source: "s", series: "t", ..Default::default() })).unwrap();
+    let bits = |xs: Vec<f64>| xs.into_iter().map(f64::to_bits).collect::<Vec<_>>();
+    assert_eq!(bits(w.points.iter().map(|(_, v)| v.unwrap()).collect()), bits(values.clone()), "the window's points");
+    let samples: Vec<String> = values.iter().enumerate().map(|(i, v)| format!("{{\"src\":\"s\",\"ser\":\"t\",\"k\":null,\"ms\":{i},\"v\":{},\"n\":{i}}}", text(*v))).collect();
+    let body = format!("event: data\ndata: {{\"samples\":[{}]}}\n\n", samples.join(","));
+    let (addr, _) = fake_peer(move |s| {
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+    });
+    let mut events = rt.block_on(PeerClient::new(addr.to_string()).event_stream()).unwrap();
+    match rt.block_on(events.next_event()) {
+        Ok(PeerEvent::Data(got)) => assert_eq!(bits(got.iter().map(|s| s.value.unwrap()).collect()), bits(values), "the stream's samples"),
+        other => panic!("{other:?}"),
+    }
+    // A stream that keeps talking (its second event 300 ms after the first, then a comment every
+    // 200 ms) and a caller away 1.5 s, past the 800 ms silence, after the first: the second next.
+    let event = |ms: i64| format!("event: data\ndata: {{\"samples\":[{{\"src\":\"s\",\"ser\":\"t\",\"k\":null,\"ms\":{ms},\"v\":1.5,\"n\":{ms}}}]}}\n\n");
+    let (one, two) = (event(1), event(2));
+    let (addr, _) = fake_peer(move |s| {
+        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{one}\r\n", one.len());
+        let _ = s.flush();
+        std::thread::sleep(Duration::from_millis(300));
+        let _ = write!(s, "{:x}\r\n{two}\r\n", two.len());
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(200));
+            if write!(s, "5\r\n: hi\n\r\n").and_then(|()| s.flush()).is_err() {
+                return;
+            }
+        }
+    });
+    let mut events = rt.block_on(PeerClient::new(addr.to_string()).event_stream()).unwrap().with_silence(Duration::from_millis(800));
+    assert!(matches!(rt.block_on(events.next_event()), Ok(PeerEvent::Data(s)) if s[0].index_ms == 1));
+    std::thread::sleep(Duration::from_millis(1_500));
+    match rt.block_on(events.next_event()) {
+        Ok(PeerEvent::Data(s)) => assert_eq!(s[0].index_ms, 2),
+        other => panic!("the stream talked all along: {other:?}"),
     }
 }
