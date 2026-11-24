@@ -1416,6 +1416,18 @@ fn a_row_without_its_number_or_stated_twice_places_its_cells_as_the_engine_does(
     }
     let (wrong, cells_now, matched_now) = mismatches(&path, &mut probe);
     assert_eq!((cells_now, matched_now), (cells, matched - 2), "{wrong:?}");
+    // a row numbered `-0` (XSD's zero, the engine's row 0, which holds nothing): its cells are none
+    // the engine holds, whatever they cache
+    for zero in ["-0", "-00", "+0", "0"] {
+        rewrite_part(&abs, &path, "xl/worksheets/sheet1.xml", |t| {
+            t.replacen("</sheetData>", &format!(r#"<row r="{zero}"><c r="A9" t="e"><f>NA()</f><v>#DIV/0!</v></c></row></sheetData>"#), 1)
+        });
+        let raw = scan_raw(&path).unwrap();
+        let planted = raw.formula_cells.iter().filter(|c| c.reference == "A9").nth(1).unwrap();
+        assert!(planted.not_held.as_deref().is_some_and(|w| w.contains("in row 0")), "{zero}: {:?}", planted.not_held);
+        let (wrong, cells_now, matched_now) = mismatches(&path, &mut probe);
+        assert_eq!((cells_now, matched_now), (cells + 1, matched), "{zero}: {wrong:?}");
+    }
     // B2 stated twice, the first spelled `B02` (or `B002`), which the engine reads as B2
     let b2 = r#"<c r="B2" s="2"><f>ABS(A2)</f><v>1</v></c>"#;
     for spelled in ["B02", "B002"] {

@@ -940,18 +940,23 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
                 *slot = c.reference.as_deref().and_then(cell_place).map(|(_, row)| row);
             }
         }
-        let row_number: Vec<Option<u32>> = rows
+        // a row's `r` read as the engine reads it, a signed number (`-0` and `+0` are 0, a row the
+        // engine holds nowhere, as one it cannot read); a row without `r` takes its first cell's
+        let row_number: Vec<Option<i64>> = rows
             .iter()
             .zip(&first_row)
-            .map(|(r, first)| r.as_deref().map(|r| xsd_trim(r).parse::<u32>().ok()).unwrap_or(*first))
+            .map(|(r, first)| match r.as_deref() {
+                Some(r) => Some(xsd_trim(r).parse::<i64>().unwrap_or(0)),
+                None => first.map(i64::from),
+            })
             .collect();
-        let mut last_statement: HashMap<u32, usize> = HashMap::new();
+        let mut last_statement: HashMap<i64, usize> = HashMap::new();
         for (k, n) in row_number.iter().enumerate() {
             if let Some(n) = n {
                 last_statement.insert(*n, k);
             }
         }
-        let mut last_at: HashMap<(u32, &str), usize> = HashMap::new();
+        let mut last_at: HashMap<(i64, &str), usize> = HashMap::new();
         for (i, c) in cells.iter().enumerate() {
             if let (Some(Some(n)), Some((letters, _))) = (row_number.get(c.row_n), c.reference.as_deref().and_then(cell_place)) {
                 last_at.insert((*n, letters), i);
@@ -990,7 +995,7 @@ pub fn scan_raw(path: &Path) -> Result<RawWorkbook, OracleError> {
             };
             let in_row = row_number.get(c.row_n).copied().flatten();
             let not_held = match in_row {
-                Some(n) if n != row => Some(format!("a cell `{reference}` in row {n}, which the engine places by its row")),
+                Some(n) if n != i64::from(row) => Some(format!("a cell `{reference}` in row {n}, which the engine places by its row")),
                 Some(n) if last_statement.get(&n) != Some(&c.row_n) => {
                     Some(format!("a cell `{reference}` of a row the sheet states again later, which the engine takes whole"))
                 }
