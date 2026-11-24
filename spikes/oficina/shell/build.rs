@@ -43,11 +43,15 @@ fn main() {
     };
     builder.build();
 
+    let windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
     println!("cargo::rustc-link-search=native={}", lib.display());
-    for l in ["kddockwidgets-qt6", "SpixQtQuick", "SpixCore", "anyrpc"] {
+    // KDDockWidgets names its Windows library after its major version too (kddockwidgets-qt62.lib
+    // and .dll), its Linux one by the SONAME alone.
+    let kddw = if windows { "kddockwidgets-qt62" } else { "kddockwidgets-qt6" };
+    for l in [kddw, "SpixQtQuick", "SpixCore", "anyrpc"] {
         println!("cargo::rustc-link-lib={l}");
     }
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+    if windows {
         // The drawing probe asks DXGI for Direct3D 11's adapter (cpp/shell.cpp). Windows finds
         // the libraries at run time on PATH (Qt's `bin`, the dependencies' `bin`), as the
         // Windows run sets it (run-windows.ps1).

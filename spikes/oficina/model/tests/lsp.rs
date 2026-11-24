@@ -33,7 +33,15 @@ fn messages_are_framed_and_read_back_whatever_pieces_they_come_in() {
     assert_eq!(Unframer::default().push(other.as_bytes()).expect("frames"), vec![a]);
     assert_eq!(Unframer::default().push(b"Content-Type: x\r\n\r\n{}").unwrap_err(), FrameError::NoLength("Content-Type: x".into()));
     assert!(matches!(Unframer::default().push(b"Content-Length: 3\r\n\r\nnot"), Err(FrameError::NotJson(_))));
+    #[cfg(not(windows))]
     assert_eq!(lsp::uri_of(Path::new("/a b/ação.rs")), "file:///a%20b/a%C3%A7%C3%A3o.rs");
+    #[cfg(windows)]
+    {
+        assert_eq!(lsp::uri_of(Path::new(r"C:\a b\ação.rs")), "file:///C:/a%20b/a%C3%A7%C3%A3o.rs");
+        assert_eq!(lsp::uri_of(Path::new(r"\\?\C:\a b\ação.rs")), "file:///C:/a%20b/a%C3%A7%C3%A3o.rs");
+        assert_eq!(lsp::plain(Path::new(r"\\?\C:\a b")), Path::new(r"C:\a b"));
+        assert_eq!(lsp::plain(Path::new(r"\\?\UNC\host\share\a")), Path::new(r"\\host\share\a"));
+    }
 }
 
 #[test]

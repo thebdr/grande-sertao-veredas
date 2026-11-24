@@ -170,6 +170,12 @@ impl Shell {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_oficina-spike-shell"));
         // Qt's platform: `offscreen` (no display) unless the run names another, `xcb` for X11.
         let platform = std::env::var("OFICINA_TEST_PLATFORM").unwrap_or_else(|_| "offscreen".to_string());
+        // On Windows `offscreen` reads fonts from Qt's own `lib/fonts`, which Qt no longer fills:
+        // it is pointed at the system's, so text is laid out with real glyphs as on `windows`.
+        if cfg!(windows) && platform == "offscreen" && std::env::var_os("QT_QPA_FONTDIR").is_none() {
+            let windir = std::env::var_os("WINDIR").unwrap_or_else(|| r"C:\Windows".into());
+            cmd.env("QT_QPA_FONTDIR", Path::new(&windir).join("Fonts"));
+        }
         cmd.args(args)
             .env("QT_QPA_PLATFORM", platform)
             .env("OFICINA_SPIX_PORT", port.to_string())

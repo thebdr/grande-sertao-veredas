@@ -17,16 +17,30 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use serde_json::{Value, json};
 use thiserror::Error;
 
+/// A path as tools other than Windows' own read it: on Windows the `\\?\` that `canonicalize`
+/// puts before a drive (`\\?\C:\a`) or a share (`\\?\UNC\host\share`) taken off, since
+/// rust-analyzer matches a project's files to the editor's by their plain paths (measured in the
+/// spike's Windows run: a crate rooted at `\\?\C:\…` left its file "not included in any crates");
+/// elsewhere the path as it is.
+pub fn plain(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        let text = path.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
+}
+
 /// A file path as the protocol names it. On Windows `C:\a\b` (or the `\\?\C:\a\b` that
 /// `canonicalize` gives) is `file:///C:/a/b`.
 pub fn uri_of(path: &Path) -> String {
+    let path = plain(path);
     let text = path.to_string_lossy();
-    let text = if cfg!(windows) {
-        let plain = text.strip_prefix(r"\\?\").unwrap_or(&text);
-        format!("/{}", plain.replace('\\', "/"))
-    } else {
-        text.into_owned()
-    };
+    let text = if cfg!(windows) { format!("/{}", text.replace('\\', "/")) } else { text.into_owned() };
     let mut out = String::from("file://");
     for (i, b) in text.bytes().enumerate() {
         match b {
@@ -88,12 +102,12 @@ impl Unframer {
 /// on `orcl-std`, and the toolchain's own standard library. Nothing in it asks cargo anything.
 pub fn orcl_project(program: &Path, orcl_std: &Path, sysroot: &Path) -> Value {
     json!({
-        "sysroot": sysroot,
-        "sysroot_src": sysroot.join("lib/rustlib/src/rust/library"),
+        "sysroot": plain(sysroot),
+        "sysroot_src": plain(sysroot).join("lib/rustlib/src/rust/library"),
         "crates": [
             {
                 "display_name": "program",
-                "root_module": program,
+                "root_module": plain(program),
                 "edition": "2024",
                 "deps": [{ "crate": 1, "name": "orcl_std" }],
                 "is_workspace_member": true,
@@ -101,7 +115,7 @@ pub fn orcl_project(program: &Path, orcl_std: &Path, sysroot: &Path) -> Value {
             },
             {
                 "display_name": "orcl_std",
-                "root_module": orcl_std,
+                "root_module": plain(orcl_std),
                 "edition": "2024",
                 "deps": [],
                 "is_workspace_member": false,

@@ -26,6 +26,10 @@ fn scratch() -> tempfile::TempDir {
     tempfile::tempdir_in(base).expect("a scratch folder")
 }
 
+/// A file name that is markup: a tag where the system allows one, entities on Windows, whose names
+/// cannot hold `<` or `>`. Drawn as rich text, either would show other characters than the name.
+const MARKUP: &str = if cfg!(windows) { "&lt;b&gt;RUN.txt" } else { "<b>RUN.txt" };
+
 /// The planted project of the model's own tests, and a file whose name is markup.
 fn project() -> tempfile::TempDir {
     let dir = scratch();
@@ -42,7 +46,7 @@ fn project() -> tempfile::TempDir {
     write(r, "notes.txt", "notes");
     write(r, ".cargo/config.toml", "[build]\nrustc-wrapper = \"./wrapper.sh\"\n");
     write(r, "alpha/deep.toml", &stamped("veredas-binding", 1));
-    write(r, "alpha/<b>RUN.txt", "a name that is markup");
+    write(r, &format!("alpha/{MARKUP}"), "a name that is markup");
     fs::create_dir_all(r.join("alpha/inner")).expect("a folder");
     fs::create_dir_all(r.join("Zeta")).expect("a folder");
     dir
@@ -104,11 +108,11 @@ fn a_folder_is_read_when_it_opens_and_again_only_when_refreshed() {
     write(r, "alpha/late.toml", &stamped("veredas-catalog", 1));
     shell.click(&row_named(&shell, "alpha"));
     let mut opened: Vec<&str> = ROOT.to_vec();
-    opened.splice(2..2, ["inner", "<b>RUN.txt", "deep.toml | veredas-binding 1 · Supervisão", "late.toml | veredas-catalog 1 · Core"]);
+    opened.splice(2..2, ["inner", MARKUP, "deep.toml | veredas-binding 1 · Supervisão", "late.toml | veredas-catalog 1 · Core"]);
     wait_rows(&shell, &opened);
     // A name that is markup is drawn as its characters.
-    let markup = row_named(&shell, "<b>RUN.txt");
-    assert_eq!(shell.property(&format!("{markup}/name"), "text"), "<b>RUN.txt");
+    let markup = row_named(&shell, MARKUP);
+    assert_eq!(shell.property(&format!("{markup}/name"), "text"), MARKUP);
     assert_eq!(shell.property(&format!("{markup}/name"), "textFormat"), "PlainText");
     // Written after alpha was read: not drawn until the tree reads it again.
     write(r, "alpha/zz.toml", &stamped("veredas-catalog", 1));
@@ -139,7 +143,7 @@ fn a_refresh_keeps_the_open_folders_and_the_selection() {
         ".cargo",
         "alpha",
         "inner",
-        "<b>RUN.txt",
+        MARKUP,
         "deep.toml | veredas-binding 1 · Supervisão",
         "Zeta",
         "ação.toml | veredas-bench 1 · Maquinar",

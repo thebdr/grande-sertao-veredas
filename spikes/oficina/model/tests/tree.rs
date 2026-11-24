@@ -250,7 +250,8 @@ fn the_root_must_be_a_folder_that_reads() {
     let missing = dir.path().join("missing");
     assert_eq!(
         Tree::open(&missing).unwrap_err(),
-        TreeError::Read { path: missing.display().to_string(), why: "No such file or directory (os error 2)".into() }
+        // The system's own words for a missing file (Windows has its own).
+        TreeError::Read { path: missing.display().to_string(), why: std::io::Error::from_raw_os_error(2).to_string() }
     );
     assert_eq!(
         TreeError::NotAFolder { path: "x".into() }.to_string(),

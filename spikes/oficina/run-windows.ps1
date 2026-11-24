@@ -33,14 +33,15 @@ function Log([string]$Text) {
     Write-Host $Text
 }
 
-# One step: a command run by cmd (its stderr merged, so PowerShell 5.1 turns no line into an error),
-# in a folder, its output and exit code written to the result.
+# One step: a command run by cmd (the stderr of every command of a chain merged, so the result holds
+# each error and PowerShell 5.1 turns no line into one), in a folder, its output and exit code
+# written to the result.
 function Step([string]$Name, [string]$Command, [string]$Folder = $Root) {
     Log ""
     Log "== $Name"
     Log "> $Command   (in $Folder)"
     Push-Location $Folder
-    $out = cmd /c "$Command 2>&1"
+    $out = cmd /c "($Command) 2>&1"
     $code = $LASTEXITCODE
     Pop-Location
     if ($out) { Add-Content -Path $Result -Encoding utf8 -Value $out }
@@ -81,14 +82,14 @@ $common = "-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=`"$Deps`" 
 if (-not (Test-Path (Join-Path $Deps "lib\anyrpc.lib"))) {
     $src = Join-Path $Sources "anyrpc"
     if (-not (Test-Path $src)) { Step "AnyRPC: fetch" "git clone -q https://github.com/sgieseking/anyrpc.git `"$src`" && git -C `"$src`" checkout -q b1949b3d4084" | Out-Null }
-    Step "AnyRPC: build" "cmake -S `"$src`" -B `"$src\build`" $common -DANYRPC_LIB_BUILD_SHARED=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_WITH_ADDRESS_SANITIZE=OFF -DBUILD_PROTOCOL_MESSAGEPACK=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && cmake --build `"$src\build`" -j $jobs && cmake --install `"$src\build`"" | Out-Null
+    Step "AnyRPC: build" "cmake -S `"$src`" -B `"$src\build`" $common -DANYRPC_LIB_BUILD_SHARED=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_WITH_ADDRESS_SANITIZE=OFF -DBUILD_WITH_LOG4CPLUS=OFF -DBUILD_PROTOCOL_MESSAGEPACK=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && cmake --build `"$src\build`" -j $jobs && cmake --install `"$src\build`"" | Out-Null
 }
 if (-not (Test-Path (Join-Path $Deps "lib\SpixCore.lib"))) {
     $src = Join-Path $Sources "spix"
     if (-not (Test-Path $src)) { Step "Spix: fetch" "git clone -q https://github.com/faaxm/spix.git `"$src`" && git -C `"$src`" checkout -q 7ab2831" | Out-Null }
     Step "Spix: build" "cmake -S `"$src`" -B `"$src\build`" $common -DSPIX_QT_MAJOR=6 -DSPIX_BUILD_QTQUICK=ON -DSPIX_BUILD_QTWIDGETS=OFF -DSPIX_BUILD_EXAMPLES=OFF -DSPIX_BUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF && cmake --build `"$src\build`" -j $jobs && cmake --install `"$src\build`"" | Out-Null
 }
-if (-not (Test-Path (Join-Path $Deps "lib\kddockwidgets-qt6.lib"))) {
+if (-not (Test-Path (Join-Path $Deps "lib\kddockwidgets-qt62.lib"))) {
     $src = Join-Path $Sources "kddockwidgets"
     if (-not (Test-Path $src)) { Step "KDDockWidgets: fetch" "git clone -q --depth 1 --branch v2.5.1 https://github.com/KDAB/KDDockWidgets.git `"$src`"" | Out-Null }
     Step "KDDockWidgets: build" "cmake -S `"$src`" -B `"$src\build`" $common -DKDDockWidgets_QT6=ON -DKDDockWidgets_FRONTENDS=qtquick -DKDDockWidgets_EXAMPLES=OFF -DKDDockWidgets_TESTS=OFF && cmake --build `"$src\build`" -j $jobs && cmake --install `"$src\build`"" | Out-Null
