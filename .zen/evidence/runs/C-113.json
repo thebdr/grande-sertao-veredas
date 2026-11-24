@@ -1,24 +1,25 @@
 {
   "clause": "C-113",
-  "command": "cargo test -p veredas-maquinar --test ethercat_segment",
+  "command": "cargo nextest run -p veredas-maquinar --test ethercat_segment",
   "commandArgv": [
     "cargo",
-    "test",
+    "nextest",
+    "run",
     "-p",
     "veredas-maquinar",
     "--test",
     "ethercat_segment"
   ],
   "exitCode": 0,
-  "outputSha": "21a366fc9183fffb83cef8e9dde384eacc812ea6fab5de86990bc7ed34ab768f",
-  "outputTail": "test round_3::a_device_faulted_in_safe_op_keeps_safe_op_flagged ... ok\ntest round_4::a_faulted_device_is_acknowledged_in_its_state_and_back_in_op ... ok\ntest every_command_reads_writes_and_counts_as_the_standard_has_it ... ok\ntest the_dissectors_read_the_returned_frame_as_the_standard_has_it ... ok\ntest round_4::a_device_of_1024_bytes_each_way_exchanges_every_byte_with_ethercrab ... ok\ntest round_4::ethercrab_takes_the_segment_down_from_op ... ok\ntest the_reference_s_segment_runs_from_its_bench_file_and_a_missing_interface_is_named ... ok\ntest round_3::a_silent_master_leaves_its_devices_in_op ... ok\ntest a_maindevice_finds_the_segment_brings_it_to_op_and_exchanges_process_data ... ok\ntest round_2::a_frame_of_another_type_is_unanswered_and_counted_unreadable ... ok\n\ntest result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.59s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running tests/ethercat_segment.rs (target/debug/build/veredas-maquinar/577507be4178d7c8/out/ethercat_segment-577507be4178d7c8)",
-  "ranAt": "2026-11-23T18:24:08.220Z",
-  "headCommit": "2550d9b72bfefbe76259392f5941072dc6ac846b",
+  "outputSha": "96a620f421f788b65fa7551daac490e346dcafc846505d8e1d21cd84d55523e6",
+  "outputTail": "        PASS [   0.019s] (34/46) veredas-maquinar::ethercat_segment the_clock_latches_takes_its_offset_and_compares_in_sign_and_magnitude\n        PASS [   0.105s] (35/46) veredas-maquinar::ethercat_segment round_5::the_outputs_are_read_whatever_the_al_state\n        PASS [   0.116s] (36/46) veredas-maquinar::ethercat_segment round_4::a_faulted_device_is_acknowledged_in_its_state_and_back_in_op\n        PASS [   0.117s] (37/46) veredas-maquinar::ethercat_segment round_5::a_plant_fault_is_cleared_by_init\n        PASS [   0.142s] (38/46) veredas-maquinar::ethercat_segment round_3::a_device_faulted_in_safe_op_keeps_safe_op_flagged\n        PASS [   0.336s] (39/46) veredas-maquinar::ethercat_segment every_command_reads_writes_and_counts_as_the_standard_has_it\n        PASS [   0.500s] (40/46) veredas-maquinar::ethercat_segment the_dissectors_read_the_returned_frame_as_the_standard_has_it\n        PASS [   1.052s] (41/46) veredas-maquinar::ethercat_segment round_4::ethercrab_takes_the_segment_down_from_op\n        PASS [   1.051s] (42/46) veredas-maquinar::ethercat_segment the_reference_s_segment_runs_from_its_bench_file_and_a_missing_interface_is_named\n        PASS [   1.081s] (43/46) veredas-maquinar::ethercat_segment round_4::a_device_of_1024_bytes_each_way_exchanges_every_byte_with_ethercrab\n        PASS [   1.347s] (44/46) veredas-maquinar::ethercat_segment round_3::a_silent_master_leaves_its_devices_in_op\n        PASS [   1.577s] (45/46) veredas-maquinar::ethercat_segment a_maindevice_finds_the_segment_brings_it_to_op_and_exchanges_process_data\n        PASS [   1.641s] (46/46) veredas-maquinar::ethercat_segment round_2::a_frame_of_another_type_is_unanswered_and_counted_unreadable\n────────────\n     Summary [   1.643s] 46 tests run: 46 passed, 0 skipped",
+  "ranAt": "2026-11-24T22:01:31.420Z",
+  "headCommit": "6c79623fd483d1809d20132ff6518b556628c817",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/ethercat_segment.rs",
       "file": "crates/veredas-maquinar/tests/ethercat_segment.rs",
-      "fileSha": "75e5da3db464b634c87c8e85db8dac3b2d2e84b3e407a55b98928786a1a1f2b6"
+      "fileSha": "8c0f2a6e814f91133eb45147ca82883dd845777f18c0b5aaa8d3ec8029a2e15b"
     }
   ]
 }
