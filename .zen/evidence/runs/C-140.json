@@ -1,0 +1,31 @@
+{
+  "clause": "C-140",
+  "command": "cargo test -j 8 -p veredas-aranha --test observe",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-j",
+    "8",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "observe"
+  ],
+  "exitCode": 0,
+  "outputSha": "ed51f8fde028b73b76b46ed499b37f6f40a661de9599066bd88b6b3adb40209d",
+  "outputTail": "\nrunning 6 tests\ntest a_device_s_dcp_answer_and_hello_say_who_it_is_and_a_request_who_asks ... ok\ntest an_lldp_frame_says_what_port_and_chassis_it_comes_from ... ok\ntest an_arp_sender_claims_its_address_and_a_probe_claims_none ... ok\ntest what_a_dcp_frame_holds_damaged_is_named_and_a_group_source_says_nothing ... ok\ntest every_other_frame_is_classed_and_counted_never_observed ... ok\ntest frames_through_the_seam_keep_their_witness_and_any_bytes_decode_without_a_panic ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running tests/observe.rs (target/debug/build/veredas-aranha/91ca881b55323d56/out/observe-91ca881b55323d56)",
+  "ranAt": "2026-11-24T20:02:19.750Z",
+  "headCommit": "abcbbb132f11f5b9b09b3088ffeb47aa5fa15bbe",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/observe.rs",
+      "file": "crates/veredas-aranha/tests/observe.rs",
+      "fileSha": "4a0bfa0f6a2fdd21db7c5eec8db6e2f4e3ac966df4dc7cd4169ea049e51b75cc"
+    },
+    {
+      "name": "crates/veredas-aranha/tests/common/mod.rs",
+      "file": "crates/veredas-aranha/tests/common/mod.rs",
+      "fileSha": "e3f228cd2b4bbd09bda4196228ab527e6f28dba06ee02306b362990c19b7edb6"
+    }
+  ]
+}
