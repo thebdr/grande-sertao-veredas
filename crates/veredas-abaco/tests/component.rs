@@ -449,12 +449,11 @@ fn check_environment(whose: &str, env: &[(String, String)], toolchain: &Path) {
     for var in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"] {
         assert!(get(var).is_none(), "{whose}: {var} is set: something compiles crates in rustc's place");
     }
-    // stable cargo, stable settings
-    for (var, _) in env.iter().filter(|(k, v)| {
+    // stable cargo, stable settings: no unstable setting is set, the first one named
+    let unstable = env.iter().find(|(k, v)| {
         !v.is_empty() && (k == "RUSTC_BOOTSTRAP" || k == "__CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS" || k.starts_with("CARGO_UNSTABLE_"))
-    }) {
-        panic!("{whose}: {var} is set: unstable settings");
-    }
+    });
+    assert!(unstable.is_none(), "{whose}: {} is set: unstable settings", unstable.map_or("", |(k, _)| k.as_str()));
     let toolchain = toolchain.canonicalize().unwrap_or_else(|_| toolchain.to_path_buf());
     let beside = toolchain.join("rustc");
     // rustup's proxy runs the toolchain RUSTUP_TOOLCHAIN names, in RUSTUP_HOME: a name, the one
