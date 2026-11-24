@@ -1129,7 +1129,7 @@ fn plain(html: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// What one rustdoc page shows of core, by key: the item's declaration (`item-decl`); every
+/// What one rustdoc page shows of core, by key: the item's declaration (`decl`); every
 /// item's anchor with what it renders (an impl's or a method's header, a field with its type, a
 /// variant, a re-export's line), and every anchor of the page's frame as a key alone;
 /// and every row of a module's table by the page it points to, with what it shows (the name and
@@ -1157,7 +1157,7 @@ fn page_view(page: &str, html: &str) -> Vec<(String, String)> {
     if let Some(i) = html.find("<pre class=\"rust item-decl\">") {
         let decl = &html[i..];
         let end = decl.find("</pre>").unwrap_or(decl.len());
-        keys.push(("item-decl".to_string(), plain(&decl[..end])));
+        keys.push(("decl".to_string(), plain(&decl[..end])));
     }
     let mut at = 0;
     while let Some(found) = html[at..].find(" id=\"") {
@@ -1189,7 +1189,9 @@ fn page_view(page: &str, html: &str) -> Vec<(String, String)> {
             }
             _ => String::new(),
         };
-        keys.push((id, text));
+        // Each id in its own namespace, `id:`, so no id a doc comment writes (a heading's, a raw
+        // span's) can take the place of the declaration or of a row.
+        keys.push((format!("id:{id}"), text));
     }
     // A module's table: each row by the page it points to, resolved from the module's folder;
     // a line that points to no page of its own (a glob's re-export) by what it shows.
@@ -1377,7 +1379,7 @@ fn public_paths(view: &BTreeMap<String, String>) -> BTreeSet<String> {
         let (dir, file) = page.rsplit_once('/').unwrap_or(("", page));
         let module: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
         let name = if file == "index.html" {
-            match anchor.strip_prefix("reexport.") {
+            match anchor.strip_prefix("id:reexport.") {
                 Some(n) => Some(n),
                 None if anchor.is_empty() => None,
                 None => continue,
@@ -1429,27 +1431,27 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
         "stop_flag",
     ];
     const NET_ROOT: &[&str] = &[
-        "index.html#reexports",
+        "index.html#id:reexports",
         // The root's table in the build's view, its re-exports inlined: their sections.
-        "index.html#enums",
-        "index.html#functions",
-        "index.html#structs",
-        "index.html#reexport.Quality",
-        "index.html#reexport.Sample",
-        "index.html#reexport.SeriesRef",
-        "index.html#reexport.SeriesType",
-        "index.html#reexport.SourceId",
-        "index.html#reexport.Value",
-        "index.html#reexport.now_unix_ms",
-        "index.html#reexport.SourceError",
-        "index.html#reexport.SourceHandle",
-        "index.html#reexport.stop_flag",
+        "index.html#id:enums",
+        "index.html#id:functions",
+        "index.html#id:structs",
+        "index.html#id:reexport.Quality",
+        "index.html#id:reexport.Sample",
+        "index.html#id:reexport.SeriesRef",
+        "index.html#id:reexport.SeriesType",
+        "index.html#id:reexport.SourceId",
+        "index.html#id:reexport.Value",
+        "index.html#id:reexport.now_unix_ms",
+        "index.html#id:reexport.SourceError",
+        "index.html#id:reexport.SourceHandle",
+        "index.html#id:reexport.stop_flag",
     ];
     // A master's line in `fieldbus`: the modules section and its entry in the page's contents,
     // there once one master is.
     const FIELDBUS_LINE: &[&str] = &[
-        "fieldbus/index.html#modules",
-        "fieldbus/index.html#rustdoc-toc",
+        "fieldbus/index.html#id:modules",
+        "fieldbus/index.html#id:rustdoc-toc",
     ];
     let layer = |feature: &str, path: &str| -> bool {
         match feature {
@@ -1552,7 +1554,7 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
         }
         // A dependency's type is named by its full path: the variant `SourceError::Pattern`
         // carries regex's error, told from any other crate's `Error`.
-        let pattern = &views[members]["source/enum.SourceError.html#variant.Pattern"];
+        let pattern = &views[members]["source/enum.SourceError.html#id:variant.Pattern"];
         assert!(pattern.contains("‹enum regex::error::Error›"), "{pattern}");
         for page in [
             "schema/index.html",
