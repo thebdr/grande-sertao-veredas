@@ -1,0 +1,27 @@
+{
+  "clause": "C-251",
+  "command": "cargo nextest run -p veredas-oficina --features driver --test tree",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "-p",
+    "veredas-oficina",
+    "--features",
+    "driver",
+    "--test",
+    "tree"
+  ],
+  "exitCode": 0,
+  "outputSha": "ada4e521535700dbe48a00abbbfcc9d60f9a7a680a63b6bc31ebd7e3cce67afa",
+  "outputTail": "    Blocking waiting for file lock on package cache\n   Compiling veredas-oficina v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/oficina-98b1d6/crates/veredas-oficina)\nwarning: veredas-oficina@2.0.0-alpha.1: Neither mold, lld, nor gold linkers were found. Linking with GNU ld.bfd will likely fail.\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.87s\n────────────\n Nextest run ID 503ea834-07d3-4201-833f-31a56146ba4a with nextest profile: default\n    Starting 3 tests across 1 binary (1 test skipped)\n        PASS [   1.067s] (1/3) veredas-oficina::tree the_project_folder_is_drawn_row_for_row_folders_first_each_toml_file_named_by_its_stamp\n        PASS [   2.067s] (2/3) veredas-oficina::tree a_refresh_keeps_the_open_folders_and_the_selection\n        PASS [   3.055s] (3/3) veredas-oficina::tree a_folder_is_read_when_it_opens_and_again_only_when_refreshed\n────────────\n     Summary [   3.055s] 3 tests run: 3 passed, 1 skipped",
+  "ranAt": "2026-11-24T23:50:18.017Z",
+  "headCommit": "f4446c3add067414129a7eda221f74fdc0341d14",
+  "tests": [
+    {
+      "name": "crates/veredas-oficina/tests/tree.rs",
+      "file": "crates/veredas-oficina/tests/tree.rs",
+      "fileSha": "d1f357dabc59f6d709f00cc01ea4843ba9279369efada1ffd570b559c69c664e"
+    }
+  ]
+}
