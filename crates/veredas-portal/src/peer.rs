@@ -626,7 +626,14 @@ impl PeerEvents {
                     Err(e) => return self.end(e),
                 }
             }
-            let data = match tokio::time::timeout_at(self.heard + self.silence, self.body.piece()).await {
+            // A silence too long to add to the clock is none: the stream waits for its peer.
+            let deadline = self.heard.checked_add(self.silence);
+            let piece = self.body.piece();
+            let read = match deadline {
+                Some(deadline) => tokio::time::timeout_at(deadline, piece).await,
+                None => Ok(piece.await),
+            };
+            let data = match read {
                 Err(_) => return self.end(PeerError::Silent { ms: self.silence.as_millis() }),
                 Ok(Ok(None)) => return self.end(PeerError::Closed),
                 Ok(Err(e)) => return self.end(e),
@@ -794,6 +801,28 @@ mod tests {
         }
         assert!(matches!(refused, Some(PeerError::TooLarge { limit: EVENT_LIMIT })), "{refused:?}");
         assert!(out.is_empty());
+    }
+
+    /// A silence too long to add to the clock is none, never a panic: the stream reads on and
+    /// ends when its peer ends it.
+    #[test]
+    fn a_silence_past_the_clock_s_reach_is_none() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                let (mut s, _) = listener.accept().await.unwrap();
+                let mut head = [0u8; 4096];
+                let _ = s.read(&mut head).await;
+                let body = "event: data\ndata: {\"samples\":[{\"src\":\"s\",\"ser\":\"t\",\"k\":null,\"ms\":1,\"v\":1.5,\"n\":1}]}\n\n";
+                let answer = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+                let _ = s.write_all(answer.as_bytes()).await;
+            });
+            let mut events = PeerClient::new(addr.to_string()).event_stream().await.unwrap().with_silence(Duration::MAX);
+            assert!(matches!(events.next_event().await, Ok(PeerEvent::Data(s)) if s[0].index_ms == 1));
+            assert!(matches!(events.next_event().await, Err(PeerError::Closed)));
+        });
     }
 
     #[test]

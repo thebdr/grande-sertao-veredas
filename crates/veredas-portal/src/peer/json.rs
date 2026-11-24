@@ -9,7 +9,7 @@
 
 use serde_json::{Map, Number, Value};
 
-/// The deepest nesting read, serde_json's own limit.
+/// Nesting this deep is refused, as serde_json refuses it: 127 levels read, the 128th not.
 const DEPTH: usize = 128;
 
 /// The JSON text as a value; a text that is no JSON refused with what broke and where.
@@ -73,8 +73,8 @@ impl Reader<'_> {
 
     fn nested(&mut self, read: fn(&mut Self) -> Result<Value, String>) -> Result<Value, String> {
         self.depth += 1;
-        if self.depth > DEPTH {
-            return Err(self.at("nested past 128"));
+        if self.depth >= DEPTH {
+            return Err(self.at("nested 128 deep"));
         }
         let v = read(self);
         self.depth -= 1;
@@ -284,7 +284,8 @@ mod tests {
     }
 
     /// Strings, objects and arrays as JSON has them: every escape, a pair of surrogates, nesting
-    /// to 128 and no deeper, white space anywhere between; and what is no JSON refused.
+    /// to 127 and no deeper (serde_json's own limit), white space anywhere between; and what is
+    /// no JSON refused.
     #[test]
     fn the_rest_of_json_and_what_is_none() {
         assert_eq!(
@@ -293,8 +294,9 @@ mod tests {
         );
         assert_eq!(parse("[\"x\\\"\\\\\\/\\b\\f\\n\\r\\t\\u00e7\\ud83d\\ude00ção\"]").unwrap(), json!(["x\"\\/\u{8}\u{c}\n\r\t\u{e7}\u{1f600}ção"]));
         let deep = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
-        assert!(parse(&deep(128)).is_ok());
-        assert!(parse(&deep(129)).unwrap_err().starts_with("nested past 128"));
+        assert!(parse(&deep(127)).is_ok());
+        assert!(parse(&deep(128)).unwrap_err().starts_with("nested 128 deep"));
+        assert!(serde_json::from_str::<serde_json::Value>(&deep(127)).is_ok() && serde_json::from_str::<serde_json::Value>(&deep(128)).is_err(), "serde_json's limit, the same");
         for bad in ["", "[1,]", "{\"a\" 1}", "{1:2}", "01", "1.", ".5", "1e", "-", "+1", "[1 2]", "\"a", "\"\u{1}\"", "\"\\x\"", "\"\\ud83d\"", "\"\\ude00\"", "\"\\u12\"", "\"\\u+123\"", "tru", "nul", "1e400", "[] x"] {
             assert!(parse(bad).is_err(), "{bad:?} read");
         }
