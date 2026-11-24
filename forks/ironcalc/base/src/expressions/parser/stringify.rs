@@ -676,7 +676,17 @@ fn stringify(
             }
         }
         NumberKind(number) => {
+            // Excel's 15 significant digits when they read back to the same number; otherwise the
+            // shortest spelling that does (0.30000000000000004, 1.7976931348623157e308), so a
+            // formula written and read again holds the number it held (Veredas fork change 29)
             let s = to_excel_precision_str(*number);
+            let s = if s.parse::<f64>().ok() == Some(*number) || !number.is_finite() {
+                s
+            } else {
+                let mut buffer = ryu::Buffer::new();
+                let text = buffer.format(*number);
+                text.strip_suffix(".0").unwrap_or(text).to_string()
+            };
             if locale.numbers.symbols.decimal == "." {
                 s
             } else {
