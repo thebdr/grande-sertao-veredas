@@ -2,10 +2,12 @@
 //! identity). The MAC an observation names is the device; an address is a value of it and a name
 //! is never a key. Every field keeps every value it was given, each with the first and last witness
 //! and how often, so a disagreement is a conflict on record, never a silent overwrite; its current
-//! value is the one heard last.
+//! value is the one heard last. An empty station name is no name, and 0.0.0.0 no address.
 //!
-//! Applying the same observations in the same order gives the same devices: a replay of a capture
-//! reads as the listening did.
+//! What is fused is read by the frames' times, never by the order they were applied in: the same
+//! observations in any order give the same devices (but for a MAC that both speaks for itself and
+//! is another device's port, [`Fusion::apply`]), so a replay of a capture reads as the listening
+//! did, and a capture merged out of order reads as one heard in order.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
@@ -14,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::observe::{Observation, Observed, Probe, Witness};
 use crate::profinet::dcp::{IpStatus, IpSuite};
-use crate::profinet::lldp::{Delays, MrpPortStatus, PortStatus};
+use crate::profinet::lldp::{ChassisId, Delays, LldpPdu, MrpPortStatus, PortStatus};
 use crate::profinet::mac::Mac;
 
 /// One value a field was given, and by whom: the first and the last witness, and how many.
@@ -26,7 +28,8 @@ pub struct Candidate<T> {
     pub count: u64,
 }
 
-/// A field with its provenance: its candidates in the order first heard.
+/// A field with its provenance: its candidates in the order first heard (by their first witness's
+/// time, whatever order they were applied in).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Field<T> {
     pub candidates: Vec<Candidate<T>>,
@@ -47,17 +50,31 @@ fn when(w: &Witness) -> (u64, u64) {
 impl<T: PartialEq + Clone> Field<T> {
     /// Record `value` as `w` heard it.
     pub fn observe(&mut self, value: T, w: &Witness) {
-        match self.candidates.iter_mut().find(|c| c.value == value) {
+        self.merge(Candidate { value, first: w.clone(), last: w.clone(), count: 1 });
+    }
+
+    /// Take in a candidate: its count added, its witnesses widened, the candidates kept in the
+    /// order first heard.
+    fn merge(&mut self, n: Candidate<T>) {
+        match self.candidates.iter_mut().find(|c| c.value == n.value) {
             Some(c) => {
-                c.count += 1;
-                if when(w) >= when(&c.last) {
-                    c.last = w.clone();
+                c.count += n.count;
+                if when(&n.last) >= when(&c.last) {
+                    c.last = n.last;
                 }
-                if when(w) < when(&c.first) {
-                    c.first = w.clone();
+                if when(&n.first) < when(&c.first) {
+                    c.first = n.first;
                 }
             }
-            None => self.candidates.push(Candidate { value, first: w.clone(), last: w.clone(), count: 1 }),
+            None => self.candidates.push(n),
+        }
+        self.candidates.sort_by_key(|c| when(&c.first));
+    }
+
+    /// Take in every candidate of another field.
+    fn absorb(&mut self, other: Field<T>) {
+        for c in other.candidates {
+            self.merge(c);
         }
     }
 
@@ -92,11 +109,51 @@ pub struct Port {
     /// The interfaces its frames were heard on: LLDP is link-local, so a port heard on one of this
     /// machine's interfaces is cabled to it.
     pub heard_on: BTreeSet<String>,
-    /// When it said it was leaving (a time to live of 0), unless it spoke again after.
+    /// When it said it was leaving (a time to live of 0), unless a later frame came: its last
+    /// leaving frame against its last other frame, by stamp then index.
     pub left_ns: Option<u64>,
+    /// The place (stamp, index) of its last frame saying it was leaving, and of its last other.
+    pub leaving: Option<(u64, u64)>,
+    pub spoke: Option<(u64, u64)>,
     pub first_ns: u64,
     pub last_ns: u64,
     pub frames: u64,
+}
+
+impl Port {
+    /// A frame at `at`, leaving or not.
+    fn said(&mut self, at: (u64, u64), leaving: bool) {
+        let slot = if leaving { &mut self.leaving } else { &mut self.spoke };
+        if slot.is_none_or(|t| at > t) {
+            *slot = Some(at);
+        }
+        self.settle();
+    }
+
+    fn settle(&mut self) {
+        self.left_ns = match (self.leaving, self.spoke) {
+            (Some(l), spoke) if spoke.is_none_or(|s| l > s) => Some(l.0),
+            _ => None,
+        };
+    }
+
+    /// Take in what another record of this port holds.
+    fn absorb(&mut self, o: Port) {
+        self.port_mac.absorb(o.port_mac);
+        self.desc.absorb(o.desc);
+        self.pn_status.absorb(o.pn_status);
+        self.delays.absorb(o.delays);
+        self.mrp.absorb(o.mrp);
+        self.pvid.absorb(o.pvid);
+        self.mau_type.absorb(o.mau_type);
+        self.heard_on.extend(o.heard_on);
+        self.leaving = self.leaving.max(o.leaving);
+        self.spoke = self.spoke.max(o.spoke);
+        self.settle();
+        self.first_ns = self.first_ns.min(o.first_ns);
+        self.last_ns = self.last_ns.max(o.last_ns);
+        self.frames += o.frames;
+    }
 }
 
 /// One device: a MAC and everything said of it.
@@ -119,8 +176,8 @@ pub struct Device {
     pub sys_name: Field<String>,
     pub sys_desc: Field<String>,
     pub sys_caps: Field<(u16, u16)>,
-    /// LLDP's management addresses (IPv4).
-    pub mgmt_ips: BTreeSet<Ipv4Addr>,
+    /// LLDP's management addresses (IPv4), as each PDU that gives one states them.
+    pub mgmt_ips: Field<BTreeSet<Ipv4Addr>>,
     /// The addresses its ARP claimed: a second, independent witness of its address.
     pub arp_ip: Field<Ipv4Addr>,
     pub ports: BTreeMap<String, Port>,
@@ -130,10 +187,14 @@ pub struct Device {
     pub first_ns: u64,
     pub last_ns: u64,
     pub frames: u64,
+    /// Nothing is said of it but LLDP PDUs from its own MAC naming no MAC for their chassis: a
+    /// port whose device is not known yet, taken into that device once a PDU from the same MAC
+    /// names it.
+    pub by_source: bool,
 }
 
 impl Device {
-    fn new(mac: Mac, at_ns: u64) -> Device {
+    fn new(mac: Mac, at_ns: u64, by_source: bool) -> Device {
         Device {
             mac,
             name: Field::default(),
@@ -148,7 +209,7 @@ impl Device {
             sys_name: Field::default(),
             sys_desc: Field::default(),
             sys_caps: Field::default(),
-            mgmt_ips: BTreeSet::new(),
+            mgmt_ips: Field::default(),
             arp_ip: Field::default(),
             ports: BTreeMap::new(),
             heard: BTreeSet::new(),
@@ -156,18 +217,21 @@ impl Device {
             first_ns: at_ns,
             last_ns: at_ns,
             frames: 0,
+            by_source,
         }
     }
 
-    /// What to call it: its station name, else its LLDP system name, else its MAC.
+    /// What to call it: its station name, else its LLDP system name, else its MAC (an empty name
+    /// is none).
     pub fn label(&self) -> String {
-        self.name.current().or_else(|| self.sys_name.current()).cloned().unwrap_or_else(|| self.mac.to_string())
+        let named = |f: &Field<String>| f.current().filter(|n| !n.is_empty()).cloned();
+        named(&self.name).or_else(|| named(&self.sys_name)).unwrap_or_else(|| self.mac.to_string())
     }
 
-    /// The addresses it holds now: its DCP address, its ARP address and its management addresses,
+    /// The addresses it holds now: its current DCP address, ARP address and management addresses,
     /// 0.0.0.0 left out.
     pub fn addresses(&self) -> BTreeSet<Ipv4Addr> {
-        let mut s: BTreeSet<Ipv4Addr> = self.mgmt_ips.clone();
+        let mut s: BTreeSet<Ipv4Addr> = self.mgmt_ips.current().cloned().unwrap_or_default();
         s.extend(self.ip.current().map(|suite| suite.ip));
         s.extend(self.arp_ip.current().copied());
         s.remove(&Ipv4Addr::UNSPECIFIED);
@@ -181,6 +245,42 @@ impl Device {
         self.heard.insert(w.probe);
         self.heard_on.insert(w.iface.clone());
     }
+
+    /// Take in what another record of this device holds (a port of it known before it was).
+    fn absorb(&mut self, o: Device) {
+        self.name.absorb(o.name);
+        self.alias.absorb(o.alias);
+        self.ip.absorb(o.ip);
+        self.ip_status.absorb(o.ip_status);
+        self.pn_id.absorb(o.pn_id);
+        self.vendor.absorb(o.vendor);
+        self.role.absorb(o.role);
+        self.instance.absorb(o.instance);
+        self.chassis.absorb(o.chassis);
+        self.sys_name.absorb(o.sys_name);
+        self.sys_desc.absorb(o.sys_desc);
+        self.sys_caps.absorb(o.sys_caps);
+        self.mgmt_ips.absorb(o.mgmt_ips);
+        self.arp_ip.absorb(o.arp_ip);
+        for (id, p) in o.ports {
+            match self.ports.get_mut(&id) {
+                Some(mine) => mine.absorb(p),
+                None => {
+                    self.ports.insert(id, p);
+                }
+            }
+        }
+        self.heard.extend(o.heard);
+        self.heard_on.extend(o.heard_on);
+        self.first_ns = self.first_ns.min(o.first_ns);
+        self.last_ns = self.last_ns.max(o.last_ns);
+        self.frames += o.frames;
+    }
+}
+
+/// An LLDP PDU names its chassis by a MAC: PROFINET's chassis MAC, or a chassis id of subtype MAC.
+fn names_chassis_mac(pdu: &LldpPdu) -> bool {
+    pdu.pn.chassis_mac.is_some() || matches!(pdu.chassis, ChassisId::Mac { .. })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -190,9 +290,9 @@ pub enum ConflictKind {
     DuplicateName,
     /// Two devices hold one address.
     DuplicateIp,
-    /// One device has named itself two ways.
+    /// One device has named itself two ways (an empty name none).
     NameChanged,
-    /// One device has held two DCP addresses.
+    /// One device has held two DCP addresses (0.0.0.0 none, mask and gateway aside).
     IpChanged,
     /// A device flags its own address as in conflict (DCP's BlockInfo).
     ReportsIpConflict,
@@ -217,23 +317,37 @@ impl Fusion {
         Fusion::default()
     }
 
-    /// The device one of whose ports a MAC is (its LLDP frames come from it), when exactly one is.
+    /// The device one of whose ports a MAC is (any of its LLDP frames came from it), when exactly
+    /// one is; a port not yet known as a device's ([`Device::by_source`]) is no device's.
     pub fn port_owner(&self, port_mac: Mac) -> Option<Mac> {
-        let mut owners = self.devices.values().filter(|d| d.ports.values().any(|p| p.port_mac.current() == Some(&port_mac))).map(|d| d.mac);
+        let mut owners = self
+            .devices
+            .values()
+            .filter(|d| !d.by_source && d.ports.values().any(|p| p.port_mac.candidates.iter().any(|c| c.value == port_mac)))
+            .map(|d| d.mac);
         let first = owners.next()?;
         owners.next().is_none().then_some(first)
     }
 
-    /// Apply one observation to the device its subject names; an LLDP PDU that names no MAC for
-    /// its chassis (a shutdown PDU holds the mandatory three alone) to the device its source is
-    /// already a port of, when one is, by that MAC.
+    /// Apply one observation to the device its subject names. An LLDP PDU that names no MAC for
+    /// its chassis (a shutdown PDU holds the mandatory three alone) is the device's whose port its
+    /// source is, when exactly one device's is, else its source's: kept there as a port not yet
+    /// known ([`Device::by_source`]) until a PDU from that MAC names its device, which then takes
+    /// it in. So the order applied changes nothing, but where a MAC speaks for itself (DCP, ARP)
+    /// before it is known as another device's port: what it said by LLDP stays its own.
     pub fn apply(&mut self, o: &Observation) {
         let w = &o.witness;
-        let mac = match &o.observed {
-            Observed::Lldp { src, .. } if o.observed.subject() == *src => self.port_owner(*src).unwrap_or(*src),
-            other => other.subject(),
+        let (mac, sourced) = match &o.observed {
+            Observed::Lldp { src, pdu } if !names_chassis_mac(pdu) => {
+                let mac = self.port_owner(*src).unwrap_or(*src);
+                (mac, mac == *src)
+            }
+            other => (other.subject(), false),
         };
-        let d = self.devices.entry(mac).or_insert_with(|| Device::new(mac, w.at_ns));
+        let d = self.devices.entry(mac).or_insert_with(|| Device::new(mac, w.at_ns, sourced));
+        if !sourced {
+            d.by_source = false;
+        }
         d.touch(w);
         match &o.observed {
             // (A request's identity is empty: the asker is on record, nothing of it is said.)
@@ -274,7 +388,10 @@ impl Fusion {
                 if let Some(v) = pdu.sys_caps {
                     d.sys_caps.observe(v, w);
                 }
-                d.mgmt_ips.extend(pdu.mgmt_addrs.iter().filter_map(|m| m.ipv4()));
+                let mgmt: BTreeSet<Ipv4Addr> = pdu.mgmt_addrs.iter().filter_map(|m| m.ipv4()).collect();
+                if !mgmt.is_empty() {
+                    d.mgmt_ips.observe(mgmt, w);
+                }
                 let id = pdu.port.short();
                 let port = d.ports.entry(id.clone()).or_insert_with(|| Port { id, first_ns: w.at_ns, last_ns: w.at_ns, ..Port::default() });
                 port.first_ns = port.first_ns.min(w.at_ns);
@@ -301,15 +418,20 @@ impl Fusion {
                     port.mau_type.observe(m.mau_type, w);
                 }
                 // Leaving, or back: whichever was said last.
-                if pdu.ttl == 0 {
-                    if port.left_ns.is_none_or(|t| w.at_ns >= t) {
-                        port.left_ns = Some(w.at_ns);
-                    }
-                } else if port.left_ns.is_some_and(|t| w.at_ns > t) {
-                    port.left_ns = None;
-                }
+                port.said(when(w), pdu.ttl == 0);
             }
             Observed::Arp { ip, .. } => d.arp_ip.observe(*ip, w),
+        }
+        // A PDU naming its device from a MAC kept as a port not yet known: that device takes it in.
+        if let Observed::Lldp { src, pdu } = &o.observed
+            && names_chassis_mac(pdu)
+            && mac != *src
+            && self.devices.get(src).is_some_and(|d| d.by_source)
+            && self.port_owner(*src) == Some(mac)
+            && let Some(port) = self.devices.remove(src)
+            && let Some(owner) = self.devices.get_mut(&mac)
+        {
+            owner.absorb(port);
         }
     }
 
@@ -325,12 +447,18 @@ impl Fusion {
             for ip in d.addresses() {
                 by_ip.entry(ip).or_default().push(d.mac);
             }
-            if d.name.conflicted() {
-                let names: Vec<&str> = d.name.candidates.iter().map(|c| c.value.as_str()).collect();
+            let names: Vec<&str> = d.name.candidates.iter().map(|c| c.value.as_str()).filter(|n| !n.is_empty()).collect();
+            if names.len() > 1 {
                 out.push(Conflict { kind: ConflictKind::NameChanged, value: names.join(", "), macs: vec![d.mac] });
             }
-            if d.ip.conflicted() {
-                let ips: Vec<String> = d.ip.candidates.iter().map(|c| c.value.ip.to_string()).collect();
+            let mut ips: Vec<Ipv4Addr> = Vec::new();
+            for ip in d.ip.candidates.iter().map(|c| c.value.ip).filter(|ip| !ip.is_unspecified()) {
+                if !ips.contains(&ip) {
+                    ips.push(ip);
+                }
+            }
+            if ips.len() > 1 {
+                let ips: Vec<String> = ips.iter().map(Ipv4Addr::to_string).collect();
                 out.push(Conflict { kind: ConflictKind::IpChanged, value: ips.join(", "), macs: vec![d.mac] });
             }
             if d.ip_status.current().is_some_and(|s| s.conflict) {
