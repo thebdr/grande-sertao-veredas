@@ -374,9 +374,21 @@ fn a_file_that_is_not_what_it_should_be_is_refused_by_its_part_and_place() {
         // what the engine refuses of the settings, by the part
         ("workbook.toml", Box::new(|t| Some(t.replacen("tz = \"UTC\"", "tz = \"Mars/Olympus\"", 1))), "workbook.toml: `settings`: "),
         ("workbook.toml", Box::new(|t| Some(replace_line(t, "locale = ", "locale = \"xx-nowhere\""))), "workbook.toml: `settings`: Invalid locale"),
+        // a formula of white space alone, which the writer refuses too
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { array = \"\", size = [1, 1] }"))), "sheets/01-Loads.toml B4: an empty formula"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { array = \" \", size = [1, 1] }"))), "sheets/01-Loads.toml B4: an empty formula"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { f = \" \" }"))), "sheets/01-Loads.toml B4: an empty formula"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { f = \"\" }"))), "sheets/01-Loads.toml B4: an empty formula"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { dynamic = \"\\t\" }"))), "sheets/01-Loads.toml B4: an empty formula"),
         // a cell stated inside a legacy array's area, in either order of the keys
         ("sheets/01-Loads.toml", Box::new(|t| Some(format!("{t}E1 = {{ array = \"1\", size = [1, 3] }}\nE2 = {{ n = 5 }}\n"))), "sheets/01-Loads.toml E2: a cell stated inside the array formula at E1"),
-        ("sheets/01-Loads.toml", Box::new(|t| Some(format!("{t}G2 = {{ array = \"7\", size = [1, 9] }}\nG10 = {{ array = \"7\", size = [1, 1] }}\n"))), "sheets/01-Loads.toml G10: a cell stated inside the array formula at G2"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(format!("{t}G2 = {{ array = \"7\", size = [1, 9] }}\nG10 = {{ array = \"7\", size = [1, 1] }}\n"))), "sheets/01-Loads.toml G10: an array formula over the one at G2"),
+        // two legacy arrays whose areas overlap, neither anchor in the other's area
+        ("sheets/01-Loads.toml", Box::new(|t| Some(format!("{t}B10 = {{ array = \"1\", size = [1, 2] }}\nA11 = {{ array = \"5\", size = [2, 1] }}\n"))), "sheets/01-Loads.toml A11: an array formula over the one at B10"),
+        // a legacy array past the sheet's edge, refused before any sum is taken (no overflow)
+        ("sheets/01-Loads.toml", Box::new(|t| Some(format!("{t}E1 = {{ array = \"1\", size = [1, 2147483647] }}\n"))), "sheets/01-Loads.toml E1: an array formula of 1 by 2147483647, which runs past the sheet's edge"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(format!("{t}E1 = {{ array = \"1\", size = [2147483647, 1] }}\n"))), "sheets/01-Loads.toml E1: an array formula of 2147483647 by 1, which runs past the sheet's edge"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(format!("{t}E2 = {{ array = \"1\", size = [1, 1048576] }}\n"))), "sheets/01-Loads.toml E2: an array formula of 1 by 1048576, which runs past the sheet's edge"),
         ("workspace/references.toml", Box::new(|t| Some(t.replace("ba7816bf8f01cfea", "BA7816BF8F01CFEA"))), "workspace/references.toml reference 1: `sha256` is 64 lowercase hex digits"),
         ("workspace/references.toml", Box::new(|t| Some(t.replace("2026-11-23T10:04:05Z", "2026-11-23 10:04"))), "workspace/references.toml reference 1: `modified` is RFC 3339"),
         ("workspace/decisions.toml", Box::new(|t| Some(t.replace("veredas-abaco-records", "veredas-abaco-state"))), "workspace/decisions.toml: `format` is `veredas-abaco-state`, not `veredas-abaco-records`"),
@@ -574,6 +586,12 @@ fn names_the_engine_refuses_are_refused_by_the_writer_and_the_reader() {
         (Box::new(|w| w.defined_names[0].name = "1:1".into()), "workbook.toml", "name = \"Spam\"", "name = \"1:1\"", "is no name (it reads as a cell)"),
         (Box::new(|w| w.defined_names[0].name = " B1".into()), "workbook.toml", "name = \"Spam\"", "name = \" B1\"", "is no name (it reads as a cell)"),
         (Box::new(|w| w.defined_names[1].name = "SPAN".into()), "workbook.toml", "name = \"Spam\"", "name = \"SPAN\"", "is stated in its scope already, as `defined_names."),
+        // a name opening with an operator or holding one, which a formula reads as the cell
+        (Box::new(|w| w.defined_names[0].name = "@B1".into()), "workbook.toml", "name = \"Spam\"", "name = \"@B1\"", "is no name (a letter, `_` or `\\` first"),
+        (Box::new(|w| w.defined_names[0].name = "(B1)".into()), "workbook.toml", "name = \"Spam\"", "name = \"(B1)\"", "is no name (a letter, `_` or `\\` first"),
+        (Box::new(|w| w.defined_names[0].name = "+B1".into()), "workbook.toml", "name = \"Spam\"", "name = \"+B1\"", "is no name (a letter, `_` or `\\` first"),
+        (Box::new(|w| w.defined_names[0].name = "B1+0".into()), "workbook.toml", "name = \"Spam\"", "name = \"B1+0\"", "is no name (a letter, `_` or `\\` first"),
+        (Box::new(|w| w.defined_names[0].name = "true".into()), "workbook.toml", "name = \"Spam\"", "name = \"true\"", "is no name (a letter, `_` or `\\` first"),
     ];
     for (in_model, part, from, to, want) in &cases {
         // the writer
@@ -594,6 +612,16 @@ fn names_the_engine_refuses_are_refused_by_the_writer_and_the_reader() {
         std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
         let got = abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_default();
         assert!(got.contains(want), "reading: {got}\n  wanted: {want}");
+        std::fs::remove_file(&path).unwrap();
+    }
+    // and the names Excel spells, in any script, a backslash first, a built-in one, are written and
+    // read back
+    for name in ["Área", "Ação.Total", "\\Loads", "_xlnm.Print_Area", "B1_load"] {
+        let mut file = make();
+        file.book.model_mut().workbook.defined_names[0].name = name.into();
+        abacofile::write(&mut file, &path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let back = abacofile::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(back.book.model().workbook.defined_names.iter().any(|d| d.name == name), "{name}");
         std::fs::remove_file(&path).unwrap();
     }
 }
@@ -678,6 +706,28 @@ fn a_number_no_file_holds_refuses_the_write_by_its_path() {
     }
 }
 
+/// `book` exported to `path` with its part `part` passed through `edit`, which must change it: an
+/// `.xlsx` no engine writes, as a malformed file would hold it.
+fn patched_xlsx(book: &mut Workbook, path: &Path, part: &str, edit: impl Fn(&str) -> String) {
+    book.export(path).unwrap();
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+    let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let name = entry.name().unwrap().to_string();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+        if name == part {
+            let text = String::from_utf8(bytes).unwrap();
+            let edited = edit(&text);
+            assert_ne!(edited, text, "{part} unchanged");
+            bytes = edited.into_bytes();
+        }
+        parts.push((name, bytes));
+    }
+    std::fs::write(path, abacofile::zip_of(&parts).unwrap()).unwrap();
+}
+
 #[test]
 fn what_the_reader_refuses_the_writer_refuses_by_its_place() {
     use ironcalc_base::expressions::types::Area;
@@ -708,24 +758,26 @@ fn what_the_reader_refuses_the_writer_refuses_by_its_place() {
     let xlsx = dir.path().join("empty.xlsx");
     let mut book = Workbook::new("Empty").unwrap();
     book.set_formula(0, Addr::parse("A1").unwrap(), "=1+1").unwrap();
-    book.export(&xlsx).unwrap();
-    let mut archive = zip::ZipArchive::new(std::fs::File::open(&xlsx).unwrap()).unwrap();
-    let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
-    for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).unwrap();
-        let name = entry.name().unwrap().to_string();
-        let mut bytes = Vec::new();
-        std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
-        if name == "xl/worksheets/sheet1.xml" {
-            let text = String::from_utf8(bytes).unwrap();
-            assert!(text.contains("<f>1+1</f>"), "{text}");
-            bytes = text.replace("<f>1+1</f>", "<f></f>").into_bytes();
-        }
-        parts.push((name, bytes));
-    }
-    std::fs::write(&xlsx, abacofile::zip_of(&parts).unwrap()).unwrap();
+    patched_xlsx(&mut book, &xlsx, "xl/worksheets/sheet1.xml", |t| t.replace("<f>1+1</f>", "<f></f>"));
     let got = refused(&mut AbacoFile::new(open(&xlsx)));
     assert!(got.contains("sheets/01-Sheet1.toml A1: an empty formula"), "{got}");
+    // two legacy arrays whose areas overlap, neither anchor in the other's (`ref` widened)
+    let xlsx = dir.path().join("overlap.xlsx");
+    let mut book = Workbook::new("Overlap").unwrap();
+    book.model_mut().set_user_array_formula(0, 1, 2, 1, 2, "={1;2}").unwrap();
+    book.model_mut().set_user_array_formula(0, 2, 1, 1, 1, "=5").unwrap();
+    patched_xlsx(&mut book, &xlsx, "xl/worksheets/sheet1.xml", |t| t.replace("ref=\"A2:A2\"", "ref=\"A2:B2\""));
+    let got = refused(&mut AbacoFile::new(open(&xlsx)));
+    assert!(got.contains("sheets/01-Sheet1.toml A2: an array formula over the one at B1"), "{got}");
+    // a workbook of no sheet, which the engine's own API never leaves (`Cannot delete only sheet`)
+    let xlsx = dir.path().join("no-sheet.xlsx");
+    let mut book = Workbook::new("Bare").unwrap();
+    patched_xlsx(&mut book, &xlsx, "xl/workbook.xml", |t| {
+        let (a, b) = (t.find("<sheets>").unwrap(), t.find("</sheets>").unwrap());
+        format!("{}<sheets></sheets>{}", &t[..a], &t[b + "</sheets>".len()..])
+    });
+    let got = refused(&mut AbacoFile::new(open(&xlsx)));
+    assert!(got.contains("manifest.toml: a workbook holds a sheet at least"), "{got}");
     // settings the engine refuses, set past its setters
     let mut book = Workbook::new("Settings").unwrap();
     book.model_mut().workbook.settings.tz = "Mars/Olympus".into();
@@ -787,6 +839,53 @@ fn a_quote_prefixed_cell_an_array_spills_into_keeps_its_style() {
         let again = dir.path().join("again.abaco");
         abacofile::write(&mut back, &again).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), std::fs::read(&again).unwrap(), "bold {bold}");
+    }
+}
+
+#[test]
+fn a_spilled_cell_of_style_0_reads_back_with_style_0() {
+    // the writer leaves out a spilled cell of style 0; the engine creates it again on reading with its
+    // row's or its column's style, and a legacy array with a quote prefix's plain copy of style 0: it
+    // holds style 0, for a legacy array and a dynamic one, and typing in it reads its style
+    let dir = tempfile::tempdir().unwrap();
+    for case in ["column", "row", "quote prefix"] {
+        let mut book = Workbook::new("Spill").unwrap();
+        book.model_mut().set_user_array_formula(0, 1, 1, 1, 3, "={1;2;3}").unwrap();
+        book.set_formula(0, Addr::parse("D1").unwrap(), "=SEQUENCE(3)").unwrap();
+        book.recalc();
+        let mut bold = book.style(0, Addr::parse("F1").unwrap()).unwrap();
+        bold.font.b = true;
+        let model = book.model_mut();
+        match case {
+            "column" => {
+                model.set_column_style(0, 1, &bold).unwrap();
+                model.set_column_style(0, 4, &bold).unwrap();
+            }
+            "row" => {
+                model.set_row_style(0, 2, &bold).unwrap();
+                model.set_row_style(0, 3, &bold).unwrap();
+            }
+            _ => model.workbook.styles.cell_xfs[0].quote_prefix = true,
+        }
+        let spilled: Vec<Addr> = ["A2", "A3", "D2", "D3"].iter().map(|a| Addr::parse(a).unwrap()).collect();
+        for a in &spilled {
+            assert_eq!((book.content(0, *a).unwrap(), book.style_index(0, *a).unwrap()), (Content::Spill, 0), "{case} {a}");
+        }
+        let mut file = AbacoFile::new(book);
+        let path = dir.path().join("spill.abaco");
+        abacofile::write(&mut file, &path).unwrap();
+        let mut back = abacofile::read(&path).unwrap();
+        assert!(differences(&file.book, &back.book).is_empty(), "{case}: {:?}", differences(&file.book, &back.book));
+        for a in &spilled {
+            assert_eq!(back.book.style_index(0, *a).unwrap(), 0, "{case} {a}");
+        }
+        let again = dir.path().join("again.abaco");
+        abacofile::write(&mut back, &again).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), std::fs::read(&again).unwrap(), "{case}");
+        // typing into a spilled cell: the engine reads its style, which the workbook holds
+        for a in ["D2", "A2"] {
+            back.book.set_value(0, Addr::parse(a).unwrap(), &Value::Number(9.0)).unwrap();
+        }
     }
 }
 

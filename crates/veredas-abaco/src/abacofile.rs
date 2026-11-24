@@ -17,7 +17,7 @@
 //! Every TOML part states its `format` and `version` first. A part this Ábaco does not read is
 //! kept and written back as it came, so a newer Ábaco's additions survive an older one's save.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -285,7 +285,8 @@ pub fn unescape_line(s: &str) -> Result<String, String> {
             Some('r') => out.push('\r'),
             Some('u') => {
                 let hex: String = chars.by_ref().take(4).collect();
-                let c = (hex.len() == 4)
+                // four hex digits, no sign (`from_str_radix` would take `+041`)
+                let c = (hex.len() == 4 && hex.chars().all(|c| c.is_ascii_hexdigit()))
                     .then(|| u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32))
                     .flatten()
                     .ok_or_else(|| format!("`\\u{hex}` is no character"))?;
@@ -630,14 +631,69 @@ fn bare(formula: &str) -> &str {
     formula.strip_prefix('=').unwrap_or(formula)
 }
 
+/// A legacy array's area, its first and last rows and columns, reckoned wide so no size overflows;
+/// refused when it holds no cell or runs past the sheet's edge.
+fn array_area(anchor: Addr, columns: i64, rows: i64) -> Result<[i64; 4], String> {
+    if columns < 1 || rows < 1 {
+        return Err(format!("an array formula of {columns} by {rows}, which holds no cell"));
+    }
+    let (r, c) = (i64::from(anchor.row), i64::from(anchor.column));
+    let (r2, c2) = (r + rows - 1, c + columns - 1);
+    if r2 > i64::from(crate::a1::LAST_ROW) || c2 > i64::from(crate::a1::LAST_COLUMN) {
+        return Err(format!("an array formula of {columns} by {rows}, which runs past the sheet's edge"));
+    }
+    Ok([r, c, r2, c2])
+}
+
+fn holds(area: &[i64; 4], row: i64, column: i64) -> bool {
+    (area[0]..=area[2]).contains(&row) && (area[1]..=area[3]).contains(&column)
+}
+
+/// The first legacy array, row-major, whose area overlaps an earlier one's, with that one's anchor:
+/// the engine enters none such (the writer and the reader refuse it alike).
+fn overlapping_arrays(arrays: &[(Addr, [i64; 4])]) -> Option<(Addr, Addr)> {
+    let mut sorted = arrays.to_vec();
+    sorted.sort_by_key(|(a, _)| *a);
+    let mut open: Vec<(Addr, [i64; 4])> = Vec::new();
+    for (a, area) in sorted {
+        open.retain(|(_, o)| o[2] >= area[0]);
+        if let Some((b, _)) = open.iter().find(|(_, o)| o[0] <= area[2] && area[0] <= o[2] && o[1] <= area[3] && area[1] <= o[3]) {
+            return Some((a, *b));
+        }
+        open.push((a, area));
+    }
+    None
+}
+
+/// The anchor of the legacy array, another than `addr`'s own, whose area holds `addr`.
+fn array_holding(arrays: &[(Addr, [i64; 4])], addr: Addr) -> Option<Addr> {
+    arrays
+        .iter()
+        .filter(|(_, o)| o[0] != o[2] || o[1] != o[3])
+        .find(|(a, o)| *a != addr && holds(o, i64::from(addr.row), i64::from(addr.column)))
+        .map(|(a, _)| *a)
+}
+
 /// The `[cells]` table of one sheet, one line per cell, row-major. A cell the reader would refuse is
 /// refused here by its address, so every file written reads back: a style the workbook does not
-/// hold, a legacy array formula over merged cells (the engine enters none such on reading).
+/// hold, a legacy array formula over merged cells, of no size, past the sheet's edge or over
+/// another's area, a cell with content inside another's area (the engine enters none such on reading).
 fn cells_text(book: &Workbook, sheet: u32, part: &str) -> Result<String, ModelError> {
     let styles = book.model().workbook.styles.cell_xfs.len();
     let merged = &book.model().workbook.worksheet(sheet).map_err(|e| ModelError::Engine(e.to_string()))?.merged_cells;
     let mut out = String::from("\n[cells]\n");
-    for (addr, style) in book.cells(sheet)? {
+    let cells = book.cells(sheet)?;
+    let mut arrays = Vec::new();
+    for (addr, _) in &cells {
+        if let Content::ArrayFormula { columns, rows, .. } = book.content(sheet, *addr)? {
+            let area = array_area(*addr, i64::from(columns), i64::from(rows)).map_err(|e| ModelError::Engine(format!("{part} {addr}: {e}")))?;
+            arrays.push((*addr, area));
+        }
+    }
+    if let Some((a, b)) = overlapping_arrays(&arrays) {
+        return Err(ModelError::Engine(format!("{part} {a}: an array formula over the one at {b}, which the engine enters none of")));
+    }
+    for (addr, style) in cells {
         let bad = |what: String| ModelError::Engine(format!("{part} {addr}: {what}"));
         if style < 0 {
             return Err(bad(format!("style {style} is no style")));
@@ -651,12 +707,19 @@ fn cells_text(book: &Workbook, sheet: u32, part: &str) -> Result<String, ModelEr
         {
             return Err(bad("an empty formula, which the engine enters none of".into()));
         }
-        if let Content::ArrayFormula { columns, rows, .. } = content {
-            if columns < 1 || rows < 1 {
-                return Err(bad(format!("an array formula of {columns} by {rows}, which holds no cell")));
-            }
-            let (r2, c2) = (addr.row + rows - 1, addr.column + columns - 1);
-            if merged.iter().any(|m| m.row <= r2 && addr.row < m.row + m.height && m.column <= c2 && addr.column < m.column + m.width) {
+        if !matches!(content, Content::Spill | Content::Empty | Content::Value(Value::Empty))
+            && let Some(anchor) = array_holding(&arrays, addr)
+        {
+            return Err(bad(format!("a cell inside the array formula at {anchor}, which the engine enters none of")));
+        }
+        if let Content::ArrayFormula { .. } = content
+            && let Some((_, [r, c, r2, c2])) = arrays.iter().find(|(a, _)| *a == addr)
+        {
+            let meets = |m: &ironcalc_base::types::MergedCell| {
+                let (mr, mc) = (i64::from(m.row), i64::from(m.column));
+                mr <= *r2 && *r < mr + i64::from(m.height) && mc <= *c2 && *c < mc + i64::from(m.width)
+            };
+            if merged.iter().any(meets) {
                 return Err(bad("an array formula over merged cells, which the engine enters none of".into()));
             }
         }
@@ -987,6 +1050,9 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
             None
         }
     };
+    if ewb.worksheets.is_empty() {
+        return Err(format!("{MANIFEST}: a workbook holds a sheet at least"));
+    }
     for (i, ws) in ewb.worksheets.iter().enumerate() {
         let part = parts.get(i).map(String::as_str).unwrap_or(MANIFEST);
         let name = &ws.name;
@@ -1014,6 +1080,12 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
     for (i, d) in ewb.defined_names.iter().enumerate() {
         if d.name.is_empty() || crate::book::name_reads_as_a_cell(&d.name) {
             return Err(format!("{WORKBOOK}: `defined_names.{i}` `{}` is no name (it reads as a cell)", d.name));
+        }
+        if !crate::book::name_is_spelled_as_a_name(&d.name) {
+            return Err(format!(
+                "{WORKBOOK}: `defined_names.{i}` `{}` is no name (a letter, `_` or `\\` first, then letters, digits, `_` and `.`)",
+                d.name
+            ));
         }
         if let Some(j) =
             ewb.defined_names[..i].iter().position(|e| e.sheet_id == d.sheet_id && e.name.to_uppercase() == d.name.to_uppercase())
@@ -1090,6 +1162,10 @@ fn entry(e: CellEntry) -> Result<Entry, String> {
         return Err(format!("style {} is no style", e.style));
     }
     let error = |code: &str| error_named(code).ok_or_else(|| format!("{code:?} is no error"));
+    // a formula of white space alone, which the engine enters none of (the writer refuses it too)
+    if [&e.f, &e.array, &e.dynamic].iter().any(|f| f.as_ref().is_some_and(|f| f.trim().is_empty())) {
+        return Err("an empty formula, which the engine enters none of".into());
+    }
     Ok(if let Some(n) = e.n {
         if !n.is_finite() {
             return Err(format!("{n} is no finite number"));
@@ -1158,6 +1234,8 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
     // the cells that carry only a style (a styled cell an array spills into among them): entering an
     // array may give its spilled cells a derived style, so theirs is set again after
     let mut style_only: Vec<(u32, i32, i32, i32)> = Vec::new();
+    // every cell the file states, so a spilled cell it does not state is known after the arrays spill
+    let mut stated: HashSet<(u32, i32, i32)> = HashSet::new();
     if manifest.sheets.is_empty() {
         return Err(parts.bad(format!("{MANIFEST}: a workbook holds a sheet at least")));
     }
@@ -1201,16 +1279,20 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
         };
         // the legacy arrays' areas, so a cell stated inside one is refused whatever order the keys
         // come in (the array's own anchor and the style-only cells it spills into aside)
-        let arrays: Vec<(Addr, i32, i32)> = cells
-            .iter()
-            .filter_map(|(k, v)| {
-                let t = v.as_table()?;
-                t.get("array")?;
-                let size = t.get("size")?.as_array()?;
-                let (w, h) = (size.first()?.as_integer()?, size.get(1)?.as_integer()?);
-                Some((Addr::parse(k).ok()?, i32::try_from(w).ok()?, i32::try_from(h).ok()?))
-            })
-            .collect();
+        // (an area of no cell or past the sheet's edge refused by its anchor before any sum is taken,
+        // and one over another's area)
+        let mut arrays: Vec<(Addr, [i64; 4])> = Vec::new();
+        for (k, v) in &cells {
+            let size = v.as_table().filter(|t| t.contains_key("array")).and_then(|t| t.get("size")).and_then(toml::Value::as_array);
+            let Some(size) = size else { continue };
+            let (Some(w), Some(h), Ok(a)) = (size.first().and_then(toml::Value::as_integer), size.get(1).and_then(toml::Value::as_integer), Addr::parse(k)) else {
+                continue;
+            };
+            arrays.push((a, array_area(a, w, h).map_err(|e| parts.bad(format!("{} {k}: {e}", sheet.part)))?));
+        }
+        if let Some((a, b)) = overlapping_arrays(&arrays) {
+            return Err(parts.bad(format!("{} {a}: an array formula over the one at {b}, which the engine enters none of", sheet.part)));
+        }
         for (key, cell) in cells {
             let bad = |e: String| parts.bad(format!("{} {key}: {e}", sheet.part));
             let addr = Addr::parse(&key).map_err(|e| bad(e.to_string()))?;
@@ -1239,15 +1321,14 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
             let (row, column) = (addr.row, addr.column);
             let entry = entry(cell).map_err(bad)?;
             if !matches!(entry, Entry::Style)
-                && let Some((anchor, ..)) = arrays.iter().find(|(a, w, h)| {
-                    *a != addr && (a.row..a.row + h).contains(&row) && (a.column..a.column + w).contains(&column)
-                })
+                && let Some(anchor) = array_holding(&arrays, addr)
             {
                 return Err(bad(format!("a cell stated inside the array formula at {anchor}")));
             }
             if matches!(entry, Entry::Style) {
                 style_only.push((i as u32, row, column, s));
             }
+            stated.insert((i as u32, row, column));
             match entry {
                 Entry::Number(v) => ws.set_cell_with_number(row, column, v, s).map_err(bad)?,
                 Entry::Text(t) => {
@@ -1310,12 +1391,6 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
         };
         restored.map_err(bad)?;
     }
-    for (sheet, row, column, style) in style_only {
-        let ws = model.workbook.worksheet_mut(sheet).map_err(|e| ModelError::file(path, e))?;
-        ws.set_cell_style(row, column, style).map_err(|e| ModelError::file(path, e))?;
-    }
-    model.workbook.styles.cell_xfs.truncate(styles_in_file);
-
     let mut macros = BTreeMap::new();
     for name in &manifest.macros {
         if !is_identifier(name) {
@@ -1354,6 +1429,24 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
     }
     let mut book = Workbook::from_model(model, Origin::Abaco { path: path.to_path_buf() });
     book.recalc();
+    // The styles the file states, set again once every array has spilled (a legacy one on entering,
+    // a dynamic one on evaluating; either gives a cell it creates its row's or column's style, a
+    // legacy one a quote prefix's plain copy): a spilled cell the file states keeps its style, one it
+    // does not state holds style 0. The styles entering derived are orphans then, cut back.
+    let mut spilled_unstated = Vec::new();
+    for sheet in 0..manifest.sheets.len() as u32 {
+        for (addr, style) in book.cells(sheet)? {
+            if style != 0 && !stated.contains(&(sheet, addr.row, addr.column)) && book.content(sheet, addr)? == Content::Spill {
+                spilled_unstated.push((sheet, addr.row, addr.column, 0));
+            }
+        }
+    }
+    let model = book.model_mut();
+    for (sheet, row, column, style) in style_only.into_iter().chain(spilled_unstated) {
+        let ws = model.workbook.worksheet_mut(sheet).map_err(|e| ModelError::file(path, e))?;
+        ws.set_cell_style(row, column, style).map_err(|e| ModelError::file(path, e))?;
+    }
+    model.workbook.styles.cell_xfs.truncate(styles_in_file);
     Ok(AbacoFile { book, macros, workspace, kept: parts.all })
 }
 
@@ -1369,6 +1462,11 @@ mod tests {
         }
         assert_eq!(escape_line("a\u{2028}b"), "a\\u2028b");
         assert_eq!(unescape_line("bad \\u12").unwrap_err(), "`\\u12` is no character");
+        // four hex digits and nothing else: no sign, no space
+        for bad in ["\\u+041", "\\u-041", "\\u 041", "\\u004G"] {
+            assert!(unescape_line(bad).is_err(), "{bad}");
+        }
+        assert_eq!(unescape_line("\\u004f\\u004F").unwrap(), "OO");
         assert_eq!(escape_line("a\tb\\"), "a\\tb\\\\");
         assert_eq!(unescape_line("bad \\x").unwrap_err(), "`\\x` is no escape");
         assert_eq!(unescape_line("trailing \\").unwrap_err(), "a line ends in a lone `\\`");

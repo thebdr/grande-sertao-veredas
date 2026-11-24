@@ -150,6 +150,17 @@ pub fn name_reads_as_a_cell(name: &str) -> bool {
     a1 || rc(&upper) || c_alone || parsed || reference_spelling
 }
 
+/// Whether `name` is spelled as Excel spells a name: a letter (any script's), `_` or `\\` first,
+/// then letters, digits, `_` and `.`, 255 characters at most, and neither `TRUE` nor `FALSE`. A name
+/// opening with an operator (`@B1`, `(B1)`, `+B1`) or holding one (`B1+0`) is none: a formula
+/// naming it reads the cell.
+pub fn name_is_spelled_as_a_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let first_ok = chars.next().is_some_and(|c| c.is_alphabetic() || c == '_' || c == '\\');
+    let upper = name.to_uppercase();
+    first_ok && chars.all(|c| c.is_alphanumeric() || c == '_' || c == '.') && name.chars().count() <= 255 && upper != "TRUE" && upper != "FALSE"
+}
+
 impl ModelError {
     pub(crate) fn file(path: &Path, message: impl std::fmt::Display) -> ModelError {
         ModelError::File {
