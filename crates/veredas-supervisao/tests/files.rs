@@ -482,6 +482,26 @@ fn two_sessions_never_open_one_database_file() {
             std::os::unix::fs::symlink("a.duckdb", d.join("stores/c.duckdb")).unwrap();
         }));
         assert!(got.ends_with(&tail("store")), "a pinned file through two links: {got}");
+        // A chain of links to a file not made yet, beside that file: three links and forty refused
+        // (the drive follows forty), forty-one loaded (the drive refuses to open it, so no two
+        // sessions open one file); and a loop of links loaded, its reading ended.
+        let chain = |links: usize| move |d: &std::path::Path| {
+            std::fs::create_dir_all(d.join("stores")).unwrap();
+            for k in 1..=links {
+                let to = if k == links { "a.duckdb".to_string() } else { format!("l{}.duckdb", k + 1) };
+                std::os::unix::fs::symlink(to, d.join(format!("stores/l{k}.duckdb"))).unwrap();
+            }
+        };
+        for (links, refused_too) in [(3, true), (40, true), (41, false)] {
+            let got = refused(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/l1.duckdb\" }", "the hall", false, &chain(links)));
+            assert_eq!(got.ends_with(&tail("store")), refused_too, "a chain of {links} links to a file not made, beside it: {got}");
+        }
+        let looped = |d: &std::path::Path| {
+            std::fs::create_dir_all(d.join("stores")).unwrap();
+            std::os::unix::fs::symlink("c.duckdb", d.join("stores/b.duckdb")).unwrap();
+            std::os::unix::fs::symlink("b.duckdb", d.join("stores/c.duckdb")).unwrap();
+        };
+        assert!(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/b.duckdb\" }", "the hall", false, &looped).is_ok(), "a loop of links loaded");
         // A pinned file that is itself a link to the other's, neither made yet (a link to nothing).
         let got = refused(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/b.duckdb\" }", "the hall", false, &|d| {
             std::fs::create_dir_all(d.join("stores")).unwrap();
@@ -512,6 +532,11 @@ fn two_sessions_never_open_one_database_file() {
     let shared = "store = { dir = \"../stores\" }";
     let got = refused(three([shared, shared, shared], ["the loop", "the hall", "the loop"]));
     assert!(got.starts_with("session `yard`: ") && got.ends_with(&tail("store")), "the first and the third of three: {got}");
+    // And every other pair of the three: the first and the second, the second and the third.
+    let got = refused(three([shared, shared, shared], ["the loop", "the loop", "the yard"]));
+    assert!(got.starts_with("session `hall`: ") && got.ends_with(&tail("store")), "the first and the second of three: {got}");
+    let got = refused(three([shared, shared, shared], ["the loop", "the hall", "the hall"]));
+    assert!(got.starts_with("session `yard`: ") && got.contains(" is the database file session `hall` opens for its store"), "the second and the third of three: {got}");
     assert!(three([shared, shared, shared], ["the loop", "the hall", "the yard"]).is_ok(), "three names, one folder");
     // One file written relative and absolute, the supervisão file read by a path relative to the
     // folder the test runs in: refused.
