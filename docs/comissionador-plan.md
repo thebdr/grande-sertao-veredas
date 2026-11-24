@@ -132,7 +132,7 @@ the stored window's end is the run's horizon. The same rows give the same verdic
 
 **Bound before it runs.** Before its first step a run checks the test against the session: the
 session's name against `portal`, the mode against `modes`, every table and column the test and
-its functions read (a column read through a row an `await` binds among them), every `write` target an OPC UA tag marked writable, every `send` a channel
+its functions read (a column read through a name no table it may hold a row of has among them, an `await`'s and through every copy), every `write` target an OPC UA tag marked writable, every `send` a channel
 and a message of the session, and, live, the switch armed when the test writes. A refusal there
 starts nothing and writes no run.
 
@@ -259,9 +259,16 @@ Recorded as the build meets them.
   as text.
 - **A replay's write moves no clock** (C-203, Q318). Live, a write moves the clock to the plant's
   answer, at least the read settle after a step that read the plant; a replay sends nothing and
-  stays. A wait right after a write with a bound tighter than that lag and the reaction holds
-  live and times out replayed. Until portal keeps each write's moment, a test meant to replay
-  gives such a wait room.
+  stays. Plant data read right after a write, before that lag has passed, is the plant before the
+  write in a replay: a tight wait times out, an await takes an earlier row, a read the old value.
+  Until portal keeps each write's moment, a test meant to replay reads nothing right after a
+  write.
+- **A view's rows carry no source or sequence** (C-202). An await told the last row it took by
+  its source and sequence, so over a view it retook a row of a shared stamp; a stamp's rows now
+  stand in one order whatever the store's, and an await counts what it passed.
+- **The store's latest breaks a tie its own way** (C-202). Two rows of a table at one stamp (two
+  keys, two sources): a wait applying them in sequence disagreed with a read; a tied stamp is
+  read back through `latest` before the wait judges it.
 - **Rows share stamps** (C-202). A log stamped to the second, or two messages in one millisecond,
   give rows of one stamp: a wait judges a stamp once all its rows are applied, and an await at the
   stamp of the row the last one took takes the next row there, or a counting loop misses events.

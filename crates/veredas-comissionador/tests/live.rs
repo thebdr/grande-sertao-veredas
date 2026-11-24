@@ -276,6 +276,13 @@ fn timeouts_the_run_s_bound_and_the_tester_s_stop() {
     let r = go(&format!("{HEAD}test \"t\" {{\n  id T\n  timeout 500ms\n  step w wait plc_main.speed >= 3.0\n}}\n"), &RunOptions::live());
     assert_eq!((r.verdict, r.decided_at.as_deref(), r.reason.as_str()), (RunVerdict::Aborted, Some("w"), "the run's bound of 500ms passed"));
     assert_eq!(steps(&r), ["w #1 cut short: "]);
+    // The bound passing inside the wait moves the clock to it, and the run's own window replayed
+    // ends the same way.
+    assert_eq!((r.steps[0].end_ms - r.steps[0].start_ms, r.end_ms - r.start_ms), (500, 500));
+    let text = format!("{HEAD}test \"t\" {{\n  id T\n  timeout 500ms\n  modes live, replay\n  step w wait plc_main.speed >= 3.0\n}}\n");
+    let live = go(&text, &RunOptions::live());
+    let replayed = go(&text, &RunOptions::replay(live.start_ms, live.end_ms));
+    assert_eq!((replayed.reason.as_str(), replayed.steps[0].end_ms), ("the run's bound of 500ms passed", live.steps[0].end_ms));
     let opts = RunOptions::live();
     let stop = opts.stop.clone();
     let text = test_of("  step a report \"before\"\n  step w wait plc_main.speed >= 3.0\n");
@@ -494,6 +501,18 @@ fn values_compute_and_compare_as_the_reference_says() {
     assert_eq!(one("round(-1e19)"), "e #1 error: `round` gives a whole number past its range");
     assert_eq!(one("round(9.2e18)"), "e #1 pass: x = 9200000000000000000");
     assert_eq!(one("2s * 1.5"), "e #1 pass: x = 3s");
+    // A whole number and a duration never pass through a float's 53 bits.
+    assert_eq!(one("round(9223372036854775807)"), "e #1 pass: x = 9223372036854775807");
+    assert_eq!(one("round(9007199254740993)"), "e #1 pass: x = 9007199254740993");
+    assert_eq!(one("int(9.21e18)"), "e #1 pass: x = 9210000000000000000");
+    assert_eq!(one("int(-9.223372036854775808e18)"), "e #1 pass: x = -9223372036854775808");
+    assert_eq!(one("int(1e19)"), "e #1 error: `int` gives a whole number past its range");
+    assert_eq!(one("9007199254740993ms * 1.0"), "e #1 pass: x = 9007199254740993ms");
+    assert_eq!(one("9007199254740993ms * 2.0"), "e #1 pass: x = 18014398509481986ms");
+    assert_eq!(one("3ms * 0.5"), "e #1 pass: x = 2ms");
+    assert_eq!(one("-3ms * 0.5"), "e #1 pass: x = -2ms");
+    assert_eq!(one("1ms * 0.1"), "e #1 pass: x = 0s");
+    assert_eq!(one("0.25 * 6ms"), "e #1 pass: x = 2ms");
     // A loop to the largest whole number ends there.
     let r = go("  step f script { for i in 9223372036854775806 .. 9223372036854775807 { x = i } }\n");
     assert_eq!(steps(&r), ["f #1 pass: i = 9223372036854775807, x = 9223372036854775807"]);
@@ -528,4 +547,136 @@ fn a_live_read_waits_until_its_moment_is_stored() {
         run_with(&checked(&test_of("  step c check readings.temp == 21.5\n")), s.live(), &RunOptions::live()).unwrap().0
     });
     assert_eq!(steps(&r), ["c #1 pass: readings.temp == 21.5: pass"]);
+}
+
+// ---- refute round 2 ------------------------------------------------------------------------
+
+#[test]
+fn an_awaited_row_s_copies_are_followed_in_any_order_and_a_name_s_tables_judged_together() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    // A copy that stands before its await in the text, reached by the routes after it: refused,
+    // nothing written.
+    let c = checked(&test_of(concat!(
+        "  step go   write plc_main.run := 1\n",
+        "            on pass -> take\n",
+        "  step copy script { r = o }\n",
+        "  step use  check r.nosuch == 1\n",
+        "  step take await plc_main timeout 3s -> o\n",
+        "            on pass -> copy\n",
+    )));
+    let e = run_with(&c, s.live(), &RunOptions::live()).unwrap_err();
+    assert_eq!(e.0, ["`plc_main` has no column `nosuch`, read as `r.nosuch`"]);
+    assert_eq!(tag(&bench, "run"), "Int32(0)", "nothing written");
+    // In a function, through two copies in a loop, each before the statement it follows.
+    let f = "format = \"veredas-functions\"\nversion = 1\n\nfunction F() -> (s: int) {\n  reads plc_main\n  timeout 1s\n  s = 0\n  for i in 1 .. 3 {\n    if i == 3 {\n      s = p.nosuch\n    }\n    if i >= 2 {\n      p = q\n    }\n    q = await plc_main\n  }\n}\n";
+    let e = run_with(&checked_with(&test_of("  use f.fn\n  step c call F() -> s\n"), f), s.live(), &RunOptions::live()).unwrap_err();
+    assert_eq!(e.0, ["`plc_main` has no column `nosuch`, read as `p.nosuch`"]);
+    // A name rebound by an await of another table: each read judged against the tables the name
+    // may hold, refused only when none of them has the column.
+    log_line(dir.path(), -1500, "21.5");
+    let rebound = |read: &str| {
+        checked(&test_of(&format!(
+            "  step a await plc_main timeout 2s -> r\n  step b check r.level > 0.5\n  step c await readings timeout 3s -> r\n  step d check {read}\n"
+        )))
+    };
+    let (r, _) = run_with(&rebound("r.temp > 0"), s.live(), &RunOptions::live()).unwrap();
+    assert_eq!((r.verdict, steps(&r)[3].as_str()), (RunVerdict::Passed, "d #1 pass: r.temp > 0: pass"), "{:?}", steps(&r));
+    let e = run_with(&rebound("r.nosuch > 0"), s.live(), &RunOptions::live()).unwrap_err();
+    assert_eq!(e.0, ["`plc_main` has no column `nosuch`, read as `r.nosuch`", "`readings` has no column `nosuch`, read as `r.nosuch`"]);
+}
+
+#[test]
+fn awaits_over_a_view_take_each_row_of_a_stamp_once() {
+    // A view over the events: its rows carry no source or sequence, so a row is told by its place
+    // among the rows of its stamp, in one order whatever the store's.
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let view = "\n[[table]]\nname = \"evv\"\nsql = \"SELECT index_ms, n FROM ev\"\n";
+    let s = session(dir.path(), &(with_rules(project_text(&bench, false, 4)) + view));
+    let c = checked(&test_of(concat!(
+        "  step e1 await evv timeout 3s -> r1\n",
+        "  step e2 await evv timeout 3s -> r2\n",
+        "  step e3 await evv timeout 3s -> r3\n",
+        "  step r  report r1.n, r2.n, r3.n\n",
+    )));
+    let r = std::thread::scope(|sc| {
+        sc.spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            log_together(dir.path(), -500, &["n=2", "n=1"]);
+            log_text(dir.path(), -600, "n=3");
+        });
+        run_with(&c, s.live(), &RunOptions::live()).unwrap().0
+    });
+    let mut first_two = texts(&r)[..2].to_vec();
+    first_two.sort();
+    assert_eq!((first_two, texts(&r)[2].as_str()), (vec!["r1.n = 1".to_string(), "r2.n = 2".to_string()], "r3.n = 3"), "{:?}", steps(&r));
+    let f = "format = \"veredas-functions\"\nversion = 1\n\nfunction Count(k: int) -> (s: int) {\n  reads evv\n  timeout 3s\n  s = 0\n  for i in 1 .. k {\n    e = await evv where e.n > 0\n    s += e.n\n  }\n}\n";
+    let c = checked_with(&test_of("  use f.fn\n  step c call Count(k: 4) -> s\n  step r report s\n"), f);
+    let r = std::thread::scope(|sc| {
+        sc.spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            log_together(dir.path(), -500, &["n=1", "n=2", "n=3"]);
+            log_text(dir.path(), -600, "n=4");
+        });
+        run_with(&c, s.live(), &RunOptions::live()).unwrap().0
+    });
+    assert_eq!(texts(&r), ["s = 10"], "{:?}", steps(&r));
+}
+
+#[test]
+fn a_wait_and_a_read_agree_on_a_stamp_two_keys_share() {
+    // Two keys of one table at one stamp, `x` 0 under one and 1 under the other: the wait judges
+    // the stamp by the value a read there finds, so the check after it agrees with it.
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let keyed = "\n[[rule]]\nname = \"kt\"\npattern = \" k=(?P<k>[a-z]) x=(?P<x>[0-9]+)\"\nscope = \"plant\"\nkey = \"k\"\ntypes = { x = \"int\" }\n";
+    let s = session(dir.path(), &(project_text(&bench, false, 4) + keyed));
+    let c = checked(&test_of("  step w wait kt.x == 1 timeout 1500ms\n          on timeout -> c\n  step c check kt.x == 1\n"));
+    for lines in [["k=b x=0", "k=a x=1"], ["k=a x=1", "k=b x=0"]] {
+        let r = std::thread::scope(|sc| {
+            sc.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                log_together(dir.path(), -500, &lines);
+            });
+            run_with(&c, s.live(), &RunOptions::live()).unwrap().0
+        });
+        let st = steps(&r);
+        assert_eq!(st[0].starts_with("w #1 pass"), st[1].starts_with("c #1 pass"), "{lines:?}: {st:?}");
+        std::thread::sleep(Duration::from_millis(600));
+    }
+}
+
+#[test]
+fn a_live_wait_for_a_duration_waits_until_its_bound_has_passed() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    // A function's wait past its own bound of 1 s: the call times out at the bound, once the plant
+    // has reached it, so the write after it and what it causes come after.
+    let f = "format = \"veredas-functions\"\nversion = 1\n\nfunction Pause() {\n  timeout 1s\n  wait 5s\n}\n";
+    let c = checked_with(&test_of(concat!(
+        "  use f.fn\n",
+        "  step p    call Pause()\n",
+        "            on timeout -> go\n",
+        "  step go   write plc_main.run := 1\n",
+        "  step fast wait plc_main.speed >= 2.0 timeout 5s\n",
+    )), f);
+    let begun = std::time::Instant::now();
+    let (r, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    assert!(begun.elapsed() >= Duration::from_secs(1), "{:?}", begun.elapsed());
+    let (p, go) = (&r.steps[0], &r.steps[1]);
+    assert_eq!((p.outcome, p.end_ms - p.start_ms, go.start_ms), (Some(Outcome::Timeout), 1000, p.end_ms), "{:?}", steps(&r));
+    let plant = veredas_comissionador::plant::LivePlant::new(s.live()).unwrap();
+    use veredas_comissionador::plant::Plant;
+    let table = plant.tables().unwrap().into_iter().find(|t| t.name == "plc_main").unwrap();
+    let rows = plant.rows(&table, 0, plant.now_ms()).unwrap();
+    let reacted = rows.iter().find(|row| row.field("speed") == Some(Some(veredas_comissionador::eval::Value::Float(2.0)))).expect("the reaction stored").time_ms;
+    assert!(reacted > go.start_ms, "the reaction after the write: {reacted} against {}", go.start_ms);
+    // A step's wait past the run's bound: the run ends at the bound, once it has passed.
+    let begun = std::time::Instant::now();
+    let (r, _) = run_with(&checked(&format!("{HEAD}test \"t\" {{\n  id T\n  timeout 500ms\n  step w wait 5min\n}}\n")), s.live(), &RunOptions::live()).unwrap();
+    assert!(begun.elapsed() >= Duration::from_millis(500), "{:?}", begun.elapsed());
+    assert_eq!((r.reason.as_str(), r.end_ms - r.start_ms), ("the run's bound of 500ms passed", 500));
 }

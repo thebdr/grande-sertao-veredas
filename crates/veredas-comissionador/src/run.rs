@@ -266,29 +266,45 @@ fn action_exprs<'a>(a: &'a Action, f: &mut dyn FnMut(&'a Expr)) {
     }
 }
 
-/// The rows a block binds: every `await`'s name with its table, and a name a bare name of one is
-/// assigned to, in order.
-fn stmt_rows(body: &[Stmt], rows: &mut HashMap<String, BTreeSet<String>>) {
+/// The rows a block binds: every `await`'s name with its table, and every bare name assigned to a
+/// name (`r = o`), to be followed by [`follow_copies`].
+fn stmt_rows(body: &[Stmt], rows: &mut HashMap<String, BTreeSet<String>>, copies: &mut Vec<(String, String)>) {
     for s in body {
         match &s.kind {
             StmtKind::Await { bind, table, .. } => {
                 rows.entry(bind.value.clone()).or_default().insert(table.value.clone());
             }
             StmtKind::Assign { target, value, .. } => {
-                if let ExprKind::Name(n) = &value.kind
-                    && let Some(ts) = rows.get(n.as_str()).cloned()
-                {
-                    rows.entry(target.value.clone()).or_default().extend(ts);
+                if let ExprKind::Name(n) = &value.kind {
+                    copies.push((target.value.clone(), n.clone()));
                 }
             }
             StmtKind::If { arms, otherwise } => {
-                arms.iter().for_each(|(_, b)| stmt_rows(b, rows));
+                arms.iter().for_each(|(_, b)| stmt_rows(b, rows, copies));
                 if let Some(b) = otherwise {
-                    stmt_rows(b, rows);
+                    stmt_rows(b, rows, copies);
                 }
             }
-            StmtKind::For { body, .. } => stmt_rows(body, rows),
+            StmtKind::For { body, .. } => stmt_rows(body, rows, copies),
             _ => {}
+        }
+    }
+}
+
+/// Every table a name may hold a row of: an `await`'s, and through every copy, in whatever order
+/// the copies stand (a step routed back, a loop), until nothing changes.
+fn follow_copies(rows: &mut HashMap<String, BTreeSet<String>>, copies: &[(String, String)]) {
+    loop {
+        let mut grew = false;
+        for (target, source) in copies {
+            let Some(from) = rows.get(source).cloned() else { continue };
+            let into = rows.entry(target.clone()).or_default();
+            for t in from {
+                grew |= into.insert(t);
+            }
+        }
+        if !grew {
+            return;
         }
     }
 }
@@ -296,8 +312,10 @@ fn stmt_rows(body: &[Stmt], rows: &mut HashMap<String, BTreeSet<String>>) {
 /// The fields every row has, whatever its table.
 const ROW_FIELDS: [&str; 5] = ["time", "arrival", "source", "key", "seq"];
 
-/// Every column read through a row an `await` binds (`a.x`), against the table it is a row of:
-/// `(table, column, base)` for each one that table lacks.
+/// Every column read through a row an `await` binds (`a.x`), against the tables the name may hold
+/// a row of: `(table, column, base)` for each of them when none has that column. A name rebound to
+/// rows of tables of other columns is judged where it runs: which await reached a read is the
+/// routes' to say.
 fn row_columns(exprs: &[&Expr], rows: &HashMap<String, BTreeSet<String>>, tables: &HashMap<String, Table>, out: &mut Vec<(String, String, String)>) {
     for e in exprs {
         e.walk(&mut |x: &Expr| {
@@ -305,10 +323,9 @@ fn row_columns(exprs: &[&Expr], rows: &HashMap<String, BTreeSet<String>>, tables
                 && let Some(ts) = rows.get(&base.value)
                 && !ROW_FIELDS.contains(&field.value.as_str())
             {
-                for t in ts {
-                    if let Some(table) = tables.get(t)
-                        && !table.columns.iter().any(|c| c.name == field.value)
-                    {
+                let known: Vec<(&String, &Table)> = ts.iter().filter_map(|t| tables.get(t).map(|table| (t, table))).collect();
+                if !known.is_empty() && known.iter().all(|(_, table)| !table.columns.iter().any(|c| c.name == field.value)) {
+                    for (t, _) in known {
                         out.push((t.clone(), field.value.clone(), base.value.clone()));
                     }
                 }
@@ -427,23 +444,26 @@ pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode) -> Result<Bound, Ref
     // names are the test's), a function's within it.
     let mut lacking = Vec::new();
     let mut rows: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut copies: Vec<(String, String)> = Vec::new();
     for a in t.steps.iter().flat_map(|s| s.actions.iter()) {
         match &a.kind {
             ActionKind::Await { bind, table, .. } => {
                 rows.entry(bind.value.clone()).or_default().insert(table.value.clone());
             }
-            ActionKind::Script { body } => stmt_rows(body, &mut rows),
+            ActionKind::Script { body } => stmt_rows(body, &mut rows, &mut copies),
             _ => {}
         }
     }
+    follow_copies(&mut rows, &copies);
     let mut exprs = Vec::new();
     for a in t.steps.iter().flat_map(|s| s.actions.iter()) {
         action_exprs(a, &mut |e| exprs.push(e));
     }
     row_columns(&exprs, &rows, &tables, &mut lacking);
     for f in c.files.iter().flat_map(|f| f.functions.functions.iter()) {
-        let mut rows = HashMap::new();
-        stmt_rows(&f.body, &mut rows);
+        let (mut rows, mut copies) = (HashMap::new(), Vec::new());
+        stmt_rows(&f.body, &mut rows, &mut copies);
+        follow_copies(&mut rows, &copies);
         let mut exprs = Vec::new();
         stmt_exprs(&f.body, &mut |e| exprs.push(e));
         row_columns(&exprs, &rows, &tables, &mut lacking);
@@ -591,9 +611,10 @@ struct Runner<'a> {
     attempts: HashMap<String, u32>,
     retries: HashMap<(String, usize), u32>,
     statements: u64,
-    /// The last row an `await` of each table took: its stamp and who it is (source, sequence,
-    /// arrival), so the next `await` at that stamp takes the row after it.
-    taken: HashMap<String, (i64, String, i64, i64)>,
+    /// The last row an `await` of each table took: its stamp and how many rows of that stamp, in
+    /// their order, it passed and took, so the next `await` at that stamp takes the row after it
+    /// (a view's rows carry no source or sequence to tell them apart).
+    taken: HashMap<String, (i64, usize)>,
     result: RunResult,
     listener: &'a mut dyn FnMut(&Event),
 }
@@ -839,7 +860,17 @@ impl Runner<'_> {
             let rows = self.plant.rows(t, after, upto).map_err(|e| Halt::Store(e.to_string()))?;
             all.extend(rows.into_iter().map(|r| (i, r)));
         }
-        all.sort_by(|(ia, a), (ib, b)| a.time_ms.cmp(&b.time_ms).then(ia.cmp(ib)).then(a.seq.cmp(&b.seq)));
+        // Rows sharing a stamp in one order whatever the store's: by every field, then their cells.
+        all.sort_by(|(ia, a), (ib, b)| {
+            a.time_ms
+                .cmp(&b.time_ms)
+                .then(ia.cmp(ib))
+                .then(a.seq.cmp(&b.seq))
+                .then_with(|| a.source.cmp(&b.source))
+                .then_with(|| a.key.cmp(&b.key))
+                .then(a.arrival_ms.cmp(&b.arrival_ms))
+                .then_with(|| format!("{:?}", a.columns).cmp(&format!("{:?}", b.columns)))
+        });
         Ok(all.into_iter().map(|(_, r)| r).collect())
     }
 
@@ -898,6 +929,8 @@ impl Runner<'_> {
             first = false;
             if upto > cursor {
                 let rows = self.rows(&names, cursor, upto)?;
+                // The tables with more than one row at the stamp being applied.
+                let mut tied: BTreeSet<String> = BTreeSet::new();
                 for (i, row) in rows.iter().enumerate() {
                     for ((t, c), slot) in cache.iter_mut() {
                         if *t == row.table
@@ -906,9 +939,22 @@ impl Runner<'_> {
                             *slot = Some(v);
                         }
                     }
+                    if i > 0 && rows[i - 1].time_ms == row.time_ms && rows[i - 1].table == row.table {
+                        tied.insert(row.table.clone());
+                    }
                     // Judged at a stamp once every row of that stamp is applied: never half of one.
                     if rows.get(i + 1).is_some_and(|next| next.time_ms == row.time_ms) {
                         continue;
+                    }
+                    // A table's rows sharing the stamp: its values as a read at that stamp finds
+                    // them, whichever the store takes for the latest of a tie.
+                    for t in std::mem::take(&mut tied) {
+                        let Some(table) = self.tables.get(&t) else { continue };
+                        for ((tt, c), slot) in cache.iter_mut() {
+                            if *tt == t {
+                                *slot = self.plant.latest(table, c, row.time_ms).map_err(|e| Halt::Store(e.to_string()))?.map(|(_, v)| v);
+                            }
+                        }
                     }
                     match holds(self.plant, &self.tables, &cache, row.time_ms) {
                         Ok(true) => return Ok(Waited::At(row.time_ms)),
@@ -935,25 +981,24 @@ impl Runner<'_> {
     /// row however many share a stamp.
     fn wait_event(&mut self, table: &str, bind: &str, filter: Option<&Expr>, until: i64, scope: &mut Scope) -> R<Waited> {
         let before = scope.get(bind).cloned();
-        let mut skip = self.taken.get(table).filter(|t| t.0 == self.clock).cloned();
+        let skip = self.taken.get(table).filter(|t| t.0 == self.clock).map(|t| t.1);
         let mut cursor = if skip.is_some() { self.clock - 1 } else { self.clock };
         let mut first = true;
+        // The stamp being walked, and how many of its rows have been met.
+        let (mut stamp, mut met) = (None::<i64>, 0usize);
         loop {
             let upto = self.reach(until, first)?;
             first = false;
             if upto > cursor {
                 for row in self.rows(&[table.to_string()], cursor, upto)? {
                     let at = row.time_ms;
-                    let id = (row.time_ms, row.source.clone(), row.seq, row.arrival_ms);
-                    if let Some(last) = &skip {
-                        if row.time_ms == last.0 {
-                            // The rows of that stamp up to the one already taken are passed over.
-                            if id == *last {
-                                skip = None;
-                            }
-                            continue;
-                        }
-                        skip = None;
+                    if stamp != Some(at) {
+                        (stamp, met) = (Some(at), 0);
+                    }
+                    met += 1;
+                    // The rows of the last taken one's stamp, up to it, are passed over.
+                    if skip.is_some_and(|k| at == self.clock && met <= k) {
+                        continue;
                     }
                     scope.insert(bind.to_string(), Value::Row(Arc::new(row)));
                     let ok = match filter {
@@ -970,7 +1015,7 @@ impl Runner<'_> {
                     };
                     match ok {
                         Ok(true) => {
-                            self.taken.insert(table.to_string(), id);
+                            self.taken.insert(table.to_string(), (at, met));
                             return Ok(Waited::At(at));
                         }
                         Ok(false) => {}
@@ -1004,23 +1049,21 @@ impl Runner<'_> {
         {
             return Err(Halt::WindowEnded(self.horizon));
         }
-        if target > until {
-            self.clock = until;
-            return Ok(false);
-        }
+        // Live, the machine's clock reaches the end first, the duration's or the bound's.
+        let end = target.min(until);
         match self.mode {
             RunMode::Replay { .. } => {}
             RunMode::Live => loop {
                 self.check_stop()?;
-                let left = target - self.plant.now_ms();
+                let left = end - self.plant.now_ms();
                 if left <= 0 {
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(left.min(POLL.as_millis() as i64) as u64));
             },
         }
-        self.clock = target;
-        Ok(true)
+        self.clock = end;
+        Ok(target <= until)
     }
 }
 
@@ -1138,7 +1181,11 @@ impl Runner<'_> {
                         self.clock = until;
                         Flow::Out(Outcome::Timeout, format!("{text} did not hold within {}", eval::duration_text(until - t0)))
                     }
-                    Waited::Timeout => return Err(Halt::Bound),
+                    Waited::Timeout => {
+                        // The run's bound passed inside the wait: the clock stands at it.
+                        self.clock = until;
+                        return Err(Halt::Bound);
+                    }
                     Waited::Fault(f) => Flow::Out(Outcome::Error, format!("{text}: {f}")),
                 }
             }
@@ -1165,7 +1212,10 @@ impl Runner<'_> {
                         self.clock = until;
                         Flow::Out(Outcome::Timeout, format!("no row of `{}` within {}", table.value, eval::duration_text(until - t0)))
                     }
-                    Waited::Timeout => return Err(Halt::Bound),
+                    Waited::Timeout => {
+                        self.clock = until;
+                        return Err(Halt::Bound);
+                    }
                     Waited::Fault(f) => Flow::Out(Outcome::Error, f),
                 }
             }
@@ -1467,10 +1517,10 @@ impl Runner<'_> {
                         StmtFlow::Next
                     }
                     Waited::Timeout => {
+                        self.clock = until;
                         if !own && until >= self.deadline {
                             return Err(Halt::Bound);
                         }
-                        self.clock = until;
                         StmtFlow::Out(Outcome::Timeout, format!("{} did not hold in time", self.text_in(ctx, condition.span)))
                     }
                     Waited::Fault(f) => StmtFlow::Out(Outcome::Error, f),
@@ -1493,10 +1543,10 @@ impl Runner<'_> {
                         StmtFlow::Next
                     }
                     Waited::Timeout => {
+                        self.clock = until;
                         if !own && until >= self.deadline {
                             return Err(Halt::Bound);
                         }
-                        self.clock = until;
                         StmtFlow::Out(Outcome::Timeout, format!("no row of `{}` in time", table.value))
                     }
                     Waited::Fault(f) => StmtFlow::Out(Outcome::Error, f),

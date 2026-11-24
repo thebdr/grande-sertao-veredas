@@ -359,11 +359,11 @@ run a write or a send moves it to the moment the plant answered, so whatever the
 after a write is after the write; in a replay a write and a send are not sent and the clock does
 not move. Every step reads the plant as of the clock. A live run reads a moment only once it is
 250 ms past, so the rows stamped at or before it have reached the store; a replay of a live
-run's own window therefore reads the rows the live run read. A wait or an await right after a
-write starts earlier in such a replay than it did live, by the time the live run took to send
-the write and have it answered (at least those 250 ms after a step that read the plant): a bound
-tighter than that and the plant's reaction together can time out in the replay where it held
-live (`docs/questions.md` Q318). A replay's clock never passes its window: a step the window
+run's own window therefore reads the rows the live run read. Plant data read right after a write
+(a read, a check, a report, a wait, an await) is read earlier in such a replay than it was live,
+by the time the live run took to send the write and have it answered (at least those 250 ms after
+a step that read the plant): it finds the plant as it stood before the write, a wait can time out
+where it held live and an await take an earlier row (`docs/questions.md` Q318). A replay's clock never passes its window: a step the window
 ends inside is cut short and the run aborted with the window's end named, before the run's bound
 or a call's.
 
@@ -399,8 +399,11 @@ box; a step placed twice, or a position for no step, in the `layout`.
 
 Bound to a portal session as the run starts, the run is refused when the session's name is not
 the test's `portal`, the mode is not among the test's `modes`, a table or a column the test reads
-is not in the session, a `write`'s column is not an OPC UA tag marked writable, a `send`'s channel
-or message is not the session's, or, live, the test writes and portal's switch is off.
+is not in the session, a column is read through a name no table it may hold a row of has (an
+`await`'s table, and through every copy of the name, in any order: which await reached the read
+is the routes' to say, so a name rebound to another table's rows is judged where it runs), a
+`write`'s column is not an OPC UA tag marked writable, a `send`'s channel or message is not the
+session's, or, live, the test writes and portal's switch is off.
 
 ## Grammar
 

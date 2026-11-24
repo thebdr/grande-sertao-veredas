@@ -257,11 +257,45 @@ pub fn arith(op: BinOp, l: &Value, r: &Value) -> E {
         (BinOp::Add, Duration(a), Duration(b)) => a.checked_add(*b).map(Duration).ok_or_else(span),
         (BinOp::Sub, Duration(a), Duration(b)) => a.checked_sub(*b).map(Duration).ok_or_else(span),
         (BinOp::Mul, Duration(d), Int(n)) | (BinOp::Mul, Int(n), Duration(d)) => d.checked_mul(*n).map(Duration).ok_or_else(span),
-        (BinOp::Mul, Duration(d), Float(x)) | (BinOp::Mul, Float(x), Duration(d)) => whole(*d as f64 * x).map(Duration).ok_or_else(span),
+        (BinOp::Mul, Duration(d), Float(x)) | (BinOp::Mul, Float(x), Duration(d)) => times(*d, *x).map(Duration).ok_or_else(span),
         (BinOp::Div, Duration(_), Duration(0)) => Err(fault("a division by zero")),
         (BinOp::Div, Duration(a), Duration(b)) => Ok(Float(*a as f64 / *b as f64)),
         _ => Err(bad()),
     }
+}
+
+/// `d` times `x`, exactly, rounded once to the whole number nearest it (half away from zero, as
+/// `round` does), when one holds it: a float is a whole mantissa times a power of two, so the
+/// product is a whole number in 128 bits shifted, never a float's rounding of `d`.
+fn times(d: i64, x: f64) -> Option<i64> {
+    if !x.is_finite() {
+        return None;
+    }
+    let bits = x.to_bits();
+    let (field, frac) = (((bits >> 52) & 0x7ff) as i32, (bits & ((1u64 << 52) - 1)) as i128);
+    let (mantissa, exp) = if field == 0 { (frac, -1074) } else { (frac | (1 << 52), field - 1075) };
+    let mantissa = if bits >> 63 == 1 { -mantissa } else { mantissa };
+    // |d| < 2^63 and the mantissa < 2^53: the product fits 128 bits.
+    let n = d as i128 * mantissa;
+    let exact = if exp >= 0 {
+        if exp >= 64 {
+            if n == 0 { 0 } else { return None }
+        } else {
+            n.checked_mul(1i128 << exp)?
+        }
+    } else {
+        let k = (-exp) as u32;
+        let a = n.unsigned_abs();
+        let q = if k >= 120 {
+            // |n| < 2^116: under a sixteenth.
+            0
+        } else {
+            let (q, r) = (a >> k, a & ((1u128 << k) - 1));
+            if r >= 1u128 << (k - 1) { q + 1 } else { q }
+        };
+        if n < 0 { -(q as i128) } else { q as i128 }
+    };
+    i64::try_from(exact).ok()
 }
 
 /// A float rounded to the whole number nearest it, when one holds it: never saturated.
@@ -335,6 +369,7 @@ fn builtin(name: &str, v: &[Value], now: i64) -> E {
             }
             Ok(best)
         }
+        ("round", [Int(i)]) => Ok(Int(*i)),
         ("round", [x]) => match num(x) {
             Some(f) => whole(f).map(Int).ok_or_else(|| fault("`round` gives a whole number past its range")),
             None => Err(want("a number")),
@@ -350,7 +385,8 @@ fn builtin(name: &str, v: &[Value], now: i64) -> E {
         ("seconds", _) => Err(want("a duration")),
         ("now", []) => Ok(Time(now)),
         ("int", [Int(i)]) => Ok(Int(*i)),
-        ("int", [Float(x)]) if x.is_finite() && x.abs() < 9.2e18 => Ok(Int(x.trunc() as i64)),
+        ("int", [Float(x)]) if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&x.trunc()) => Ok(Int(x.trunc() as i64)),
+        ("int", [Float(_)]) => Err(fault("`int` gives a whole number past its range")),
         ("int", [Bool(b)]) => Ok(Int(*b as i64)),
         ("int", [Text(t)]) => t.trim().parse::<i64>().map(Int).map_err(|_| fault(format!("\"{t}\" is no whole number"))),
         ("int", _) => Err(want("a number, a truth value or a text")),
