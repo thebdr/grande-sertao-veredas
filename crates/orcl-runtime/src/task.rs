@@ -56,6 +56,16 @@ pub struct TaskConfig {
     pub period: Duration,
 }
 
+impl TaskConfig {
+    /// Whether a task can run on this configuration: its period not zero. A host checks it before it has a program.
+    pub fn check(&self) -> Result<(), TaskError> {
+        if self.period.is_zero() {
+            return Err(TaskError::ZeroPeriod { task: self.name });
+        }
+        Ok(())
+    }
+}
+
 /// Why a task cannot be made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskError {
@@ -176,9 +186,7 @@ pub struct Task<P: TaskProgram> {
 impl<P: TaskProgram> Task<P> {
     /// A task that has run nothing yet; its first scan is due at zero on the clock it is stepped on.
     pub fn new(config: TaskConfig, program: P) -> Result<Self, TaskError> {
-        if config.period.is_zero() {
-            return Err(TaskError::ZeroPeriod { task: config.name });
-        }
+        config.check()?;
         Ok(Self {
             config,
             program,

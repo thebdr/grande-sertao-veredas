@@ -12,4 +12,4 @@
 
 mod controller;
 
-pub use controller::{Command, Controller, Loaded, Native, PowerOnError, Refusal, Restart, Source, Switch, Target};
+pub use controller::{Command, Controller, Loaded, Native, Refusal, Restart, Source, Switch, Target};

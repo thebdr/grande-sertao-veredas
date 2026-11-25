@@ -9,8 +9,8 @@ use orcl_interp::{
 };
 use orcl_runtime::{Clock, Image, Interpreted, Io, MakeError, Regions, TaskConfig, TaskError, TaskProgram, VirtualClock};
 use orcl_std::{Program, Scan};
-use veredas_controlador::{Controller, Loaded, PowerOnError, Restart, Source, Switch, Target};
-use veredas_core::state::{CommandSource, StartupReason};
+use veredas_controlador::{Controller, Loaded, Restart, Source, Switch, Target};
+use veredas_core::state::{CommandSource, StartupReason, StateWord};
 
 fn ms(v: u64) -> Duration {
     Duration::from_millis(v)
@@ -312,7 +312,7 @@ fn a_program_error_faults_the_controller_naming_where_it_stood_and_the_exchange_
         if index == 5 { In { value: 9, divisor: 0 } } else { steady(index) }
     }
     let (mut c, mut plant, mut clock) = started(interpreted(), zero_at_5, 8);
-    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:2") sim() no_realtime()"#);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:2:5") sim() no_realtime()"#);
     let values: Vec<u32> = plant.writes.iter().map(|w| w.1).collect();
     let mut want: Vec<u32> = (0..5).map(|k| scanned(FIRST + 1 + k as u32, k)).collect();
     want.extend([SAFE.value; 3]);
@@ -376,19 +376,56 @@ fn while_no_program_runs_the_safe_outputs_handed_in_are_written() {
 }
 
 #[test]
-fn a_program_that_cannot_be_made_is_refused_when_the_controller_comes_up() {
+fn a_program_that_cannot_be_made_leaves_the_controller_in_fault_load_exchanging_the_safe_outputs() {
     let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
-    let refused = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).err();
-    assert_eq!(refused, Some(PowerOnError::Program(MakeError::State)));
-    let zero = TaskConfig { name: "main", period: Duration::ZERO };
-    let refused = Controller::power_on_from(zero, SIM, Restart::First, loaded(&first())).err();
-    assert_eq!(refused, Some(PowerOnError::Task(TaskError::ZeroPeriod { task: "main" })));
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).unwrap();
+    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(c.load_error(), Some(&MakeError::State));
+    step(&mut c, &mut plant, &mut clock, 3);
+    assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)]);
+    // acknowledged and started, its load fails again, the safe outputs going on
+    c.acknowledge(OFICINA, &Key).unwrap();
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(plant.writes.len(), 5);
+    assert!(plant.writes.iter().all(|w| w.1 == SAFE.value), "{:?}", plant.writes);
+    // whatever the state it would come back to; from its own failure, FAULT internal
+    for restart in [Restart::PowerCycle { was: StateWord::Run }, Restart::PowerCycle { was: StateWord::Stop }] {
+        let c = Controller::power_on_from(config(), SIM, restart, loaded(&two)).unwrap();
+        assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()", "{restart:?}");
+    }
+    let c = Controller::power_on_from(config(), SIM, Restart::Crash, loaded(&two)).unwrap();
+    assert_eq!(text(&c), "FAULT internal(id=507) sim() no_realtime()");
+    // an entry that is no function, by the adapter's reason
     let mut wrong = loaded(&first());
     wrong.entry = FunctionId(3);
-    assert!(matches!(
-        Controller::power_on_from(config(), SIM, Restart::First, wrong).err(),
-        Some(PowerOnError::Program(MakeError::Entry(_)))
-    ));
+    let c = Controller::power_on_from(config(), SIM, Restart::First, wrong).unwrap();
+    assert!(matches!(c.load_error(), Some(MakeError::Entry(_))), "{:?}", c.load_error());
+    // a program that is made has no load error; a zero period is refused when the controller comes up
+    assert_eq!(interpreted().load_error(), None);
+    let zero = TaskConfig { name: "main", period: Duration::ZERO };
+    let refused = Controller::power_on_from(zero, SIM, Restart::First, loaded(&first())).err();
+    assert_eq!(refused, Some(TaskError::ZeroPeriod { task: "main" }));
+}
+
+#[test]
+fn what_safe_rust_cannot_reach_is_the_runtime_s_fault_not_the_program_s() {
+    // a value read before anything wrote it: the quotient's statement taken out
+    let mut uninit = code();
+    uninit.functions[0].blocks[1].statements.remove(0);
+    // code marked unreachable reached: the first block ends there
+    let mut unreachable = code();
+    unreachable.functions[0].blocks[0].terminator = Terminator::Unreachable { at: at(2) };
+    for program in [uninit, unreachable] {
+        let source = Loaded::new(program, FunctionId(0), REGIONS, first(), SAFE);
+        let c = Controller::power_on_from(config(), SIM, Restart::First, source).unwrap();
+        let (c, plant, _) = started(c, steady, 3);
+        assert_eq!(text(&c), "FAULT internal(id=507) sim() no_realtime()");
+        assert_eq!(plant.writes.iter().map(|w| w.1).collect::<Vec<_>>(), [SAFE.value; 3]);
+    }
 }
 
 #[test]

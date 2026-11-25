@@ -17,7 +17,7 @@
 //! errors, where the task faults by the watchdog, by the program's error, or by both on one scan. After every step the
 //! model and the engine must agree on everything the clause states. Every sequence runs twice: the program as a
 //! `TaskProgram` of its own, and as a native `orcl_std::Program`, which the engine runs through its blanket
-//! implementation, the path of every program controlador runs today; a native program has no error, so its runs draw
+//! implementation, the path of every native program controlador runs; a native program has no error, so its runs draw
 //! the same timings with no scan failing.
 use std::cell::RefCell;
 use std::convert::Infallible;
@@ -526,7 +526,7 @@ fn a_task_that_faults_late_in_its_run_agrees_with_the_model_over_a_hundred_runs_
 
 #[test]
 fn a_native_program_agrees_with_the_model_over_every_run_none_failing() {
-    // the path of every program controlador runs today: what it is handed, its time to the nanosecond, the output
+    // the path of every native program controlador runs: what it is handed, its time to the nanosecond, the output
     // image as the last scan left it, on every step of every run
     for (mix, seeds, steps) in RUNS {
         for seed in seeds {

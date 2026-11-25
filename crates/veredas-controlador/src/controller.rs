@@ -12,7 +12,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use orcl_interp::{FunctionId, Scalar};
+use orcl_interp::{ErrorKind, FunctionId, Scalar};
 use orcl_runtime::{
     Clock, Fault, Image, Interpreted, Io, MakeError, Regions, RunState, ScanError, Task, TaskConfig, TaskError,
     TaskProgram,
@@ -98,14 +98,17 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// Where a controller's program comes from: made afresh at power-on, for the safe outputs while none runs, and at
-/// every start, so a start runs the program from its initial values.
+/// Where a controller's program comes from: made at power-on, which checks it, and afresh at every start, so a start
+/// runs the program from its initial values; its safe outputs apply while no program runs, made or not.
 pub trait Source {
     type Program: TaskProgram;
     /// Why the program cannot be made.
     type Error;
 
     fn make(&mut self) -> Result<Self::Program, Self::Error>;
+
+    /// The outputs written while no program runs, the program made or not.
+    fn safe_outputs(&mut self) -> <Self::Program as TaskProgram>::Outputs;
 
     /// The fault a scan's error is to the controller: the program's own, with where it stood, or the runtime's.
     fn reason(&self, program: &Self::Program, error: &<Self::Program as TaskProgram>::Error) -> FaultReason;
@@ -126,6 +129,11 @@ impl<P: Program + Default> Source for Native<P> {
 
     fn make(&mut self) -> Result<P, Infallible> {
         Ok(P::default())
+    }
+
+    /// Those of the program as it is before any scan.
+    fn safe_outputs(&mut self) -> P::Outputs {
+        Program::safe_outputs(&P::default())
     }
 
     fn reason(&self, _program: &P, error: &Infallible) -> FaultReason {
@@ -159,28 +167,30 @@ impl<I: Image, O: Image> Source for Loaded<I, O> {
         Interpreted::new(self.program.clone(), self.entry, self.regions, &self.state, self.safe)
     }
 
-    /// The program's own error is 502 `program(at)`, `at` its source file and line; the adapter's or the host's
-    /// failure, an image the machine refuses or outputs read back as none, is the runtime's, 507 `internal`.
+    fn safe_outputs(&mut self) -> O {
+        self.safe
+    }
+
+    /// The program's own error, where Rust would panic (a failed check, an index past the end), is 502
+    /// `program(at)`, `at` its source file, line and column. The runtime's own failure is 507 `internal`: code
+    /// marked unreachable reached, a value read before anything wrote it, an inconsistency the load should have
+    /// refused, none of which safe Rust can reach, so a fault of the front end or the machine; and an image the
+    /// machine refuses or outputs read back as none, the adapter's or the host's.
     fn reason(&self, program: &Interpreted<I, O>, error: &ScanError) -> FaultReason {
         match error {
-            ScanError::Program(error) => {
+            ScanError::Program(error) if matches!(error.kind, ErrorKind::Check(_) | ErrorKind::Bounds { .. }) => {
                 let files = &program.machine().program().files;
                 let file = files.get(error.at.file as usize).map_or("?", String::as_str);
-                FaultReason::Program { at: format!("{file}:{}", error.at.line) }
+                FaultReason::Program { at: format!("{file}:{}:{}", error.at.line, error.at.column) }
             }
-            ScanError::Host(_) | ScanError::Outputs => FaultReason::Internal,
+            ScanError::Program(_) | ScanError::Host(_) | ScanError::Outputs => FaultReason::Internal,
         }
     }
 }
 
-/// Why a controller does not come up.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PowerOnError<E> {
-    /// The engine refused the task's configuration.
-    Task(TaskError),
-    /// The program cannot be made.
-    Program(E),
-}
+/// The download a load names while there are none: a program handed in by its host (`docs/questions.md` Q233,
+/// DECISION PENDING).
+const NO_DOWNLOAD: u32 = 0;
 
 /// The program clock a task runs on: the target's clock from the moment the program started.
 struct ProgramClock<'a, C: Clock> {
@@ -219,14 +229,16 @@ impl<I, O, D: Io<I, O>> Io<I, O> for TargetIo<'_, D> {
 pub struct Controller<P: TaskProgram, S: Source<Program = P> = Native<P>> {
     config: TaskConfig,
     source: S,
+    /// Why the program could not be made, the last time it was not.
+    load_error: Option<S::Error>,
     target: Target,
     state: ControllerState,
     /// The running program's task, from its start until a stop or an acknowledge.
     task: Option<Task<P>>,
     /// Where the running program's clock starts on the target's clock.
     origin: Duration,
-    /// A program as it is before any scan, whose safe outputs apply while no task runs.
-    idle: P,
+    /// The safe outputs that apply while no task runs.
+    idle: P::Outputs,
     /// The next exchange while no task runs, counted in periods of the target's clock.
     idle_cycle: u64,
     /// When the last exchange with the plant read its inputs, on the target's clock.
@@ -236,25 +248,27 @@ pub struct Controller<P: TaskProgram, S: Source<Program = P> = Native<P>> {
 impl<P: Program + Default> Controller<P> {
     /// The controller of a native program as it comes up: from nothing, from a power cycle or from its own failure.
     pub fn power_on(config: TaskConfig, target: Target, restart: Restart) -> Result<Self, TaskError> {
-        Self::power_on_from(config, target, restart, Native::default()).map_err(|e| match e {
-            PowerOnError::Task(e) => e,
-            PowerOnError::Program(never) => match never {},
-        })
+        Self::power_on_from(config, target, restart, Native::default())
     }
 }
 
 impl<P: TaskProgram, S: Source<Program = P>> Controller<P, S> {
     /// The controller as it comes up, its program made by `source`: refused when the engine refuses the task's
-    /// configuration or the program cannot be made, each checked once, here, as a start would meet them.
-    pub fn power_on_from(config: TaskConfig, target: Target, restart: Restart, mut source: S) -> Result<Self, PowerOnError<S::Error>> {
-        let idle = source.make().map_err(PowerOnError::Program)?;
-        let _checked = Task::new(config.clone(), source.make().map_err(PowerOnError::Program)?).map_err(PowerOnError::Task)?;
+    /// configuration, checked once, here. The program is made here too, as every load checks it (Q36): one that
+    /// cannot be made leaves the controller in FAULT 506 `load`, exchanging the safe outputs, unless it comes up
+    /// from its own failure, FAULT 507 `internal`.
+    pub fn power_on_from(config: TaskConfig, target: Target, restart: Restart, mut source: S) -> Result<Self, TaskError> {
+        config.check()?;
+        let idle = source.safe_outputs();
+        let load_error = source.make().err();
         let mut state = ControllerState::new(State::Stop(None));
         state.conditions.sim = target.simulated;
         state.conditions.no_realtime = !target.realtime && !target.production;
+        let loads = load_error.is_none();
         let mut controller = Controller {
             config,
             source,
+            load_error,
             target,
             state,
             task: None,
@@ -264,6 +278,12 @@ impl<P: TaskProgram, S: Source<Program = P>> Controller<P, S> {
             last_exchange: None,
         };
         match restart {
+            // Q228, point 8 (the briefing's K7 reading): the runtime restarting while the machine did not is its
+            // own failure, and it comes up in FAULT, which stops a crash loop.
+            Restart::Crash => controller.state.state = State::Fault(Some(FaultReason::Internal)),
+            // Q36: a stored program that does not pass its check at power-on is the FAULT 506 `load`, never a
+            // substitute, whatever the state it would come back to.
+            _ if !loads => controller.state.state = State::Fault(Some(FaultReason::Load { download: NO_DOWNLOAD })),
             // Q228, point 2: a controller that never ran comes up in STOP with no reason.
             Restart::First => {}
             // RUN returns as RUN through a warm start; so does a start-up a power cut interrupted, its aim having
@@ -274,9 +294,6 @@ impl<P: TaskProgram, S: Source<Program = P>> Controller<P, S> {
             Restart::PowerCycle { was } => {
                 controller.state.state = State::Stop(Some(StopReason::PowerOn { was }));
             }
-            // Q228, point 8 (the briefing's K7 reading): the runtime restarting while the machine did not is its
-            // own failure, and it comes up in FAULT, which stops a crash loop.
-            Restart::Crash => controller.state.state = State::Fault(Some(FaultReason::Internal)),
         }
         Ok(controller)
     }
@@ -284,6 +301,11 @@ impl<P: TaskProgram, S: Source<Program = P>> Controller<P, S> {
     /// The controller's state as structured data; its text is `state().to_string()`, core's writer.
     pub fn state(&self) -> &ControllerState {
         &self.state
+    }
+
+    /// Why the program could not be made, the last time it was not: at power-on or at a start's load.
+    pub fn load_error(&self) -> Option<&S::Error> {
+        self.load_error.as_ref()
     }
 
     /// The running program, while a task runs.
@@ -378,7 +400,7 @@ impl<P: TaskProgram, S: Source<Program = P>> Controller<P, S> {
                 let _ = io.read_inputs(now);
                 self.last_exchange = Some(now);
                 // Q228, point 1: in STOP every output takes its safe value, as in FAULT.
-                io.write_outputs(clock.now(), &self.idle.safe_outputs());
+                io.write_outputs(clock.now(), &self.idle);
                 self.idle_cycle = self.idle_cycle.saturating_add(1);
             }
         }
@@ -399,12 +421,24 @@ impl<P: TaskProgram, S: Source<Program = P>> Controller<P, S> {
     /// Load, restore, handler, devices, then RUN, the program's clock starting `now`: the load makes the program
     /// afresh from its source. With no retained variable that ORCL can mark yet, a warm start and a cold one both
     /// start the program from its initial values; with no start-up handler and no device, the phases pass at once
-    /// (Q228, points 4 and 5). A program its source made at power-on is made alike now; one that is not leaves the
-    /// controller in FAULT internal.
+    /// (Q228, points 4 and 5). A program that cannot be made fails the load: FAULT 506 `load` (Q36).
     fn finish_startup(&mut self, now: Duration) {
-        self.task = self.source.make().ok().and_then(|program| Task::new(self.config.clone(), program).ok());
         self.origin = now;
-        self.state.state = if self.task.is_some() { State::Run } else { State::Fault(Some(FaultReason::Internal)) };
+        self.task = None;
+        self.state.state = match self.source.make() {
+            Ok(program) => match Task::new(self.config.clone(), program) {
+                Ok(task) => {
+                    self.task = Some(task);
+                    State::Run
+                }
+                // the configuration was checked at power-on, so the engine refusing it is the runtime's failure
+                Err(_) => State::Fault(Some(FaultReason::Internal)),
+            },
+            Err(error) => {
+                self.load_error = Some(error);
+                State::Fault(Some(FaultReason::Load { download: NO_DOWNLOAD }))
+            }
+        };
     }
 
     /// Leaves the program: the task ends and the idle exchange takes over at the next step.

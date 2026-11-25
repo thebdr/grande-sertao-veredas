@@ -51,7 +51,8 @@ MIR's own shape, so the front end lowers one to one and a step is a statement of
   end is the fault 502), an enum variant's fields;
 - **terminators**: go to, a switch on an integer, return, a call (to a function of the file or to an operation of
   the list), an assertion (failing it is the fault 502, with MIR's message: overflow, division by zero, an index
-  out of bounds), unreachable (the fault 502). A drop of a type without drop glue is nothing, and one with drop
+  out of bounds), unreachable (the runtime's failure 507, not the program's: safe Rust reaches it only through a
+  fault of the front end or the machine, as it does a value read before anything wrote it). A drop of a type without drop glue is nothing, and one with drop
   glue is refused at lowering: no ORCL type has any (O6).
 
 An **instruction boundary** is between two statements, or a statement and a terminator: where a breakpoint stops,
@@ -78,7 +79,9 @@ target's settings (`veredas-alvo`), not built yet.
   where it stopped.
 - **A program error** (a failed assertion, an index out of bounds, unreachable code, a core operation's precondition
   broken) ends the entry's run with a typed error that names the instruction's source location; the machine is
-  left as it was at that instruction, for the fault record. Never a panic (O11).
+  left as it was at that instruction, for the fault record. Never a panic (O11). To the controller (C-152) a failed
+  check and an index past the end are the program's fault 502; unreachable code, a value read before anything
+  wrote it and an inconsistency the load should have refused are the runtime's 507.
 - **The engine of a scan** runs an interpreted program as it runs a native one. A native `Program::scan` cannot
   fail, so `orcl-runtime` runs a `TaskProgram`, whose scan may end in an error of its own, which the task turns
   into its fault (`Fault::Program`, dated at the scan's start, its outputs never written, the safe outputs from

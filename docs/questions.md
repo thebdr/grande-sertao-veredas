@@ -3237,7 +3237,9 @@ constant.
 
 **Taken meanwhile**: (a), without the file's part: `orcl_runtime::Interpreted` is handed the first
 state as slots and the safe outputs as a value when it is made (DECISION PENDING in
-`crates/orcl-runtime/src/interpreted.rs`). The engine's `TaskProgram::safe_outputs` takes `&mut self`,
+`crates/orcl-runtime/src/interpreted.rs`), and the controller's `Loaded` (C-152) takes both from its
+host, the program made afresh from them at every start (DECISION PENDING in
+`crates/veredas-controlador/src/controller.rs`). The engine's `TaskProgram::safe_outputs` takes `&mut self`,
 so (b) needs no change to the engine.
 
 Both (a) and (b) need a program file of a format past 1, which holds neither the values nor a table
@@ -3274,6 +3276,35 @@ is what makes a stuck interpreted scan recoverable without killing the thread.
 **Taken meanwhile**: (a). `orcl_runtime::Interpreted` calls its entry to its return (C-155 says so).
 
 **Reversible?** Yes: a budget is a field of the adapter, read by one loop.
+
+---
+
+## Q233 - The download a FAULT 506 `load` names before there are downloads
+
+**Raised** 2026-11-25, by the controlador session, making the controller's program at power-on and at
+every start (C-152).
+
+Q36 rules that a stored program failing its check before a load (a swap, a restart, a power-on) is
+the FAULT 506 `load(download)`, never a substitute, and the plan keeps the last 10 downloads, each
+with its identity, the SHA-256 of its manifest. Downloads are not built yet: the controller's program
+is handed in by its host (Q231), and one that cannot be made (the machine refuses it, a first state of
+another type) now leaves the controller in FAULT 506 too. Core's `FaultReason::Load` carries the
+download as a `u32`, so it needs a number when there is no download to name.
+- (a) 0, read as "no download": the state reads `FAULT load(id=506, download=0)`; the first download
+  is 1.
+- (b) The number of the download the program came from, which a program handed in by its host does
+  not have until downloads land: until then the controller comes up in STOP 104 `no_program`
+  instead, which the plan has for a controller with no program.
+- (c) A reason of its own for a program handed in that cannot be made, which core's list would gain.
+
+The assistant recommends (a): 506 is the fault the ruling names for a program that does not load, and
+the download's number joins it when downloads land; whether `download` is a counter or the identity's
+short form is the download's own question then.
+
+**Taken meanwhile**: (a). `NO_DOWNLOAD` in `crates/veredas-controlador/src/controller.rs` (DECISION
+PENDING); the adapter's reason is kept for the host (`Controller::load_error`).
+
+**Reversible?** Yes: one constant and the text the state carries.
 
 ---
 

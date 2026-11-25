@@ -515,4 +515,5 @@ Where each item stands on 2026-11-25:
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan gives way to the
   prior art's LET. **Q230** a program whose functions call themselves. **Q231** where an
   interpreted program's first state and safe outputs come from. **Q232** an instruction budget per
-  scan for an interpreted program.
+  scan for an interpreted program. **Q233** the download a FAULT 506 `load` names before there are
+  downloads.
