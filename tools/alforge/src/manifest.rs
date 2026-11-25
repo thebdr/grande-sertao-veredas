@@ -553,9 +553,15 @@ pub fn check_together(root: &Path, all: &[(PathBuf, Manifest)]) -> Result<Vec<St
                 // A first pin whose inputs do not read gives way to the next that does, so it
                 // hides no conflict between later ones.
                 Some((other, Err(why))) => {
-                    refusals.push(format!("{} {} is pinned by releases {other} and {}, and its build inputs at {other}'s commit do not read: {why}", x.name, x.version, m.release));
-                    if h.inputs.is_ok() {
-                        first.insert(key, (m.release.to_string(), h.inputs.clone()));
+                    let said = format!("{} {} is pinned by releases {other} and {}, and its build inputs at {other}'s commit do not read: {why}", x.name, x.version, m.release);
+                    let own = h.inputs.as_ref().err().map(|own| format!("{} {} is pinned by releases {other} and {}, and its build inputs at {}'s commit do not read: {own}", x.name, x.version, m.release, m.release));
+                    refusals.push(said);
+                    // This one's own reason said too: no unread pin hides another's.
+                    match own {
+                        Some(own) => refusals.push(own),
+                        None => {
+                            first.insert(key, (m.release.to_string(), h.inputs.clone()));
+                        }
                     }
                 }
                 None => {

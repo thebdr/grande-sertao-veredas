@@ -1672,3 +1672,86 @@ fn round_nineteen_an_absolute_path_is_refused_and_a_data_file_names_nothing() {
     let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
     assert!(!held["veredas-portal"].inputs.as_ref().unwrap().0.contains_key("named-by-data.txt"));
 }
+
+#[test]
+fn round_twenty_a_pre_release_git_dependency_is_charged_and_every_unread_pin_says_why() {
+    // A git dependency stated without a version: cargo reads its requirement as any version, a
+    // pre-release included (a main branch's `0.2.0-dev`), and its lock entry charges the component
+    // when `cargo update` moves its commit.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+    let src = "git+https://example.invalid/gitdep";
+    let lock = |commit: &str| {
+        format!(
+            "version = 4\n\n[[package]]\nname = \"gitdep\"\nversion = \"0.2.0-dev\"\nsource = \"{src}#{commit}\"\n\n[[package]]\nname = \"veredas-git\"\nversion = \"2.0.0\"\ndependencies = [\n \"gitdep\",\n]\n"
+        )
+    };
+    r.write("crates/veredas-git/Cargo.toml", "[package]\nname = \"veredas-git\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\ngitdep = { git = \"https://example.invalid/gitdep\" }\n");
+    r.write("crates/veredas-git/src/lib.rs", "\n");
+    let (old, new) = ("3".repeat(40), "5".repeat(40));
+    r.write("Cargo.lock", &lock(&old));
+    let c1 = r.commit("a pre-release git dependency");
+    let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
+    let keys: Vec<String> = held["veredas-git"].inputs.as_ref().unwrap().0.keys().filter(|k| k.starts_with("Cargo.lock")).cloned().collect();
+    assert_eq!(keys, [format!("Cargo.lock: gitdep 0.2.0-dev ({src}#{old})")]);
+    r.write("Cargo.lock", &lock(&new));
+    let c2 = r.commit("cargo update -p gitdep");
+    let pin = |release: &str, commit: &str| -> (PathBuf, Manifest) {
+        let text = format!(
+            "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
+             [[component]]\nname = \"veredas-git\"\nversion = \"2.0.0\"\n\n[tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+        );
+        (PathBuf::from(format!("{release}.toml")), manifest::load(&text).unwrap())
+    };
+    assert_eq!(
+        manifest::check_together(r.path(), &[pin("2.0.0", &c1), pin("2.0.1", &c2)]).unwrap(),
+        [format!(
+            "veredas-git 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (Cargo.lock: gitdep 0.2.0-dev ({src}#{old}), Cargo.lock: gitdep 0.2.0-dev ({src}#{new})): a version names everything its build reads"
+        )]
+    );
+    // Two unreadable pins in a row, then one that reads: each unread one's own reason said.
+    r.write("Cargo.lock", &lock(&old).replace("name = \"veredas-git\"\nversion = \"2.0.0\"", "name = \"veredas-git\"\nversion = \"1.9.0\""));
+    let stale = r.commit("a stale lock");
+    r.git(&["rm", "-q", "Cargo.lock"]);
+    let none = r.commit("no lock");
+    let got = manifest::check_together(r.path(), &[pin("2.0.0", &stale), pin("2.0.1", &none), pin("2.0.2", &c1)]).unwrap();
+    let stale_why = "its Cargo.lock does not pin veredas-git 2.0.0: the lock file is not this workspace's";
+    assert_eq!(
+        got,
+        [
+            format!("veredas-git 2.0.0 is pinned by releases 2.0.0 and 2.0.1, and its build inputs at 2.0.0's commit do not read: {stale_why}"),
+            "veredas-git 2.0.0 is pinned by releases 2.0.0 and 2.0.1, and its build inputs at 2.0.1's commit do not read: veredas-git depends on `gitdep` and the commit holds no Cargo.lock to pin it".to_string(),
+            format!("veredas-git 2.0.0 is pinned by releases 2.0.0 and 2.0.2, and its build inputs at 2.0.0's commit do not read: {stale_why}"),
+        ]
+    );
+    // A `[patch]` of the git source to a fork in the tree at a pre-release, the fork no member a
+    // release builds from its folder: refused, as for a fork of a registry crate.
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"forks\"]\n\n[patch.\"https://example.invalid/gitdep\"]\ngitdep = { path = \"forks/gitdep\" }\n");
+    r.write("forks/gitdep/Cargo.toml", "[workspace]\n\n[package]\nname = \"gitdep\"\nversion = \"0.2.0-dev\"\nedition = \"2024\"\n");
+    r.write("forks/gitdep/src/lib.rs", "\n");
+    r.write("Cargo.lock", "version = 4\n\n[[package]]\nname = \"gitdep\"\nversion = \"0.2.0-dev\"\n\n[[package]]\nname = \"veredas-git\"\nversion = \"2.0.0\"\ndependencies = [\n \"gitdep\",\n]\n");
+    let patched = r.commit("the git source patched to a fork");
+    let held = manifest::components_at(r.path(), &patched, &mut Vec::new()).unwrap();
+    assert_eq!(held["veredas-git"].inputs, Err("its Cargo.lock's gitdep 0.2.0-dev has no source and is no member a release builds from its folder".to_string()));
+}
+
+#[test]
+fn round_twenty_a_shebang_and_raw_identifiers_as_rustc_reads_them() {
+    use alforge::inputs::{is_shebang, literals, named};
+    // An inner attribute on the first line is no shebang, whatever whitespace or plain comments
+    // stand between `#!` and its `[`, across lines.
+    assert_eq!(literals("#![doc = include_str!(\"../README.md\")]\n"), ["../README.md"]);
+    assert_eq!(literals("#!/* a comment */[doc = include_str!(\"c.md\")]\n"), ["c.md"]);
+    assert_eq!(literals("#! // a comment\n\n[doc = include_str!(\"d.md\")]\n"), ["d.md"]);
+    assert!(!is_shebang("#!/* a /* nested */ one */ [x]"));
+    // A doc comment is a token of its own: the line is a shebang. `/**/` and `////` are plain.
+    assert!(is_shebang("#!/// a doc\n[x]") && is_shebang("#!//! a doc\n[x]") && is_shebang("#!/** a doc */[x]") && is_shebang("#!/*! a doc */[x]"));
+    assert!(!is_shebang("#!/**/[x]") && !is_shebang("#!//// plain\n[x]") && !is_shebang("#!/*** plain */[x]"));
+    assert!(is_shebang("#!/usr/bin/env run") && is_shebang("#!") && !is_shebang("fn main() {}"));
+    // A byte-order mark goes first, then the shebang: what the shebang's line opens (`/*`) hides
+    // nothing after it.
+    assert_eq!(literals("\u{feff}#!/usr/bin/env run /*\ninclude!(\"h.rs\");\n// */\n"), ["h.rs"]);
+    // Raw identifiers: `r#include!` read as Rust in turn, `r#cfg_attr` read for its `path`.
+    assert_eq!(named("r#include!(\"sub/inc.rs\");\n"), [("sub/inc.rs".to_string(), true)]);
+    assert_eq!(literals("#[r#cfg_attr(all(), path = \"sub/m.rs\")]\nmod m;\n"), ["sub/m.rs"]);
+}

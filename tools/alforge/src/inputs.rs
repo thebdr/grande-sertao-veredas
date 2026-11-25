@@ -199,8 +199,10 @@ impl Workspace<'_> {
             for d in &own.dependencies {
                 let at = resolve(lock, d)?;
                 let l = &lock[at];
+                // `*` is cargo's "any version" for a git or path dependency stated without one,
+                // which a pre-release meets too (SemVer's `*` would refuse it).
                 let meets = |req: &Option<semver::VersionReq>| match (req, semver::Version::parse(&l.version)) {
-                    (Some(r), Ok(v)) => r.matches(&v),
+                    (Some(r), Ok(v)) => r.comparators.is_empty() || r.matches(&v),
                     _ => true,
                 };
                 if wanted_by.iter().any(|(n, req)| *n == l.name && meets(req)) {
@@ -364,8 +366,11 @@ pub fn literals(text: &str) -> Vec<String> {
 /// A text that does not lex as Rust is read for the same forms as text instead.
 pub fn named(text: &str) -> Vec<(String, bool)> {
     let mut lf = text.replace("\r\n", "\n");
-    // rustc drops a first line that is a shebang (`#!` not followed by `[`), as here.
-    if lf.starts_with("#!") && !lf[2..].trim_start().starts_with('[') {
+    // rustc drops a byte-order mark, then a first line that is a shebang, as here.
+    if let Some(rest) = lf.strip_prefix('\u{feff}') {
+        lf = rest.to_string();
+    }
+    if is_shebang(&lf) {
         lf = lf.find('\n').map(|i| lf[i..].to_string()).unwrap_or_default();
     }
     match lf.parse::<proc_macro2::TokenStream>() {
@@ -389,6 +394,48 @@ pub fn named(text: &str) -> Vec<(String, bool)> {
                 }
             }
             out
+        }
+    }
+}
+
+/// Whether a source's first line is a shebang as rustc reads it (`rustc_lexer::strip_shebang`): it
+/// opens with `#!` and the next token, past whitespace and comments that are not doc comments
+/// (across lines), is not `[`, which would open an inner attribute.
+pub fn is_shebang(text: &str) -> bool {
+    let Some(tail) = text.strip_prefix("#!") else { return false };
+    let mut rest = tail;
+    loop {
+        // Rust's whitespace (`Pattern_White_Space`).
+        rest = rest.trim_start_matches(['\t', '\n', '\u{b}', '\u{c}', '\r', ' ', '\u{85}', '\u{200e}', '\u{200f}', '\u{2028}', '\u{2029}']);
+        if let Some(after) = rest.strip_prefix("//") {
+            // `///` (not `////`) and `//!` are doc comments, tokens of their own.
+            if (after.starts_with('/') && !after.starts_with("//")) || after.starts_with('!') {
+                return true;
+            }
+            rest = after.find('\n').map(|i| &after[i..]).unwrap_or("");
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            // `/**` (not `/**/` or `/***`) and `/*!` are doc comments.
+            if (after.starts_with('*') && !after.starts_with("*/") && !after.starts_with("**")) || after.starts_with('!') {
+                return true;
+            }
+            // Nested, to its end (an unterminated one runs to the end of the text).
+            let mut depth = 1;
+            let mut i = 0;
+            let b = after.as_bytes();
+            while i < b.len() && depth > 0 {
+                if b[i..].starts_with(b"/*") {
+                    depth += 1;
+                    i += 2;
+                } else if b[i..].starts_with(b"*/") {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            rest = &after[i..];
+        } else {
+            return !rest.starts_with('[');
         }
     }
 }
