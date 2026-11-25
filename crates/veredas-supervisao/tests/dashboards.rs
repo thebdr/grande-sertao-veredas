@@ -943,11 +943,13 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
 /// element carrying one (its parts' state classes swapped with it, so it stands in one state whole),
 /// every one of them read as the page drew it in its own state, and a probe per state put beside the
 /// one of them with the most parts (a badge, a dot), read by what paints it and every part inside
-/// it (every property of the browser's computed style whose value holds a colour, each where it
-/// paints: an SVG shape's fill and stroke; a box's background, shadows, each side of its border and
-/// its outline; a text's colour, its glyphs' fill and stroke, its decoration and its shadow; a
-/// filter's colours; a property holding a colour that no rule reads refused by name: a tile's
-/// badge, figure, sub-line and sparkline, a cell's text); every state painted
+/// it (every property of the browser's computed style whose value holds a colour by the browser's own
+/// colour syntax, each where it paints: an SVG shape's fill and stroke; a box's background, shadows,
+/// each side of its border and its outline; a text's colour, its glyphs' fill and stroke, its
+/// decoration and its shadow, its first letter and first line read alike; a filter's colours; a
+/// property holding a colour that no rule reads refused by name; each colour resolved, none of no
+/// alpha, nor a shadow of no length: a tile's badge, figure, sub-line and sparkline, a cell's
+/// text); every state painted
 /// otherwise than every other, and none in the accent's four colours (by red, green and blue) or any
 /// colour of its band of hue (220° to 290°, saturation above 0.2), but the neutral series the
 /// accent draws (Q22): a sparkline's normal and a table's inline bar.
@@ -996,24 +998,76 @@ const STATE_PAINT: &str = r##"((STATES) => {
     "scrollbar-color": box,
   };
   const INERT = new Set(["stop-color", "flood-color", "lighting-color", "-webkit-tap-highlight-color", "border-block-start-color", "border-block-end-color", "border-inline-start-color", "border-inline-end-color"]);
-  const HOLDS = /rgba?\(|hsla?\(|#[0-9a-f]{3,8}\b/i;
-  const unread = new Set();
-  const paint = (e) => {
-    const c = getComputedStyle(e);
-    const got = [];
-    for (const q of c) {
-      const v = c.getPropertyValue(q);
-      if (q.startsWith("--") || !HOLDS.test(v) || INERT.has(q)) continue;
-      if (!(q in PAINTS)) unread.add(q);
-      else if (PAINTS[q](e, c)) got.push([q, v]);
-    }
-    return got;
-  };
-  const parts = (el) => [el, ...el.querySelectorAll("*")];
-  const sig = (el) => parts(el).map((e) => paint(e).map(([, v]) => v).join(" | ")).join(" // ");
   const root = getComputedStyle(document.documentElement);
   const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
   const rgb = (c) => { ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = c; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data]; };
+  // The colours a value holds, by the browser's own colour syntax: every function in it the browser
+  // takes for a colour (`CSS.supports`: rgb, hsl, hwb, lab, lch, oklab, oklch, `color()`,
+  // `color-mix()` and whatever else it parses as one), a function that is none (a gradient, a
+  // filter's drop shadow) read for the colours inside it, and every hex. (A computed value names no
+  // colour by a word: the browser writes each as a function.)
+  const isColour = new Map();
+  const colours = (v) => {
+    const out = [];
+    for (let i = 0; i < v.length; ) {
+      const f = /^[a-z-]+\(/i.exec(v.slice(i, i + 40));
+      if (f) {
+        let depth = 0, j = i;
+        for (; j < v.length; j++) { if (v[j] === "(") depth++; else if (v[j] === ")" && --depth === 0) break; }
+        const fn = v.slice(i, j + 1);
+        if (!isColour.has(fn)) isColour.set(fn, CSS.supports("color", fn));
+        if (isColour.get(fn)) out.push(fn);
+        else out.push(...colours(v.slice(i + f[0].length, j)));
+        i = j + 1;
+        continue;
+      }
+      const h = /^#[0-9a-f]{3,8}\b/i.exec(v.slice(i, i + 10));
+      if (h) { out.push(h[0]); i += h[0].length; continue; }
+      i++;
+    }
+    return out;
+  };
+  // What a counted value paints, its colours resolved (so one colour written two ways is one
+  // paint): none where every colour it holds is of no alpha, nor a shadow of no length (no offset,
+  // blur or spread) or of no alpha, each shadow of a list read alone.
+  const SHADOWS = new Set(["box-shadow", "text-shadow"]);
+  const resolved = (v) => colours(v).reduce((s, tok) => { const [r, g, b, a] = rgb(tok); return s.split(tok).join(`rgba(${r}, ${g}, ${b}, ${+(a / 255).toFixed(3)})`); }, v);
+  const painting = (q, v) => {
+    const cols = colours(v);
+    if (cols.length && cols.every((tok) => rgb(tok)[3] === 0)) return null;
+    if (!SHADOWS.has(q)) return resolved(v);
+    const kept = [];
+    let depth = 0, from = 0;
+    for (let i = 0; i <= v.length; i++) {
+      if (v[i] === "(") depth++;
+      else if (v[i] === ")") depth--;
+      if (i === v.length || (v[i] === "," && depth === 0)) {
+        const one = v.slice(from, i).trim();
+        from = i + 1;
+        const lengths = (one.replace(/\([^)]*\)/g, "").match(/-?[\d.]+px/g) || []).map(parseFloat);
+        if (colours(one).some((tok) => rgb(tok)[3] > 0) && lengths.some((l) => l !== 0)) kept.push(resolved(one));
+      }
+    }
+    return kept.length ? kept.join(", ") : null;
+  };
+  const unread = new Set();
+  // A part read with its first letter and its first line, where it holds a text of its own (each
+  // painted by the same rules as the part).
+  const paint = (e, pseudo = null) => {
+    const c = getComputedStyle(e, pseudo);
+    const got = [];
+    for (const q of c) {
+      if (q.startsWith("--") || INERT.has(q)) continue;
+      const v = c.getPropertyValue(q);
+      if (!colours(v).length) continue;
+      if (!(q in PAINTS)) unread.add(q);
+      else if (PAINTS[q](e, c)) { const p = painting(q, v); if (p !== null) got.push([pseudo ? `${pseudo} ${q}` : q, p]); }
+    }
+    return got;
+  };
+  const read = (e) => [...paint(e), ...(html(e) && ownText(e) ? [...paint(e, "::first-letter"), ...paint(e, "::first-line")] : [])];
+  const parts = (el) => [el, ...el.querySelectorAll("*")];
+  const sig = (el) => parts(el).map((e) => read(e).map(([q, v]) => `${q} ${v}`).join(" | ")).join(" // ");
   const familyRgb = ["--accent", "--accent-tint", "--accent-soft", "--accent-outline"].map((v) => rgb(root.getPropertyValue(v).trim()).slice(0, 3).join(","));
   const ofAccent = (tok) => {
     const p = rgb(tok);
@@ -1025,7 +1079,6 @@ const STATE_PAINT: &str = r##"((STATES) => {
     const hue = (h + 360) % 360;
     return hue >= 220 && hue <= 290 && s > 0.2;
   };
-  const TOKENS = /(rgba?\([^)]*\)|hsla?\([^)]*\)|#[0-9a-f]{3,8}\b)/gi;
   // A place: an object's outermost element whose class names a state (a tile, a grid cell, a
   // timeline's run, a level's fill and its figure, a table's cell), its parts inside it swapped with
   // it, every state class they carry, so the object stands in one state whole.
@@ -1048,7 +1101,7 @@ const STATE_PAINT: &str = r##"((STATES) => {
     for (const e of parts(p)) {
       if (s === "normal" && e.closest(".st-line-normal") && p.contains(e.closest(".st-line-normal"))) continue;
       if (e.matches(".inbar-fill")) continue;
-      for (const [q, v] of paint(e)) for (const tok of v.match(TOKENS) || []) if (ofAccent(tok)) out.push(`${where} in ${s}: its ${e.tagName.toLowerCase()}.${e.getAttribute("class") ?? ""}'s ${q} ${tok}, of the accent`);
+      for (const [q, v] of read(e)) for (const tok of colours(v)) if (ofAccent(tok)) out.push(`${where} in ${s}: its ${e.tagName.toLowerCase()}.${e.getAttribute("class") ?? ""}'s ${q} ${tok}, of the accent`);
     }
   };
   const ownState = (el) => (el.getAttribute("class") || "").split(/\s+/).map((c) => c.match(STATE)?.[2]).find((s) => s) ?? null;
