@@ -1,13 +1,13 @@
 {
   "clause": "C-251",
-  "verdict": "refuted",
-  "ranAt": "2026-11-25T01:39:17.967Z",
-  "headCommit": "b6b6c6459ee9b3f657886a39edfa2993e41350df",
+  "verdict": "holds",
+  "ranAt": "2026-11-25T01:51:05.677Z",
+  "headCommit": "5ed5aa11c4e5dfee41b18f9f6342331e2cab2853",
   "tests": [
     {
       "name": "crates/veredas-oficina/tests/tree.rs",
       "file": "crates/veredas-oficina/tests/tree.rs",
-      "symbolSha": "7afdbff6006198dafdf64712695a488325da728dc35d8297f0883fc45cf23db8"
+      "symbolSha": "47b600866d416a43ac046702e7e1e25f189785e4f16e6ca149f6b384a050a2b7"
     }
   ]
 }
