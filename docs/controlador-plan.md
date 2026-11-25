@@ -409,7 +409,8 @@ Where each item stands on 2026-11-25:
   far.
 - **A study of the interpreter's front end** and of the list of core-library operations ORCL allows:
   `docs/orcl/front-end.md`, its choices ruled (Q221, Q222, Q227). The front end's plan is a section
-  of `docs/orcl/README.md`, which law L6 reads for every `orcl-*` crate.
+  of `docs/orcl/README.md`, which law L6 reads for every `orcl-*` crate; the interpreter's design is
+  `docs/orcl/interpreter.md` (Q230 open).
 - **The study of Linux for real time and of its recovery methods** (`docs/robustness.md`, "The Linux
   study"): `docs/controlador/linux-study.md`, its choices ruled ("On the target" above).
 - **PROFINET International membership**: the architect's.
@@ -438,6 +439,6 @@ Where each item stands on 2026-11-25:
   every request that alters the controller made robust, **Q38** what must survive, **Q41** wear and
   filling; `docs/questions.md` holds each answer, and **Q35** the licence every crate here states.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan gives way to the
-  prior art's LET.
+  prior art's LET. **Q230** a program whose functions call themselves.
 - Ruled and waiting on another member: Q225's `clippy.toml`, once law L7 and its clause (C-046,
   portal's) treat it as a tool's file.

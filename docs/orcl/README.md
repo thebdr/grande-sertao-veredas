@@ -40,7 +40,7 @@ suite's plan, "Naming"), so its crates keep the names `orcl-*`, live under `crat
 |---|---|---|---|
 | `orcl-std` | The standard control library, `no_std`: the scan model (`Scan`, `Program`), IEC-style timers (`Ton`, `Tof`, `Tp`), edges (`RTrig`, `FTrig`), a counter (`Ctu`), bit access (`Bits`) | nothing | carried from Veredas 1 |
 | `orcl-runtime` | The engine of a scan: a task's cycle over a process image, on a clock it is handed (virtual or real), the time-error rule, safe outputs, cycle statistics; no operating-system code, `no_std` with std named where it is used (the target's clock and its sleep) | `orcl-std` | carried from Veredas 1, reworked |
-| `orcl-interp` | The interpreter and its program format: bytecode made from the compiler's intermediate form, run one instruction at a time, suspendable at every instruction boundary | `orcl-std` | planned, after the front end's study |
+| `orcl-interp` | The interpreter and its program format: bytecode made from the compiler's intermediate form, run one instruction at a time, suspendable at every instruction boundary | `orcl-std` | planned: its design is `interpreter.md` |
 | `orcl-front` | The front end: reads an ORCL crate through `rustc_public` on the pinned nightly and writes the program `orcl-interp` runs | `orcl-interp` | planned: a member on stable, its driver behind a feature on the pinned nightly (Q221, Q222) |
 
 A crate's row in law L5's map (`MAP` in `tools/leis`: `orcl-*` use each other and core) is settled when the crate
@@ -95,7 +95,8 @@ How the intermediate form is reached, what it holds, and the list of core-librar
 study `front-end.md`. Ruled on 2026-11-25: a call from a program's crates into core is an operation of a closed
 list, each implemented natively and proven against the native call by the conformance suite, and a call outside the
 list is refused by name and place when the program is lowered; core's own intermediate form is never interpreted
-(Q227).
+(Q227). How the program file, the instructions, memory and running meet these requirements is `interpreter.md`;
+what it leaves open is Q230.
 
 ### The front end
 `crates/orcl-front` (Q221, 2026-11-25): a workspace member that builds on stable as an empty shell, so
@@ -168,9 +169,11 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
 - **The study of the interpreter's front end and of the core-library operations ORCL allows** (`front-end.md`).
 - **Controlador's execution model**, ruled on 2026-11-25 (`docs/controlador/execution-model.md`, Q223 with Q33).
 - **The front end's section above**, before `crates/orcl-front` (law L6 reads this file for it).
+- **The interpreter's design** (`interpreter.md`), before `crates/orcl-interp`.
 
 ## Open
 - **Q44** the type table, and a second front end for the translators.
+- **Q230** a program whose functions call themselves: refused when the interpreter loads it, taken meanwhile.
 - **Q45** the reading that the conformance suite is only as good as the list of core operations ORCL allows.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan should give way to the prior art's
   LET, at the end of its logical period (`language/README.md`, "Not settled yet").

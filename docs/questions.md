@@ -2961,6 +2961,37 @@ carried `Tp` changes; the other two timers stay.
 
 ---
 
+## Q230 - A program whose functions call themselves
+
+**Raised** 2026-11-25, by the controlador session, designing the interpreter
+(`docs/orcl/interpreter.md`).
+
+The interpreter lays a program's memory out when it loads it, so that nothing is allocated during a
+scan (`docs/orcl/README.md`, "The interpreter"): it walks the calls from the program's entries and
+sizes its stack by the deepest path. A function that reaches itself, directly or through others, has
+no deepest path. Rust compiles such a program, the ruling of 2026-11-16 ("no further checks
+necessary") leaves the program unchecked, and ORCL's rules say nothing of recursion yet. Whether
+every translator's target can represent it is not studied.
+
+Options:
+- (a) The interpreter refuses such a program when it loads it, naming the cycle of calls, as it
+  refuses a call into core outside its list: what it cannot lay out. The language's own principle,
+  "start strict, since loosening a rule breaks no program and tightening one can"
+  (`docs/orcl/language/ownership.md`, OQ2), speaks for it.
+- (b) It runs on a stack of a size the target's settings give, laid out at load, and a call past it
+  is the fault 502 `program(at)`: every program Rust compiles runs, and a deep one faults in
+  production.
+- (c) The language forbids recursion as a rule of its own, which the translators can rely on, and the
+  interpreter refuses as in (a).
+
+The assistant recommends (a) now, and (c) when the language's rules are next reviewed.
+
+**Taken meanwhile**: (a). No program file exists yet.
+
+**Reversible?** Yes: loosening to (b) breaks no program.
+
+---
+
 ## Q47 - How much debug information do development builds carry?
 
 **Raised** 2026-11-23, by the orchestrating session, on the home disk's use with ten sessions.
