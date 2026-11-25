@@ -14,6 +14,80 @@ fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
 }
 
+/// Whether a script's line opens a quoted heredoc (`... <<'END'`), and its end word.
+fn heredoc_end(line: &str) -> Option<&str> {
+    let at = line.find("<<'")?;
+    Some(line[at + 3..].trim_end_matches('\''))
+}
+
+/// A shell script's lines outside its heredocs, and each heredoc's opening line with its body, as
+/// the shell reads them (a body runs to the first line that is its end word alone).
+fn split_script(s: &str) -> (Vec<&str>, Vec<(&str, String)>) {
+    let (mut outer, mut docs) = (Vec::new(), Vec::new());
+    let mut lines = s.lines();
+    while let Some(l) = lines.next() {
+        match heredoc_end(l) {
+            Some(end) => {
+                let mut body = String::new();
+                for b in lines.by_ref() {
+                    if b == end {
+                        break;
+                    }
+                    body.push_str(b);
+                    body.push('\n');
+                }
+                docs.push((l, body));
+            }
+            None => outer.push(l),
+        }
+    }
+    (outer, docs)
+}
+
+/// A script's lines naming `word`, in order: a heredoc whose opening line names it whole, with its
+/// body and end.
+fn naming(s: &str, word: &str) -> String {
+    let mut out = String::new();
+    let mut lines = s.lines();
+    while let Some(l) = lines.next() {
+        let keep = l.contains(word);
+        if keep {
+            out.push_str(l);
+            out.push('\n');
+        }
+        if let Some(end) = heredoc_end(l) {
+            for b in lines.by_ref() {
+                if keep {
+                    out.push_str(b);
+                    out.push('\n');
+                }
+                if b == end {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A systemd unit as systemd reads it: each assignment with its section, in order, comments and
+/// blank lines left out; a line that is neither a section nor an assignment kept as key `?`.
+fn unit_entries(unit: &str) -> Vec<(String, String, String)> {
+    let mut section = String::new();
+    let mut out = Vec::new();
+    for l in unit.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#') && !l.starts_with(';')) {
+        if l.starts_with('[') {
+            section = l.to_string();
+        } else {
+            match l.split_once('=') {
+                Some((k, v)) => out.push((section.clone(), k.to_string(), v.to_string())),
+                None => out.push((section.clone(), "?".to_string(), l.to_string())),
+            }
+        }
+    }
+    out
+}
+
 /// A PPM of `w` by `h` pixels: its left `page` columns in `canvas`, the rest a gradient of other
 /// colours, as a desktop's wallpaper.
 fn ppm(w: usize, h: usize, page: usize, canvas: (u8, u8, u8)) -> Vec<u8> {
@@ -135,6 +209,13 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     // The boot's check said after a login started on the serial console: named.
     let late = format!("vmw_pvscsi\nvmxnet3\nveredas login: \nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
     assert_eq!(maquina::proof_faults(&proof(&late, 0.3, "a"), "2.0.0"), ["the boot's check said its lines after a login started on the serial console"]);
+    // A login between two of its lines, the check's first said before it and the rest after: named
+    // too. A login after its last line: none.
+    let between = good.replace(&format!("{card}\n"), &format!("veredas login: \n{card}\n"));
+    assert_eq!(maquina::proof_faults(&proof(&between, 0.3, "a"), "2.0.0"), ["the boot's check said its lines after a login started on the serial console"]);
+    let last = good.replace("VEREDAS-ATUALIZAR ok\n", "veredas login: \nVEREDAS-ATUALIZAR ok\n");
+    assert_eq!(maquina::proof_faults(&proof(&last, 0.3, "a"), "2.0.0"), ["the boot's check said its lines after a login started on the serial console"]);
+    assert_eq!(maquina::proof_faults(&proof(&format!("{good}veredas login: \n"), 0.3, "a"), "2.0.0"), Vec::<String>::new());
     // The plant's own faults are the proof's: `alforge prova` fails on a page not served (and
     // whatever else the plant's check names).
     let mut dead = proof(&good, 0.3, "a");
@@ -262,36 +343,116 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
         assert!(unit.lines().any(|l| l == format!("User={}", r.machine.user)), "{unit}");
     }
     assert!(s.contains(&format!("[ \"$(systemctl show -p User --value \"$s.service\")\" = \"{}\" ]", r.machine.user)));
-    // Each key in its own section, as systemd reads it (elsewhere it ignores it).
-    let in_section = |unit: &str, section: &str, line: &str| -> bool {
-        let mut current = "";
-        unit.lines().any(|l| {
-            if l.starts_with('[') {
-                current = l;
-            }
-            current == section && l == line
-        })
-    };
-    let unit = &s[s.find("cat > /etc/systemd/system/veredas-verifica.service").unwrap()..];
-    let unit = &unit[..unit.find("\nUNIT\n").unwrap()];
-    assert!(in_section(unit, "[Unit]", "Before=serial-getty@ttyS0.service getty@tty1.service"), "{unit}");
-    // A oneshot service: `Before=` waits for it to finish, not only to start.
-    assert!(in_section(unit, "[Service]", "Type=oneshot"), "{unit}");
-    assert!(in_section(unit, "[Service]", "StandardOutput=journal+console"), "{unit}");
-    for service in ["veredas-bancada", "veredas-supervisao"] {
-        let u = &s[s.find(&format!("cat > /etc/systemd/system/{service}.service")).unwrap()..];
-        let u = &u[..u.find("\nUNIT\n").unwrap()];
-        for line in ["Restart=always", "RestartSec=3", &format!("User={}", r.machine.user)] {
-            assert!(in_section(u, "[Service]", line), "{service}: {line}");
-        }
-    }
     // The script stops at its first failing step and says OK last.
     assert_eq!(s.lines().next(), Some("set -eu"));
     assert_eq!(s.lines().rfind(|l| !l.trim().is_empty()), Some("echo ALFORGE-PROVISION-OK"));
-    // The guide at the commit copied, then the update's section appended to it.
-    let line = |want: &str| s.lines().position(|l| l == want).unwrap_or_else(|| panic!("no line {want}"));
-    assert!(line("cp /alforge/guide.md /home/veredas/README-veredas.md") < line("cat >> /home/veredas/README-veredas.md <<'GUIDE'"), "the guide copied whole, then its section appended");
-    assert!(unit.lines().any(|l| l == "StandardOutput=journal+console"), "{unit}");
+    // The files the script writes by heredoc, these and no others, and nothing else under systemd's
+    // folders: no drop-in beside a unit.
+    let (outer, docs) = split_script(&s);
+    let opened: Vec<&str> = docs.iter().map(|(l, _)| *l).collect();
+    assert_eq!(
+        opened,
+        [
+            "cat > /usr/local/sbin/veredas-atualizar <<'ATUALIZAR'",
+            "cat >> /home/veredas/README-veredas.md <<'GUIDE'",
+            "cat > /etc/systemd/system/veredas-bancada.service <<'UNIT'",
+            "cat > /etc/systemd/system/veredas-supervisao.service <<'UNIT'",
+            "cat > /usr/local/libexec/veredas-verifica <<'SCRIPT'",
+            "cat > /etc/systemd/system/veredas-verifica.service <<'UNIT'",
+            "cat > $H/.config/autostart/veredas-supervisao.desktop <<'DESK'",
+        ]
+    );
+    assert!(!outer.iter().any(|l| l.contains("/etc/systemd/") || l.contains(".service.d")), "{outer:?}");
+    let body = |opening: &str| docs.iter().find(|(l, _)| *l == opening).map(|(_, b)| b.as_str()).unwrap();
+    // Each unit whole, as systemd reads it: every key in its section with its value, in order, and
+    // none other (a key in another section is ignored, a later one of the same key wins).
+    let user = &r.machine.user;
+    let row = |section: &str, key: &str, value: &str| (section.to_string(), key.to_string(), value.to_string());
+    let service = |exe: &str, file: &str| {
+        vec![
+            row("[Service]", "User", user),
+            row("[Service]", "WorkingDirectory", &format!("/home/{user}/planta")),
+            row("[Service]", "ExecStart", &format!("/bin/bash -c 'exec /opt/veredas/current/bin/{exe} {file} < <(exec sleep infinity)'")),
+            row("[Service]", "Restart", "always"),
+            row("[Service]", "RestartSec", "3"),
+            row("[Install]", "WantedBy", "multi-user.target"),
+        ]
+    };
+    let bench = [vec![row("[Unit]", "Description", "Veredas: the bench playing the plant (veredas-maquinar)"), row("[Unit]", "After", "network.target")], service("veredas-maquinar", "bench.toml")].concat();
+    let supervisao = [
+        vec![
+            row("[Unit]", "Description", &format!("Veredas: supervisão serving the plant on port {} (veredas-supervisao)", r.machine.supervisao_port)),
+            row("[Unit]", "After", "veredas-bancada.service"),
+            row("[Unit]", "Wants", "veredas-bancada.service"),
+        ],
+        service("veredas-supervisao", "supervisao.toml"),
+    ]
+    .concat();
+    // The boot's check a oneshot (`Before=` then waits for it to finish, not only to start), done
+    // before a login starts on the serial console, its lines on the console.
+    let verifica = vec![
+        row("[Unit]", "Description", "Veredas: the release's files checked against its SHA256SUMS"),
+        row("[Unit]", "Before", "serial-getty@ttyS0.service getty@tty1.service"),
+        row("[Service]", "Type", "oneshot"),
+        row("[Service]", "ExecStart", "/usr/local/libexec/veredas-verifica"),
+        row("[Service]", "StandardOutput", "journal+console"),
+        row("[Install]", "WantedBy", "multi-user.target"),
+    ];
+    for (name, want) in [("veredas-bancada", bench), ("veredas-supervisao", supervisao), ("veredas-verifica", verifica)] {
+        assert_eq!(unit_entries(body(&format!("cat > /etc/systemd/system/{name}.service <<'UNIT'"))), want, "{name}");
+    }
+    assert!(outer.contains(&"systemctl enable veredas-bancada.service veredas-supervisao.service veredas-verifica.service"));
+    // The boot's check whole: its commands in order (its comments free), the release `current`
+    // names entered first, its lines said in the order the proof reads them ([`maquina::CHECK_LINES`]).
+    let check = body("cat > /usr/local/libexec/veredas-verifica <<'SCRIPT'");
+    assert_eq!(check.lines().next(), Some("#!/bin/sh"));
+    let commands: Vec<&str> = check.lines().filter(|l| !l.starts_with('#')).collect();
+    let packages = r.machine.packages.join(" ");
+    let want = format!(
+        r##"cd /opt/veredas/current
+rel=$(sed -n 's/^release = "\(.*\)"$/\1/p' release.toml)
+if sha256sum --quiet -c SHA256SUMS; then echo "VEREDAS-SUMS-OK $rel"; else echo "VEREDAS-SUMS-FAILED $rel"; fi
+echo "VEREDAS-BUNDLE $(sha256sum SHA256SUMS | cut -d' ' -f1)"
+for c in /sys/class/net/*; do n=$(basename "$c"); [ "$n" = lo ] || echo "VEREDAS-CARD $n $(cat "$c/address")"; done
+if [ -e /usr/sbin/sshd ] || [ -e /lib/systemd/system/ssh.service ] || [ -e /usr/lib/systemd/system/ssh.service ]; then echo "VEREDAS-SSH present"; else echo "VEREDAS-SSH absent"; fi
+if [ -e /etc/cloud/cloud-init.disabled ]; then echo "VEREDAS-CLOUD-INIT disabled"; else echo "VEREDAS-CLOUD-INIT enabled"; fi
+missing=
+for p in {packages}; do dpkg-query -W -f='${{Status}}' "$p" 2>/dev/null | grep -q 'install ok installed' || missing="$missing $p"; done
+if [ -z "$missing" ]; then echo "VEREDAS-PACKAGES ok"; else echo "VEREDAS-PACKAGES missing$missing"; fi
+others=
+for s in veredas-bancada veredas-supervisao; do [ "$(systemctl show -p User --value "$s.service")" = "{user}" ] || others="$others $s"; done
+if [ -z "$others" ]; then echo "VEREDAS-SERVICES-USER ok"; else echo "VEREDAS-SERVICES-USER other:$others"; fi
+missing=
+for b in /opt/veredas/current/bin/*; do n=$(basename "$b"); [ "$(command -v "$n")" = "/usr/local/bin/$n" ] || missing="$missing $n"; done
+if [ -z "$missing" ]; then echo "VEREDAS-ON-PATH ok"; else echo "VEREDAS-ON-PATH missing$missing"; fi
+if [ -x /usr/local/sbin/veredas-atualizar ] && python3 -c 'import tomllib, tarfile' 2>/dev/null; then echo "VEREDAS-ATUALIZAR ok"; else echo "VEREDAS-ATUALIZAR missing"; fi"##
+    );
+    assert_eq!(commands, want.lines().collect::<Vec<_>>());
+    let said: Vec<usize> = commands
+        .iter()
+        .filter(|l| l.contains("echo \"VEREDAS-"))
+        .map(|l| maquina::CHECK_LINES.iter().position(|w| l.contains(&format!("echo \"{w}"))).unwrap_or_else(|| panic!("a line the proof does not know: {l}")))
+        .collect();
+    assert_eq!(said, (0..maquina::CHECK_LINES.len()).collect::<Vec<_>>());
+    // The user's README as the script's own lines write it, every line naming it run in order into
+    // a folder of the test's: the guide at the commit whole, then the update's section, linked on
+    // the desktop.
+    let readme = naming(&s, "README-veredas.md");
+    assert_eq!(
+        readme.lines().filter(|l| l.contains("README-veredas.md")).collect::<Vec<_>>(),
+        ["cp /alforge/guide.md /home/veredas/README-veredas.md", "cat >> /home/veredas/README-veredas.md <<'GUIDE'", "ln -sfn $H/README-veredas.md $H/Desktop/README-veredas.md"]
+    );
+    let sandbox = tempfile::tempdir().unwrap();
+    let home = sandbox.path().join("home");
+    std::fs::create_dir_all(home.join("Desktop")).unwrap();
+    let sample = "# A guide at the release's commit\n\nIts lines.\n";
+    std::fs::write(sandbox.path().join("guide.md"), sample).unwrap();
+    let fragment = format!("set -eu\nH={}\n{}", home.display(), readme.replace("/home/veredas", &home.display().to_string()).replace("/alforge/guide.md", &sandbox.path().join("guide.md").display().to_string()));
+    let ran = std::process::Command::new("sh").arg("-c").arg(&fragment).output().unwrap();
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    let section = body("cat >> /home/veredas/README-veredas.md <<'GUIDE'");
+    assert_eq!(std::fs::read_to_string(home.join("README-veredas.md")).unwrap(), format!("{sample}{section}"));
+    assert_eq!(std::fs::read_link(home.join("Desktop/README-veredas.md")).unwrap(), home.join("README-veredas.md"));
     // A recipe that leaves out what it removes is refused: removal is stated, never assumed.
     let text = std::fs::read_to_string(repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     let without: String = text.lines().filter(|l| !l.starts_with("remove = ")).map(|l| format!("{l}\n")).collect();
@@ -588,12 +749,13 @@ fn a_machine_is_built_only_from_a_cut_that_ran_to_its_end() {
 }
 
 #[test]
-fn a_release_is_proven_by_its_own_recipe_and_page_at_its_commit() {
+fn a_release_is_built_and_proven_by_its_own_recipe_guide_and_page_at_its_commit() {
     use std::process::Command;
-    // A throwaway repository: the release's commit holds a recipe of 3072 MB, in the member's folder
-    // under its former name (`tools/entrega`, as release 2.0.0-alpha.1's does), and a page canvas of
-    // #102030; a later commit, HEAD, renames the folder `tools/alforge` and holds 2048 MB and
-    // #405060; the working tree holds 1024 MB and #708090. The proof's setup reads the release's own.
+    // A throwaway repository: the release's commit holds a recipe of 3072 MB and its guide, in the
+    // member's folder under its former name (`tools/entrega`, as release 2.0.0-alpha.1's does), and a
+    // page canvas of #102030; a later commit, HEAD, renames the folder `tools/alforge` and holds
+    // 2048 MB, another guide and #405060; the working tree holds 1024 MB, a third guide and #708090.
+    // The build's setup and the proof's read the release's own.
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path();
     let git = |args: &[&str]| {
@@ -611,6 +773,7 @@ fn a_release_is_proven_by_its_own_recipe_and_page_at_its_commit() {
     let state = |folder: &str, mb: u32, canvas: &str| {
         std::fs::create_dir_all(root.join(folder).join("maquina")).unwrap();
         std::fs::write(root.join(folder).join("maquina/maquina.toml"), machine_memory(mb)).unwrap();
+        std::fs::write(root.join(folder).join("maquina/guide.md"), format!("# The guide beside the recipe of {mb} MB\n")).unwrap();
         std::fs::create_dir_all(root.join("crates/veredas-supervisao/web/dist/assets")).unwrap();
         std::fs::write(root.join("crates/veredas-supervisao/web/dist/assets/app.css"), format!(":root{{--canvas: #{canvas};--ink:#eeeeee}}\n")).unwrap();
     };
@@ -657,6 +820,13 @@ fn a_release_is_proven_by_its_own_recipe_and_page_at_its_commit() {
     std::fs::write(work.join(format!("{release}.toml")), &text).unwrap();
     let s = maquina::proof_setup(root, release, target).unwrap();
     assert_eq!((s.recipe.machine.memory_mb, s.ova, s.canvas, s.bundle), (3072, ova, (0x10, 0x20, 0x30), sums));
+    // What the machine is built with: the commit's recipe and guide, the cut's bundle and the folder
+    // it unpacks into, the machine made under the release's work.
+    let b = maquina::build_setup(root, release, target).unwrap();
+    assert_eq!(
+        (b.recipe.machine.memory_mb, b.guide.as_str(), b.bundle, b.bundle_dir.as_str(), b.work),
+        (3072, "# The guide beside the recipe of 3072 MB\n", work.join(format!("{name}.tar.gz")), name.as_str(), work.join("maquina"))
+    );
 }
 
 #[test]

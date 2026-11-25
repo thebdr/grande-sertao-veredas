@@ -414,14 +414,6 @@ pub fn boot(r: &Recipe, vmdk: &Path, port: u16, qmp: Option<u16>, console: &Path
     })
 }
 
-/// Builds the tester machine of a release already cut: its bundle under
-/// `target/alforge/<release>/`, the recipe and the guide read at the commit its manifest names.
-/// Whether release `release`'s cut ran to its end: its manifest written where a cut writes it
-/// (`releases/<release>.toml` for a real cut, `<work>/<release>.toml` for a trial; a real cut's
-/// decides over a trial's of the same release left beside the bundle, which the real cut's work
-/// replaced) and the bundle's own `release.toml` byte for byte. A cut refused after packing (its
-/// run together failed) leaves a bundle and no manifest; a machine is never built from such a
-/// bundle.
 /// Why the provisioning's console (its log's tail, then its exit) does not show it finished: no
 /// `ALFORGE-PROVISION-OK`, another exit than 0, or the root's free space not trimmed (`fstrim`'s
 /// line for `/`). Empty when it does.
@@ -444,6 +436,12 @@ pub fn provision_faults(console: &str) -> Vec<String> {
     out
 }
 
+/// Whether release `release`'s cut ran to its end: its manifest written where a cut writes it
+/// (`releases/<release>.toml` for a real cut, `<work>/<release>.toml` for a trial; a real cut's
+/// decides over a trial's of the same release left beside the bundle, which the real cut's work
+/// replaced) and the bundle's own `release.toml` byte for byte. A cut refused after packing (its
+/// run together failed) leaves a bundle and no manifest; a machine is never built from such a
+/// bundle.
 pub fn cut_finished(root: &Path, release: &str, work: &Path, bundle_manifest: &str) -> Result<(), VmError> {
     let refused = |stderr: String| VmError::Failed { program: "the tester machine".into(), status: "refused".into(), stderr };
     let places = [root.join("releases").join(format!("{release}.toml")), work.join(format!("{release}.toml"))];
@@ -463,7 +461,25 @@ pub fn cut_finished(root: &Path, release: &str, work: &Path, bundle_manifest: &s
     Ok(())
 }
 
-pub fn from_release(root: &Path, release: &str, target: &str) -> Result<Paths, VmError> {
+/// What `alforge maquina <release>` builds with ([`build_setup`]).
+#[derive(Debug)]
+pub struct BuildSetup {
+    /// The recipe at the commit the release's manifest names.
+    pub recipe: Recipe,
+    /// The guide at that commit, copied into the machine as the user's README.
+    pub guide: String,
+    /// The release's bundle, where its cut packed it, and the folder it unpacks into.
+    pub bundle: PathBuf,
+    pub bundle_dir: String,
+    /// Where the machine is made: `target/alforge/<release>/maquina/`.
+    pub work: PathBuf,
+}
+
+/// What the tester machine of a release already cut is built with: its bundle under
+/// `target/alforge/<release>/`, of a cut that ran to its end ([`cut_finished`]), and the recipe and
+/// the guide read at the commit its manifest names, in the member's folder of that commit (never a
+/// later HEAD's or the working tree's).
+pub fn build_setup(root: &Path, release: &str, target: &str) -> Result<BuildSetup, VmError> {
     let work = root.join("target/alforge").join(release);
     let bundle_dir = format!("veredas-{release}-{target}");
     let bundle = work.join(format!("{bundle_dir}.tar.gz"));
@@ -483,7 +499,13 @@ pub fn from_release(root: &Path, release: &str, target: &str) -> Result<Paths, V
         .unwrap_or(crate::FOLDERS[0]);
     let recipe = Recipe::load(&at(&format!("{folder}/maquina/maquina.toml"))?).map_err(|e| VmError::Failed { program: "the recipe".into(), status: "refused".into(), stderr: e.to_string() })?;
     let guide = at(&format!("{folder}/maquina/guide.md"))?;
-    build(&recipe, &bundle, &bundle_dir, release, &guide, &work.join("maquina"))
+    Ok(BuildSetup { recipe, guide, bundle, bundle_dir, work: work.join("maquina") })
+}
+
+/// Builds the tester machine of a release already cut, with what [`build_setup`] reads.
+pub fn from_release(root: &Path, release: &str, target: &str) -> Result<Paths, VmError> {
+    let s = build_setup(root, release, target)?;
+    build(&s.recipe, &s.bundle, &s.bundle_dir, release, &s.guide, &s.work)
 }
 
 /// The colours of a PPM screen dump sampled on a grid of every fourth pixel; `None` for a file
@@ -787,6 +809,19 @@ pub fn prove(r: &Recipe, ova: &Path, release: &str, canvas: (u8, u8, u8), bundle
     Ok(Proof { vmdk, ova: ova_found, console: console_text, plant, screen, colours: seen, page_share: share, before, after, bundle: bundle.to_string() })
 }
 
+/// The lines the boot's check says, by their first word, in the order it says them.
+pub const CHECK_LINES: [&str; 9] = [
+    "VEREDAS-SUMS-",
+    "VEREDAS-BUNDLE ",
+    "VEREDAS-CARD ",
+    "VEREDAS-SSH ",
+    "VEREDAS-CLOUD-INIT ",
+    "VEREDAS-PACKAGES ",
+    "VEREDAS-SERVICES-USER ",
+    "VEREDAS-ON-PATH ",
+    "VEREDAS-ATUALIZAR ",
+];
+
 /// Why a proof does not show the machine working: the OVA as VMware reads it, the release's sums
 /// checked at boot, the guest on VMware's disk and network drivers and naming the proof's card, the
 /// plant from the host, the page drawn by the desktop's browser, the disk unchanged. Empty when it
@@ -796,9 +831,11 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
     if !p.console.contains(&format!("VEREDAS-SUMS-OK {release}")) {
         out.push(format!("the boot did not check the release's sums (VEREDAS-SUMS-OK {release})"));
     }
-    // Said before a login starts on the serial console (whose agetty would hang the line up).
-    if let (Some(login), Some(said)) = (p.console.find("login:"), p.console.find("VEREDAS-SUMS-"))
-        && login < said
+    // Said before a login starts on the serial console (whose agetty would hang the line up):
+    // every line of the check, its last one included.
+    let last = CHECK_LINES.iter().filter_map(|w| p.console.rfind(w)).max();
+    if let (Some(login), Some(last)) = (p.console.find("login:"), last)
+        && login < last
     {
         out.push("the boot's check said its lines after a login started on the serial console".to_string());
     }
