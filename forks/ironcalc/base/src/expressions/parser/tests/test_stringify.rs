@@ -64,8 +64,11 @@ fn correct_parenthesis() {
         "-(1.05*(0.0284+0.0046)-0.0284)"
     );
 
+    // the bracket stays: the parser reads `1+3+5` as `(1+3)+5`, another formula, and in floating
+    // point another value (`0.1+(0.2+0.3)` is 0.6, `0.1+0.2+0.3` 0.6000000000000001; Veredas fork
+    // change 30)
     let t = parser.parse("1 + (3+5)", &cell_reference);
-    assert_eq!(to_english_localized_string(&t, &cell_reference), "1+3+5");
+    assert_eq!(to_english_localized_string(&t, &cell_reference), "1+(3+5)");
 
     let t = parser.parse("1 - (3+5)", &cell_reference);
     assert_eq!(to_english_localized_string(&t, &cell_reference), "1-(3+5)");

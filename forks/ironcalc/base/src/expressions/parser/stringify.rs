@@ -5,7 +5,7 @@ use super::{
 use crate::constants::{LAST_COLUMN, LAST_ROW};
 use crate::expressions::parser::move_formula::to_string_array_node;
 use crate::expressions::parser::static_analysis::remove_redundant_implicit_intersection;
-use crate::expressions::token::{OpSum, OpUnary};
+use crate::expressions::token::OpUnary;
 use crate::functions::Function;
 use crate::language::{get_language, Language};
 use crate::locale::{get_locale, Locale};
@@ -658,6 +658,20 @@ fn format_function(
 // * =RC+R1C1
 // * =A1+B1
 
+/// A number spelled so it reads back the same: Excel's 15 significant digits when they hold it,
+/// otherwise the shortest spelling that does (Veredas fork changes 29 and 30, the latter for an
+/// array constant's numbers).
+pub(crate) fn number_reading_back(number: f64) -> String {
+    let s = to_excel_precision_str(number);
+    if s.parse::<f64>().ok() == Some(number) || !number.is_finite() {
+        s
+    } else {
+        let mut buffer = ryu::Buffer::new();
+        let text = buffer.format(number);
+        text.strip_suffix(".0").unwrap_or(text).to_string()
+    }
+}
+
 fn stringify(
     node: &Node,
     context: Option<&CellReferenceRC>,
@@ -679,14 +693,7 @@ fn stringify(
             // Excel's 15 significant digits when they read back to the same number; otherwise the
             // shortest spelling that does (0.30000000000000004, 1.7976931348623157e308), so a
             // formula written and read again holds the number it held (Veredas fork change 29)
-            let s = to_excel_precision_str(*number);
-            let s = if s.parse::<f64>().ok() == Some(*number) || !number.is_finite() {
-                s
-            } else {
-                let mut buffer = ryu::Buffer::new();
-                let text = buffer.format(*number);
-                text.strip_suffix(".0").unwrap_or(text).to_string()
-            };
+            let s = number_reading_back(*number);
             if locale.numbers.symbols.decimal == "." {
                 s
             } else {
@@ -949,48 +956,26 @@ fn stringify(
                 language
             )
         ),
-        OpConcatenateKind { left, right } => format!(
-            "{}&{}",
-            stringify(
-                left,
-                context,
-                displace_data,
-                export_to_excel,
-                locale,
-                language
-            ),
-            stringify(
-                right,
-                context,
-                displace_data,
-                export_to_excel,
-                locale,
-                language
-            )
-        ),
-        CompareKind { kind, left, right } => format!(
-            "{}{}{}",
-            stringify(
-                left,
-                context,
-                displace_data,
-                export_to_excel,
-                locale,
-                language
-            ),
-            kind,
-            stringify(
-                right,
-                context,
-                displace_data,
-                export_to_excel,
-                locale,
-                language
-            )
-        ),
+        // An operand that binds less than its operator, or as much on the right (the parser reads
+        // left to right), is bracketed, so the spelling reads back as the same formula:
+        // `(A1&A2)*1`, `"x"&(A1>0)`, `(A1<A2)=(A2<A3)` (Veredas fork change 30)
+        OpConcatenateKind { left, right } => {
+            let x = stringify(left, context, displace_data, export_to_excel, locale, language);
+            let y = stringify(right, context, displace_data, export_to_excel, locale, language);
+            let x = if matches!(**left, CompareKind { .. }) { format!("({x})") } else { x };
+            let y = if matches!(**right, CompareKind { .. } | OpConcatenateKind { .. }) { format!("({y})") } else { y };
+            format!("{x}&{y}")
+        }
+        CompareKind { kind, left, right } => {
+            let x = stringify(left, context, displace_data, export_to_excel, locale, language);
+            let y = stringify(right, context, displace_data, export_to_excel, locale, language);
+            let y = if matches!(**right, CompareKind { .. }) { format!("({y})") } else { y };
+            format!("{x}{kind}{y}")
+        }
         OpSumKind { kind, left, right } => {
-            // CompareKind has lower precedence than +/-, so wrap it to preserve semantics
-            let left_str = if matches!(**left, CompareKind { .. }) {
+            // CompareKind and a concatenation have lower precedence than +/-, so wrap them to
+            // preserve semantics
+            let left_str = if matches!(**left, CompareKind { .. } | OpConcatenateKind { .. }) {
                 format!(
                     "({})",
                     stringify(
@@ -1012,10 +997,9 @@ fn stringify(
                     language,
                 )
             };
-            // if kind is minus then we need parentheses in the right side if they are OpSumKind or CompareKind
-            let right_str = if (matches!(kind, OpSum::Minus) && matches!(**right, OpSumKind { .. }))
-                | matches!(**right, CompareKind { .. })
-            {
+            // the right side is bracketed when it is a sum (`A1+(A2+A3)` is not `A1+A2+A3` to the
+            // parser), a comparison or a concatenation
+            let right_str = if matches!(**right, OpSumKind { .. } | CompareKind { .. } | OpConcatenateKind { .. }) {
                 format!(
                     "({})",
                     stringify(
@@ -1042,7 +1026,7 @@ fn stringify(
         }
         OpProductKind { kind, left, right } => {
             let x = match **left {
-                OpSumKind { .. } | CompareKind { .. } => format!(
+                OpSumKind { .. } | CompareKind { .. } | OpConcatenateKind { .. } => format!(
                     "({})",
                     stringify(
                         left,
@@ -1063,7 +1047,7 @@ fn stringify(
                 ),
             };
             let y = match **right {
-                OpSumKind { .. } | CompareKind { .. } | OpProductKind { .. } => format!(
+                OpSumKind { .. } | CompareKind { .. } | OpProductKind { .. } | OpConcatenateKind { .. } => format!(
                     "({})",
                     stringify(
                         right,
@@ -1255,7 +1239,6 @@ fn stringify(
                     | ExternalReferenceKind { .. }
                     | ExternalRangeKind { .. }
                     | OpRangeKind { .. }
-                    | OpProductKind { .. }
                     | FunctionKind { .. }
                     | NamedFunctionKind { .. }
                     | LambdaDefKind { .. }
@@ -1276,8 +1259,10 @@ fn stringify(
                         ..
                     } => false,
 
-                    // What binds less than the minus: `-(A1=B1)` is not `-A1=B1`
+                    // What binds less than the minus: `-(A1=B1)` is not `-A1=B1`, nor `-(A1*B1)`
+                    // `-A1*B1` to the parser (fork change 30)
                     OpPowerKind { .. }
+                    | OpProductKind { .. }
                     | OpSumKind { .. }
                     | OpConcatenateKind { .. }
                     | CompareKind { .. }
@@ -1310,17 +1295,14 @@ fn stringify(
                 }
             }
             OpUnary::Percentage => {
-                format!(
-                    "{}%",
-                    stringify(
-                        right,
-                        context,
-                        displace_data,
-                        export_to_excel,
-                        locale,
-                        language
-                    )
-                )
+                // what `%` follows is one operand: an operation before it is bracketed,
+                // `(A1+A2)%` (fork change 30)
+                let x = stringify(right, context, displace_data, export_to_excel, locale, language);
+                if matches!(**right, OpSumKind { .. } | OpProductKind { .. } | OpPowerKind { .. } | OpConcatenateKind { .. } | CompareKind { .. }) {
+                    format!("({x})%")
+                } else {
+                    format!("{x}%")
+                }
             }
         },
         ErrorKind(kind) => format!("{kind}"),

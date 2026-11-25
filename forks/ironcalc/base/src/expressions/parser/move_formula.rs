@@ -10,10 +10,7 @@ use crate::{
     language::Language,
     locale::Locale,
 };
-use crate::{
-    expressions::types::{Area, CellReferenceRC},
-    number_format::to_excel_precision_str,
-};
+use crate::expressions::types::{Area, CellReferenceRC};
 
 pub(crate) fn ref_is_in_area(sheet: u32, row: i32, column: i32, area: &Area) -> bool {
     if area.sheet != sheet {
@@ -76,7 +73,8 @@ fn move_function(
 }
 
 fn format_number_locale(number: f64, locale: &Locale) -> String {
-    let s = to_excel_precision_str(number);
+    // spelled to read back the same, as a plain number is (Veredas fork change 30)
+    let s = super::stringify::number_reading_back(number);
     let decimal = &locale.numbers.symbols.decimal;
     if decimal == "." {
         s
