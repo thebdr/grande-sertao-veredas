@@ -176,7 +176,8 @@ fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// A file's place, read as one place however its path is written: made absolute, then read part by
+/// A file's place, read as one place however its path is written: its text read first as the engine
+/// reads it (`as_the_engine_reads`: a leading `~`, a leading `file:` URL), made absolute, then read part by
 /// part as the drive reads it, a part that is a link replaced by where it leads (its target taken
 /// from its folder, read part by part in turn), standing or not yet; a `..` the parent of what is
 /// read so far, so a `..` after a link, written or in a link's target, is the parent of where the
@@ -186,6 +187,7 @@ fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
 /// lowercase).
 fn same_place(p: &Path) -> Option<PathBuf> {
     use std::path::Component;
+    let p = &as_the_engine_reads(p);
     let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
     let owned = |q: &Path| q.components().map(|c| PathBuf::from(c.as_os_str())).collect::<std::collections::VecDeque<PathBuf>>();
     let mut pending = owned(&abs);
@@ -227,6 +229,34 @@ fn same_place(p: &Path) -> Option<PathBuf> {
         out = PathBuf::from(out.to_string_lossy().to_lowercase());
     }
     Some(out)
+}
+
+/// A database file's path as the engine reads it before the drive does (DuckDB's
+/// `FileSystem::ExpandPath`, for the database it opens and for one it attaches): a leading `~` the
+/// home folder (`HOME`, on Windows `USERPROFILE`) and the rest after it as written; a leading
+/// `file:` URL its path (`file:/`, `file:///`, `file://localhost/`; on Windows without the slash
+/// before the drive's letter); any other path as it is.
+fn as_the_engine_reads(p: &Path) -> PathBuf {
+    let text = p.to_string_lossy();
+    if let Some(rest) = text.strip_prefix('~') {
+        let mut home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap_or_default();
+        home.push(rest);
+        return PathBuf::from(home);
+    }
+    let b = text.as_bytes();
+    let win = usize::from(cfg!(windows));
+    let offset = if !text.starts_with("file:/") {
+        0
+    } else if b.get(6) != Some(&b'/') {
+        5 + win
+    } else if b.get(7) == Some(&b'/') {
+        7 + win
+    } else if b.get(7..17) == Some(b"localhost/".as_slice()) {
+        16 + win
+    } else {
+        0
+    };
+    if offset > 0 { PathBuf::from(&text[offset..]) } else { p.to_path_buf() }
 }
 
 /// Read a supervisão file from disk; its folder is where its references live.

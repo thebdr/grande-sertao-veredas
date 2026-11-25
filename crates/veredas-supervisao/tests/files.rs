@@ -387,21 +387,25 @@ fn two_sessions_never_open_one_database_file() {
     // Two projects, `loop` and `hall`, the second's name given; `prepare` given the folder before
     // the file loads (to lay links in it); the supervisão file read by its absolute path, or by one
     // relative to the folder the test runs in.
+    // The two projects laid in `root`, the supervisão file's path returned.
+    let lay = |root: &std::path::Path, loop_store: &str, hall_store: &str, hall_name: &str| -> std::path::PathBuf {
+        let mut ex = example();
+        ex.host.push_str("\n[[session]]\nname = \"hall\"\nproject = \"hall/project.toml\"\nbinding = \"hall/binding.toml\"\n");
+        let path = write_example(root, &ex);
+        assert!(ex.project.contains("\nstore = \"ram\"\n") && ex.project.contains("\nname = \"the loop\"\n"));
+        std::fs::write(root.join("loop/project.toml"), ex.project.replace("\nstore = \"ram\"\n", &format!("\n{loop_store}\n"))).unwrap();
+        std::fs::create_dir_all(root.join("hall")).unwrap();
+        std::fs::write(root.join("hall/project.toml"), ex.project.replace("\nstore = \"ram\"\n", &format!("\n{hall_store}\n")).replace("\nname = \"the loop\"\n", &format!("\nname = \"{hall_name}\"\n"))).unwrap();
+        for f in ["binding.toml", "layout.svg"] {
+            std::fs::copy(root.join("loop").join(f), root.join("hall").join(f)).unwrap();
+        }
+        path
+    };
     let two_by = |loop_store: &str, hall_store: &str, hall_name: &str, relative: bool, prepare: &dyn Fn(&std::path::Path)| -> Result<config::HostConfig, ConfigError> {
         let dir = tempfile::tempdir().unwrap();
         let at = dir.path().display().to_string().replace('\\', "/");
         let (loop_store, hall_store) = (loop_store.replace("{dir}", &at), hall_store.replace("{dir}", &at));
-        let (loop_store, hall_store) = (loop_store.as_str(), hall_store.as_str());
-        let mut ex = example();
-        ex.host.push_str("\n[[session]]\nname = \"hall\"\nproject = \"hall/project.toml\"\nbinding = \"hall/binding.toml\"\n");
-        let path = write_example(dir.path(), &ex);
-        assert!(ex.project.contains("\nstore = \"ram\"\n") && ex.project.contains("\nname = \"the loop\"\n"));
-        std::fs::write(dir.path().join("loop/project.toml"), ex.project.replace("\nstore = \"ram\"\n", &format!("\n{loop_store}\n"))).unwrap();
-        std::fs::create_dir_all(dir.path().join("hall")).unwrap();
-        std::fs::write(dir.path().join("hall/project.toml"), ex.project.replace("\nstore = \"ram\"\n", &format!("\n{hall_store}\n")).replace("\nname = \"the loop\"\n", &format!("\nname = \"{hall_name}\"\n"))).unwrap();
-        for f in ["binding.toml", "layout.svg"] {
-            std::fs::copy(dir.path().join("loop").join(f), dir.path().join("hall").join(f)).unwrap();
-        }
+        let path = lay(dir.path(), &loop_store, &hall_store, hall_name);
         prepare(dir.path());
         if relative {
             let normal = |p: &std::path::Path| p.components().filter(|c| matches!(c, std::path::Component::Normal(_))).map(|c| c.as_os_str().to_owned()).collect::<Vec<_>>();
@@ -579,6 +583,62 @@ fn two_sessions_never_open_one_database_file() {
     let got = refused(three([shared, shared, shared], ["the loop", "the hall", "the hall"]));
     assert!(got.starts_with("session `yard`: ") && got.contains(" is the database file session `hall` opens for its store"), "the second and the third of three: {got}");
     assert!(three([shared, shared, shared], ["the loop", "the hall", "the yard"]).is_ok(), "three names, one folder");
+    #[cfg(unix)]
+    {
+        // A session with no place (a path through more than forty links, which the drive opens
+        // nowhere) beside the others in every arrangement: beside another with none, loaded (no two
+        // have a place, none is the other's); ahead of two that share a file, the later refused
+        // naming the earlier.
+        let chain_in = |d: &std::path::Path, folder: &str, end: &str| {
+            std::fs::create_dir_all(d.join(folder)).unwrap();
+            for k in 1..=41 {
+                let to = if k == 41 { end.to_string() } else { format!("l{}.duckdb", k + 1) };
+                std::os::unix::fs::symlink(to, d.join(format!("{folder}/l{k}.duckdb"))).unwrap();
+            }
+            std::fs::write(d.join(folder).join(end), b"").unwrap();
+        };
+        assert!(two_by("store = { disk = \"../ca/l1.duckdb\" }", "store = { disk = \"../cb/l1.duckdb\" }", "the hall", false, &|d| { chain_in(d, "ca", "a.duckdb"); chain_in(d, "cb", "b.duckdb"); }).is_ok(), "no place beside no place");
+        let dir = tempfile::tempdir().unwrap();
+        let mut ex = example();
+        for s in ["hall", "yard"] {
+            ex.host.push_str(&format!("\n[[session]]\nname = \"{s}\"\nproject = \"{s}/project.toml\"\nbinding = \"{s}/binding.toml\"\n"));
+        }
+        let path = write_example(dir.path(), &ex);
+        for (s, store, name) in [("loop", "store = { disk = \"../stores/l1.duckdb\" }", "the loop"), ("hall", "store = { disk = \"../one.duckdb\" }", "the hall"), ("yard", "store = { disk = \"../one.duckdb\" }", "the yard")] {
+            std::fs::create_dir_all(dir.path().join(s)).unwrap();
+            if s != "loop" {
+                for f in ["binding.toml", "layout.svg"] {
+                    std::fs::copy(dir.path().join("loop").join(f), dir.path().join(s).join(f)).unwrap();
+                }
+            }
+            std::fs::write(dir.path().join(s).join("project.toml"), ex.project.replace("\nstore = \"ram\"\n", &format!("\n{store}\n")).replace("\nname = \"the loop\"\n", &format!("\nname = \"{name}\"\n"))).unwrap();
+        }
+        chain_in(dir.path(), "stores", "a.duckdb");
+        let got = refused(config::load_file(&path));
+        assert!(got.starts_with("session `yard`: ") && got.contains(" is the database file session `hall` opens for its store"), "no place ahead of two sharing a file: {got}");
+        // A path read as the engine reads it before the drive does (DuckDB's `ExpandPath`): the
+        // supervisão file given by a path whose first part is a folder named `~` (a quoted `~`, a
+        // service file that expands nothing), so portal hands the engine `~/loop/../one.duckdb`, the
+        // home folder's `one.duckdb`, refused beside a store pinned there; and one whose first part
+        // is a folder named `file:`, the rest a file URL's path, refused beside the file it names.
+        // The executable's own check, run in a folder of its own with a home of its own.
+        let check = |cwd: &std::path::Path, home: &std::path::Path, file: &str| {
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(file).arg("--check").current_dir(cwd).env("HOME", home).output().unwrap();
+            (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned())
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (cwd, home) = (dir.path().join("cwd"), dir.path().join("home"));
+        std::fs::create_dir_all(&home).unwrap();
+        lay(&cwd.join("~"), "store = { disk = \"../one.duckdb\" }", &format!("store = {{ disk = \"{}/one.duckdb\" }}", home.display()), "the hall");
+        let (code, err) = check(&cwd, &home, "~/supervisao.toml");
+        assert!(code == Some(2) && err.contains(&tail("store")), "a path the engine reads from the home folder: {code:?} {err}");
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let mirror = cwd.join("file:").join(real.strip_prefix("/").unwrap());
+        lay(&mirror, "store = { disk = \"../one.duckdb\" }", &format!("store = {{ disk = \"{}/one.duckdb\" }}", real.display()), "the hall");
+        let (code, err) = check(&cwd, &home, &format!("file:{}/supervisao.toml", real.display()));
+        assert!(code == Some(2) && err.contains(&tail("store")), "a path the engine reads as a file URL: {code:?} {err}");
+    }
     // One file written relative and absolute, the supervisão file read by a path relative to the
     // folder the test runs in: refused.
     let got = refused(two_by("store = { disk = \"../one.duckdb\" }", "store = { disk = \"{dir}/one.duckdb\" }", "the hall", true, &none));
