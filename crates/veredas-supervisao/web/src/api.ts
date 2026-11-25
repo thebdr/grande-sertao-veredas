@@ -78,7 +78,12 @@ export async function getJson<T>(url: string): Promise<T> {
   // A redirect is never followed, as a write's is not: a read answered by one fails, said as the
   // view's refusal, never as another address's answer.
   const r = await fetch(url, { cache: "no-store", redirect: "error" });
-  const body = await r.json().catch(() => ({ error: `${r.status} ${r.statusText}` }));
+  // An answer that is no JSON (cut short on its way, a plain refusal) is no data, whatever its
+  // status: said as the view's refusal, by its status, and of a success that it was no JSON.
+  const head = [String(r.status), r.statusText].filter((s) => s).join(" ");
+  const body = await r.json().catch(() => {
+    throw new Error(r.ok ? `${head}: an answer that is no JSON` : head);
+  });
   if (!r.ok) throw new Error((body as { error?: string }).error ?? `${r.status}`);
   return body as T;
 }
