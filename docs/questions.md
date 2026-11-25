@@ -824,6 +824,13 @@ release's limit of one cyclic task.
 written on 2026-11-22, is `docs/controlador/execution-model.md` (Q223); code stands only on the one
 case every option runs alike, a single cyclic task.
 
+**Decided** 2026-11-25, by the architect, with Q223, which answered this question with a proposal:
+asked "Controlador's execution model is proposed in `docs/controlador/execution-model.md`: tasks
+share only the process image, each task its own slice of it, a fieldbus thread above the logic that
+is never halted, a program clock paused at a halt, and blocks interrupting each other on ONE logic
+thread at instruction boundaries (first release). Accept it?", "Accept as proposed (Recommended)".
+The model is written in that file, and the plan carries each decision in a line.
+
 ## Q34 - Where do the tests of core's fieldbus masters against the bench live?
 
 **Raised** 2026-11-15, by the ruling on the review's entry 10 ("Core, rules amended").
@@ -854,6 +861,15 @@ is meant for Oficina alone, and that its reading is no legal advice.
 
 **Taken meanwhile**: no licence is stated in any manifest and no licence file is written. Nothing
 is published before this is answered.
+
+**Decided** 2026-11-25, by the architect: asked "Which licence do the suite's permissive crates
+carry (core, portal, `orcl-std` and all that Oficina links)? Oficina itself is GPLv3. Taken
+meanwhile: no licence is stated anywhere, in a public repository. This is no legal advice.", "MIT OR
+Apache-2.0 (Recommended)", against MIT alone, Apache-2.0 alone and "Not yet". The option's text:
+"The dual expression usual for Rust crates, and the IronCalc fork's own. Each crate states it in its
+manifest and carries its licence files; Oficina states GPL-3.0; no single licence file at the root
+claims the whole repository." Not ruled with it: the copyright holder the licence files name, and
+whether Oficina's GPL is version 3 only or version 3 or later.
 
 ## Q36 - How is a download's integrity built?
 
@@ -2213,6 +2229,15 @@ task, which every option runs alike.
 
 **Reversible?** Yes: nothing is built on points 2 to 8.
 
+**Decided** 2026-11-25, by the architect: asked "Controlador's execution model is proposed in
+`docs/controlador/execution-model.md`: tasks share only the process image, each task its own slice
+of it, a fieldbus thread above the logic that is never halted, a program clock paused at a halt, and
+blocks interrupting each other on ONE logic thread at instruction boundaries (first release). Accept
+it?", "Accept as proposed (Recommended)", against a real-time thread per priority for point 4 and
+going through the points one by one. The eight points stand as proposed, point 4 as (b) for the
+first release; what point 2 leaves open (O7's publish at the end of a scan, or LET) stays open. Q33
+is answered with it.
+
 ## Q224 - Names for controlador's own files
 
 **Raised** 2026-11-22, by the controlador session (`docs/controlador-plan.md`, "Before the code").
@@ -2376,6 +2401,13 @@ locked memory and `PREEMPT_RT` in the kernel's version string, never `/sys/kerne
 
 **Reversible?** Yes: nothing is built.
 
+**Decided** 2026-11-25, by the architect: asked "The Linux study for the controller recommends: the
+Civil Infrastructure Platform's 10-year kernel; SWUpdate with EFI Boot Guard for updates with
+fallback; a read-only system under dm-verity with correction; Btrfs for the program's two copies;
+chrony; a watchdog chain ending in the controller; volatile logs with pstore; ECC memory and a
+wear-reporting drive. Accept them?", "Accept all (Recommended)", against going through them one by
+one and "Not yet". The eight recommendations above are the plan's choices.
+
 ## Q227 - The list of core-library operations ORCL allows: a closed list, or core's MIR interpreted?
 
 **Raised** 2026-11-22, by the controlador session, in the study of the interpreter's front end (the
@@ -2439,6 +2471,13 @@ cycle. Where it is silent the first build takes a reading, each marked `DECISION
 **Taken meanwhile**: the readings above, as readings.
 
 **Reversible?** Yes: each is a line of the controller and an assertion of its test.
+
+**Decided** 2026-11-25, by the architect: asked "Controlador's first build took nine readings where
+the plan is silent: outputs take safe values in STOP; a controller that never ran comes up in STOP;
+an interrupted start-up returns through a warm start; no retained variables yet; a command that
+would change nothing is refused; a runtime restarted alone comes up in FAULT internal; a stop from
+STARTUP is allowed. Accept them?", "Accept all nine (Recommended)", against going through them one
+by one. The nine readings stand as taken.
 
 ---
 
