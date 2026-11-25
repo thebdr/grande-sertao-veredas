@@ -12,15 +12,15 @@
     "fusion"
   ],
   "exitCode": 0,
-  "outputSha": "5354fb1eadfe8381d239a5c847a5c67702b0868b6a46ea043fd35819aae7a073",
-  "outputTail": "test an_arp_sender_s_address_is_a_second_witness ... ok\ntest an_lldp_pdu_naming_its_source_for_its_chassis_is_its_source_s_device ... ok\ntest a_port_known_before_its_device_is_taken_in_whole_whatever_the_order ... ok\ntest a_port_s_leaving_is_its_last_frame_by_time ... ok\ntest every_conflict_is_on_record_once_ordered_by_kind_and_value ... ok\ntest every_value_is_kept_with_its_witnesses_and_the_one_heard_last_is_current ... ok\ntest an_lldp_frame_describes_its_device_s_port_and_its_leaving ... ok\ntest conflicts_are_read_from_what_each_device_says_now ... ok\ntest what_is_fused_is_read_by_time_whatever_order_it_is_applied_in ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.42s\n     Running tests/fusion.rs (target/debug/build/veredas-aranha/7364670412f9cd57/out/fusion-7364670412f9cd57)",
-  "ranAt": "2026-11-24T23:31:26.305Z",
-  "headCommit": "0e92da3060ec3fa9a1eed01e4bef179a310f84c5",
+  "outputSha": "1fc098cb2fafcfbe59a2535a228280ae665ec9731501094dbc69be24d4489480",
+  "outputTail": "test a_port_s_leaving_is_its_last_frame_by_time ... ok\ntest round_3::the_label_is_the_current_station_name ... ok\ntest a_port_known_before_its_device_is_taken_in_whole_whatever_the_order ... ok\ntest round_3::one_stamp_told_apart_by_index_in_every_order ... ok\ntest round_3::ip_changed_in_the_order_heard ... ok\ntest an_lldp_frame_describes_its_device_s_port_and_its_leaving ... ok\ntest round_3::a_leaving_within_one_stamp_against_two_returns ... ok\ntest what_is_fused_is_read_by_time_whatever_order_it_is_applied_in ... ok\n\ntest result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Blocking waiting for file lock on package cache\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.52s\n     Running tests/fusion.rs (target/debug/build/veredas-aranha/7364670412f9cd57/out/fusion-7364670412f9cd57)",
+  "ranAt": "2026-11-25T06:12:21.701Z",
+  "headCommit": "cea29566808bfc24b5ff7ae999f0555ce00d6055",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/fusion.rs",
       "file": "crates/veredas-aranha/tests/fusion.rs",
-      "fileSha": "2e5aed2c929ed6257d072ba0c1b54bcd4d2e55878e52335fa9363518b91578a5"
+      "fileSha": "d6e2ff70980853904793db9da097f8c292676046a2925b96ab749e127ca15957"
     }
   ]
 }
