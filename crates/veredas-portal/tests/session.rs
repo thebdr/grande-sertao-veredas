@@ -715,3 +715,110 @@ fn a_log_s_history_read_on_every_path_and_set_once() {
         std::fs::set_permissions(p, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
     }
 }
+
+/// C-096's second refute round. A member of a family there and not readable while its backfill
+/// reaches it leaves the history unread for good: never said read (500 of 600 lines stored, the
+/// 100 of the member lost). A fixed-name family whose fixed active is there and not readable holds
+/// history: not said read until it opens and is stored. A family read from a start in the past
+/// whose folder is not there fails its worker, never saying read; a file not there read from a
+/// start in the past says read at once. A member deleted before the backfill reaches it leaves
+/// nothing unread: said read.
+#[cfg(unix)]
+#[test]
+fn a_history_left_unread_is_never_said_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let history = |live: &Live, id: &str| live.health.read().unwrap().get(id).map(|h| (h.history_read, h.state.clone()));
+    let shut = |p: &std::path::Path, mode: u32| std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+    // A family of six members, the fifth made unreadable once the start has located its point
+    // (the start returns once the locate has peeked every member) and while the first's 20 000
+    // lines replay: the replay reaches it shut. A chmod landing late fails the test, 20 500 rows.
+    let fam = dir.path().join("fam");
+    std::fs::create_dir_all(&fam).unwrap();
+    write_history(&fam.join("plant_1.log"), 0..20_000);
+    for m in 2..=6u32 {
+        write_history(&fam.join(format!("plant_{m}.log")), 20_000 + (m - 2) * 100..20_000 + (m - 1) * 100);
+    }
+    let mut cfg = SessionConfig::new("member");
+    cfg.start = Some(midnight());
+    cfg.logs.push(family("fam", &fam, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    shut(&fam.join("plant_5.log"), 0o000);
+    let live = session.live();
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(20) && rows(&live, "readings") < 20_400 {
+        assert_ne!(history(&live, "fam").map(|h| h.0), Some(true), "{} of 20 500 rows stored", rows(&live, "readings"));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(3) {
+        assert_ne!(history(&live, "fam").map(|h| h.0), Some(true), "{} of 20 500 rows stored", rows(&live, "readings"));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!((history(&live, "fam").map(|h| h.0), rows(&live, "readings")), (Some(false), 20_400), "the unreadable member's lines lost");
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    shut(&fam.join("plant_5.log"), 0o644);
+
+    // The same family, the fifth member deleted instead: gone, nothing of it left to read, the
+    // history said read with the other 20 400 lines.
+    let gone = dir.path().join("gone");
+    std::fs::create_dir_all(&gone).unwrap();
+    for entry in std::fs::read_dir(&fam).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), gone.join(entry.file_name())).unwrap();
+    }
+    let mut cfg = SessionConfig::new("gone");
+    cfg.start = Some(midnight());
+    cfg.logs.push(family("gone", &gone, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    std::fs::remove_file(gone.join("plant_5.log")).unwrap();
+    assert_eq!(rows_when_history_read(&session.live(), "gone", 20_400), 20_400);
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+
+    // A fixed family whose active holds history and is made unreadable: waited for.
+    let fixed = dir.path().join("fixed");
+    std::fs::create_dir_all(&fixed).unwrap();
+    write_history(&fixed.join("done_1.log"), 0..20_000);
+    for m in 2..=4u32 {
+        write_history(&fixed.join(format!("done_{m}.log")), 20_000 + (m - 2) * 100..20_000 + (m - 1) * 100);
+    }
+    write_history(&fixed.join("current.log"), 20_300..20_400);
+    let mut cfg = SessionConfig::new("fixed-held");
+    cfg.start = Some(midnight());
+    cfg.logs.push(family("fixed", &fixed, r"done_(?P<idx>\d+)\.log", ActiveConfig::Fixed("current.log".into())));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    shut(&fixed.join("current.log"), 0o000);
+    let live = session.live();
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(20) && rows(&live, "readings") < 20_300 {
+        assert_ne!(history(&live, "fixed").map(|h| h.0), Some(true), "{} of 20 400 rows stored", rows(&live, "readings"));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!((history(&live, "fixed").map(|h| h.0), rows(&live, "readings")), (Some(false), 20_300), "the active's history not yet read");
+    shut(&fixed.join("current.log"), 0o644);
+    assert_eq!(rows_when_history_read(&live, "fixed", 20_400), 20_400);
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+
+    // From a start in the past: a family folder not there fails, a file not there is read at once.
+    let mut cfg = SessionConfig::new("absent-past");
+    cfg.start = Some(midnight());
+    cfg.logs.push(family("absent", &dir.path().join("no_such_folder"), r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest));
+    cfg.logs.push(log_source("none", &dir.path().join("not_there.log")));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    assert!(wait(Duration::from_secs(10), || history(&live, "none").is_some_and(|h| h.0)), "{:?}", live.health.read().unwrap());
+    assert!(wait(Duration::from_secs(10), || history(&live, "absent").is_some_and(|h| matches!(h.1, HealthState::Failed(_)))), "{:?}", live.health.read().unwrap());
+    assert_eq!(history(&live, "absent").map(|h| h.0), Some(false));
+    let _ = session.stop();
+}

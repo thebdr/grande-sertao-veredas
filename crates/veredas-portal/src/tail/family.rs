@@ -153,7 +153,7 @@ const PATIENCE: Duration = Duration::from_millis(500);
 /// flush the final partial. A file that cannot be opened within `PATIENCE` is skipped: it
 /// vanished mid-burst and nothing of it is readable.
 fn read_full(path: &Path, grace: Duration, stop: &AtomicBool, emit: &mut dyn FnMut(String)) -> Result<(), SourceError> {
-    read_range_full(path, 0, None, grace, stop, emit)
+    read_range_full(path, 0, None, grace, stop, emit).map(|_| ())
 }
 
 /// `read_full` from a byte offset with a known encoding: the backfill's replay primitive.
@@ -164,21 +164,32 @@ fn read_range_full(
     grace: Duration,
     stop: &AtomicBool,
     emit: &mut dyn FnMut(String),
-) -> Result<(), SourceError> {
+) -> Result<Unread, SourceError> {
     let deadline = Instant::now() + PATIENCE;
     let mut cursor = loop {
         if stop.load(Ordering::Relaxed) {
-            return Ok(());
+            return Ok(Unread::No);
         }
         match TailedFile::open_at(path, offset, encoding) {
             Ok(c) => break c,
             Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            Err(_) => return Ok(()),
+            // Gone (renamed by a rotation, whose new name is read in its turn, or deleted).
+            Err(e) if crate::tail::single::is_not_found(&e) => return Ok(Unread::No),
+            // There and not readable (held by a writer, no read allowed, a share failing):
+            // skipped, its lines unread.
+            Err(_) => return Ok(Unread::Held),
         }
     };
     cursor.drain_stable(grace, stop, emit)?;
     cursor.flush_pending(emit);
-    Ok(())
+    Ok(Unread::No)
+}
+
+/// Whether a file a backfill meant to read was there and left unread.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Unread {
+    No,
+    Held,
 }
 
 /// (key, name): the rotation-order rank. The modification time is deliberately left out: it only
@@ -387,7 +398,14 @@ fn attach_backfill(
     emit: &mut dyn FnMut(String),
     attached_slot: &mut Option<Sender<()>>,
     swept: &dyn Fn(),
+    lost: &dyn Fn(),
 ) -> Result<BackfillAttach, SourceError> {
+    // A member there and left unread: the start's history is not whole, and never says read.
+    let read = |unread: Unread| {
+        if unread == Unread::Held {
+            lost();
+        }
+    };
     let Some(ts) = ts else {
         return Err(SourceError::NotConfigured("a Backfill start point requires a timestamp spec".into()));
     };
@@ -411,7 +429,7 @@ fn attach_backfill(
             return Ok(BackfillAttach::Stopped);
         }
         let (off, enc) = if i == 0 { (plan.first_offset, plan.first_encoding) } else { (0, None) };
-        read_range_full(&f.path, off, enc, cfg.drain_grace, stop, emit)?;
+        read(read_range_full(&f.path, off, enc, cfg.drain_grace, stop, emit)?);
         consumed.insert(f.name.clone());
     }
 
@@ -444,7 +462,7 @@ fn attach_backfill(
                 None => {
                     // Vanished before it was reached: read any remnant, then converge on the
                     // newest by rank.
-                    read_range_full(&planned.path, off, enc, cfg.drain_grace, stop, emit)?;
+                    read(read_range_full(&planned.path, off, enc, cfg.drain_grace, stop, emit)?);
                     match newest_catch_up(spec, cfg, (planned.key, planned.name.clone()), stop, wake_rx, emit)? {
                         None => Ok(BackfillAttach::Stopped),
                         Some((c, k, nm)) => Ok(BackfillAttach::Attached { cursor: Box::new(c), key: k, name: nm, known: consumed }),
@@ -475,7 +493,7 @@ fn attach_backfill(
                             return Ok(BackfillAttach::Stopped);
                         }
                         let (off, enc) = pending.take().unwrap_or((0, None));
-                        read_range_full(&f.path, off, enc, cfg.drain_grace, stop, emit)?;
+                        read(read_range_full(&f.path, off, enc, cfg.drain_grace, stop, emit)?);
                         consumed.insert(f.file_name.clone());
                     }
                     continue;
@@ -507,10 +525,13 @@ fn attach_backfill(
                         // Fell behind: drop the unread cursor; the loop sweeps again (the offset
                         // still owed to the remains).
                     }
-                    Err(_) => {
+                    Err(e) => {
                         // Every retiree swept and the fixed active not there: the history is
-                        // read, whatever appears at the fixed path being new content.
-                        swept();
+                        // read, whatever appears at the fixed path being new content. There and
+                        // not readable, it holds history: waited for, the flag not said.
+                        if crate::tail::single::is_not_found(&e) {
+                            swept();
+                        }
                         wait_tick(wake_rx, cfg.poll_interval);
                     }
                 }
@@ -569,7 +590,8 @@ fn run_family(
     let mut backfilled: Option<(TailedFile, OrderKey, String)> = None;
     if let FamilyStart::Backfill(start_at) = cfg.start {
         let swept = || crate::tail::mark_history_read(&history, sent.get());
-        match attach_backfill(&spec, &cfg, ts.as_ref(), start_at, &stop, &wake_rx, &mut emit, &mut attached_slot, &swept)? {
+        let lost = || crate::tail::mark_history_lost(&history);
+        match attach_backfill(&spec, &cfg, ts.as_ref(), start_at, &stop, &wake_rx, &mut emit, &mut attached_slot, &swept, &lost)? {
             BackfillAttach::Stopped => return Ok(()),
             BackfillAttach::FamilyEmpty => {
                 nothing_to_read();

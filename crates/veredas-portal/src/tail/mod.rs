@@ -23,6 +23,14 @@ pub(crate) fn mark_history_read(at: &Option<std::sync::Arc<std::sync::atomic::At
     }
 }
 
+/// The mark of a log whose start's history cannot be whole (a member there and left unread): no
+/// count of lines reaches it, so the session never says the history read. Set once, as a count.
+pub(crate) const HISTORY_LOST: u64 = u64::MAX - 1;
+
+pub(crate) fn mark_history_lost(at: &Option<std::sync::Arc<std::sync::atomic::AtomicU64>>) {
+    mark_history_read(at, HISTORY_LOST);
+}
+
 #[doc(hidden)]
 pub use backfill::{line_table, plan_for, plan_for_with};
 pub use family::{FamilyStart, FamilyTailConfig, FamilyTailSource};

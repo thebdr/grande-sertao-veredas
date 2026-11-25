@@ -572,7 +572,7 @@ fn settle_lines(stats: &mut BTreeMap<String, Stats>, history_read: &HashMap<Stri
 fn history_is_read(at: Option<&Arc<std::sync::atomic::AtomicU64>>, st: &Stats) -> bool {
     at.is_none_or(|at| {
         let sent = at.load(std::sync::atomic::Ordering::Relaxed);
-        !st.history_lost && sent != u64::MAX && st.stored >= sent
+        !st.history_lost && sent != u64::MAX && sent != crate::tail::HISTORY_LOST && st.stored >= sent
     })
 }
 

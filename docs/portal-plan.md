@@ -246,7 +246,9 @@ where they differ.
 - **A log says when its start's history is in the store** (Q319, 2026-11-25; **built, C-096**):
   each log's health carries `history_read`, said once the lines its worker had sent by the end of
   every file as it stood at the start are stored; a comissionador replay and supervisão's host
-  wait for it instead of guessing from stillness.
+  wait for it instead of guessing from stillness. A history that cannot be whole (a member
+  there and not readable when the backfill reaches it, a flush that failed, a worker that failed)
+  is never said read, so a waiter needs a deadline of its own.
 - **Every gated write and send kept in the store with the moment it was answered** (Q318,
   2026-11-25; not built, C-097 proposed): a table of the session's own, `writes`, one row per
   write or send: when it was asked and when answered (the answer's arrival its stamp on the
