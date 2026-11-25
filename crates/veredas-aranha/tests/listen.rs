@@ -231,7 +231,7 @@ fn the_kept_frames_are_bounded_and_damage_is_kept_with_its_frame() {
         }
     }
     let listener = Listener::start(vec![Box::new(Refusing)], Options::default()).unwrap();
-    let told = listener.send_tracked("refusing", vec![0; 60]).unwrap();
+    let told = listener.send_tracked("refusing", vec![0; 60]).unwrap().told;
     assert_eq!(told.recv_timeout(WAIT), Ok(Outcome::Refused("a frame of 60000 bytes is past the 65536 a wire carries".into())));
     assert_eq!(told.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected), "told once");
     assert!(listener.until(WAIT, |s| s.stats.interfaces["refusing"].refused == 1));
@@ -416,8 +416,8 @@ impl Wire for Panicking {
 #[test]
 fn a_worker_that_panics_ends_with_its_reason_and_a_wire_name_may_hold_a_nul() {
     let l = Listener::start(vec![Box::new(Panicking { sent: false })], Options { rate: 1, ..Options::default() }).unwrap();
-    let first = l.send_tracked("panics", vec![0; 60]).unwrap();
-    let second = l.send_tracked("panics", vec![1; 60]).unwrap();
+    let first = l.send_tracked("panics", vec![0; 60]).unwrap().told;
+    let second = l.send_tracked("panics", vec![1; 60]).unwrap().told;
     assert!(matches!(first.recv_timeout(WAIT), Ok(Outcome::Sent { .. })));
     let reason = "its worker panicked: the wire broke".to_string();
     assert_eq!(second.recv_timeout(WAIT), Ok(Outcome::Unsent(reason.clone())));
@@ -449,7 +449,7 @@ fn an_ended_worker_takes_nothing_more_and_says_what_it_never_sent() {
     for _ in 0..4 {
         l.send("fails", vec![0; 60]).unwrap();
     }
-    let told = l.send_tracked("fails", vec![1; 60]).unwrap();
+    let told = l.send_tracked("fails", vec![1; 60]).unwrap().told;
     assert!(l.until(WAIT, |s| s.stats.interfaces["fails"].ended.is_some()));
     let reason = "a frame of 1 bytes is shorter than an Ethernet header".to_string();
     assert_eq!(told.recv_timeout(WAIT), Ok(Outcome::Unsent(reason.clone())));
@@ -463,7 +463,7 @@ fn an_ended_worker_takes_nothing_more_and_says_what_it_never_sent() {
     let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options { rate: 1, ..Options::default() }).unwrap();
     l.send("lan0", vec![0; 60]).unwrap();
     assert!(l.until(WAIT, |s| s.stats.interfaces["lan0"].sent == 1));
-    let told = l.send_tracked("lan0", vec![0; 60]).unwrap();
+    let told = l.send_tracked("lan0", vec![0; 60]).unwrap().told;
     l.send("lan0", vec![0; 60]).unwrap();
     let s = l.stop();
     let i = &s.stats.interfaces["lan0"];
@@ -500,7 +500,7 @@ fn every_frame_is_the_interface_s_that_heard_it_and_its_account_says_so() {
     let mut dev = hub.port("dev", DEV);
     let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options::default()).unwrap();
     let before = veredas_aranha::wire::stamp(std::time::SystemTime::now());
-    let told: Vec<_> = [14, 65_536].map(|n| l.send_tracked("lan0", vec![0; n]).unwrap()).into_iter().collect();
+    let told: Vec<_> = [14, 65_536].map(|n| l.send_tracked("lan0", vec![0; n]).unwrap().told).into_iter().collect();
     assert!(l.until(WAIT, |s| s.stats.interfaces["lan0"].sent == 2));
     let after = veredas_aranha::wire::stamp(std::time::SystemTime::now());
     // Each told where its frame was kept, once.
@@ -542,4 +542,60 @@ fn this_machine_s_own_frames_and_two_devices_of_one_name_in_the_snapshot() {
     assert_eq!(s.fusion.devices.keys().copied().collect::<Vec<_>>(), [DEV, PORT]);
     assert_eq!(s.conflicts, s.fusion.conflicts());
     assert_eq!(s.conflicts.iter().map(|c| (c.kind, c.value.as_str())).collect::<Vec<_>>(), [(veredas_aranha::fusion::ConflictKind::DuplicateName, "same"), (veredas_aranha::fusion::ConflictKind::DuplicateIp, "192.168.0.10")]);
+}
+
+/// A wire that panics when it is handed a frame.
+struct PanicsOnSend;
+impl Wire for PanicsOnSend {
+    fn name(&self) -> &str {
+        "panics"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, _: &[u8]) -> Result<(), WireError> {
+        panic!("the card fell out")
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
+#[test]
+fn a_tracked_frame_knows_its_place_may_be_withdrawn_and_is_told_even_mid_send() {
+    let hub = Hub::new();
+    let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options { rate: 1, ..Options::default() }).unwrap();
+    // One sent at once; then two tracked behind it at one a second: nothing ahead of the first,
+    // one of the second.
+    l.send("lan0", vec![0; 60]).unwrap();
+    assert!(l.until(WAIT, |s| s.stats.interfaces["lan0"].sent == 1));
+    let first = l.send_tracked("lan0", vec![1; 60]).unwrap();
+    let second = l.send_tracked("lan0", vec![2; 60]).unwrap();
+    assert_eq!((first.ahead, second.ahead), (0, 1));
+    assert_ne!(first.id, second.id);
+    // The second withdrawn while it waits: gone from the queue, counted, never told; once.
+    assert!(l.withdraw("lan0", second.id));
+    assert!(!l.withdraw("lan0", second.id));
+    assert!(!l.withdraw("lan9", first.id), "no such interface");
+    let i = l.interface("lan0").unwrap();
+    assert_eq!((i.queued, i.withdrawn), (1, 1));
+    assert_eq!(second.told.recv_timeout(Duration::from_millis(100)), Err(std::sync::mpsc::RecvTimeoutError::Disconnected));
+    // The first goes in its turn, then is no longer withdrawn.
+    assert!(matches!(first.told.recv_timeout(WAIT), Ok(Outcome::Sent { .. })));
+    assert!(!l.withdraw("lan0", first.id));
+    assert_eq!(l.interface("lan0").unwrap().sent, 2);
+    // A worker that panics as it hands a frame to its wire: a tracked one told never sent with
+    // the panic's message, once; an untracked one counted never sent too.
+    let l = Listener::start(vec![Box::new(PanicsOnSend)], Options::default()).unwrap();
+    let told = l.send_tracked("panics", vec![0; 60]).unwrap().told;
+    let reason = "its worker panicked: the card fell out".to_string();
+    assert_eq!(told.recv_timeout(WAIT), Ok(Outcome::Unsent(reason.clone())));
+    assert_eq!(told.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected), "told once");
+    let i = l.interface("panics").unwrap();
+    assert_eq!((i.sent, i.unsent, i.ended), (0, 1, Some(reason)));
+    let l = Listener::start(vec![Box::new(PanicsOnSend)], Options::default()).unwrap();
+    l.send("panics", vec![0; 60]).unwrap();
+    assert!(l.until(WAIT, |s| s.stats.interfaces["panics"].ended.is_some()));
+    assert_eq!(l.interface("panics").unwrap().unsent, 1);
 }

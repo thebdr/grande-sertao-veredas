@@ -101,6 +101,16 @@ impl Device {
                         trailing: Vec::new(),
                     };
                     port.send(&asking.frame(e.src, DEV).unwrap()).unwrap();
+                    // Under DCP's answer frame id, its xid, to the asker: a Get's answer, and an
+                    // Identify answer under another EtherType.
+                    let mut get = asking.clone();
+                    get.service = Service::Get;
+                    get.service_type = dcp::ServiceType::Success;
+                    get.blocks[0].info = Some(0);
+                    port.send(&get.frame(e.src, DEV).unwrap()).unwrap();
+                    let mut elsewhere = dcp::identify_response(e.src, DEV, pdu.xid, &id).unwrap();
+                    elsewhere[12..14].copy_from_slice(&0x88B6u16.to_be_bytes());
+                    port.send(&elsewhere).unwrap();
                 }
                 if manner.flood > 0 {
                     std::thread::sleep(Duration::from_millis(50));
@@ -134,6 +144,7 @@ fn an_identify_is_answered_by_what_it_matches_and_only_its_answers_count() {
     // A second interface of this machine on the same hub hears the answer too: not lan0's.
     let l = Arc::new(Listener::start(vec![Box::new(hub.port("lan0", LAN0)), Box::new(hub.port("lan1", LAN1))], Options::default()).unwrap());
     // An Identify answer this machine itself sends while it waits is no answer, nor another's.
+    hub.set_now(77_000);
     let sender = {
         let l = Arc::clone(&l);
         std::thread::spawn(move || {
@@ -161,7 +172,7 @@ fn an_identify_is_answered_by_what_it_matches_and_only_its_answers_count() {
     assert_eq!((a.mac, a.identity.clone()), (DEV, DeviceIdentity::from_blocks(&identity().blocks())));
     let kept = l.frame(a.frame).unwrap();
     assert!(a.frame > asked.request);
-    assert_eq!((kept.frame.iface.as_str(), kept.sent, a.at_ns), ("lan0", false, kept.frame.at_ns));
+    assert_eq!((kept.frame.iface.as_str(), kept.sent, a.at_ns), ("lan0", false, 77_000), "stamped by the hub's clock");
     assert_eq!((asked.others, asked.lost), (2, 0));
     // The listener fused it, heard on both interfaces, its name witnessed after the request.
     let s = l.snapshot();
@@ -169,7 +180,7 @@ fn an_identify_is_answered_by_what_it_matches_and_only_its_answers_count() {
     assert_eq!(dev.name.current().map(String::as_str), Some("io-device-1"));
     assert!(dev.name.candidates[0].first.frame > asked.request);
     assert_eq!(dev.heard_on.iter().cloned().collect::<Vec<_>>(), ["lan0", "lan1"]);
-    assert_eq!(s.stats.interfaces["lan1"].heard, 7, "the request, the answer, the four not to it and the answer lan0 sent");
+    assert_eq!(s.stats.interfaces["lan1"].heard, 9, "the request, the answer, the six not to it and the answer lan0 sent");
     // By station name and by alias: answered; by a name it does not hold: nothing.
     for filter in [Filter::Name("io-device-1".into()), Filter::Alias("port-001.switch-1".into())] {
         let again = ask::identify(&l, "lan0", &quick(filter.clone())).unwrap();
@@ -200,6 +211,8 @@ fn an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer() {
     assert!(asked.sent_ns - sent[0].frame.at_ns >= 3 * 1_000_000_000 - 2_000_000, "{:?}", sent.iter().map(|k| k.frame.at_ns).collect::<Vec<_>>());
     // Then the spread (20 × 10 ms) and the wait (100 ms): at least 0.3 s after it was sent.
     assert!(took >= Duration::from_millis(3000 + 300 - 5), "{took:?}");
+    assert_eq!(asked.window, Duration::from_millis(300), "the spread, 20 steps of 10 ms, and the wait");
+    assert!(took <= Duration::from_millis(3000 + 300 + 700), "{took:?}");
     assert_eq!(asked.answers.len(), 1);
     // An answer that comes after the spread and the wait is not this request's: heard and fused
     // by the listener all the same.
@@ -217,9 +230,9 @@ fn answers_let_go_past_the_listener_s_bound_are_counted_lost() {
     let _dev = Device::start(hub.port("dev", DEV), Manner { distract: true, flood: 10, ..Manner::default() });
     let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options { max_frames: 3, ..Options::default() }).unwrap();
     let asked = ask::identify(&l, "lan0", &Identify { filter: Filter::All, response_delay: 1, wait: Duration::from_millis(500) }).unwrap();
-    // The answer, the four not to it and ten Hellos came after the request; three are kept.
-    assert_eq!(l.kept(), (asked.request + 13, asked.request + 16));
-    assert_eq!((asked.lost, asked.answers.len(), asked.others), (12, 0, 0));
+    // The answer, the six not to it and ten Hellos came after the request; three are kept.
+    assert_eq!(l.kept(), (asked.request + 15, asked.request + 18));
+    assert_eq!((asked.lost, asked.answers.len(), asked.others), (14, 0, 0));
     // The listener heard and fused the answer as it came.
     assert_eq!(l.snapshot().fusion.devices[&DEV].name.current().map(String::as_str), Some("io-device-1"));
 }
@@ -304,6 +317,55 @@ impl Wire for FailsAfterSend {
     }
 }
 
+/// A wire that panics when it is handed a frame.
+struct PanicsOnSend;
+impl Wire for PanicsOnSend {
+    fn name(&self) -> &str {
+        "panics"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, _: &[u8]) -> Result<(), WireError> {
+        panic!("the card fell out")
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
+/// A wire that answers the Identify it is handed with a frame its capture cut.
+struct CutAnswer {
+    answer: Option<Vec<u8>>,
+}
+impl Wire for CutAnswer {
+    fn name(&self) -> &str {
+        "cut"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, frame: &[u8]) -> Result<(), WireError> {
+        let pdu = dcp::decode(ether::parse(frame).unwrap().payload).unwrap();
+        self.answer = Some(dcp::identify_response(LAN0, DEV, pdu.xid, &identity()).unwrap());
+        Ok(())
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        match self.answer.take() {
+            Some(bytes) => {
+                let mut f = Frame::new(1, "cut", bytes);
+                f.length += 4;
+                Ok(Some(f))
+            }
+            None => {
+                std::thread::sleep(timeout);
+                Ok(None)
+            }
+        }
+    }
+}
+
 /// A wire whose every read fails: its worker ends.
 struct Broken;
 impl Wire for Broken {
@@ -360,10 +422,27 @@ fn asking_is_refused_where_it_cannot_be_heard_sent_or_bounded() {
     assert_eq!(msg(ask::identify(&ending, "fails", &Identify::default())), "\"fails\" is heard no more (a frame of 2 bytes is shorter than an Ethernet header): nothing is asked on it");
     assert!(start.elapsed() < Duration::from_millis(900), "{:?}", start.elapsed());
     assert_eq!(ending.interface("fails").unwrap().unsent, 1);
+    // A request handed to a wire that stalls past its turn: it may yet go, said so; one still
+    // waiting behind another that stalls: withdrawn, and never sent.
     let slow = Listener::start(vec![Box::new(Stalling)], Options::default()).unwrap();
     let start = Instant::now();
-    assert_eq!(msg(ask::identify(&slow, "stalling", &Identify::default())), "\"stalling\" did not send the Identify within 1.05s");
+    assert_eq!(msg(ask::identify(&slow, "stalling", &Identify::default())), "\"stalling\"'s wire was still taking the Identify past its turn, 1.05s: it may yet go, and no answer to it is this ask's");
     assert!(start.elapsed() >= Duration::from_millis(1050));
+    let behind = Listener::start(vec![Box::new(Stalling)], Options::default()).unwrap();
+    behind.send("stalling", frame.clone()).unwrap();
+    assert!(behind.until(Duration::from_secs(5), |s| s.stats.interfaces["stalling"].queued == 0));
+    assert_eq!(msg(ask::identify(&behind, "stalling", &Identify::default())), "\"stalling\" did not send the Identify within its turn, 1.05s: it is withdrawn and never sent");
+    assert!(behind.until(Duration::from_secs(5), |s| s.stats.interfaces["stalling"].sent == 1));
+    std::thread::sleep(Duration::from_millis(300));
+    let i = behind.interface("stalling").unwrap();
+    assert_eq!((i.sent, i.queued, i.withdrawn), (1, 0, 1));
+    // A worker that panics as it hands the request to its wire: said ended, with the panic, at once.
+    let panicking = Listener::start(vec![Box::new(PanicsOnSend)], Options::default()).unwrap();
+    let start = Instant::now();
+    assert_eq!(msg(ask::identify(&panicking, "panics", &Identify::default())), "\"panics\" is heard no more (its worker panicked: the card fell out): nothing is asked on it");
+    assert!(start.elapsed() < Duration::from_millis(900), "{:?}", start.elapsed());
+    // A wait of a minute is no wait past one.
+    assert_eq!(msg(ask::identify(&l, "nameless", &Identify { wait: ask::MAX_WAIT, ..Identify::default() })), "\"nameless\" has no MAC of its own (a capture replayed): nothing is asked from it");
 }
 
 /// Two bench devices of one station name behind one bridge, a plant's segment: one announces
@@ -406,6 +485,10 @@ fn the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_se
         "the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_segment",
         &[("a0", "b0"), ("c1", "d1"), ("c2", "d2")],
         || {
+            // The three MACs the test chose, set before anything opens an interface.
+            let (here, announced, silent) = (Mac([0x02, 0, 0, 0, 0, 0xA0]), Mac([0x02, 0, 0, 0, 0, 0xD1]), Mac([0x02, 0, 0, 0, 0, 0xD2]));
+            bench::pin(&[("a0", here), ("d1", announced), ("d2", silent)], &[("a0", "b0"), ("c1", "d1"), ("c2", "d2")]);
+            assert_eq!([bench::mac_of("a0"), bench::mac_of("d1"), bench::mac_of("d2")], [here, announced, silent]);
             // One segment: a bridge holding the near ends of the devices' pairs and the far end of
             // the listener's, crossed each way before anything is heard.
             netns::ip(&["link", "add", "br0", "type", "bridge"]);
@@ -414,7 +497,6 @@ fn the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_se
             }
             netns::ip(&["link", "set", "br0", "up"]);
             netns::wait_pairs(&[("a0", "d1"), ("a0", "d2")]);
-            let (here, announced, silent) = (bench::mac_of("a0"), bench::mac_of("d1"), bench::mac_of("d2"));
 
             let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
             let run = bench::start("one-segment", SEGMENT);
@@ -431,7 +513,9 @@ fn the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_se
             assert_eq!((all.others, all.lost), (0, 0));
             let req = l.frame(all.request).unwrap();
             assert_eq!(ether::parse(&req.frame.bytes).unwrap().src, here);
+            let now = veredas_aranha::wire::stamp(std::time::SystemTime::now());
             for a in &all.answers {
+                assert!(all.sent_ns <= a.at_ns && a.at_ns <= now, "{a:?}");
                 let ip = if a.mac == announced { 10 } else { 11 };
                 assert_eq!(a.identity.name.as_deref(), Some("bomba-1"));
                 assert_eq!(a.identity.ip.as_ref().map(|s| s.ip), Some(Ipv4Addr::new(192, 168, 0, ip)));
@@ -452,8 +536,11 @@ fn the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_se
             assert_eq!(conflicts, [(ConflictKind::DuplicateName, "bomba-1".to_string(), both.clone())]);
 
             // By name: both; by the alias: the silent one; by a name nobody holds: nobody.
-            let by = |filter: Filter| {
-                let mut m: Vec<Mac> = ask::identify(&l, "a0", &quick(filter)).unwrap().answers.iter().map(|a| a.mac).collect();
+            let mut asks = vec![(all.xid, Filter::All)];
+            let mut by = |filter: Filter| {
+                let asked = ask::identify(&l, "a0", &quick(filter.clone())).unwrap();
+                asks.push((asked.xid, filter));
+                let mut m: Vec<Mac> = asked.answers.iter().map(|a| a.mac).collect();
                 m.sort();
                 m
             };
@@ -468,18 +555,100 @@ fn the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_se
             let frames = l.frames();
             let dissected = common::dissect(&frames.iter().map(|k| k.frame.bytes.clone()).collect::<Vec<_>>());
             let mut requests = 0;
+            // (Read against what the test asked and what the bench file states, not through the
+            // codecs the bench and the listener share.)
+            let p = "pn_dcp";
             for (k, d) in frames.iter().zip(&dissected) {
                 assert_eq!(d.complaints(), Vec::<String>::new());
                 if !d.has("pn_dcp") {
                     continue;
                 }
                 if k.sent {
+                    // Each request from this machine's MAC to DCP's group address, under its
+                    // ask's transaction id and a delay of 1, its filter as asked.
+                    let (xid, filter) = &asks[requests];
                     requests += 1;
+                    assert_eq!((d.one("eth", "eth.src"), d.one("eth", "eth.dst")), (here.to_string(), "01:0e:cf:00:00:00".to_string()));
+                    assert_eq!((d.one(p, "pn_dcp.xid"), d.one(p, "pn_dcp.response_delay")), (xid.to_string(), "1".to_string()));
+                    match filter {
+                        Filter::All => assert_eq!(d.one(p, "pn_dcp.option"), "255"),
+                        Filter::Name(n) => assert_eq!(&d.one(p, "pn_dcp.suboption_device_nameofstation"), n),
+                        Filter::Alias(a) => assert_eq!(&d.one(p, "pn_dcp.suboption_device_aliasname"), a),
+                    }
                 } else {
-                    assert_eq!(d.one("pn_dcp", "pn_dcp.suboption_device_nameofstation"), "bomba-1");
+                    // Each answer as the bench file states it.
+                    let src = d.one("eth", "eth.src");
+                    let ip = if src == announced.to_string() { "192.168.0.10" } else { assert_eq!(src, silent.to_string()); "192.168.0.11" };
+                    assert_eq!(d.one(p, "pn_dcp.suboption_device_nameofstation"), "bomba-1");
+                    assert_eq!((d.one(p, "pn_dcp.suboption_ip_ip"), d.one(p, "pn_dcp.suboption_ip_subnetmask")), (ip.to_string(), "255.255.255.0".to_string()));
                 }
             }
             assert_eq!(requests, 4);
         },
     );
+}
+
+#[test]
+fn askers_at_once_each_take_their_turn_and_their_answers() {
+    let hub = Hub::new();
+    let _dev = Device::start(hub.port("dev", DEV), Manner::default());
+    let l = Arc::new(Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options { rate: 1, ..Options::default() }).unwrap());
+    let askers: Vec<_> = (0..5)
+        .map(|_| {
+            let l = Arc::clone(&l);
+            std::thread::spawn(move || ask::identify(&l, "lan0", &quick(Filter::All)))
+        })
+        .collect();
+    let asked: Vec<ask::Asked> = askers.into_iter().map(|h| h.join().unwrap().unwrap()).collect();
+    let xids: std::collections::BTreeSet<u32> = asked.iter().map(|a| a.xid).collect();
+    assert_eq!(xids.len(), 5);
+    assert!(asked.iter().all(|a| a.answers.len() == 1), "{asked:?}");
+    let i = l.interface("lan0").unwrap();
+    assert_eq!((i.sent, i.withdrawn, i.queued), (5, 0, 0));
+}
+
+#[test]
+fn frames_let_go_while_answers_flood_are_counted_at_the_moment_they_are_read() {
+    // A device that streams answers to the request under its id through the asker's read, the
+    // listener keeping 64 frames: the first answer read is the first frame kept after the request
+    // and the lost, so none was let go between the count and the read.
+    let hub = Hub::new();
+    let mut port = hub.port("dev", DEV);
+    let stop = Arc::new(AtomicBool::new(false));
+    let halt = Arc::clone(&stop);
+    let device = std::thread::spawn(move || {
+        while !halt.load(Ordering::SeqCst) {
+            let Ok(Some(f)) = port.recv(Duration::from_millis(20)) else { continue };
+            let Ok(e) = ether::parse(&f.bytes) else { continue };
+            let Ok(pdu) = dcp::decode(e.payload) else { continue };
+            // Answers streamed under the request's id for 300 ms, through the asker's read.
+            if pdu.service == Service::Identify && !pdu.service_type.is_response() {
+                let answer = dcp::identify_response(e.src, DEV, pdu.xid, &identity()).unwrap();
+                let until = Instant::now() + Duration::from_millis(300);
+                while Instant::now() < until {
+                    port.send(&answer).unwrap();
+                    std::thread::sleep(Duration::from_micros(50));
+                }
+            }
+        }
+    });
+    let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options { max_frames: 64, ..Options::default() }).unwrap();
+    for _ in 0..10 {
+        let asked = ask::identify(&l, "lan0", &Identify { filter: Filter::All, response_delay: 1, wait: Duration::from_millis(150) }).unwrap();
+        let first = asked.answers.first().expect("answers kept");
+        assert_eq!(first.frame, asked.request + 1 + asked.lost, "{} lost", asked.lost);
+        assert!(asked.lost > 0, "the flood passed the bound");
+        // (The stream of this ask's answers ends before the next asks.)
+        std::thread::sleep(Duration::from_millis(400));
+    }
+    stop.store(true, Ordering::SeqCst);
+    device.join().unwrap();
+}
+
+#[test]
+fn an_answer_a_capture_cut_is_not_counted() {
+    let l = Listener::start(vec![Box::new(CutAnswer { answer: None })], Options::default()).unwrap();
+    let asked = ask::identify(&l, "cut", &quick(Filter::All)).unwrap();
+    assert_eq!((asked.answers.len(), asked.others), (0, 0));
+    assert!(l.frame(asked.request + 1).unwrap().frame.is_cut());
 }

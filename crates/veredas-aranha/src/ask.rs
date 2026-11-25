@@ -54,6 +54,8 @@ pub struct Asked {
     /// The request as the listener kept it: its index and its stamp.
     pub request: u64,
     pub sent_ns: u64,
+    /// What it waited after the request went: the devices' spread and its wait.
+    pub window: Duration,
     /// The answers to it, in the order heard.
     pub answers: Vec<Answer>,
     /// Identify answers heard on the interface meanwhile that are not to it: another transaction
@@ -79,8 +81,10 @@ pub enum AskError {
     Request(DcpError),
     #[error("{iface:?}'s wire refused the Identify: {reason}")]
     Refused { iface: String, reason: String },
-    #[error("{iface:?} did not send the Identify within {waited:?}")]
+    #[error("{iface:?} did not send the Identify within its turn, {waited:?}: it is withdrawn and never sent")]
     NotSent { iface: String, waited: Duration },
+    #[error("{iface:?}'s wire was still taking the Identify past its turn, {waited:?}: it may yet go, and no answer to it is this ask's")]
+    Stalled { iface: String, waited: Duration },
 }
 
 /// A transaction id this process has not used: a count from a start drawn from the clock and the
@@ -111,25 +115,28 @@ pub fn identify(listener: &Listener, iface: &str, ask: &Identify) -> Result<Aske
     let mac = account.mac.ok_or_else(|| AskError::NoMac(iface.to_string()))?;
     let xid = next_xid();
     let request = dcp::identify_request(mac, xid, ask.response_delay, &ask.filter).map_err(AskError::Request)?;
-    let told = listener.send_tracked(iface, request)?;
+    let tracked = listener.send_tracked(iface, request)?;
 
-    // Its turn: the frames queued before it at the interface's pace, and a second more.
+    // Its turn: the frames queued ahead of it (counted as it was queued) at the interface's pace,
+    // and a second more; past it, taken back if it still waits.
     let gap = Duration::from_secs(1) / listener.options().rate;
-    let waited = gap.saturating_mul(u32::try_from(account.queued + 1).unwrap_or(u32::MAX)).saturating_add(Duration::from_secs(1));
-    let (index, sent_ns) = match told.recv_timeout(waited) {
+    let waited = gap.saturating_mul(u32::try_from(tracked.ahead + 1).unwrap_or(u32::MAX)).saturating_add(Duration::from_secs(1));
+    let (index, sent_ns) = match tracked.told.recv_timeout(waited) {
         Ok(Outcome::Sent { index, at_ns }) => (index, at_ns),
         Ok(Outcome::Refused(reason)) => return Err(AskError::Refused { iface: iface.to_string(), reason }),
         Ok(Outcome::Unsent(reason)) => return Err(AskError::Ended { iface: iface.to_string(), reason }),
-        Err(_) => return Err(AskError::NotSent { iface: iface.to_string(), waited }),
+        Err(_) if listener.withdraw(iface, tracked.id) => return Err(AskError::NotSent { iface: iface.to_string(), waited }),
+        Err(_) => return Err(AskError::Stalled { iface: iface.to_string(), waited }),
     };
 
     // The devices' spread, and the wait past it.
-    std::thread::sleep(Duration::from_millis(10).saturating_mul(u32::from(ask.response_delay)).saturating_add(ask.wait));
+    let window = Duration::from_millis(10).saturating_mul(u32::from(ask.response_delay)).saturating_add(ask.wait);
+    std::thread::sleep(window);
 
-    let mut asked = Asked { iface: iface.to_string(), xid, request: index, sent_ns, answers: Vec::new(), others: 0, lost: 0 };
-    let next = index + 1;
-    asked.lost = listener.kept().0.saturating_sub(next);
-    for (i, k) in listener.frames_from(next) {
+    let mut asked = Asked { iface: iface.to_string(), xid, request: index, sent_ns, window, answers: Vec::new(), others: 0, lost: 0 };
+    let (lost, frames) = listener.read_from(index + 1);
+    asked.lost = lost;
+    for (i, k) in frames {
         if k.sent || k.frame.iface != iface || k.frame.is_cut() {
             continue;
         }

@@ -55,6 +55,15 @@ pub enum Outcome {
     Unsent(String),
 }
 
+/// A frame handed over to be sent and told of: its number (to withdraw it), the frames queued
+/// ahead of it when it was queued, and where its outcome comes.
+#[derive(Debug)]
+pub struct Tracked {
+    pub id: u64,
+    pub ahead: usize,
+    pub told: Receiver<Outcome>,
+}
+
 /// A kept frame: heard, or sent by the listener.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Kept {
@@ -71,8 +80,11 @@ pub struct Interface {
     /// Frames its wire refused to send (each reason among the damage).
     pub refused: u64,
     pub queued: usize,
-    /// Frames still queued when its worker ended or the listener stopped: never sent.
+    /// Frames still queued when its worker ended or the listener stopped, or being handed to its
+    /// wire when its worker ended: never sent.
     pub unsent: u64,
+    /// Frames taken back while they waited: never sent.
+    pub withdrawn: u64,
     /// Why its worker stopped hearing, when it did: a capture read to its end, or the wire's error.
     pub ended: Option<String>,
 }
@@ -130,7 +142,7 @@ const DAMAGE_KEPT: usize = 50;
 pub const MAX_RATE: u32 = 1000;
 
 /// A frame waiting its turn, and who is to be told what became of it.
-type Queued = (Vec<u8>, Option<Sender<Outcome>>);
+type Queued = (u64, Vec<u8>, Option<Sender<Outcome>>);
 
 struct State {
     frames: VecDeque<Kept>,
@@ -139,6 +151,11 @@ struct State {
     fusion: Fusion,
     stats: Stats,
     queues: BTreeMap<String, VecDeque<Queued>>,
+    /// Every frame handed over is numbered, so one still waiting may be withdrawn.
+    next_id: u64,
+    /// The frame each worker is handing to its wire (and whom to tell), so that the worker's end
+    /// counts it, and tells it, too.
+    in_flight: BTreeMap<String, Option<Sender<Outcome>>>,
 }
 
 struct Shared {
@@ -192,7 +209,7 @@ impl Listener {
             queues.insert(w.name().to_string(), VecDeque::new());
         }
         let shared = Arc::new(Shared {
-            state: Mutex::new(State { frames: VecDeque::new(), base: 0, fusion: Fusion::new(), stats, queues }),
+            state: Mutex::new(State { frames: VecDeque::new(), base: 0, fusion: Fusion::new(), stats, queues, next_id: 0, in_flight: BTreeMap::new() }),
             stop: AtomicBool::new(false),
             own,
             options,
@@ -219,19 +236,36 @@ impl Listener {
     /// Queue a whole frame to send on `iface`, paced by its worker. Refused on an interface no
     /// worker hears, past the queue's bound, or of a length no wire carries.
     pub fn send(&self, iface: &str, frame: Vec<u8>) -> Result<(), ListenError> {
-        self.queue(iface, frame, None)
+        self.queue(iface, frame, None).map(|_| ())
     }
 
     /// Queue a frame as [`Listener::send`] does, and be told what became of it once its worker
-    /// has sent it or its wire refused it, or that it never will (its worker ended first, or the
-    /// listener stopped): told once, then the channel closes.
-    pub fn send_tracked(&self, iface: &str, frame: Vec<u8>) -> Result<Receiver<Outcome>, ListenError> {
-        let (tx, rx) = channel();
-        self.queue(iface, frame, Some(tx))?;
-        Ok(rx)
+    /// has sent it or its wire refused it, or that it never will (its worker ended first, even
+    /// while handing it to the wire, or the listener stopped): told once, then the channel closes.
+    /// The ticket says how many frames were queued ahead of it, counted as it was queued.
+    pub fn send_tracked(&self, iface: &str, frame: Vec<u8>) -> Result<Tracked, ListenError> {
+        let (tx, told) = channel();
+        let (id, ahead) = self.queue(iface, frame, Some(tx))?;
+        Ok(Tracked { id, ahead, told })
     }
 
-    fn queue(&self, iface: &str, frame: Vec<u8>, tell: Option<Sender<Outcome>>) -> Result<(), ListenError> {
+    /// Take back a frame still waiting in its interface's queue: whether it was there (it is then
+    /// never sent, counted withdrawn, and nothing is told of it). A frame its worker is already
+    /// handing to its wire, or has sent, is not withdrawn.
+    pub fn withdraw(&self, iface: &str, id: u64) -> bool {
+        let mut st = lock(&self.shared.state);
+        let Some(q) = st.queues.get_mut(iface) else { return false };
+        let Some(at) = q.iter().position(|(i, _, _)| *i == id) else { return false };
+        q.remove(at);
+        let left = q.len();
+        if let Some(i) = st.stats.interfaces.get_mut(iface) {
+            i.queued = left;
+            i.withdrawn += 1;
+        }
+        true
+    }
+
+    fn queue(&self, iface: &str, frame: Vec<u8>, tell: Option<Sender<Outcome>>) -> Result<(u64, usize), ListenError> {
         if frame.len() < 14 {
             return Err(ListenError::Frame(WireError::TooShort(frame.len())));
         }
@@ -247,12 +281,16 @@ impl Listener {
         if q.len() >= bound {
             return Err(ListenError::QueueFull { iface: iface.to_string(), queued: q.len() });
         }
-        q.push_back((frame, tell));
+        let ahead = q.len();
+        let id = st.next_id;
+        st.next_id += 1;
+        let Some(q) = st.queues.get_mut(iface) else { return Err(ListenError::NotListening(iface.to_string())) };
+        q.push_back((id, frame, tell));
         let queued = q.len();
         if let Some(i) = st.stats.interfaces.get_mut(iface) {
             i.queued = queued;
         }
-        Ok(())
+        Ok((id, ahead))
     }
 
     /// The listening as it stands.
@@ -274,9 +312,16 @@ impl Listener {
 
     /// The kept frames from this index on, each with its index.
     pub fn frames_from(&self, index: u64) -> Vec<(u64, Kept)> {
+        self.read_from(index).1
+    }
+
+    /// How many frames from this index on were let go, and the kept ones after them, each with its
+    /// index: read at one moment, so none is let go between the count and the read.
+    pub fn read_from(&self, index: u64) -> (u64, Vec<(u64, Kept)>) {
         let st = lock(&self.shared.state);
+        let lost = st.base.saturating_sub(index);
         let skip = usize::try_from(index.saturating_sub(st.base)).unwrap_or(usize::MAX);
-        st.frames.iter().enumerate().skip(skip).map(|(i, k)| (st.base + i as u64, k.clone())).collect()
+        (lost, st.frames.iter().enumerate().skip(skip).map(|(i, k)| (st.base + i as u64, k.clone())).collect())
     }
 
     /// The indices of the first frame still kept and of the next to come.
@@ -345,16 +390,17 @@ fn work(wire: Box<dyn Wire>, s: Arc<Shared>) {
     let mut st = lock(&s.state);
     let why = ended.clone().unwrap_or_else(|| "the listener stopped".to_string());
     let left: Vec<Queued> = st.queues.get_mut(&iface).map(|q| q.drain(..).collect()).unwrap_or_default();
+    // A frame its worker was handing to the wire when the worker ended (a panic there) is never
+    // sent either.
+    let in_flight = st.in_flight.remove(&iface);
     if let Some(i) = st.stats.interfaces.get_mut(&iface) {
         i.ended = ended;
-        i.unsent += left.len() as u64;
+        i.unsent += left.len() as u64 + u64::from(in_flight.is_some());
         i.queued = 0;
     }
     drop(st);
-    for (_, tell) in left {
-        if let Some(tx) = tell {
-            let _ = tx.send(Outcome::Unsent(why.clone()));
-        }
+    for tx in left.into_iter().filter_map(|(_, _, tell)| tell).chain(in_flight.flatten()) {
+        let _ = tx.send(Outcome::Unsent(why.clone()));
     }
 }
 
@@ -376,9 +422,13 @@ fn run(mut wire: Box<dyn Wire>, s: &Shared, iface: &str) -> Option<String> {
                 if let Some(i) = st.stats.interfaces.get_mut(&iface) {
                     i.queued = left;
                 }
-                f
+                // A tracked frame being handed to the wire is told even if the worker ends there.
+                f.map(|(_, bytes, tell)| {
+                    st.in_flight.insert(iface.clone(), tell);
+                    bytes
+                })
             };
-            if let Some((bytes, tell)) = out {
+            if let Some(bytes) = out {
                 next_send = Instant::now() + gap;
                 let result = wire.send(&bytes);
                 let mut st = lock(&s.state);
@@ -399,6 +449,7 @@ fn run(mut wire: Box<dyn Wire>, s: &Shared, iface: &str) -> Option<String> {
                         Outcome::Refused(e.to_string())
                     }
                 };
+                let tell = st.in_flight.remove(&iface).flatten();
                 drop(st);
                 if let Some(tx) = tell {
                     // An asker that stopped waiting is no fault of the frame's.
