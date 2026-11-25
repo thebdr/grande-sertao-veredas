@@ -241,6 +241,20 @@ pub fn unpack_checked(packed: &Path, check: &Path, name: &str) -> Result<PathBuf
     Ok(extracted)
 }
 
+/// What the cut says of each bin with required features cargo's default build did not make (in
+/// `bin`, what the builder handed back): not shipped.
+pub fn not_made(held: &std::collections::BTreeMap<String, manifest::Held>, bin: &Path) -> Vec<String> {
+    held.values()
+        .flat_map(|h| {
+            h.optional
+                .iter()
+                .filter(|b| !bin.join(b).is_file())
+                .map(|b| format!("{}'s `{b}` was not built with its default features: not shipped (docs/questions.md Q443)", h.name))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// The components as built: each ships its bins without required features and those with required
 /// features cargo's default build made (in `bin`, what the builder handed back), each one cargo did
 /// not make said; the manifest written from them, read back and checked against the repository again.
@@ -255,12 +269,12 @@ pub fn as_built(
     held: &std::collections::BTreeMap<String, manifest::Held>,
     bin: &Path,
 ) -> Result<(std::collections::BTreeMap<String, manifest::Held>, String, Manifest), CutError> {
+    for line in not_made(held, bin) {
+        eprintln!("alforge: {line}");
+    }
     let mut shipped = held.clone();
     for h in shipped.values_mut() {
         let made: std::collections::BTreeSet<String> = h.optional.iter().filter(|b| bin.join(b).is_file()).cloned().collect();
-        for b in h.optional.difference(&made) {
-            eprintln!("alforge: {}'s `{b}` was not built with its default features: not shipped (docs/questions.md Q443)", h.name);
-        }
         h.bins.extend(made);
         h.optional.clear();
     }
@@ -319,6 +333,11 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
         .collect();
     if !shared.is_empty() {
         return Err(refused(shared.join("\n")));
+    }
+    // The build's output folder holds no tracked file: the dep-info check takes what lies there as
+    // the build's own.
+    if let Some(tracked) = git::list(root, &commit, "target").map_err(|e| refused(e.to_string()))? {
+        return Err(refused(format!("commit {commit} tracks target/ ({}): the build's own output folder holds no file of the tree", tracked.join(", "))));
     }
     // What each version names must read at the commit: the build is held to it.
     let unread: Vec<String> = held.values().filter_map(|h| h.inputs.as_ref().err().map(|why| format!("{}'s build inputs do not read: {why}", h.name))).collect();

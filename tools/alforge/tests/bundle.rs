@@ -1287,10 +1287,25 @@ fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
     // named file, in another folder, out of the tree, in the build's own output.
     assert_eq!(
         alforge::inputs::read_outside(info, builder::SRC, builder::VENDOR, &inputs),
-        ["/build/src/crates/../../etc/climbed.rs", "/etc/fora.conf", "crates/veredas-portalx/src/lib.rs", "docs/a b.rs", "docs/cost$.txt", "docs/fora.rs", "docs/fora2.rs", "docs/fora3.rs", "docs/unix.rs"],
+        ["/build/src/crates/../../etc/climbed.rs", "/etc/fora.conf", "crates/veredas-portalx/src/lib.rs", "docs/a b.rs", "docs/cost$$.txt", "docs/fora.rs", "docs/fora2.rs", "docs/fora3.rs", "docs/unix.rs"],
         "a path is judged where it lands, out of the build's output and the vendored sources too",
     );
     assert_eq!((builder::SRC, builder::VENDOR), ("/build/src", "/build/vendor"));
+    // As cargo 1.100 writes them: only a space escaped (`$` raw), so a name ending in `\` before
+    // the space between two paths reads as one word holding ` /`, refused as it stands rather
+    // than taken for a file of core's folder; a relative path refused; `/..` resolved as `/`,
+    // climbing above the root onto a named file passing and elsewhere refused.
+    let cargo_wrote = "/build/src/target/release/x: /build/src/crates/veredas-core/src/zz\\ /build/src/docs/fora.rs docs/r.rs /build/src/../../../etc/x /../../build/src/crates/veredas-core/src/lib.rs\n";
+    assert_eq!(
+        alforge::inputs::read_outside(cargo_wrote, builder::SRC, builder::VENDOR, &inputs),
+        ["/build/src/../../../etc/x", "/build/src/crates/veredas-core/src/zz /build/src/docs/fora.rs", "docs/r.rs"]
+    );
+    // The vendored sources' stanza, written beside the tree (never over a configuration it holds),
+    // names its folder from there.
+    assert_eq!(
+        builder::vendor_config("[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"../vendor\"\n"),
+        "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"vendor\"\n"
+    );
     assert_eq!(alforge::inputs::read_outside("/build/src/target/release/x: /build/src/crates/veredas-core/src/lib.rs\n", builder::SRC, builder::VENDOR, &inputs), Vec::<String>::new());
 }
 
@@ -1370,5 +1385,53 @@ fn a_proc_macro_component_has_its_library_built_for_its_dep_info() {
     let s = builder::script(&recipe(), &[b]);
     assert!(s.lines().any(|l| l == "cargo build --release --locked --offline --jobs 4 -p veredas-macro --lib"), "{s}");
     assert!(s.lines().any(|l| l == "cp target/release/libveredas_macro.d /build/out/deps/"), "{s}");
+}
+
+#[test]
+fn round_fifteen_shared_names_with_required_features_crate_types_and_a_tracked_output_folder() {
+    let message = |got: Result<cut::Cut, CutError>| match got {
+        Err(e) => e.to_string(),
+        Ok(c) => panic!("cut: {:?}", c.manifest),
+    };
+    // Two components each naming `ferramenta`, with required features their defaults turn on.
+    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-a\", \"crates/veredas-b\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    for c in ["veredas-a", "veredas-b"] {
+        r.write(
+            &format!("crates/{c}/Cargo.toml"),
+            &format!("[package]\nname = \"{c}\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"f\"]\nf = []\n\n[[bin]]\nname = \"ferramenta\"\npath = \"src/f.rs\"\nrequired-features = [\"f\"]\n"),
+        );
+        r.write(&format!("crates/{c}/src/f.rs"), "fn main() {}\n");
+    }
+    r.commit("one name, required features");
+    let (got, left) = trial_cut(r.dir.path());
+    assert_eq!(message(got), "`ferramenta` is an executable of veredas-a and veredas-b: a bundle holds one executable a name");
+    assert!(!left);
+    // A commit tracking a file under target/, where the build's output goes: refused.
+    let (r, c) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let _ = c;
+    r.write("target/tracked.txt", "a file of the tree\n");
+    r.git(&["add", "-f", "target/tracked.txt"]);
+    let c = r.commit("a tracked file under target/");
+    let (got, left) = trial_cut(r.dir.path());
+    assert_eq!(message(got), format!("commit {c} tracks target/ (tracked.txt): the build's own output folder holds no file of the tree"));
+    assert!(!left);
+    // A component that ships no executable has a library the cut builds, whatever its crate type.
+    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/*\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    for (name, lib) in [("veredas-rl", "crate-type = [\"rlib\"]"), ("veredas-dy", "crate-type = [\"dylib\"]"), ("veredas-st", "crate-type = [\"staticlib\"]"), ("veredas-cd", "crate-type = [\"cdylib\"]"), ("veredas-pm", "proc-macro = true")] {
+        r.write(&format!("crates/{name}/Cargo.toml"), &format!("[package]\nname = \"{name}\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[lib]\n{lib}\n"));
+        r.write(&format!("crates/{name}/src/lib.rs"), "\n");
+    }
+    let c = r.commit("every crate type");
+    let held = alforge::manifest::components_at(r.dir.path(), &c, &mut Vec::new()).unwrap();
+    for name in ["veredas-rl", "veredas-dy", "veredas-st", "veredas-cd", "veredas-pm"] {
+        assert_eq!(held[name].lib.as_deref(), Some(name.replace('-', "_").as_str()), "{name}");
+    }
+    // What the cut says of a bin with required features cargo did not make.
+    let mut h = held["veredas-rl"].clone();
+    h.optional = ["feito", "nao-feito"].iter().map(|b| b.to_string()).collect();
+    let one: std::collections::BTreeMap<String, alforge::manifest::Held> = [("veredas-rl".to_string(), h)].into_iter().collect();
+    let bin = tempfile::tempdir().unwrap();
+    std::fs::write(bin.path().join("feito"), "").unwrap();
+    assert_eq!(cut::not_made(&one, bin.path()), ["veredas-rl's `nao-feito` was not built with its default features: not shipped (docs/questions.md Q443)"]);
 }
 

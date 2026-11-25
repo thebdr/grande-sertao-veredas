@@ -634,22 +634,23 @@ fn an_io_error_after_links_changed_puts_them_back_and_the_room_counts_the_bundle
     assert!(err.starts_with("veredas-atualizar: not installed, the machine is as it was:\n  "), "{err}");
     assert_eq!(m.snapshot(), before, "current, veredas-a's link and the release's folder put back");
     assert_eq!(m.calls(), "");
-    // The room a bundle needs: its files' size beside the reserve. A sparse file of 200 MB packs
-    // small; with the reserve just under the free room, its size is what does not fit.
+    // The room a bundle needs: its files' size beside the reserve. A sparse file of 1 GB packs
+    // small; with the reserve 512 MB under the free room (wide enough for a shared disk's
+    // changes meanwhile), its size is what does not fit.
     let m = Machine::new();
     let w2 = tempfile::tempdir().unwrap();
     let big = bundle_of(w2.path(), "1.1.0", TARGET, &["veredas-portal"], |d| {
-        std::fs::File::create(d.join("planta/big.bin")).unwrap().set_len(200 << 20).unwrap();
+        std::fs::File::create(d.join("planta/big.bin")).unwrap().set_len(1 << 30).unwrap();
         bundle::write_sums(d).unwrap();
     });
     let avail = String::from_utf8(Command::new("df").args(["--output=avail", "-B1"]).arg(m.path("opt")).output().unwrap().stdout).unwrap();
     let avail: u64 = avail.lines().nth(1).unwrap().trim().parse().unwrap();
-    let reserve = ((avail >> 20) - 40).to_string();
+    let reserve = ((avail >> 20) - 512).to_string();
     let before = m.snapshot();
     let out = m.command(&[&big], &[("VEREDAS_SETTLE", "0"), ("VEREDAS_RESERVE_MB", &reserve)]).output().unwrap();
     let err = String::from_utf8(out.stderr).unwrap();
     assert_eq!(out.status.code(), Some(2), "{err}");
-    assert!(err.contains("  the bundle needs 200 MB under "), "{err}");
+    assert!(err.contains("  the bundle needs 1024 MB under "), "{err}");
     assert_eq!(m.snapshot(), before);
 }
 

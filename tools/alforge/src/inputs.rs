@@ -616,6 +616,22 @@ fn literal(s: &str) -> Option<String> {
     None
 }
 
+/// An absolute path with its `.` and `..` parts resolved as the kernel resolves them (`/..` is `/`),
+/// without its leading `/`.
+fn rooted(p: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in p.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    parts.join("/")
+}
+
 /// A path from the tree's root with its `.` and `..` parts resolved; `None` when it is absolute or
 /// climbs out of the tree.
 fn normal(p: &Path) -> Option<String> {
@@ -643,10 +659,14 @@ pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs) ->
         // A path as rustc or cargo writes it may climb back (`crates/x/src/../../../docs/y.rs`, a
         // build script's `rerun-if-changed={OUT_DIR}/../../…`): resolved first, then judged where
         // it lands, the build's own output and the vendored sources included.
-        let Some(landed) = PathBuf::from(&path).strip_prefix("/").ok().and_then(normal).map(|p| PathBuf::from(format!("/{p}"))) else {
+        // Cargo escapes a space as `\ ` and nothing else, so a name ending in `\` before the space
+        // between two paths reads as one path holding ` /`: no file's name holds `/`, so such a
+        // word is ambiguous and refused as it stands; so is a path that is not absolute.
+        if path.contains(" /") || !path.starts_with('/') {
             out.insert(path);
             continue;
-        };
+        }
+        let landed = PathBuf::from(format!("/{}", rooted(&path)));
         if landed.starts_with(Path::new(src).join("target")) || landed.starts_with(vendor) {
             continue;
         }
@@ -665,8 +685,8 @@ pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs) ->
     out.into_iter().collect()
 }
 
-/// The prerequisites of every rule of a dep-info file (make's syntax: `target: dep dep`, a space
-/// in a name escaped as `\ `, a line continued by a final `\`), its targets left out.
+/// The prerequisites of every rule of a dep-info file as cargo writes it (`target: dep dep`, a
+/// space in a name escaped as `\ `, a line continued by a final `\`), its targets left out.
 fn dep_info_paths(text: &str) -> Vec<String> {
     let joined = text.replace("\\\n", " ");
     let mut out = Vec::new();
@@ -675,12 +695,12 @@ fn dep_info_paths(text: &str) -> Vec<String> {
         let Some(colon) = line.char_indices().find(|&(i, c)| c == ':' && line[i + 1..].chars().next().is_none_or(char::is_whitespace)).map(|(i, _)| i) else {
             continue;
         };
+        // Cargo's writer escapes a space as `\ ` and writes everything else, `$` included, as it is.
         let mut word = String::new();
         let mut chars = line[colon + 1..].chars().peekable();
         while let Some(c) = chars.next() {
             match c {
                 '\\' if chars.peek() == Some(&' ') => word.push(chars.next().unwrap_or(' ')),
-                '$' if chars.peek() == Some(&'$') => word.push(chars.next().unwrap_or('$')),
                 c if c.is_whitespace() => {
                     if !word.is_empty() {
                         out.push(std::mem::take(&mut word));
