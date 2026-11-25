@@ -30,7 +30,8 @@ lean on a crate's encoding):
 - **The functions**: each a body as MIR has it at opt-level 0 (`front-end.md`): its parameters, its locals (with the
   source's name where the source gave one), basic blocks of statements, and one terminator a block.
 - **The entries**: the functions a host may call, each by its source path (`Conveyor::scan`), with the program's
-  inputs, outputs and state types and the functions that build their default and safe values. Format 1 holds no
+  inputs, outputs and state types, and their first state and safe outputs, as values or as functions that build
+  them (`docs/questions.md` Q231, open; each needs a format of its own past 1). Format 1 holds no
   table of them: a host finds an entry by its function's name, its parameters' types being the function's own; a
   table, if the front end needs one, comes with a new format version (C-154).
 - **The source map**: for every instruction its source location, so a fault 502 `program(at)` and a breakpoint
@@ -81,7 +82,9 @@ target's settings (`veredas-alvo`), not built yet.
 - **The engine of a scan** runs an interpreted program as it runs a native one. A native `Program::scan` cannot
   fail, so `orcl-runtime` runs a `TaskProgram`, whose scan may end in an error of its own, which the task turns
   into its fault (`Fault::Program`, dated at the scan's start, its outputs never written, the safe outputs from
-  then on, as for the watchdog's); a native `Program` is a `TaskProgram` that never fails (C-151).
+  then on, as for the watchdog's); a native `Program` is a `TaskProgram` that never returns an error (C-151). A scan that runs past twice its period
+  is the watchdog's fault even when it then fails, since the host's watchdog faults it at twice the period while it
+  still runs (`docs/controlador/execution-model.md`, point 6).
 - **An interpreted program on the engine** (`orcl_runtime::Interpreted`, C-155) is a machine and its scan entry,
   `fn scan(&mut self, scan: &Scan, inputs: &I, outputs: &mut O)` as the front end lowers it, over four regions:
   the program's state, the scan, the inputs and the outputs. Its inputs and outputs are the native program's own
@@ -91,7 +94,7 @@ target's settings (`veredas-alvo`), not built yet.
   to its return, and reads the outputs back; nothing is allocated. A program error faults the task, and the
   machine is left at the instruction that failed, for the fault record. Its first state and its safe outputs are
   handed in when it is made (Q231). A scan that never returns is the host's watchdog's to catch, as a native
-  one's is; an instruction budget per scan would let the engine stop it itself (open).
+  one's is; an instruction budget per scan would let the engine stop it itself (Q232).
 - **Determinism**: no host time or randomness inside the machine; integer and float operations as Rust's on every
   target (IEEE 754 for the basic float operations; no transcendental function is on the list); the same program,
   inputs and scan times give the same outputs and the same instruction count.
@@ -128,4 +131,5 @@ with Veredas 1's conveyor and a probe that reaches every block of `orcl-std` and
   the target sets, a fault when it is exceeded.
 - **Q231** where an interpreted program's first state and safe outputs come from: handed in by the host at load
   (taken meanwhile; the front end would compute them), or entries the machine calls.
-- **An instruction budget per scan**, so the engine stops a scan that never returns rather than the host's watchdog.
+- **Q232** an instruction budget per scan, so the engine stops a scan that never returns rather than the host's
+  watchdog: none, taken meanwhile.

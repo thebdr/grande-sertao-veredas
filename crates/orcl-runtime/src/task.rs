@@ -7,8 +7,9 @@ use core::fmt;
 use core::time::Duration;
 
 /// What a task runs: a program whose scan may end in an error of its own, which faults the task. A native
-/// [`Program`] is one whose scan never fails; an interpreted one ([`crate::Interpreted`]) fails where Rust would
-/// panic (`docs/orcl/interpreter.md`, "Running").
+/// [`Program`] is one whose scan never returns an error (a native panic is ORCL's O11 limit, outside the engine);
+/// an interpreted one ([`crate::Interpreted`]) fails where Rust would panic (`docs/orcl/interpreter.md`, "Running").
+/// No handler of a program error is built yet: an error faults the task (`docs/questions.md` Q223, point 7).
 pub trait TaskProgram {
     type Inputs: Copy + Default;
     type Outputs: Copy + Default;
@@ -77,8 +78,9 @@ impl core::error::Error for TaskError {}
 pub enum Fault<E = Infallible> {
     /// One scan ran longer than twice the task's period (the controller's reason 501 `watchdog(task)`).
     Watchdog { exec: Duration },
-    /// The program's scan ended in an error (the controller's reason 502 `program(at)`). It ended the scan, so it is
-    /// the fault even when the same scan also ran past twice its period.
+    /// The program's scan ended in an error, within twice its period. A scan that ran past twice its period is the
+    /// watchdog's fault even when it then ended in an error: the host's watchdog faults it at twice the period, while
+    /// it still runs (`docs/controlador/execution-model.md`, point 6).
     Program { error: E },
 }
 
@@ -219,7 +221,7 @@ impl<P: TaskProgram> Task<P> {
     /// outputs are handed to the plant: its length, the time-error rule and the deadlines it skipped are all judged
     /// at that moment, and the plant's own time to take the outputs is not the scan's. A scan longer than the
     /// period is a time error; a scan longer than twice the period faults the task, and so does a scan whose
-    /// program ends in an error, which is the fault when both meet: that scan's own outputs are never written, the
+    /// program ends in an error, the watchdog's fault when both meet: that scan's own outputs are never written, the
     /// safe outputs are, from that scan on. Deadlines that passed while the scan ran are skipped and counted, never
     /// caught up.
     ///
@@ -254,7 +256,8 @@ impl<P: TaskProgram> Task<P> {
         let time_error = running && exec > period;
         if time_error {
             self.stats.overruns = self.stats.overruns.saturating_add(1);
-            if fault.is_none() && exec > period.saturating_mul(2) {
+            // past twice its period the watchdog faulted the scan while it still ran, before its end and any error
+            if exec > period.saturating_mul(2) {
                 fault = Some(Fault::Watchdog { exec });
             }
         }

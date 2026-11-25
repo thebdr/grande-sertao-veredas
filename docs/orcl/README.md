@@ -39,7 +39,7 @@ suite's plan, "Naming"), so its crates keep the names `orcl-*`, live under `crat
 | Crate | What it is | Uses | Stands |
 |---|---|---|---|
 | `orcl-std` | The standard control library, `no_std`: the scan model (`Scan`, `Program`), IEC-style timers (`Ton`, `Tof`, `Tp`), edges (`RTrig`, `FTrig`), a counter (`Ctu`), bit access (`Bits`) | nothing | carried from Veredas 1 |
-| `orcl-runtime` | The engine of a scan: a task's cycle over a process image, on a clock it is handed (virtual or real), the time-error rule, safe outputs, cycle statistics; no operating-system code, `no_std` with std named where it is used (the target's clock and its sleep); a native program or an interpreted one, whose scan may fault | `orcl-std`, `orcl-interp` | carried from Veredas 1, reworked; interpreted programs since 2026-11-25 (C-155) |
+| `orcl-runtime` | The engine of a scan: a task's cycle over a process image, on a clock it is handed (virtual or real), the time-error rule, safe outputs, cycle statistics; no operating-system code, `no_std` with std named where it is used (shared virtual time, the target's clock and its sleep, the slots of an interpreted program's regions); a native program or an interpreted one, whose scan may fault | `orcl-std`, `orcl-interp` | carried from Veredas 1, reworked; interpreted programs since 2026-11-25 (C-155) |
 | `orcl-interp` | The interpreter and its program format: bytecode made from the compiler's intermediate form, run one instruction at a time, suspendable at every instruction boundary | nothing (`orcl-std` for its tests) | its machine (C-153) and its program file (C-154) built, on programs built by hand; the front end and the conformance suite to come (`interpreter.md`) |
 | `orcl-front` | The front end: reads an ORCL crate through `rustc_public` on the pinned nightly and writes the program `orcl-interp` runs | `orcl-interp` | planned: a member on stable, its driver behind a feature on the pinned nightly (Q221, Q222) |
 
@@ -66,7 +66,8 @@ in Oficina's simulator and on a controller:
 - time read once per scan, from a clock the host hands in: virtual in a test or a simulation, monotonic on a target;
 - absolute deadlines, so a cycle never drifts; late cycles counted, never caught up;
 - the time-error rule of `docs/controlador-plan.md` ("Faults"): the handler on the first overrun, a fault when one
-  scan exceeds twice its period; safe outputs once faulted;
+  scan exceeds twice its period; a fault too when a scan's program ends in an error within it (no handler of a
+  program error is built yet, Q223 point 7); safe outputs once faulted;
 - cycle statistics against the absolute deadline: lateness, execution time, overruns, skipped cycles.
 
 How several tasks pre-empt one another, what they share and each one's slice of the process image is controlador's
@@ -173,6 +174,9 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
 ## Open
 - **Q44** the type table, and a second front end for the translators.
 - **Q230** a program whose functions call themselves: refused when the interpreter loads it, taken meanwhile.
+- **Q231** where an interpreted program's first state and safe outputs come from: handed in by its host, taken
+  meanwhile.
+- **Q232** an instruction budget per scan for an interpreted program: none, taken meanwhile.
 - **Q45** the reading that the conformance suite is only as good as the list of core operations ORCL allows.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan should give way to the prior art's
   LET, at the end of its logical period (`language/README.md`, "Not settled yet").

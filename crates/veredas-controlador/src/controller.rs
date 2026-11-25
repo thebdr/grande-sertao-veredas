@@ -233,7 +233,8 @@ impl<P: Program + Default> Controller<P> {
     }
 
     /// One cycle of the controller on the target's clock. Starting, it finishes its start-up and runs the
-    /// program's first scan at once; running, or faulted by its program, it runs the task's next scan; stopped,
+    /// program's first scan at once; running, or faulted while its program ran (the watchdog's fault), it runs the
+    /// task's next scan; stopped,
     /// or faulted before any program ran, it waits for the first period of the target's clock that is not before
     /// this step and comes after the last exchange, reads the inputs and writes the safe outputs, so the plant's
     /// exchange goes on, on those periods alone and at most once in each.

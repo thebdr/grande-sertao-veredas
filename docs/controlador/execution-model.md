@@ -133,5 +133,8 @@ versions' measured worst-case scans together fit the period.
 
 ## What code stands on so far
 The engine of a scan (`orcl-runtime`) runs one cyclic task: inputs latched at the start of its scan, outputs
-published at its end, absolute deadlines on the program clock, the time-error rule, safe outputs in FAULT. Several
-tasks, pre-emption on one logic thread, handlers and the bus thread are ruled and not built yet.
+published at its end, absolute deadlines on the program clock, the time-error rule, safe outputs in FAULT. Its
+program is native or interpreted (`orcl-interp`'s machine, C-155); a scan whose program ends in an error within
+twice its period faults the task, and one past twice its period is the watchdog's fault whatever it then does, as
+point 6 has it. Several tasks, pre-emption on one logic thread, handlers and the bus thread are ruled and not built
+yet; the controller (C-152) runs native programs only.

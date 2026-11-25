@@ -3,8 +3,9 @@
 The soft PLC of Veredas 2. `docs/veredas-plan.md` ("veredas-controlador: the softPLC") wins on
 intent; `.zen/contract.md` (P-003) wins on status. Built so far: ORCL's standard library carried
 from Veredas 1 (`orcl-std`, C-150), the engine of a scan (`orcl-runtime`, C-151), the controller's
-states and commands over one cyclic task (C-152), and the interpreter's machine on programs built
-by hand and its program file (`orcl-interp`, C-153 and C-154, 2026-11-25). This
+states and commands over one cyclic task (C-152, native programs only), the interpreter's machine
+on programs built by hand and its program file (`orcl-interp`, C-153 and C-154, 2026-11-25), and an
+interpreted program on the engine, its program errors faulting the task (C-151, C-155). This
 file holds what the architect decided in the briefing of 13 to 16 November 2026, in the rulings of
 15 November on its adversarial review, in the robustness round begun on 16 November
 (`docs/robustness.md`), and in the rulings of 25 November on the questions its first build raised
@@ -483,7 +484,7 @@ Where each item stands on 2026-11-25:
 - **A study of the interpreter's front end** and of the list of core-library operations ORCL allows:
   `docs/orcl/front-end.md`, its choices ruled (Q221, Q222, Q227). The front end's plan is a section
   of `docs/orcl/README.md`, which law L6 reads for every `orcl-*` crate; the interpreter's design is
-  `docs/orcl/interpreter.md` (Q230 open).
+  `docs/orcl/interpreter.md` (Q230, Q231 and Q232 open).
 - **The study of Linux for real time and of its recovery methods** (`docs/robustness.md`, "The Linux
   study"): `docs/controlador/linux-study.md`, its choices ruled ("On the target" above).
 - **PROFINET International membership**: the architect's.
@@ -511,4 +512,6 @@ Where each item stands on 2026-11-25:
 - Ruled and not yet stated by the crates here: **Q35** the licence, `MIT OR Apache-2.0`, its files
   naming the repository's owner.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan gives way to the
-  prior art's LET. **Q230** a program whose functions call themselves.
+  prior art's LET. **Q230** a program whose functions call themselves. **Q231** where an
+  interpreted program's first state and safe outputs come from. **Q232** an instruction budget per
+  scan for an interpreted program.

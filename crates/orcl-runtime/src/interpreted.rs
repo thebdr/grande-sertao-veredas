@@ -70,7 +70,8 @@ pub struct Interpreted<I: Image, O: Image> {
     machine: Machine,
     entry: FunctionId,
     safe: O,
-    /// Room for the slots handed to a region, reserved when the adapter is made, so a scan allocates nothing.
+    /// Room for the slots handed to a region, reserved when the adapter is made for the largest region, so a scan
+    /// allocates nothing while each image writes no more slots than its region holds.
     slots: Vec<Scalar>,
     inputs: PhantomData<fn(&I)>,
 }

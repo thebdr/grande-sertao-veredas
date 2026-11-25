@@ -835,14 +835,15 @@ fn a_program_error_faults_the_task_and_its_scan_s_own_outputs_are_never_written(
 }
 
 #[test]
-fn a_program_error_on_a_scan_past_twice_its_period_is_the_fault_and_the_scan_a_time_error() {
-    // the scan of cycle 1 runs 25 ms and fails: the watchdog would fault it too, but the error ended the scan
+fn a_failing_scan_past_twice_its_period_is_the_watchdog_s_fault_and_a_time_error() {
+    // the scan of cycle 1 runs 25 ms and fails: the host's watchdog faulted it at 20 ms, while it still ran
+    // (`docs/controlador/execution-model.md`, point 6), so the fault is the watchdog's, naming the scan's length
     let mut clock = VirtualClock::new();
     let mut plant = Loop::new(&clock, |_| Duration::ZERO);
     let mut t = failing(&clock, &[1], ms(25));
     t.step(&mut plant, &mut clock);
     let r = t.step(&mut plant, &mut clock);
-    let fault = RunState::Faulted { at: ms(10), fault: Fault::Program { error: 1 } };
+    let fault = RunState::Faulted { at: ms(10), fault: Fault::Watchdog { exec: ms(25) } };
     assert_eq!((r.scan.cycle, r.exec, r.time_error, *r.outputs, r.state), (1, ms(25), true, 7, fault));
     let s = *t.stats();
     assert_eq!((s.overruns, t.next_cycle(), t.state()), (1, 4, fault), "an overrun, its passed deadlines skipped");
@@ -859,4 +860,15 @@ fn a_program_error_on_a_time_error_counts_the_overrun_and_faults() {
     assert_eq!((r.exec, r.time_error, *r.outputs, r.state), (ms(15), true, 7, fault));
     assert_eq!(plant.writes, [(ms(15), 7)]);
     assert_eq!(t.stats().overruns, 1);
+}
+
+#[test]
+fn a_failing_scan_of_exactly_twice_its_period_is_the_program_s_fault() {
+    // twice the period is the limit itself, no watchdog's fault: the error is the fault, and the scan a time error
+    let mut clock = VirtualClock::new();
+    let mut plant = Loop::new(&clock, |_| Duration::ZERO);
+    let mut t = failing(&clock, &[0], ms(20));
+    let r = t.step(&mut plant, &mut clock);
+    let fault = RunState::Faulted { at: ms(0), fault: Fault::Program { error: 0 } };
+    assert_eq!((r.exec, r.time_error, *r.outputs, r.state), (ms(20), true, 7, fault));
 }

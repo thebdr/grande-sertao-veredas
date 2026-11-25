@@ -11,7 +11,7 @@
 //! step in twenty the host is away for up to a million periods, and a wait that has to wait wakes past its deadline,
 //! by a nanosecond, part of a period or more, as a target's does under load. The program's scan may end in an error
 //! of its own, after writing junk into its outputs: the task faults so too, dated at the scan's start, its outputs
-//! never written, and the error is the fault even on a scan past twice the period. Three mixes: anything (the
+//! never written, and a scan past twice the period is the watchdog's fault even when it fails. Three mixes: anything (the
 //! watchdog's fault early in most sequences, one scan in forty failing), every scan held to twice the period and none
 //! failing (the task runs the whole way), and held so until a step drawn late in the run, after a drawn streak of time
 //! errors, where the task faults by the watchdog, by the program's error, or by both on one scan. After every step the
@@ -177,10 +177,10 @@ impl Model {
         if time_error {
             self.overruns += 1;
         }
-        if failed {
-            self.faulted = Some((start, Why::Program(self.scans - 1)));
-        } else if time_error && exec > 2 * self.period {
+        if time_error && exec > 2 * self.period {
             self.faulted = Some((start, Why::Watchdog(exec)));
+        } else if failed {
+            self.faulted = Some((start, Why::Program(self.scans - 1)));
         }
         let outputs = if self.faulted.is_none() {
             self.image.wrapping_mul(3).wrapping_add(input + 1)
@@ -571,7 +571,7 @@ fn the_draws_reach_every_case_the_clause_names() {
     let (mut faults_past_scan_1000, mut faults_after_20_time_errors, mut faults_after_10_in_a_row) = (0, 0, 0);
     let (mut faults_after_100_skips, mut late_by_1000_periods_running, mut late_by_1000_periods_faulted) = (0, 0, 0);
     let mut woke_late = 0;
-    let (mut program_faults, mut program_faults_on_a_time_error, mut program_faults_past_twice) = (0, 0, 0);
+    let (mut program_faults, mut program_faults_on_a_time_error, mut failing_past_twice) = (0, 0, 0);
     let (mut program_faults_past_scan_1000, mut program_faults_in_free_sequences) = (0, 0);
     let runs = [(Mix::Free, 0..4_000, 50), (Mix::Free, 10_000..10_040, 2_000), (Mix::NeverFaults, 20_000..20_040, 2_000)];
     let runs = runs.into_iter().chain([(Mix::FaultsLate, 30_000..30_100, 2_000)]);
@@ -612,10 +612,12 @@ fn the_draws_reach_every_case_the_clause_names() {
                         faulting_ends_on_a_deadline += 1;
                     }
                 }
+                if !was_faulted && fail == 1 && seen.exec > 2 * period {
+                    failing_past_twice += 1;
+                }
                 if let (false, Some((_, Why::Program(_)))) = (was_faulted, model.faulted) {
                     program_faults += 1;
                     program_faults_on_a_time_error += usize::from(seen.time_error);
-                    program_faults_past_twice += usize::from(seen.exec > 2 * period);
                     program_faults_past_scan_1000 += usize::from(step >= 1_000);
                     program_faults_in_free_sequences += usize::from(matches!(mix, Mix::Free));
                 }
@@ -653,7 +655,7 @@ fn the_draws_reach_every_case_the_clause_names() {
         ("a scan started by a wait that woke past its deadline", woke_late),
         ("a program fault", program_faults),
         ("a program fault on a scan that is a time error", program_faults_on_a_time_error),
-        ("a program fault on a scan past twice the period, the program's error the fault", program_faults_past_twice),
+        ("a failing scan past twice the period, the watchdog's fault", failing_past_twice),
         ("a program fault past the 1000th scan", program_faults_past_scan_1000),
         ("a program fault in a free sequence", program_faults_in_free_sequences),
     ] {
