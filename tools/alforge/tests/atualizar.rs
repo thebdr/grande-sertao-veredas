@@ -731,8 +731,10 @@ fn round_two_the_lock_holds_the_installed_release_read_and_the_manifest_is_held_
     let c = bundle_of(w.path(), "1.2.0", TARGET, &["veredas-portal"], |_| {});
     let slow = m.command(&[&b], &[("VEREDAS_SETTLE", "0")]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(500));
-    let (code, _, err) = m.run(&[&c]);
-    assert_eq!((code, err.as_str()), (Some(2), "veredas-atualizar: another update is running\n"));
+    // The second bounded too: one that waits instead of refusing fails the test, never hangs it.
+    let second = m.command(&[&c], &[("VEREDAS_SETTLE", "0")]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    let out2 = within(second, 30);
+    assert_eq!((out2.status.code(), String::from_utf8_lossy(&out2.stderr).into_owned()), (Some(2), "veredas-atualizar: another update is running\n".to_string()));
     std::fs::write(&installed, &text).unwrap();
     let out = within(slow, 120);
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
@@ -938,5 +940,70 @@ fn round_three_the_manifests_kinds_semvers_identifiers_the_archives_room_first_a
         let mode = std::fs::metadata(m.path(&format!("opt/veredas/veredas-1.3.0-{TARGET}{d}"))).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755, "{d}");
     }
+}
+
+#[test]
+fn round_four_a_rollback_names_what_it_left_another_version_and_a_missing_symbol_version_refused() {
+    let tools = tempfile::tempdir().unwrap();
+    let disk = failing_disk(tools.path());
+    let w = tempfile::tempdir().unwrap();
+    // The rollback cannot remove the new release's folder (a file of it on a failing disk): not
+    // "as it was", exit 4, the folder named.
+    let m = Machine::new();
+    let b = bundle_of(w.path(), "1.2.0", TARGET, &["veredas-portal"], |d| {
+        std::fs::write(d.join("planta/veredas-velho.txt"), "x\n").unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    let out = m.command(&[&b], &[("VEREDAS_SETTLE", "0"), ("LD_PRELOAD", disk.to_str().unwrap()), ("ALFORGE_FAIL_UNLINK", "veredas-velho")]).output().unwrap();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(4), "{err}");
+    let dest = m.path(&format!("opt/veredas/veredas-1.2.0-{TARGET}"));
+    assert!(err.contains(&format!("the new release's folder {} could not all be removed: ", dest.display())), "{err}");
+    assert_eq!(std::fs::read_link(m.path("opt/veredas/current")).unwrap(), PathBuf::from(format!("veredas-1.0.0-{TARGET}")), "current put back");
+    // A link that cannot be put back (two of the release's own dropped, the second failing, the
+    // first's putting back failing): exit 4, the link and the kept folder named.
+    let m = Machine::new();
+    std::os::unix::fs::symlink("/opt/veredas/current/bin/veredas-antigo", m.path("usr/local/bin/veredas-antigo")).unwrap();
+    let only = bundle_of(w.path(), "1.3.0", TARGET, &["veredas-portal"], |_| {});
+    let out = m
+        .command(&[&only], &[("VEREDAS_SETTLE", "0"), ("LD_PRELOAD", disk.to_str().unwrap()), ("ALFORGE_FAIL_UNLINK", "usr/local/bin/veredas-velho"), ("ALFORGE_FAIL_SYMLINK_AFTER", "2")])
+        .output()
+        .unwrap();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(4), "{err}");
+    assert!(err.contains(&format!("{} could not be put back on /opt/veredas/current/bin/veredas-antigo", m.path("usr/local/bin/veredas-antigo").display())), "{err}");
+    assert!(err.contains(&format!("the new release's folder {} is kept", m.path(&format!("opt/veredas/veredas-1.3.0-{TARGET}")).display())), "{err}");
+    // A manifest of another version than the command reads: refused, never guessed.
+    let m = Machine::new();
+    let v2 = bundle_of(w.path(), "1.4.0", TARGET, &["veredas-portal"], |d| {
+        let t = std::fs::read_to_string(d.join("release.toml")).unwrap().replacen("\nversion = 1\n", "\nversion = 2\n", 1);
+        std::fs::write(d.join("release.toml"), t).unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    let (code, _, err) = m.run(&[&v2]);
+    assert_eq!((code, err), (Some(2), "veredas-atualizar: not installed, the machine is as it was:\n  release.toml is `veredas-release` version 2, not `veredas-release` version 1\n".to_string()));
+    // An executable asking a symbol version its library on this machine does not have (as an
+    // executable built against a newer glibc would): refused before anything is switched.
+    let lib = tempfile::tempdir().unwrap();
+    let l = lib.path();
+    std::fs::write(l.join("v.c"), "int f(void) { return 0; }\n").unwrap();
+    for (map, vers) in [("v2.map", "VERS_2"), ("v1.map", "VERS_1")] {
+        std::fs::write(l.join(map), format!("{vers} {{ global: f; local: *; }};\n")).unwrap();
+    }
+    let cc = |args: &[&str]| assert!(Command::new("cc").current_dir(l).args(args).status().unwrap().success(), "{args:?}");
+    cc(&["-shared", "-fPIC", "-Wl,--version-script=v2.map", "-Wl,-soname,libv.so", "-o", "libv.so", "v.c"]);
+    let b = bundle_of(w.path(), "1.5.0", TARGET, &["veredas-portal"], |d| {
+        std::fs::write(l.join("main.c"), "int f(void);\nint main(void) { return f(); }\n").unwrap();
+        let exe = d.join("bin/veredas-portal");
+        let out = Command::new("cc").current_dir(l).arg("-o").arg(&exe).arg("main.c").arg(format!("-Wl,-rpath,{}", l.display())).arg("-L.").arg("-lv").output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        bundle::write_sums(d).unwrap();
+    });
+    cc(&["-shared", "-fPIC", "-Wl,--version-script=v1.map", "-Wl,-soname,libv.so", "-o", "libv.so", "v.c"]);
+    let before = m.snapshot();
+    let (code, _, err) = m.run(&[&b]);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("  bin/veredas-portal would not start here: ") && err.contains("version `VERS_2' not found"), "{err}");
+    assert_eq!(m.snapshot(), before);
 }
 

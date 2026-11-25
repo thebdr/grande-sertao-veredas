@@ -293,9 +293,13 @@ def install(stage, top, old_top, bins):
                         failed.append(f"{p} could not be removed ({r.strerror})")
         if failed:
             # The folder `current` may still name is kept: nothing is deleted under a running link.
-            raise Broken([why] + failed)
+            kept = [f"the new release's folder {dest} is kept: a later update of this release is refused while it stands"] if moved else []
+            raise Broken([why] + failed + kept)
         if moved:
-            shutil.rmtree(dest, ignore_errors=True)
+            left = []
+            shutil.rmtree(dest, onexc=lambda _f, p, x: left.append(f"{p} ({getattr(x, 'strerror', x)})"))
+            if left:
+                raise Broken([why, f"the new release's folder {dest} could not all be removed: {left[0]}; a later update of this release is refused while it stands"])
         raise Refused([why])
 
 
