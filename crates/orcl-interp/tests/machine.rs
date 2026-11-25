@@ -1625,3 +1625,172 @@ fn a_float_slot_of_the_other_kind_is_refused_as_a_constant_a_region_and_an_argum
         );
     }
 }
+
+// Round 10's (the critic's kill-tests, kept): an Option of another shape, a failed core operation's position, a
+// region for a by-value parameter, a scalar type listed twice, a switch on what is no integer, a checked result
+// into a structure of three fields.
+
+type Shape = Box<dyn Fn(&mut Build, TypeId) -> TypeId>;
+
+fn opt_like(b: &mut Build, name: &str, variants: Vec<(i128, Vec<TypeId>)>) -> TypeId {
+    let variants = variants
+        .into_iter()
+        .enumerate()
+        .map(|(i, (d, fields))| Variant {
+            name: format!("V{i}"),
+            discriminant: d,
+            fields: fields.into_iter().enumerate().map(|(k, ty)| Field { name: k.to_string(), ty }).collect(),
+        })
+        .collect();
+    b.ty(Type::Enum { name: name.into(), discriminant: Int::Isize, variants })
+}
+
+fn core_call(b: &mut Build, op: CoreOp, dest: TypeId, args: &[TypeId]) {
+    let mut types = vec![dest];
+    types.extend_from_slice(args);
+    b.function(Function {
+        name: "f".into(),
+        params: args.len() as u32,
+        locals: locals(&types),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Core(op), args: (1..=args.len() as u32).map(copy).collect(), dest: place(0), next: BlockId(1), at: at(1) }),
+            block(vec![], ret()),
+        ],
+    });
+}
+
+#[test]
+fn an_option_of_another_shape_is_no_option_to_a_core_operation() {
+    let shapes: Vec<(&str, Shape, bool)> = vec![
+        ("Option { None = 0, Some(u8) = 1 }", Box::new(|b, u| opt_like(b, "Option", vec![(0, vec![]), (1, vec![u])])), true),
+        ("Option { None = 1, Some(u8) = 0 }", Box::new(|b, u| opt_like(b, "Option", vec![(1, vec![]), (0, vec![u])])), false),
+        ("Option { None = 0, Some(u8) = 2 }", Box::new(|b, u| opt_like(b, "Option", vec![(0, vec![]), (2, vec![u])])), false),
+        ("Option { None(u8) = 0, Some(u8) = 1 }", Box::new(|b, u| opt_like(b, "Option", vec![(0, vec![u]), (1, vec![u])])), false),
+        ("Option { None = 0, Some(u8, u8) = 1 }", Box::new(|b, u| opt_like(b, "Option", vec![(0, vec![]), (1, vec![u, u])])), false),
+        ("Option { None = 0, Some(u8) = 1, Other = 2 }", Box::new(|b, u| opt_like(b, "Option", vec![(0, vec![]), (1, vec![u]), (2, vec![])])), false),
+    ];
+    for (shape, make, good) in &shapes {
+        for op in [CoreOp::OptionIsNone, CoreOp::OptionIsSome, CoreOp::OptionGetOrInsert, CoreOp::CheckedShl(Int::U8)] {
+            let mut b = Build::default();
+            let (u8t, u32t, boolean) = (b.int(Int::U8), b.int(Int::U32), b.bool());
+            let opt = make(&mut b, u8t);
+            match op {
+                CoreOp::OptionIsNone | CoreOp::OptionIsSome => {
+                    let sopt = b.reference(opt, false);
+                    core_call(&mut b, op, boolean, &[sopt]);
+                }
+                CoreOp::OptionGetOrInsert => {
+                    let (ropt, ru8) = (b.reference(opt, true), b.reference(u8t, true));
+                    core_call(&mut b, op, ru8, &[ropt, u8t]);
+                }
+                _ => core_call(&mut b, op, opt, &[u8t, u32t]),
+            }
+            let got = Machine::load(b.program, &[]).map(|_| ());
+            if *good {
+                assert_eq!(got, Ok(()), "{op:?} on {shape}");
+            } else {
+                assert_eq!(
+                    got,
+                    Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "a core operation called with types it does not take" }),
+                    "{op:?} on {shape}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_failed_core_operation_leaves_the_machine_at_its_call() {
+    // fn f(o: &Option<u8>) -> bool { o.is_none() } on a region never set
+    let mut b = Build::default();
+    let (u8t, boolean) = (b.int(Int::U8), b.bool());
+    let opt = b.option(u8t);
+    let sopt = b.reference(opt, false);
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[boolean, sopt]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Core(CoreOp::OptionIsNone), args: vec![copy(1)], dest: place(0), next: BlockId(1), at: at(4) }),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[opt]).unwrap();
+    let err = m.call(f, &[Arg::Ref(RegionId(0))]).unwrap_err();
+    assert!(matches!(err, CallError::Program(ProgramError { kind: ErrorKind::Uninit, .. })), "{err:?}");
+    assert_eq!(m.position(), Some((f, BlockId(0), 0)), "the machine stays at the failed call");
+    assert_eq!(m.clone().position(), Some((f, BlockId(0), 0)), "and so does a copy of it");
+}
+
+#[test]
+fn a_region_by_reference_for_a_parameter_taken_by_value_is_refused() {
+    // fn f(x: u8) -> u8 { x }: a reference to a u8 region is no u8
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let f = b.function(Function { name: "f".into(), params: 1, locals: locals(&[u8t, u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
+    let mut m = Machine::load(b.program, &[u8t]).unwrap();
+    m.set_region(RegionId(0), &[int(Int::U8, 5)]).unwrap();
+    assert_eq!(m.start(f, &[Arg::Ref(RegionId(0))]), Err(HostError::Arguments));
+}
+
+#[test]
+fn a_scalar_type_listed_twice_is_one_type() {
+    // types: u8, u8 again, &u8 (to the first); fn f(x: &u8) -> u8 { *x } returning the second u8; a region of it
+    let mut p = Program::default();
+    p.types.push(Type::Int(Int::U8));
+    p.types.push(Type::Int(Int::U8));
+    p.types.push(Type::Ref { to: TypeId(0), mutable: false });
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[TypeId(1), TypeId(2)]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Deref]))), 1)], ret())],
+    });
+    let mut m = Machine::load(p, &[TypeId(1)]).expect("one type listed twice loads");
+    m.set_region(RegionId(0), &[int(Int::U8, 5)]).unwrap();
+    assert_eq!(m.call(FunctionId(0), &[Arg::Ref(RegionId(0))]).map(|r| r.to_vec()), Ok(vec![int(Int::U8, 5)]));
+}
+
+#[test]
+fn a_switch_with_values_on_what_is_no_integer_is_refused() {
+    for kind in ["struct", "duration", "f32"] {
+        let mut b = Build::default();
+        let (u8t, unit) = (b.int(Int::U8), b.unit());
+        let ty = match kind {
+            "struct" => b.ty(Type::Struct { name: "S".into(), fields: vec![Field { name: "a".into(), ty: u8t }] }),
+            "duration" => b.ty(Type::Duration),
+            _ => b.ty(Type::F32),
+        };
+        b.function(Function {
+            name: "f".into(),
+            params: 1,
+            locals: locals(&[unit, ty]),
+            blocks: vec![
+                block(vec![], Terminator::SwitchInt { value: copy(1), targets: vec![(1, BlockId(1))], otherwise: BlockId(1), at: at(1) }),
+                block(vec![assign(place(0), Value::Aggregate(unit, None, vec![]), 2)], ret()),
+            ],
+        });
+        assert_eq!(
+            Machine::load(b.program, &[]).map(|_| ()),
+            Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "a switch's value outside its operand's type" }),
+            "a switch on a {kind}"
+        );
+    }
+}
+
+#[test]
+fn a_checked_result_into_a_structure_of_three_fields_is_refused() {
+    let mut b = Build::default();
+    let (u8t, boolean) = (b.int(Int::U8), b.bool());
+    let three = b.tuple(&[u8t, boolean, u8t]);
+    b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[three, u8t]),
+        blocks: vec![block(vec![assign(place(0), Value::Checked(BinOp::Add, copy(1), copy(1)), 1)], ret())],
+    });
+    assert_eq!(
+        Machine::load(b.program, &[]).map(|_| ()),
+        Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a checked result into what is no (value, bool)" })
+    );
+}
