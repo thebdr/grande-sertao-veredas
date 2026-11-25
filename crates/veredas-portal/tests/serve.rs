@@ -177,6 +177,8 @@ fn the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session() 
     let (_, v) = get(addr, "/api/session");
     assert_eq!(v["health"]["log"]["count"], 20 + 20);
     assert_eq!(v["health"]["log"]["last_ts"], json!(stamp_ms(39)));
+    // Each source's history read: the log's in the store, the OPC source and the channel with none.
+    assert_eq!(["log", "plc", "sorter"].map(|id| v["health"][id]["history_read"].clone()), [json!(true), json!(true), json!(true)], "{v}");
 
     // The listing: from the ingest's cache, typed and counted, sorted by source then series.
     let (_, v) = get(addr, "/api/series");
@@ -537,4 +539,29 @@ fn the_write_surface_s_other_answers_the_budget_the_lag_and_the_end() {
     let (_, v) = get(addr, "/api/session");
     assert_eq!(v["running"], false, "{v}");
     assert_eq!(v["health"]["log"]["state"], "ended", "{v}");
+}
+
+/// The snapshot says a log's history not read while it is not: a file nobody may read, read from
+/// a start in the past, its history never in the store (C-096).
+#[cfg(unix)]
+#[test]
+fn the_snapshot_says_a_log_s_history_not_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let held = dir.path().join("held.log");
+    write_lines(&held, 0..10);
+    std::fs::set_permissions(&held, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
+    let mut cfg = SessionConfig::new("unread");
+    cfg.start = Some(midnight());
+    cfg.logs.push(log_source("held", &held));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    let server = serve(session.live());
+    assert!(wait(Duration::from_secs(10), || get(server.addr, "/api/session").1["health"]["held"].is_object()), "{}", get(server.addr, "/api/session").1);
+    std::thread::sleep(Duration::from_millis(1_200));
+    let (_, v) = get(server.addr, "/api/session");
+    assert_eq!(v["health"]["held"]["history_read"], json!(false), "{v}");
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    std::fs::set_permissions(&held, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
 }

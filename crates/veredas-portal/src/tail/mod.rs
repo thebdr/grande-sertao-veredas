@@ -69,3 +69,21 @@ impl Default for TailConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// The first moment counts: a mark after it, the lines sent since, is new content and moves
+    /// nothing (C-096, "set once").
+    #[test]
+    fn the_history_read_is_set_once() {
+        let at = Some(Arc::new(AtomicU64::new(u64::MAX)));
+        super::mark_history_read(&at, 5);
+        super::mark_history_read(&at, 9);
+        super::mark_history_read(&at, 0);
+        assert_eq!(at.as_ref().unwrap().load(Ordering::Relaxed), 5);
+        super::mark_history_read(&None, 3);
+    }
+}

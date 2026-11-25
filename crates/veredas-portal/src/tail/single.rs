@@ -158,10 +158,11 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
         }
     }
     attached(&mut Some(attached_tx));
-    // Not there at the first look: no history to read, whatever appears is new content. Present,
-    // its history is read with its first read; held, with the first read of the open that
-    // succeeds.
-    if active.is_none() && held.is_none() {
+    // A start at the end skips the history, and a file not there at the first look has none:
+    // read in at once (a file held at the first look and started at its end is read from where
+    // it stood once it opens, new content). Read from its start, present, its history is read
+    // with its first read; held, with the first read of the open that succeeds.
+    if cfg.start == FileStart::End || (active.is_none() && held.is_none()) {
         crate::tail::mark_history_read(&history, 0);
     }
     let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };

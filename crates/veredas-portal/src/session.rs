@@ -440,6 +440,12 @@ struct Stats {
     count: u64,
     last_arrival_ms: i64,
     last_ts: Option<NaiveDateTime>,
+    /// A log's lines drained since the last flush, and those whose flush landed.
+    pending: u64,
+    stored: u64,
+    /// A flush failed holding some of the log's lines before its history was read: the history
+    /// is not whole in the store, and the log never says it read.
+    history_lost: bool,
 }
 
 struct Inner {
@@ -490,6 +496,8 @@ struct ControllerRuntime {
 /// A recording in progress: its own store on the drive, the rows waiting for the next write.
 #[cfg(test)]
 mod recorder_test;
+#[cfg(test)]
+mod history_test;
 
 struct Recorder {
     store: DuckStore,
@@ -541,6 +549,31 @@ impl Recorder {
             p.extend_from_slice(rows);
         }
     }
+}
+
+/// The lines a flush held, settled: stored when every append landed; a failed append may have
+/// held any of them, so a log whose history was not read yet has lost part of it, and never says
+/// it read (C-096).
+fn settle_lines(stats: &mut BTreeMap<String, Stats>, history_read: &HashMap<String, Arc<std::sync::atomic::AtomicU64>>, failed: bool) {
+    for (id, st) in stats.iter_mut() {
+        if st.pending == 0 {
+            continue;
+        }
+        if failed && !history_is_read(history_read.get(id), st) {
+            st.history_lost = true;
+        }
+        st.stored += st.pending;
+        st.pending = 0;
+    }
+}
+
+/// Whether a log's history is read: the lines its worker had sent by its read-in all stored,
+/// and none lost to a store error; a source with no history to read is read from its start.
+fn history_is_read(at: Option<&Arc<std::sync::atomic::AtomicU64>>, st: &Stats) -> bool {
+    at.is_none_or(|at| {
+        let sent = at.load(std::sync::atomic::Ordering::Relaxed);
+        !st.history_lost && sent != u64::MAX && st.stored >= sent
+    })
 }
 
 /// The size of a record's files: the database and its write-ahead log beside it.
@@ -835,7 +868,7 @@ impl Session {
                 return Err(SessionError::Spawn { id, source: e });
             }
             time_formats.insert(SourceId::new(&id), formats);
-            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None });
+            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false });
             sources.push(SourceInfo { id, display_name: display, kind: "log", has_timestamp: has_ts });
         }
 
@@ -853,7 +886,7 @@ impl Session {
                     return Err(SessionError::Spawn { id: spec.source_id.clone(), source: e });
                 }
             };
-            stats.insert(spec.source_id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None });
+            stats.insert(spec.source_id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false });
             sources.push(SourceInfo { id: spec.source_id.clone(), display_name: spec.display_name.clone(), kind: "opc", has_timestamp: false });
             opc_handles.push(worker.writer.clone());
             opc_runtimes.push(OpcRuntime { handle: worker.handle, spec, base, seq: 0, state: ConnState::Connecting, dedup: DedupState::default() });
@@ -878,7 +911,7 @@ impl Session {
                     return Err(SessionError::Channel(e));
                 }
             };
-            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None });
+            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false });
             sources.push(SourceInfo { id, display_name: display, kind: "channel", has_timestamp: false });
             channel_handles.push(worker.writer.clone());
             channel_runtimes.push(ChannelRuntime { handle: worker.handle, writer: worker.writer, tables, state: LinkState::Waiting });
@@ -892,7 +925,7 @@ impl Session {
                 let closed = Arc::new(Mutex::new(false));
                 let id = c.source_id.trim().to_string();
                 let display = if c.display_name.trim().is_empty() { id.clone() } else { c.display_name.trim().to_string() };
-                stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None });
+                stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false });
                 sources.push(SourceInfo { id: id.clone(), display_name: display, kind: "controller", has_timestamp: false });
                 let runtime = ControllerRuntime {
                     source: SourceId::new(&id),
@@ -1107,6 +1140,7 @@ impl Inner {
         for ev in batch {
             if let Some(st) = self.stats.get_mut(ev.source.as_str()) {
                 st.count += 1;
+                st.pending += 1;
                 st.last_arrival_ms = ev.arrival_unix_ms;
                 if ev.parsed_ts.is_some() {
                     st.last_ts = ev.parsed_ts;
@@ -1332,12 +1366,15 @@ impl Inner {
     }
 
     fn flush(&mut self, live: &Live) {
+        let mut failed = false;
         for i in 0..self.wide_buf.len() {
             if self.wide_buf[i].is_empty() {
                 continue;
             }
             let rows = std::mem::take(&mut self.wide_buf[i]);
-            match live.store.append_wide(i, &rows) {
+            let appended = live.store.append_wide(i, &rows);
+            failed |= appended.is_err();
+            match appended {
                 Ok(()) => {
                     self.counters.rows += rows.len() as u64;
                     if let Some(r) = self.recorder.as_mut() {
@@ -1350,6 +1387,7 @@ impl Inner {
                 }
             }
         }
+        settle_lines(&mut self.stats, &self.history_read, failed);
         if !self.frame_buf.is_empty() {
             if live.frames.receiver_count() > 0 {
                 for chunk in self.frame_buf.chunks(FRAME_SAMPLES) {
@@ -1472,13 +1510,10 @@ impl Inner {
                     }
                 },
             };
-            // A log's history is read once the lines its worker had sent by then are stored (the
-            // count is the lines this pump stored, flushed before this refresh); a source with
-            // no history to read is read from its start.
-            let history_read = self.history_read.get(id).is_none_or(|at| {
-                let sent = at.load(std::sync::atomic::Ordering::Relaxed);
-                sent != u64::MAX && st.count >= sent
-            });
+            // A log's history is read once the lines its worker had sent by then are stored (each
+            // counted when the flush holding it landed), never when a store error lost part of
+            // it; a source with no history to read is read from its start.
+            let history_read = history_is_read(self.history_read.get(id), st);
             health.insert(id.clone(), SourceHealth { state, count: st.count, last_arrival_ms: st.last_arrival_ms, last_ts: st.last_ts, history_read });
         }
         if let Ok(mut h) = live.health.write() {

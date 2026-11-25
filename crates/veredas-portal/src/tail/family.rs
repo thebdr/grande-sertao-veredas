@@ -386,6 +386,7 @@ fn attach_backfill(
     wake_rx: &Receiver<()>,
     emit: &mut dyn FnMut(String),
     attached_slot: &mut Option<Sender<()>>,
+    swept: &dyn Fn(),
 ) -> Result<BackfillAttach, SourceError> {
     let Some(ts) = ts else {
         return Err(SourceError::NotConfigured("a Backfill start point requires a timestamp spec".into()));
@@ -506,7 +507,12 @@ fn attach_backfill(
                         // Fell behind: drop the unread cursor; the loop sweeps again (the offset
                         // still owed to the remains).
                     }
-                    Err(_) => wait_tick(wake_rx, cfg.poll_interval),
+                    Err(_) => {
+                        // Every retiree swept and the fixed active not there: the history is
+                        // read, whatever appears at the fixed path being new content.
+                        swept();
+                        wait_tick(wake_rx, cfg.poll_interval);
+                    }
                 }
             }
         }
@@ -562,7 +568,8 @@ fn run_family(
     // the seam: the same handle, the exact offset, live from here.
     let mut backfilled: Option<(TailedFile, OrderKey, String)> = None;
     if let FamilyStart::Backfill(start_at) = cfg.start {
-        match attach_backfill(&spec, &cfg, ts.as_ref(), start_at, &stop, &wake_rx, &mut emit, &mut attached_slot)? {
+        let swept = || crate::tail::mark_history_read(&history, sent.get());
+        match attach_backfill(&spec, &cfg, ts.as_ref(), start_at, &stop, &wake_rx, &mut emit, &mut attached_slot, &swept)? {
             BackfillAttach::Stopped => return Ok(()),
             BackfillAttach::FamilyEmpty => {
                 nothing_to_read();
@@ -676,6 +683,11 @@ fn run_family(
                     wait_tick(&wake_rx, cfg.poll_interval);
                     continue;
                 };
+                // A start at the end skips the history: read in at once, whether or not the
+                // active opens now (held by its writer, it is read from its end once it does).
+                if matches!(cfg.start, FamilyStart::ActiveEnd) {
+                    nothing_to_read();
+                }
                 let start = match cfg.start {
                     FamilyStart::ActiveEnd => FileStart::End,
                     // A backfill reaches here only through the family-empty fallthrough: whatever

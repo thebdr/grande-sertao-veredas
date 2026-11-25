@@ -635,3 +635,83 @@ fn a_log_says_when_its_start_s_history_is_in_the_store() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
 }
+
+fn family(id: &str, dir: &std::path::Path, pattern: &str, active: ActiveConfig) -> LogSourceConfig {
+    LogSourceConfig {
+        id: id.into(),
+        display_name: String::new(),
+        kind: LogKind::Family { dir: dir.to_string_lossy().into_owned(), pattern: pattern.into(), date_format: None, active, recursive: false },
+        timestamp: log_source("x", dir).timestamp,
+    }
+}
+
+/// C-096's other paths (its first refute round): a fixed-name family read from a start in the
+/// past whose fixed active is not there says its history read once every retiree is stored; a
+/// file held at the first look and started at its end, and a family started at its end whose
+/// fixed active is not there, say so at once, nothing to read; a family folder not there and one
+/// born empty after the start say so at once, members appearing after it new content; and once
+/// said, lines that arrive after it never take it back.
+#[test]
+fn a_log_s_history_read_on_every_path_and_set_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let history = |live: &Live, id: &str| live.health.read().unwrap().get(id).is_some_and(|h| h.history_read);
+    // A fixed family, its active not there, read from a start in the past.
+    let fixed = dir.path().join("fixed");
+    std::fs::create_dir_all(&fixed).unwrap();
+    write_history(&fixed.join("done_1.log"), 0..100);
+    write_history(&fixed.join("done_2.log"), 100..200);
+    let mut cfg = SessionConfig::new("fixed");
+    cfg.start = Some(midnight());
+    cfg.logs.push(family("fixed", &fixed, r"done_(?P<idx>\d+)\.log", ActiveConfig::Fixed("current.log".into())));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    assert_eq!(rows_when_history_read(&session.live(), "fixed", 200), 200);
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+
+    // Started at their end: a file held at the first look (no read allowed), a family whose fixed
+    // active is not there; a family folder not there; a folder empty at the start.
+    let held = dir.path().join("held.log");
+    write_history(&held, 0..10);
+    #[cfg(unix)]
+    std::fs::set_permissions(&held, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
+    let born = dir.path().join("born");
+    std::fs::create_dir_all(&born).unwrap();
+    // A family whose active (its newest) nobody may read.
+    let shut = dir.path().join("shut");
+    std::fs::create_dir_all(&shut).unwrap();
+    write_history(&shut.join("plant_1.log"), 0..10);
+    write_history(&shut.join("plant_2.log"), 10..20);
+    #[cfg(unix)]
+    std::fs::set_permissions(shut.join("plant_2.log"), std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
+    let mut cfg = SessionConfig::new("at-end");
+    cfg.logs.push(family("shut", &shut, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest));
+    cfg.logs.push(log_source("held", &held));
+    cfg.logs.push(family("waiting", &fixed, r"done_(?P<idx>\d+)\.log", ActiveConfig::Fixed("current.log".into())));
+    cfg.logs.push(family("absent", &dir.path().join("no_such_folder"), r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest));
+    cfg.logs.push(family("born", &born, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    let ids = ["held", "shut", "waiting", "absent", "born"];
+    assert!(wait(Duration::from_secs(10), || ids.iter().all(|id| history(&live, id))), "{:?}", live.health.read().unwrap());
+    assert_eq!(rows(&live, "readings"), 0, "nothing of a history read");
+    // A member born after the start is new content, the flag kept; and lines arriving after the
+    // flag never take it back, at any look while they are stored.
+    write_history(&born.join("plant_1.log"), 0..5_000);
+    let started = Instant::now();
+    while rows(&live, "readings") < 5_000 {
+        assert!(history(&live, "born"), "said once, kept: {} rows stored", rows(&live, "readings"));
+        assert!(started.elapsed() < Duration::from_secs(30), "the born member never stored");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(ids.iter().all(|id| history(&live, id)));
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    #[cfg(unix)]
+    for p in [held, shut.join("plant_2.log")] {
+        std::fs::set_permissions(p, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    }
+}
