@@ -1,15 +1,16 @@
-//! An interpreted program on the controller (C-152): a program lowered by hand as rustc's MIR has it, made afresh
-//! at power-on and at every start from what its host hands in, run beside its native twin, its own error the
-//! controller's 502 `program(at)` and a failure of the adapter or the host the runtime's 507 `internal`.
+//! An interpreted program on the controller (C-152): a program lowered by hand as rustc's MIR has it, made at
+//! power-on and afresh at every start from what its host hands in, run beside its native twin; one that cannot be
+//! made the load fault 506, its own error where Rust would panic the program's 502 `program(at)`, and what safe Rust
+//! cannot reach or a failure of the adapter or the host the runtime's 507 `internal`.
 use std::time::Duration;
 
 use orcl_interp::{
-    BinOp, Block, BlockId, Check, Const, Field, Function, FunctionId, Int, LocalDecl, Operand, Place, Program as Code,
-    Projection, Scalar, Span, Statement, Terminator, Type, TypeId, Value,
+    BinOp, Block, BlockId, Check, Const, Field, Function, FunctionId, Int, Local, LocalDecl, Operand, Place,
+    Program as Code, Projection, Scalar, Span, Statement, Terminator, Type, TypeId, Value,
 };
 use orcl_runtime::{Clock, Image, Interpreted, Io, MakeError, Regions, TaskConfig, TaskError, TaskProgram, VirtualClock};
 use orcl_std::{Program, Scan};
-use veredas_controlador::{Controller, Loaded, Restart, Source, Switch, Target};
+use veredas_controlador::{Command, Controller, Loaded, Refusal, Restart, Source, Switch, Target};
 use veredas_core::state::{CommandSource, StartupReason, StateWord};
 
 fn ms(v: u64) -> Duration {
@@ -438,4 +439,242 @@ fn a_stop_and_a_start_run_the_program_again_from_its_first_state() {
     let index = plant.reads - 2;
     let values: Vec<u32> = plant.writes.iter().map(|w| w.1).collect();
     assert_eq!(values, [scanned(FIRST + 1, index), scanned(FIRST + 2, index + 1)]);
+}
+
+// The ninth refute round's tests (`.zen/evidence/C-152.md`): every program error a program reaches is 502 at its
+// place, a faulted program's exchange on its own periods, what a load fault leaves, and the refusals in FAULT.
+
+const USIZE: TypeId = TypeId(13);
+const ARR2: TypeId = TypeId(14);
+const PAIR: TypeId = TypeId(15);
+
+fn usize_const(v: u64) -> Operand {
+    Operand::Const(Const { ty: USIZE, slots: vec![Scalar::Int(Int::Usize, v.into())] })
+}
+
+/// A location in `count.rs`, line `line`, column 9, so a fault's column is the span's own.
+fn at9(line: u32) -> Span {
+    Span { file: 1, line, column: 9 }
+}
+
+fn st(place: Place, value: Value, line: u32) -> Statement {
+    Statement { place, value, at: at9(line) }
+}
+
+/// The test's types, and a `usize`, a `[u32; 2]` and the `(u32, bool)` a checked operation gives.
+fn types() -> Vec<Type> {
+    let mut types = code().types;
+    types.push(Type::Int(Int::Usize));
+    types.push(Type::Array { element: U32, len: 2 });
+    types.push(Type::Struct { name: "(u32, bool)".into(), fields: vec![field("0", U32), field("1", BOOL)] });
+    types
+}
+
+fn function(locals: &[TypeId], blocks: Vec<Block>) -> Code {
+    let local = |ty: &TypeId| LocalDecl { ty: *ty, name: None };
+    let mut all = vec![UNIT, TypeId(9), TypeId(10), TypeId(11), TypeId(12)];
+    all.extend_from_slice(locals);
+    let scan = Function { name: "<Count as Program>::scan".into(), params: 4, locals: all.iter().map(local).collect(), blocks };
+    Code { types: types(), functions: vec![scan], files: vec!["lib.rs".into(), "count.rs".into()] }
+}
+
+/// `let table = [10, 20]; out.value = table[inputs.value as usize];` with MIR's bounds assertion or without it.
+fn indexing(asserted: bool) -> Code {
+    let index = st(Place::local(5), Value::Cast(copy(deref(3, &[0])), USIZE), 2);
+    let table = st(Place::local(6), Value::Aggregate(ARR2, None, vec![u32_const(10), u32_const(20)]), 2);
+    let element = Place { local: Local(6), projections: vec![Projection::Index(Local(5))] };
+    let read = st(deref(4, &[0]), Value::Use(copy(element)), 3);
+    if asserted {
+        let lt = st(Place::local(7), Value::Binary(BinOp::Lt, copy(Place::local(5)), usize_const(2)), 3);
+        function(
+            &[USIZE, ARR2, BOOL],
+            vec![
+                Block {
+                    statements: vec![index, table, lt],
+                    terminator: Terminator::Assert { cond: moved(7), expected: true, check: Check::Bounds, next: BlockId(1), at: at9(3) },
+                },
+                Block { statements: vec![read], terminator: Terminator::Return { at: at9(4) } },
+            ],
+        )
+    } else {
+        function(&[USIZE, ARR2], vec![Block { statements: vec![index, table, read], terminator: Terminator::Return { at: at9(4) } }])
+    }
+}
+
+/// `out.value = inputs.value * 1000;` as MIR has it with overflow checks: the checked product, then the assertion.
+fn overflowing() -> Code {
+    let product = st(Place::local(5), Value::Checked(BinOp::Mul, copy(deref(3, &[0])), u32_const(1000)), 3);
+    let flag = Operand::Copy(Place { local: Local(5), projections: vec![Projection::Field(1)] });
+    let result = Operand::Copy(Place { local: Local(5), projections: vec![Projection::Field(0)] });
+    function(
+        &[PAIR],
+        vec![
+            Block {
+                statements: vec![product],
+                terminator: Terminator::Assert { cond: flag, expected: false, check: Check::Overflow(BinOp::Mul), next: BlockId(1), at: at9(3) },
+            },
+            Block { statements: vec![st(deref(4, &[0]), Value::Use(result), 3)], terminator: Terminator::Return { at: at9(4) } },
+        ],
+    )
+}
+
+fn on(program: Code) -> Controller<Interpreted<In, Out>, Loaded<In, Out>> {
+    Controller::power_on_from(config(), SIM, Restart::First, Loaded::new(program, FunctionId(0), REGIONS, first(), SAFE)).unwrap()
+}
+
+#[test]
+fn an_index_past_the_end_with_no_assertion_before_it_is_the_program_s_fault_at_its_statement() {
+    fn past_at_2(index: usize) -> In {
+        In { value: if index == 2 { 5 } else { u32::try_from(index % 2).unwrap() }, divisor: 1 }
+    }
+    let (c, plant, _) = started(on(indexing(false)), past_at_2, 4);
+    assert_eq!(plant.writes.iter().map(|w| w.1).collect::<Vec<_>>(), [10, 20, SAFE.value, SAFE.value]);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:3:9") sim() no_realtime()"#);
+}
+
+#[test]
+fn an_index_past_the_end_caught_by_mir_s_bounds_assertion_is_the_program_s_fault() {
+    fn past_at_2(index: usize) -> In {
+        In { value: if index == 2 { 2 } else { u32::try_from(index % 2).unwrap() }, divisor: 1 }
+    }
+    let (c, plant, _) = started(on(indexing(true)), past_at_2, 4);
+    assert_eq!(plant.writes.iter().map(|w| w.1).collect::<Vec<_>>(), [10, 20, SAFE.value, SAFE.value]);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:3:9") sim() no_realtime()"#);
+}
+
+#[test]
+fn an_overflow_caught_by_mir_s_assertion_is_the_program_s_fault() {
+    fn big_at_1(index: usize) -> In {
+        In { value: if index == 1 { 5_000_000 } else { 4 }, divisor: 1 }
+    }
+    let (c, plant, _) = started(on(overflowing()), big_at_1, 3);
+    assert_eq!(plant.writes.iter().map(|w| w.1).collect::<Vec<_>>(), [4000, SAFE.value, SAFE.value]);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:3:9") sim() no_realtime()"#);
+}
+
+#[test]
+fn a_program_s_fault_keeps_its_exchange_on_the_program_s_own_periods() {
+    fn zero_at_6(index: usize) -> In {
+        if index == 6 { In { value: 9, divisor: 0 } } else { steady(index) }
+    }
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, zero_at_6);
+    let mut c = interpreted();
+    step(&mut c, &mut plant, &mut clock, 1); // the idle exchange at 0
+    clock.advance(ms(13));
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 8);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:2:5") sim() no_realtime()"#);
+    let times: Vec<Duration> = plant.writes.iter().map(|w| w.0).collect();
+    assert_eq!(times, [0, 13, 23, 33, 43, 53, 63, 73, 83].map(ms), "the faulted program's exchange on its own periods");
+    assert!(c.program().is_some(), "the faulted program is kept, where it stood");
+}
+
+#[test]
+fn an_acknowledge_of_a_load_fault_leaves_stop_acknowledged_and_a_start_shows_its_load() {
+    let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).unwrap();
+    c.acknowledge(OFICINA, &Key).unwrap();
+    assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()");
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    assert_eq!(text(&c), "STARTUP cold(id=202) load() sim() no_realtime()");
+}
+
+/// A source whose program is made at power-on and not at the starts after it, as a stored program that changed
+/// on its drive would be.
+struct Fails {
+    inner: Loaded<In, Out>,
+    makes: usize,
+}
+
+impl Source for Fails {
+    type Program = Interpreted<In, Out>;
+    type Error = MakeError;
+    fn make(&mut self) -> Result<Interpreted<In, Out>, MakeError> {
+        self.makes += 1;
+        if self.makes == 1 { self.inner.make() } else { Err(MakeError::Scan) }
+    }
+    fn safe_outputs(&mut self) -> Out {
+        self.inner.safe_outputs()
+    }
+    fn reason(&self, program: &Interpreted<In, Out>, error: &orcl_runtime::ScanError) -> veredas_core::state::FaultReason {
+        self.inner.reason(program, error)
+    }
+}
+
+#[test]
+fn a_start_s_failed_load_keeps_its_own_reason() {
+    let source = Fails { inner: loaded(&first()), makes: 0 };
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, source).unwrap();
+    assert_eq!(text(&c), "STOP sim() no_realtime()");
+    assert_eq!(c.load_error(), None);
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 3);
+    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(c.load_error(), Some(&MakeError::Scan));
+    assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)]);
+}
+
+#[test]
+fn a_program_that_cannot_be_made_is_the_load_fault_after_a_power_cycle_from_every_state() {
+    let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
+    for was in [StateWord::Run, StateWord::Startup, StateWord::Stop, StateWord::Hold, StateWord::Fault] {
+        for target in [SIM, Target { production: true, realtime: false, simulated: false }] {
+            let c = Controller::power_on_from(config(), target, Restart::PowerCycle { was }, loaded(&two)).unwrap();
+            assert_eq!(c.state().state.word(), StateWord::Fault, "{was:?} {target:?}");
+            assert!(text(&c).starts_with("FAULT load(id=506, download=0)"), "{was:?}: {}", text(&c));
+        }
+    }
+}
+
+#[test]
+fn a_start_s_failed_load_exchanges_on_the_next_period_once() {
+    let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).unwrap();
+    step(&mut c, &mut plant, &mut clock, 3);
+    c.acknowledge(OFICINA, &Key).unwrap();
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(plant.writes, [0, 10, 20, 30, 40].map(|t| (ms(t), SAFE.value)));
+}
+
+#[test]
+fn in_a_load_fault_and_a_program_fault_a_start_and_a_stop_are_refused_by_the_state() {
+    let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).unwrap();
+    let before = c.state().clone();
+    let refused = |command| Err(Refusal::State { command, state: StateWord::Fault });
+    assert_eq!(c.start(StartupReason::Cold, OFICINA, &Key), refused(Command::Start(StartupReason::Cold)));
+    assert_eq!(c.stop(OFICINA), refused(Command::Stop));
+    assert_eq!(c.state(), &before);
+    fn zero_at_1(index: usize) -> In {
+        if index == 1 { In { value: 9, divisor: 0 } } else { steady(index) }
+    }
+    let (mut c, _, _) = started(interpreted(), zero_at_1, 3);
+    let before = c.state().clone();
+    assert_eq!(c.start(StartupReason::Warm, OFICINA, &Key), refused(Command::Start(StartupReason::Warm)));
+    assert_eq!(c.stop(OFICINA), refused(Command::Stop));
+    assert_eq!(c.state(), &before);
+}
+
+#[test]
+fn a_fault_in_the_first_file_names_the_first_file() {
+    let mut program = code();
+    for block in &mut program.functions[0].blocks {
+        for s in &mut block.statements {
+            s.at.file = 0;
+        }
+        if let Terminator::Assert { at, .. } = &mut block.terminator {
+            at.file = 0;
+        }
+    }
+    fn zero_at_1(index: usize) -> In {
+        if index == 1 { In { value: 9, divisor: 0 } } else { steady(index) }
+    }
+    let (c, _, _) = started(on(program), zero_at_1, 2);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="lib.rs:2:5") sim() no_realtime()"#);
 }
