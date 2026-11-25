@@ -2308,3 +2308,153 @@ fn a_copy_of_an_idle_machine_shows_the_last_result() {
     assert_eq!((copy.result(), copy.running(), copy.steps()), (m.result(), m.running(), m.steps()));
     assert_eq!(copy.result(), &[int(Int::U8, 7)]);
 }
+
+// Round 13's (the critic's kill-tests, kept): arithmetic and bits of another right operand, core operations taking
+// moved operands, a downcast past the last variant, a switch on a constant, the last variant's trailing slots.
+
+
+
+#[test]
+fn arithmetic_and_bits_whose_right_operand_is_of_another_type_are_refused_at_load() {
+    // types: 0 u8, 1 u16, 2 bool, 3 f32, 4 f64
+    let types = [Type::Int(Int::U8), Type::Int(Int::U16), Type::Bool, Type::F32, Type::F64];
+    for (op, l, r, name) in [
+        (BinOp::Add, 0, 1, "u8 + u16"),
+        (BinOp::Sub, 0, 2, "u8 - bool"),
+        (BinOp::Mul, 3, 4, "f32 * f64"),
+        (BinOp::Div, 0, 3, "u8 / f32"),
+    ] {
+        assert_eq!(one_statement(&types, &[l, l, r], Value::Binary(op, copy(1), copy(2))), at_statement("arithmetic on what is no number"), "{name}");
+    }
+    for (op, l, r, name) in [(BinOp::BitAnd, 0, 1, "u8 & u16"), (BinOp::BitOr, 2, 0, "bool | u8"), (BinOp::BitXor, 1, 0, "u16 ^ u8")] {
+        assert_eq!(one_statement(&types, &[l, l, r], Value::Binary(op, copy(1), copy(2))), at_statement("bits of what has none"), "{name}");
+    }
+}
+
+
+fn dur_r13(d: core::time::Duration) -> Vec<Scalar> {
+    vec![int(Int::U64, d.as_secs() as i128), int(Int::U32, d.subsec_nanos() as i128)]
+}
+
+/// The core operations' operands as rustc moves them: an autoref temporary into `&self` (`is_none(move _3)`,
+/// `get_or_insert(move _5, move _6)`, `ge(move _9, move _10)`), and a temporary integer (`checked_shl(move _12, ..)`,
+/// `saturating_add(move _14, ..)`).
+///
+/// fn f(o: &mut Option<Duration>, v: Duration, x: u8) -> (bool, Duration, bool, Option<u8>, u8) {
+///     let none = o.is_none(); let got = *o.get_or_insert(v); let late = got >= v;
+///     (none, got, late, (x + 0).checked_shl(1), (x + 0).saturating_add(200)) }
+#[test]
+fn core_operations_take_their_operands_by_move_as_rustc_passes_them() {
+    use core::time::Duration;
+    let mut b = Build::default();
+    let (d, boolean, u8t, u32t) = (b.ty(Type::Duration), b.bool(), b.int(Int::U8), b.int(Int::U32));
+    let opt = b.option(d);
+    let optu8 = b.option(u8t);
+    let (ropt, sopt, rd, sd) = (b.reference(opt, true), b.reference(opt, false), b.reference(d, true), b.reference(d, false));
+    let out = b.tuple(&[boolean, d, boolean, optu8, u8t]);
+    let zero = konst(u8t, vec![int(Int::U8, 0)]);
+    let core = |op, args, dest, next| Terminator::Call { callee: Callee::Core(op), args, dest: place(dest), next: BlockId(next), at: at(next) };
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 3,
+        //            0    1     2  3   4     5     6  7   8  9   10  11     12   13     14   15
+        locals: locals(&[out, ropt, d, u8t, sopt, boolean, ropt, d, rd, d, sd, sd, boolean, u8t, optu8, u8t]),
+        blocks: vec![
+            block(vec![assign(place(4), Value::Ref(proj(1, vec![Projection::Deref]), false), 1)], core(CoreOp::OptionIsNone, vec![mv(4)], 5, 1)),
+            block(
+                vec![assign(place(6), Value::Ref(proj(1, vec![Projection::Deref]), true), 2), assign(place(7), Value::Use(copy(2)), 2)],
+                core(CoreOp::OptionGetOrInsert, vec![mv(6), mv(7)], 8, 2),
+            ),
+            block(
+                vec![
+                    assign(place(9), Value::Use(copy_at(proj(8, vec![Projection::Deref]))), 3),
+                    assign(place(10), Value::Ref(place(9), false), 3),
+                    assign(place(11), Value::Ref(place(2), false), 3),
+                ],
+                core(CoreOp::DurationCompare(BinOp::Ge), vec![mv(10), mv(11)], 12, 3),
+            ),
+            block(
+                vec![assign(place(13), Value::Binary(BinOp::Add, copy(3), zero.clone()), 4)],
+                core(CoreOp::CheckedShl(Int::U8), vec![mv(13), konst(u32t, vec![int(Int::U32, 1)])], 14, 4),
+            ),
+            block(
+                vec![assign(place(13), Value::Binary(BinOp::Add, copy(3), zero), 5)],
+                core(CoreOp::SaturatingAdd(Int::U8), vec![mv(13), konst(u8t, vec![int(Int::U8, 200)])], 15, 5),
+            ),
+            block(vec![assign(place(0), Value::Aggregate(out, None, vec![mv(5), mv(9), mv(12), mv(14), mv(15)]), 6)], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[opt]).expect("a program moving into core operations loads");
+    m.set_region(RegionId(0), &[int(Int::Isize, 0), Scalar::Uninit, Scalar::Uninit]).unwrap();
+    let mut native: Option<Duration> = None;
+    for (v, x) in [(Duration::from_millis(700), 3u8), (Duration::from_millis(500), 100), (Duration::from_millis(900), 130)] {
+        let none = native.is_none();
+        let got = *native.get_or_insert(v);
+        let mut want = vec![Scalar::Bool(none)];
+        want.extend(dur_r13(got));
+        want.push(Scalar::Bool(got >= v));
+        match x.checked_shl(1) {
+            Some(s) => want.extend([int(Int::Isize, 1), int(Int::U8, s as i128)]),
+            None => want.extend([int(Int::Isize, 0), Scalar::Uninit]),
+        }
+        want.push(int(Int::U8, x.saturating_add(200) as i128));
+        let got_m = m.call(f, &[Arg::Ref(RegionId(0)), Arg::Value(&dur_r13(v)), Arg::Value(&[int(Int::U8, x as i128)])]).map(|r| r.to_vec());
+        assert_eq!(got_m, Ok(want), "v = {v:?}, x = {x}");
+        let mut region = vec![int(Int::Isize, 1)];
+        region.extend(dur_r13(Duration::from_millis(700)));
+        assert_eq!(m.region(RegionId(0)).unwrap(), region.as_slice(), "the Option filled once, by the first value");
+    }
+}
+
+/// d01: a downcast to the variant one past the last is no variant.
+#[test]
+fn a_downcast_one_past_the_last_variant_is_refused() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let opt = b.option(u8t);
+    b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[u8t, opt]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Downcast(2), Projection::Field(0)]))), 1)], ret())],
+    });
+    assert_eq!(Machine::load(b.program, &[]).map(|_| ()), Err(at_statement("no such variant")));
+}
+
+/// d06: `switchInt(const true)` takes the branch its constant names.
+#[test]
+fn a_switch_on_a_constant_takes_its_constant_s_branch() {
+    let mut b = Build::default();
+    let (u8t, boolean) = (b.int(Int::U8), b.bool());
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[u8t]),
+        blocks: vec![
+            block(vec![], Terminator::SwitchInt { value: konst(boolean, vec![Scalar::Bool(true)]), targets: vec![(0, BlockId(2))], otherwise: BlockId(1), at: at(1) }),
+            block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 1)])), 2)], ret()),
+            block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 2)])), 3)], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    assert_eq!(m.call(f, &[]).unwrap(), &[int(Int::U8, 1)]);
+}
+
+/// d14: the last-listed variant's slots past its fields unwritten too (`E { A = 0, B(u8, bool) = 5, C(i64) = -3 }`).
+#[test]
+fn the_last_listed_variant_s_slots_past_its_fields_must_be_unwritten() {
+    let mut b = Build::default();
+    let (u8t, boolean, i64t) = (b.int(Int::U8), b.bool(), b.int(Int::I64));
+    let e = b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::Isize,
+        variants: vec![
+            Variant { name: "A".into(), discriminant: 0, fields: vec![] },
+            Variant { name: "B".into(), discriminant: 5, fields: vec![Field { name: "0".into(), ty: u8t }, Field { name: "1".into(), ty: boolean }] },
+            Variant { name: "C".into(), discriminant: -3, fields: vec![Field { name: "0".into(), ty: i64t }] },
+        ],
+    });
+    let mut m = Machine::load(b.program, &[e]).unwrap();
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, -3), int(Int::I64, -9), Scalar::Uninit]), Ok(()));
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, -3), int(Int::I64, -9), Scalar::Bool(true)]), Err(HostError::Slots), "C(-9) with B's bool left behind");
+}

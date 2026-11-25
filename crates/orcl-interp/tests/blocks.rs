@@ -1,5 +1,6 @@
-//! `orcl-std`'s blocks lowered by hand as rustc lowers them at opt-level 0, run in the machine beside the native
-//! blocks over long traces: every scan's output, `q` and elapsed time the same. The on-delay reaches four of the
+//! `orcl-std`'s blocks lowered by hand in the shape rustc gives them at opt-level 0, run in the machine beside the
+//! native blocks over long traces: every scan's output, `q` and elapsed time the same. They write `copy` where rustc
+//! writes `move`; moved operands are run on their own in `machine.rs`. The on-delay reaches four of the
 //! list's operations on its real code path (`Option::get_or_insert`, `Duration::saturating_sub`, `Ord::min`,
 //! `PartialOrd::ge`); the rising edge, `&&` as the switch rustc makes of it.
 mod common;

@@ -1,5 +1,6 @@
 //! The crate root, every line but its `//!` documentation, as it must stand: unsafe code forbidden and the panic
-//! lints denied, so clippy's run refuses a panic path in the library; its modules and exports, nothing else.
+//! lints denied, so clippy's run refuses the panic paths those lints name; no source holding a panic macro they
+//! miss (`unreachable!`, `todo!`, `unimplemented!`, the assertions); its modules and exports, nothing else.
 #[test]
 fn the_crate_root_is_exactly_its_attributes_its_modules_and_its_exports() {
     let root: Vec<&str> = include_str!("../src/lib.rs")
@@ -77,4 +78,17 @@ fn the_interpreter_depends_on_nothing_but_for_its_tests() {
     let listed = String::from_utf8(out.stdout).unwrap();
     let crates: Vec<&str> = listed.lines().filter_map(|line| line.split_whitespace().next()).collect();
     assert_eq!(crates, ["orcl-interp"], "the interpreter alone, with nothing under it");
+}
+
+/// No panic macro the denied lints do not see (`unreachable!`, `todo!`, `unimplemented!`, the assertions).
+#[test]
+fn no_source_holds_a_panic_macro_the_denied_lints_miss() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let text: String = std::fs::read_to_string(&path).unwrap().chars().filter(|c| !c.is_whitespace()).collect();
+        for word in ["unreachable!", "todo!", "unimplemented!", "assert!", "assert_eq!", "assert_ne!", "debug_assert"] {
+            assert!(!text.contains(word), "{} holds `{word}`", path.display());
+        }
+    }
 }
