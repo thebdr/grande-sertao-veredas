@@ -12,10 +12,10 @@
     "states"
   ],
   "exitCode": 0,
-  "outputSha": "1c579de45d6a466c5df6407854982e342dccc5e41cf5169d5ff4c3255449fdaa",
-  "outputTail": "test refusals_in_the_watchdog_s_fault_leave_the_faulted_program_and_its_exchange_as_they_were ... ok\ntest refusals_leave_the_exchange_while_no_program_runs_where_it_was ... ok\ntest sim_and_no_realtime_each_say_how_it_runs_on_their_own ... ok\ntest small_sentences_an_acknowledge_refused_in_run_a_stop_from_local_and_a_clock_from_zero_after_an_acknowledge ... ok\ntest the_program_stops_itself_from_run ... ok\ntest the_conditions_say_how_it_runs_after_a_power_cycle_and_a_crash_too ... ok\ntest time_errors_show_as_overruns_while_the_controller_runs ... ok\ntest the_watchdog_names_the_task_and_a_stop_keeps_the_overruns_since_the_start ... ok\ntest while_no_program_runs_the_exchange_keeps_the_target_s_periods_once_in_each ... ok\n\ntest result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running tests/model.rs (target/debug/build/veredas-controlador/a6e509b3f84b8e56/out/model-a6e509b3f84b8e56)\n     Running tests/states.rs (target/debug/build/veredas-controlador/980b47ab11d73959/out/states-980b47ab11d73959)",
-  "ranAt": "2026-11-22T21:58:30.190Z",
-  "headCommit": "d3f661778330d01db8e25252c6d3ec91b23f5dee",
+  "outputSha": "b37fbf4a4d0f0cf5990a5fd036253d4b337bd7ca30560d128959417dc2bbe179",
+  "outputTail": "test refusals_leave_the_exchange_while_no_program_runs_where_it_was ... ok\ntest sim_and_no_realtime_each_say_how_it_runs_on_their_own ... ok\ntest small_sentences_an_acknowledge_refused_in_run_a_stop_from_local_and_a_clock_from_zero_after_an_acknowledge ... ok\ntest the_conditions_say_how_it_runs_after_a_power_cycle_and_a_crash_too ... ok\ntest the_program_stops_itself_from_run ... ok\ntest while_no_program_runs_the_exchange_keeps_the_target_s_periods_once_in_each ... ok\ntest time_errors_show_as_overruns_while_the_controller_runs ... ok\ntest the_watchdog_names_the_task_and_a_stop_keeps_the_overruns_since_the_start ... ok\n\ntest result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-controlador v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/veredas-controlador)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s\n     Running tests/model.rs (target/debug/build/veredas-controlador/4d6a0ef65677f120/out/model-4d6a0ef65677f120)\n     Running tests/states.rs (target/debug/build/veredas-controlador/71a2c00c1ac7f276/out/states-71a2c00c1ac7f276)",
+  "ranAt": "2026-11-25T08:05:50.263Z",
+  "headCommit": "0431d5ac1b190521269ddb75481f19e03a0de377",
   "tests": [
     {
       "name": "crates/veredas-controlador/tests/model.rs",
