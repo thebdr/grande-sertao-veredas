@@ -11,15 +11,15 @@
     "fisica"
   ],
   "exitCode": 0,
-  "outputSha": "500c8ee9c8cac5bbad83c34b5edb1866d7e7bc2a2eefd2451e5daf139e1d9bbe",
-  "outputTail": "        PASS [   0.113s] (48/60) veredas-maquinar::fisica round_3::an_added_body_standing_at_a_belt_side_is_not_carried\n        PASS [   0.343s] (49/60) veredas-maquinar::fisica round_4::a_millimetre_and_a_milligram_are_the_least_and_rest_on_a_floor\n        PASS [   0.571s] (50/60) veredas-maquinar::fisica round_4::far_from_the_origin_a_fall_keeps_to_gravity_and_a_body_rests_as_deep\n        PASS [   0.588s] (51/60) veredas-maquinar::fisica round_3::an_added_body_against_a_belt_side_is_not_carried\n        PASS [   0.598s] (52/60) veredas-maquinar::fisica round_3::an_added_body_under_a_belt_is_not_carried\n        PASS [   1.021s] (53/60) veredas-maquinar::fisica round_3::the_depth_a_body_rests_grows_with_gravity\n        PASS [   2.365s] (54/60) veredas-maquinar::fisica round_3::an_added_body_on_a_slow_belt_is_carried\n        PASS [  10.263s] (55/60) veredas-maquinar::fisica round_4::a_belt_far_from_the_origin_carries_what_lies_on_it_as_one_near_it\n        PASS [   2.209s] (56/60) veredas-maquinar::fisica round_4::the_runner_keeps_its_scene_s_own_step\n        PASS [   0.009s] (57/60) veredas-maquinar::fisica sensors_see_bodies_and_movers_in_order_and_a_body_taken_away_leaves_them\n        PASS [   1.997s] (58/60) veredas-maquinar::fisica the_documented_scene_loads_with_its_numbers_and_runs_as_the_reference_says\n        PASS [   1.483s] (59/60) veredas-maquinar::fisica the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene\n        PASS [   2.383s] (60/60) veredas-maquinar::fisica the_same_scene_and_inputs_give_the_same_run_bit_for_bit\n────────────\n     Summary [  36.780s] 60 tests run: 60 passed, 0 skipped",
-  "ranAt": "2026-11-24T23:22:48.284Z",
-  "headCommit": "68c928b23cf2fd01bf054b68e0ad74230b447428",
+  "outputSha": "fe343142bb026d06626eeb9f040903a695d9d40d1c3b9cc0e95dc2817df1c9ab",
+  "outputTail": "        PASS [   0.144s] (48/60) veredas-maquinar::fisica round_4::a_body_dropped_at_a_long_step_rests_on_what_it_falls_on\n        PASS [   0.433s] (49/60) veredas-maquinar::fisica round_4::a_millimetre_and_a_milligram_are_the_least_and_rest_on_a_floor\n        PASS [   0.603s] (50/60) veredas-maquinar::fisica round_3::an_added_body_against_a_belt_side_is_not_carried\n        PASS [   0.616s] (51/60) veredas-maquinar::fisica round_3::an_added_body_under_a_belt_is_not_carried\n        PASS [   0.767s] (52/60) veredas-maquinar::fisica round_3::the_depth_a_body_rests_grows_with_gravity\n        PASS [   1.154s] (53/60) veredas-maquinar::fisica round_4::far_from_the_origin_a_fall_keeps_to_gravity_and_a_body_rests_as_deep\n        PASS [   4.710s] (54/60) veredas-maquinar::fisica round_3::an_added_body_on_a_slow_belt_is_carried\n        PASS [  21.226s] (55/60) veredas-maquinar::fisica round_4::a_belt_far_from_the_origin_carries_what_lies_on_it_as_one_near_it\n        PASS [   2.218s] (56/60) veredas-maquinar::fisica round_4::the_runner_keeps_its_scene_s_own_step\n        PASS [   0.009s] (57/60) veredas-maquinar::fisica sensors_see_bodies_and_movers_in_order_and_a_body_taken_away_leaves_them\n        PASS [   1.545s] (58/60) veredas-maquinar::fisica the_documented_scene_loads_with_its_numbers_and_runs_as_the_reference_says\n        PASS [   1.482s] (59/60) veredas-maquinar::fisica the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene\n        PASS [   2.997s] (60/60) veredas-maquinar::fisica the_same_scene_and_inputs_give_the_same_run_bit_for_bit\n────────────\n     Summary [  49.478s] 60 tests run: 60 passed, 0 skipped",
+  "ranAt": "2026-11-25T00:48:23.028Z",
+  "headCommit": "b2db2f310753f06fb3cc9817c55ad80686c98330",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/fisica.rs",
       "file": "crates/veredas-maquinar/tests/fisica.rs",
-      "fileSha": "9afe5aecefbb8b1c1dc4fc971a4d72d61bcdabbcc05244952fa2444c570bad3b"
+      "fileSha": "77cd8f8771f0f8f94ad9de145f4452d77f1e231aac41b70173860bb8b9ec898b"
     }
   ]
 }
