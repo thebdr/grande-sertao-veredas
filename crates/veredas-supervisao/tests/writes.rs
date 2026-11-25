@@ -1108,11 +1108,52 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
         }
     }
     assert_eq!(answered_under, BTreeSet::from(["a key", "the attention list", "its element"]), "an answer come while another object is selected by every way the page selects one");
+    // Every object of the served binding offering writes, each with how many it offers.
+    let offering: Vec<(String, usize)> = bound["objects"].as_array().unwrap().iter().filter(|o| !o["actions"].as_array().unwrap().is_empty()).map(|o| (serde_json::to_string(o["id"].as_str().unwrap()).unwrap(), o["actions"].as_array().unwrap().len())).collect();
+    assert!(offering.iter().any(|(_, n)| *n > 2), "an object offering more than two writes: {offering:?}");
+    // A press held out on every action of every object offering writes (by its place), its object
+    // selected again by every way after another (its panel built anew each time), its answer coming
+    // while it is shown: the panel's own button at that place read at the answer's moment, off with
+    // its busy cleared, for the next status to free.
+    for (id, count) in &offering {
+        let other = if id == "\"outlet-3\"" { "outlet-2" } else { "outlet-3" };
+        for n in 0..*count {
+            parcels(&mut page);
+            let (_, select, key) = selections(&mut page, id).into_iter().next().unwrap();
+            page.eval(r#"(() => { window.__plainFetch = window.__plainFetch ?? window.fetch; const f = window.__plainFetch; window.fetch = (...a) => String(a[0]).includes("/api/opc/write") ? new Promise((ok, no) => { window.__letGo = () => f(...a).then(ok, no); }) : f(...a); window.__letGo = null; window.answer = true; window.asked = []; return true; })()"#);
+            if key.is_some() {
+                parcels(&mut page);
+            }
+            page.eval(&format!("(() => {{ {select}; return true; }})()"));
+            page.wait_for(&chosen(id, &key), Duration::from_secs(10));
+            let button = format!(r#"document.querySelector('.side .actions button[data-index="{n}"]')"#);
+            page.wait_for(&format!("(() => {{ const b = {button}; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
+            page.eval(&format!("(() => {{ {button}.click(); return true; }})()"));
+            page.wait_for("window.__letGo ? true : null", Duration::from_secs(10));
+            parcels(&mut page);
+            for (_, reselect, rekey) in selections(&mut page, id) {
+                page.eval(&format!(r#"document.getElementById("{other}").dispatchEvent(new MouseEvent("click", {{ bubbles: true }})); true"#));
+                page.wait_for(&format!(r#"document.querySelector('.side .sel-title')?.dataset.id === "{other}" || null"#), Duration::from_secs(10));
+                if rekey.is_some() {
+                    parcels(&mut page);
+                }
+                page.eval(&format!("(() => {{ {reselect}; return true; }})()"));
+                page.wait_for(&chosen(id, &rekey), Duration::from_secs(10));
+            }
+            page.eval(&format!(r#"(() => {{ window.__atAnswer = null; const o = new MutationObserver(() => {{ const b = {button}; if (window.__atAnswer === null && b && b.dataset.busy === undefined) {{ window.__atAnswer = [b.disabled, b.dataset.busy ?? null]; o.disconnect(); }} }}); o.observe(document.querySelector(".side"), {{ childList: true, subtree: true, attributes: true, attributeFilter: ["data-busy", "disabled"] }}); window.__letGo(); return true; }})()"#));
+            page.wait_for("window.__atAnswer || null", Duration::from_secs(10));
+            assert_eq!(page.eval("window.__atAnswer"), json!([true, null]), "{id}'s action at place {n}, its panel built anew while out: its button off at its answer, its busy cleared, for the next status to free");
+            let freed = page.wait_for(&format!("(() => {{ const b = {button}; return b && b.dataset.busy === undefined && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
+            assert_eq!(freed, json!(true), "{id}'s action at place {n}: freed at the next status");
+            page.eval("window.fetch = window.__plainFetch; true");
+        }
+    }
     // The switch turned off while each object offering writes is shown, by every way the page
     // selects it (its element, its line, each key): at the next status the gate note says off and
-    // every button is off; then on again.
+    // every button is off, each by its place; then on again.
     let mut off_by = BTreeSet::new();
-    for id in ["\"aux-only\"", "\"tracked\"", "\"outlet-2\""] {
+    for (id, count) in &offering {
+        let (id, count) = (id.as_str(), *count);
         parcels(&mut page);
         for (way, select, key) in selections(&mut page, id) {
             if key.is_some() {
@@ -1124,7 +1165,7 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
             host.session("loop").unwrap().set_writes_armed(false);
             page.wait_for(r#"(document.querySelector('.side .gate-note')?.textContent ?? "").endsWith("is off.") || null"#, Duration::from_secs(10));
             let by = format!("{way}{}", key.as_ref().map(|k| format!(" {k}")).unwrap_or_default());
-            assert_eq!(page.eval(r#"[...document.querySelectorAll('.side .actions button')].map((b) => [b.dataset.action, b.disabled])"#).as_array().unwrap().iter().all(|b| b[1] == json!(true)), true, "{id} shown by {by}: every button off once the switch is off");
+            assert_eq!(page.eval(r#"[...document.querySelectorAll('.side .actions button')].map((b) => [Number(b.dataset.index), b.disabled])"#), json!((0..count).map(|n| json!([n, true])).collect::<Vec<_>>()), "{id} shown by {by}: every button off once the switch is off, each by its place");
             off_by.insert(way);
             host.session("loop").unwrap().set_writes_armed(true);
             assert!(wait(Duration::from_secs(10), || get(addr, "/s/loop/objects.json").1["session"]["writes_armed"] == json!(true)));
