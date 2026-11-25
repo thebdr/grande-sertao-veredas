@@ -5,7 +5,8 @@
 //! - [`Program`]: the program's types, its functions and the source files its locations name;
 //! - [`Machine`]: the loaded program, its memory and its stack; a host starts an entry and steps it, and the whole
 //!   state is data, so a run stopped at an instruction boundary goes on from there;
-//! - [`CoreOp`]: the closed list of core-library operations a program may call (`docs/questions.md` Q227).
+//! - [`CoreOp`]: the closed list of core-library operations a program may call (`docs/questions.md` Q227);
+//! - [`file`]: the program file, `<name>.orclb`, its header naming its format, its language and its nightly.
 //!
 //! A program whose indices or types do not fit is refused when it is loaded, by name ([`LoadError`]), and so is one
 //! whose functions reach themselves (Q230, taken meanwhile). A program's failure while it runs is a
@@ -20,6 +21,7 @@
 )]
 
 mod core_ops;
+pub mod file;
 mod layout;
 mod machine;
 mod ops;

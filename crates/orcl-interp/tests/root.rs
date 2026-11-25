@@ -18,6 +18,7 @@ fn the_crate_root_is_exactly_its_attributes_its_modules_and_its_exports() {
             "    clippy::expect_used",
             ")]",
             "mod core_ops;",
+            "pub mod file;",
             "mod layout;",
             "mod machine;",
             "mod ops;",
@@ -34,8 +35,9 @@ fn the_crate_root_is_exactly_its_attributes_its_modules_and_its_exports() {
     );
 }
 
-const SOURCES: [(&str, &str); 6] = [
+const SOURCES: [(&str, &str); 7] = [
     ("core_ops.rs", include_str!("../src/core_ops.rs")),
+    ("file.rs", include_str!("../src/file.rs")),
     ("layout.rs", include_str!("../src/layout.rs")),
     ("lib.rs", include_str!("../src/lib.rs")),
     ("machine.rs", include_str!("../src/machine.rs")),
