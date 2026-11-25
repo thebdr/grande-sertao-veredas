@@ -255,8 +255,9 @@ fn a_consumer_without_the_default_features_reads_stamps_states_and_draws() {
         root.join("Cargo.toml"),
         format!(
             "[package]\nname = \"slim-consumer\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
-             [workspace]\n\n[dependencies]\nveredas-core = {{ path = {:?}, default-features = false }}\n",
-            core.to_str().unwrap()
+             [workspace]\n\n[dependencies]\nveredas-core = {{ path = {:?}, default-features = false }}\n\n{}",
+            core.to_str().unwrap(),
+            workspace_profiles()
         ),
     )
     .unwrap();
@@ -593,8 +594,9 @@ fn each_form_holds_the_layers_it_promises() {
             root.join("Cargo.toml"),
             format!(
                 "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
-                 [workspace]\n\n[dependencies]\nveredas-core = {{ path = {:?}{spec} }}\n",
-                core.to_str().unwrap()
+                 [workspace]\n\n[dependencies]\nveredas-core = {{ path = {:?}{spec} }}\n\n{}",
+                core.to_str().unwrap(),
+                workspace_profiles()
             ),
         )
         .unwrap();
@@ -643,17 +645,18 @@ fn each_form_holds_the_layers_it_promises() {
     }
 }
 
-/// Every feature gate in core's source is one of the expected list: `net` on the four plant-facing
+/// Every `cfg` in core's source is one of the expected list: `net` on the four plant-facing
 /// modules and the crate root's two re-exports, `demo-server` on the demo plant, each master on its
-/// own module. The sources are read as Rust tokens, so no spelling of a gate reads otherwise (split
-/// over lines, a comment inside it, a macro carrying its words): the identifier `feature` stands
-/// only in an attribute, as a gate's `feature = "..."`, each listed with its attribute and the item
-/// it stands on; `doc` only as an attribute's name, and no attribute holds `hidden`, `path` or a
-/// macro's `$`, so nothing hides an item from rustdoc and no module comes from another file; no
-/// identifier names what pulls in code or a value from elsewhere (`include`, `env` and their kin),
-/// under its own name or imported under another; and core has no build script. That rustc reads no
-/// other file for core and no environment variable, in each form and profile, the probe's builds
-/// show from the compiler's own dep-info.
+/// own module, and `test` on the schema's own tests; no `cfg_attr`. So a form holds the same items
+/// in every build of it, whatever the profile or the platform. The sources are read as Rust
+/// tokens, so no spelling of a gate reads otherwise (split over lines, a comment inside it, a macro
+/// carrying its words): each `cfg` listed with its text and the item it stands on; the identifier
+/// `feature` only in a `cfg`, as `feature = "..."`; `doc` only as an attribute's name, and no
+/// attribute holds `hidden`, `path` or a macro's `$`, so nothing hides an item from rustdoc and no
+/// module comes from another file; no identifier names what pulls in code or a value from
+/// elsewhere (`include`, `env` and their kin), under its own name or imported under another; and
+/// core has no build script. That rustc reads no other file for core and no environment variable,
+/// in each form and profile, the probe's builds show from the compiler's own dep-info.
 #[test]
 fn every_feature_gate_is_where_it_belongs() {
     // Core's sources as tokens, read by proc-macro2 (the lexer syn reads Rust with): comments
@@ -726,6 +729,8 @@ fn every_feature_gate_is_where_it_belongs() {
         "lib.rs: #[cfg(feature=\"net\")] -> pub use source::",
         "lib.rs: #[cfg(feature=\"net\")] -> pub use types::",
         "opc/mod.rs: #[cfg(feature=\"demo-server\")] -> pub mod demo",
+        // The schema's own tests, compiled by `cargo test` alone, never in a form.
+        "schema.rs: #[cfg(test)] -> mod tests",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -815,8 +820,8 @@ fn attribute_end(tokens: &[TokenTree], k: usize) -> Option<usize> {
     }
 }
 
-/// One file's tokens read: the gates found, each keyed by its attribute and the item it stands
-/// on, and the tokens that stand where no gate may.
+/// One file's tokens read: every `cfg` attribute found, each keyed by its text and the item it
+/// stands on, and the tokens that stand where no gate may.
 struct Reading<'a> {
     rel: &'a str,
     gates: Vec<String>,
@@ -858,7 +863,24 @@ impl Reading<'_> {
                     render(&body),
                     render(&tokens[n..stop])
                 );
-                self.attribute(&body, true, &key);
+                // The attribute's path, up to its arguments: `cfg`, `doc`, `error`, `core::..`.
+                // Every `cfg` is listed, the gates of a feature and any other; no `cfg_attr`.
+                let path: Vec<String> = body
+                    .iter()
+                    .take_while(|t| match t {
+                        TokenTree::Ident(_) => true,
+                        TokenTree::Punct(p) => p.as_char() == ':',
+                        _ => false,
+                    })
+                    .filter_map(ident)
+                    .collect();
+                let cfg = path == ["cfg"];
+                if cfg {
+                    self.gates.push(key.clone());
+                } else if path.iter().any(|w| w == "cfg" || w == "cfg_attr") {
+                    self.refuse(&tokens[k], &format!("`{}`", path.join("::")));
+                }
+                self.attribute(&body, true, cfg);
                 k = end + 1;
                 continue;
             }
@@ -878,13 +900,14 @@ impl Reading<'_> {
         }
     }
 
-    /// An attribute's tokens: `top` when they are its own, not those of a group inside it.
-    fn attribute(&mut self, tokens: &[TokenTree], top: bool, key: &str) {
+    /// An attribute's tokens: `top` when they are its own, not those of a group inside it; `cfg`
+    /// when it is a `cfg`.
+    fn attribute(&mut self, tokens: &[TokenTree], top: bool, cfg: bool) {
         for (k, t) in tokens.iter().enumerate() {
             match t {
                 TokenTree::Group(g) => {
                     let inner: Vec<TokenTree> = g.stream().into_iter().collect();
-                    self.attribute(&inner, false, key);
+                    self.attribute(&inner, false, cfg);
                 }
                 TokenTree::Punct(p) if p.as_char() == '$' => {
                     self.refuse(t, "a macro's `$` in an attribute")
@@ -896,10 +919,8 @@ impl Reading<'_> {
                             let gate = matches!(tokens.get(k + 1),
                                     Some(TokenTree::Punct(p)) if p.as_char() == '=')
                                 && matches!(tokens.get(k + 2), Some(TokenTree::Literal(_)));
-                            if gate {
-                                self.gates.push(key.to_string());
-                            } else {
-                                self.refuse(t, "`feature` not as `feature = \"..\"`");
+                            if !(gate && cfg) {
+                                self.refuse(t, "`feature` not as a cfg's `feature = \"..\"`");
                             }
                         }
                         "doc" if !(top && k == 0) => {
@@ -937,6 +958,20 @@ fn forms() -> Vec<Vec<&'static str>> {
     forms
 }
 
+/// The workspace's `[profile]` tables, as a manifest's text: every consumer crate here carries
+/// them, so a build of one is what a member built alone gets in that profile.
+fn workspace_profiles() -> String {
+    let core = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace: toml::Table =
+        toml::from_str(&std::fs::read_to_string(core.join("../../Cargo.toml")).unwrap()).unwrap();
+    toml::to_string(&toml::Table::from_iter(
+        workspace
+            .get("profile")
+            .map(|p| ("profile".to_string(), p.clone())),
+    ))
+    .unwrap()
+}
+
 /// A consumer crate of the test's own asking for core in `form` alone, with `main` as its source,
 /// in the build folder every consumer here shares. Its profiles are the workspace's, so a build of
 /// it is what a member built alone gets.
@@ -947,14 +982,7 @@ fn consumer(name: &str, form: &[&str], main: &str) -> PathBuf {
         .join(name);
     std::fs::create_dir_all(root.join("src")).unwrap();
     let features: Vec<String> = form.iter().map(|f| format!("{f:?}")).collect();
-    let workspace: toml::Table =
-        toml::from_str(&std::fs::read_to_string(core.join("../../Cargo.toml")).unwrap()).unwrap();
-    let profiles = toml::to_string(&toml::Table::from_iter(
-        workspace
-            .get("profile")
-            .map(|p| ("profile".to_string(), p.clone())),
-    ))
-    .unwrap();
+    let profiles = workspace_profiles();
     std::fs::write(
         root.join("Cargo.toml"),
         format!(
@@ -1881,9 +1909,10 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
                 root.join("Cargo.toml"),
                 format!(
                     "[package]\nname = \"view-{n}\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
-                     [workspace]\n\n[dependencies]\nveredas-core = {{ path = {:?}, default-features = false, features = [{}] }}\n",
+                     [workspace]\n\n[dependencies]\nveredas-core = {{ path = {:?}, default-features = false, features = [{}] }}\n\n{}",
                     core.to_str().unwrap(),
-                    features.join(", ")
+                    features.join(", "),
+                    workspace_profiles()
                 ),
             )
             .unwrap();
