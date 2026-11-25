@@ -52,6 +52,9 @@ pub struct Member {
     pub workspace: String,
     /// What goes into its executables: its normal and build dependencies, never its tests'.
     pub deps: Vec<Dep>,
+    /// The source files its library, executables and build script start from (cargo's
+    /// `src_path`), from the root: one may lie outside its folder (`[lib] path = "../x.rs"`).
+    pub sources: Vec<String>,
 }
 
 /// A normal or build dependency of a member.
@@ -209,10 +212,17 @@ impl Workspace<'_> {
     /// resolved from the naming file's folder; a named Rust file is read in turn.
     fn named_outside(&self, used: &[&Member], folders: &[String]) -> Result<BTreeSet<String>, String> {
         let mut files: Vec<String> = Vec::new();
+        let mut out = BTreeSet::new();
         for m in used {
             walk(self.tree, &m.dir, &mut files).map_err(|e| format!("{}'s sources do not read: {e}", m.dir))?;
+            // A target whose source lies outside the folders: that file, and what it names.
+            for s in &m.sources {
+                let path = normal(Path::new(s)).ok_or_else(|| format!("{} builds from `{s}`, outside the commit's tree", m.name))?;
+                if !folders.iter().any(|f| path.starts_with(f.as_str())) && out.insert(path.clone()) {
+                    files.push(path);
+                }
+            }
         }
-        let mut out = BTreeSet::new();
         let mut i = 0;
         while i < files.len() {
             let file = files[i].clone();
@@ -276,11 +286,45 @@ fn walk(tree: &Path, dir: &str, out: &mut Vec<String>) -> std::io::Result<()> {
     inner(tree, dir, true, out)
 }
 
-/// The string literals a Rust source names files by: `#[path = "…"]` and the argument of
-/// `include_str!`, `include_bytes!` and `include!` when it is one literal (a raw one included).
-/// Read as text, comments too: a path a comment names is one more input, never one less.
+/// The string literals a Rust source names files by: `#[path = "…"]`, `path = "…"` inside a
+/// `#[cfg_attr(…)]`, and the argument of `include_str!`, `include_bytes!` and `include!` when it is
+/// one literal (a raw one included). Read as text, comments too: a path a comment names is one more
+/// input, never one less.
 pub fn literals(text: &str) -> Vec<String> {
     let mut out = Vec::new();
+    // `#[cfg_attr(<predicate>, path = "…")]`: each `path =` the attribute's parentheses hold.
+    let mut rest = text;
+    while let Some(at) = rest.find("cfg_attr") {
+        rest = &rest[at + "cfg_attr".len()..];
+        let Some(open) = rest.trim_start().strip_prefix('(') else { continue };
+        let mut depth = 1;
+        let mut end = open.len();
+        for (i, c) in open.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let inner = &open[..end];
+        let mut scan = inner;
+        while let Some(p) = scan.find("path") {
+            let before = inner[..inner.len() - scan.len() + p].trim_end();
+            scan = &scan[p + "path".len()..];
+            if !(before.ends_with(',') || before.ends_with('(') || before.is_empty()) {
+                continue;
+            }
+            if let Some(lit) = scan.trim_start().strip_prefix('=').and_then(|s| literal(s.trim_start())) {
+                out.push(lit);
+            }
+        }
+    }
     for (token, sep) in [("#[path", '='), ("include_str!", '('), ("include_bytes!", '('), ("include!", '(')] {
         let mut rest = text;
         while let Some(at) = rest.find(token) {
@@ -344,14 +388,18 @@ pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs) ->
         if p.starts_with(Path::new(src).join("target")) || p.starts_with(vendor) {
             continue;
         }
-        match p.strip_prefix(src) {
-            Ok(rel) => {
-                let rel = rel.to_string_lossy().into_owned();
+        // A path as rustc writes it may climb back (`crates/x/src/../../../docs/y.rs`): judged
+        // where it lands.
+        match p.strip_prefix(src).ok().and_then(normal) {
+            Some(rel) => {
+                if rel.starts_with("target/") {
+                    continue;
+                }
                 if !inputs.covers(&rel) {
                     out.insert(rel);
                 }
             }
-            Err(_) => {
+            None => {
                 out.insert(path);
             }
         }

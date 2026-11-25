@@ -2980,7 +2980,10 @@ Options:
   entries other members alone inherit left out.
 
 **Recommended**: (b): a version names what goes into its executables and nothing else (features no
-longer unify across components: the cut builds each alone).
+longer unify across components: the cut builds each alone). Under (a), every small commit to the
+root manifest (14 since 2.0.0-alpha.1) charges every component, and only each member may bump its
+own version: every cut then needs all members to bump in step, a shared cadence the plan's
+"Independent versions" set out to end.
 
 **Taken meanwhile** (most reversible): (a), the stricter reading: a narrower one later lets through
 every set of releases the whole file let through.
@@ -3012,6 +3015,57 @@ Options:
 nothing shipped is taken back.
 
 **Reversible?** Yes: the manifest's `bins` say what each release ships.
+
+---
+
+## Q444 - Is a release's component built alone, as its version names it, or with the others, as the suite tests it?
+
+**Raised** 2026-11-25, by the release member, from the implications check on C-290 after Q441.
+
+One `cargo build` of several packages unifies their features: built with the others, a component's
+executable carries features another member turns on (today the shipped portal carried core's
+`demo-server`, which the bench turns on), so another member's manifest reaches it and its version
+would not name it (Q441). The cut now builds each component alone. The suite (`cargo nextest run
+--workspace`) still tests them built together, with features unified across every member and the
+tests' own dependencies: at HEAD, portal and supervisão built alone lack features in 9 packages
+against the workspace's build, the bench in 17. Only the bench and supervisão run again from the
+bundle as built.
+
+Options:
+- (a) Built alone (taken meanwhile): a version names its executable's inputs; what ships differs
+  from what the suite built, the run together the one check of what ships.
+- (b) Built together, as the suite builds: what ships is what was tested, and every member's
+  manifest becomes an input of every component's version (any manifest edit bumps all).
+- (c) Built alone, and the cut also runs each component's own tests built alone (`cargo nextest run
+  -p <component>`), so what ships is tested as it is built; a longer cut.
+
+**Recommended**: (c).
+
+**Taken meanwhile** (most reversible): (a): nothing is published, and the next cut may build either
+way.
+
+**Reversible?** Yes: the builder's script.
+
+---
+
+## Q445 - Does a test-only change in a component's folder bump its version?
+
+**Raised** 2026-11-25, by the release member, from the same check.
+
+Q441 named the component's folder whole: an edit of its `tests/`, `benches/` or `examples/` charges
+it and every component using it, though nothing of it goes into an executable (refute rounds edit
+core's tests daily). Test-only dependencies already charge nothing.
+
+Options:
+- (a) The folder whole (taken meanwhile).
+- (b) The folder but its top `tests/`, `benches/` and `examples/` (and what only they read), the
+  cut's dep-info check still holding what the build read.
+
+**Recommended**: (b), a version naming what goes into an executable.
+
+**Taken meanwhile** (most reversible): (a), the stricter reading.
+
+**Reversible?** Yes: the check narrows without changing the manifest's format.
 
 ---
 

@@ -1171,9 +1171,189 @@ const G: &str = include_str!["g.txt"];
 const H: &str = include_str!(concat!(env!("OUT_DIR"), "/h.rs"));
 const I: &str = include_str!("i\\j \"k\".txt");
 // include_str!("in-a-comment.txt")
+#[cfg_attr(unix, path = "unix.rs")]
+#[cfg_attr(all(windows, feature = "xpath"), path = "win.rs", allow(dead_code))]
+mod plat;
 "##;
     assert_eq!(
         alforge::inputs::literals(src),
-        ["a.rs", "b/c.rs", "c.txt", "g.txt", "i\\j \"k\".txt", "in-a-comment.txt", "d.bin", "e.rs", "f \"q\".rs"]
+        ["unix.rs", "win.rs", "a.rs", "b/c.rs", "c.txt", "g.txt", "i\\j \"k\".txt", "in-a-comment.txt", "d.bin", "e.rs", "f \"q\".rs"]
     );
+}
+
+#[test]
+fn required_features_are_read_as_cargo_reads_them_and_checked_against_its_build() {
+    // Core's defaults turn on `veredas-base/x` (so the optional `veredas-base` and its implicit
+    // feature) and `fraco`, which asks `y` of the optional `veredas-dx` weakly, which nothing
+    // enables (`z` would, by `dep:`); `veredas-cx` is built with `x` and never asked `y`.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n");
+    for lib in ["veredas-base", "veredas-cx", "veredas-dx"] {
+        r.write(&format!("crates/{lib}/Cargo.toml"), &format!("[package]\nname = \"{lib}\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\nx = []\ny = []\n"));
+        r.write(&format!("crates/{lib}/src/lib.rs"), "\n");
+    }
+    let bins = [("needs-b", "veredas-base"), ("needs-cx", "veredas-cx/x"), ("needs-cy", "veredas-cx/y"), ("needs-dx", "veredas-dx/y"), ("needs-z", "z")];
+    let targets: String = bins.iter().map(|(b, f)| format!("\n[[bin]]\nname = \"{b}\"\npath = \"src/{b}.rs\"\nrequired-features = [\"{f}\"]\n")).collect();
+    r.write(
+        "crates/veredas-core/Cargo.toml",
+        &format!(
+            "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"veredas-base/x\", \"fraco\"]\nfraco = [\"veredas-dx?/y\"]\nz = [\"dep:veredas-dx\"]\n\n\
+             [dependencies]\nveredas-base = {{ path = \"../veredas-base\", optional = true }}\nveredas-cx = {{ path = \"../veredas-cx\", features = [\"x\"] }}\nveredas-dx = {{ path = \"../veredas-dx\", optional = true }}\n{targets}"
+        ),
+    );
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    for (b, _) in bins {
+        r.write(&format!("crates/veredas-core/src/{b}.rs"), "fn main() {}\n");
+    }
+    let c = r.commit("required features of every form");
+    let mut refusals = Vec::new();
+    let held = manifest::components_at(r.path(), &c, &mut refusals).unwrap();
+    assert_eq!(refusals, Vec::<String>::new());
+    let core = &held["veredas-core"];
+    let names = |s: &std::collections::BTreeSet<String>| s.iter().cloned().collect::<Vec<_>>();
+    assert_eq!((names(&core.bins), names(&core.left)), (vec!["needs-b".to_string(), "needs-cx".into()], vec!["needs-cy".to_string(), "needs-dx".into(), "needs-z".into()]));
+    // Cargo's own build with the default features builds exactly those.
+    let target = tempfile::tempdir().unwrap();
+    let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+        .args(["build", "--offline", "-q", "-p", "veredas-core", "--bins"])
+        .env("CARGO_TARGET_DIR", target.path())
+        .current_dir(r.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let built: Vec<String> = bins.iter().map(|(b, _)| b.to_string()).filter(|b| target.path().join("debug").join(b).exists()).collect();
+    assert_eq!(built, names(&core.bins));
+}
+
+/// A suite for what [`wider`] leaves out: portal uses core, which uses `veredas-base`, by path;
+/// portal builds with `pkgbuild` (a build dependency), on unix with `libc`, `json` (serde_json under
+/// another name) and `itoa` from crates.io beside a git `itoa` of the same version; core's library
+/// starts from a file outside its folder; portal names a module by `cfg_attr`, a module under
+/// `src/examples/`, and an outside module that names a file in turn; the bench uses `um`, a fork in
+/// a workspace of its own that uses `dois`, in a third.
+fn deeper() -> Repo {
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-base\", \"crates/veredas-core\", \"crates/veredas-maquinar\", \"crates/veredas-portal\"]\nexclude = [\"forks\"]\n");
+    let reg = "registry+https://github.com/rust-lang/crates.io-index";
+    let git = "git+https://example.invalid/itoa#0123456789abcdef0123456789abcdef01234567";
+    r.write(
+        "Cargo.lock",
+        &format!(
+            "version = 4\n\n[[package]]\nname = \"dois\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.11\"\nsource = \"{reg}\"\nchecksum = \"1111\"\n\n\
+             [[package]]\nname = \"itoa\"\nversion = \"1.0.11\"\nsource = \"{git}\"\n\n[[package]]\nname = \"libc\"\nversion = \"0.2.170\"\nsource = \"{reg}\"\nchecksum = \"2222\"\n\n\
+             [[package]]\nname = \"pkgbuild\"\nversion = \"1.0.0\"\nsource = \"{reg}\"\nchecksum = \"3333\"\n\n[[package]]\nname = \"serde_json\"\nversion = \"1.0.140\"\nsource = \"{reg}\"\nchecksum = \"4444\"\n\n\
+             [[package]]\nname = \"um\"\nversion = \"0.1.0\"\ndependencies = [\n \"dois\",\n]\n\n[[package]]\nname = \"veredas-base\"\nversion = \"2.0.0\"\n\n\
+             [[package]]\nname = \"veredas-core\"\nversion = \"2.0.0\"\ndependencies = [\n \"veredas-base\",\n]\n\n\
+             [[package]]\nname = \"veredas-maquinar\"\nversion = \"2.1.0\"\ndependencies = [\n \"um\",\n]\n\n\
+             [[package]]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.3\"\ndependencies = [\n \"itoa 1.0.11 ({reg})\",\n \"libc\",\n \"pkgbuild\",\n \"serde_json\",\n \"veredas-core\",\n]\n"
+        ),
+    );
+    r.write("crates/veredas-base/Cargo.toml", "[package]\nname = \"veredas-base\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    r.write("crates/veredas-base/src/lib.rs", "\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"../../docs/core-lib.rs\"\n\n[dependencies]\nveredas-base = { path = \"../veredas-base\" }\n");
+    r.write("docs/core-lib.rs", "pub fn core() {}\n");
+    r.write(
+        "crates/veredas-portal/Cargo.toml",
+        "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.3\"\nedition = \"2024\"\n\n[dependencies]\nveredas-core = { path = \"../veredas-core\" }\njson = { package = \"serde_json\", version = \"1\" }\nitoa = \"1\"\n\n\
+         [build-dependencies]\npkgbuild = \"1\"\n\n[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n",
+    );
+    r.write(
+        "crates/veredas-portal/src/main.rs",
+        "#[cfg_attr(unix, path = \"../../../docs/unix.rs\")]\nmod plat;\n#[path = \"../../../docs/outer.rs\"]\nmod outer;\nmod examples;\nfn main() {}\n",
+    );
+    r.write("crates/veredas-portal/src/examples/mod.rs", "pub const E: &str = include_str!(\"../../../../docs/example.txt\");\n");
+    for (f, t) in [("docs/unix.rs", "\n"), ("docs/outer.rs", "pub const D: &str = include_str!(\"deep.txt\");\n"), ("docs/deep.txt", "deep\n"), ("docs/example.txt", "example\n")] {
+        r.write(f, t);
+    }
+    r.write("crates/veredas-maquinar/Cargo.toml", "[package]\nname = \"veredas-maquinar\"\nversion = \"2.1.0\"\nedition = \"2024\"\n\n[dependencies]\num = { path = \"../../forks/um/lib\" }\n");
+    r.write("crates/veredas-maquinar/src/main.rs", "fn main() {}\n");
+    r.write("forks/um/Cargo.toml", "[workspace]\nmembers = [\"lib\"]\n");
+    r.write("forks/um/lib/Cargo.toml", "[package]\nname = \"um\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\ndois = { path = \"../../dois/lib\" }\n");
+    r.write("forks/um/lib/src/lib.rs", "\n");
+    r.write("forks/dois/Cargo.toml", "[workspace]\nmembers = [\"lib\"]\n");
+    r.write("forks/dois/lib/Cargo.toml", "[package]\nname = \"dois\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+    r.write("forks/dois/lib/src/lib.rs", "\n");
+    r
+}
+
+#[test]
+fn every_road_into_a_build_charges_the_components_it_reaches() {
+    let r = deeper();
+    let c1 = r.commit("the deeper suite");
+    let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
+    let pins = |release: &str, commit: &str| -> (PathBuf, Manifest) {
+        let text = format!(
+            "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
+             [[component]]\nname = \"veredas-base\"\nversion = \"2.0.0\"\n\n[[component]]\nname = \"veredas-core\"\nversion = \"2.0.0\"\n\n\
+             [[component]]\nname = \"veredas-maquinar\"\nversion = \"2.1.0\"\nbins = [\"veredas-maquinar\"]\n\n\
+             [[component]]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.3\"\nbins = [\"veredas-portal\"]\n\n\
+             [tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+        );
+        (PathBuf::from(format!("{release}.toml")), manifest::load(&text).unwrap())
+    };
+    assert_eq!(manifest::check(r.path(), &pins("2.0.0", &c1).1).unwrap(), Vec::<String>::new());
+    let keys = |n: &str| -> Vec<String> { held[n].inputs.as_ref().unwrap().0.keys().filter(|k| !k.starts_with(".cargo") && *k != "Cargo.toml").cloned().collect() };
+    assert_eq!(
+        keys("veredas-portal"),
+        [
+            "Cargo.lock: itoa 1.0.11",
+            "Cargo.lock: libc 0.2.170",
+            "Cargo.lock: pkgbuild 1.0.0",
+            "Cargo.lock: serde_json 1.0.140",
+            "crates/veredas-base/",
+            "crates/veredas-core/",
+            "crates/veredas-portal/",
+            "docs/core-lib.rs",
+            "docs/deep.txt",
+            "docs/example.txt",
+            "docs/outer.rs",
+            "docs/unix.rs",
+        ]
+    );
+    assert_eq!(keys("veredas-maquinar"), ["crates/veredas-maquinar/", "forks/dois/Cargo.toml", "forks/dois/lib/", "forks/um/Cargo.toml", "forks/um/lib/"]);
+    let lock = std::fs::read_to_string(r.path().join("Cargo.lock")).unwrap();
+    let charged = |component: &str, version: &str, inputs: &str| format!("{component} {version} is pinned by releases 2.0.0 and 2.0.1 at different build inputs ({inputs}): a version names everything its build reads");
+    let portal = |i: &str| charged("veredas-portal", "2.0.0-alpha.3", i);
+    let edit_lock = |from: &str, to: &str| {
+        let l = lock.clone();
+        let (from, to) = (from.to_string(), to.to_string());
+        move |r: &Repo| {
+            assert_eq!(l.matches(&from).count(), 1, "{from}");
+            r.write("Cargo.lock", &l.replace(&from, &to));
+        }
+    };
+    type Case = (&'static str, Box<dyn FnOnce(&Repo)>, Vec<String>);
+    let cases: Vec<Case> = vec![
+        ("a build dependency updated", Box::new(edit_lock("checksum = \"3333\"", "checksum = \"3434\"")), vec![portal("Cargo.lock: pkgbuild 1.0.0")]),
+        ("a dependency on unix alone updated", Box::new(edit_lock("checksum = \"2222\"", "checksum = \"2323\"")), vec![portal("Cargo.lock: libc 0.2.170")]),
+        ("a renamed dependency updated", Box::new(edit_lock("checksum = \"4444\"", "checksum = \"4545\"")), vec![portal("Cargo.lock: serde_json 1.0.140")]),
+        ("the registry's itoa, named with its source", Box::new(edit_lock("checksum = \"1111\"", "checksum = \"1212\"")), vec![portal("Cargo.lock: itoa 1.0.11")]),
+        ("the git itoa, which nothing uses", Box::new(edit_lock("#0123456789abcdef0123456789abcdef01234567", "#fedcba9876543210fedcba9876543210fedcba98")), vec![]),
+        (
+            "a member two paths away",
+            Box::new(|r: &Repo| r.write("crates/veredas-base/src/lib.rs", "pub fn changed() {}\n")),
+            vec![charged("veredas-base", "2.0.0", "crates/veredas-base/"), charged("veredas-core", "2.0.0", "crates/veredas-base/"), portal("crates/veredas-base/")],
+        ),
+        ("core's library source, outside its folder", Box::new(|r: &Repo| r.write("docs/core-lib.rs", "pub fn changed() {}\n")), vec![charged("veredas-core", "2.0.0", "docs/core-lib.rs"), portal("docs/core-lib.rs")]),
+        ("the module named by cfg_attr", Box::new(|r: &Repo| r.write("docs/unix.rs", "pub fn changed() {}\n")), vec![portal("docs/unix.rs")]),
+        ("the file a module under src/examples names", Box::new(|r: &Repo| r.write("docs/example.txt", "changed\n")), vec![portal("docs/example.txt")]),
+        ("the file an outside module names", Box::new(|r: &Repo| r.write("docs/deep.txt", "changed\n")), vec![portal("docs/deep.txt")]),
+        ("a fork a fork uses", Box::new(|r: &Repo| r.write("forks/dois/lib/src/lib.rs", "pub fn changed() {}\n")), vec![charged("veredas-maquinar", "2.1.0", "forks/dois/lib/")]),
+    ];
+    for (what, edit, want) in cases {
+        edit(&r);
+        let c = r.commit(what);
+        r.git(&["reset", "-q", "--hard", &c1]);
+        assert_eq!(manifest::check_together(r.path(), &[pins("2.0.0", &c1), pins("2.0.1", &c)]).unwrap(), want, "{what}");
+    }
+    // A package the lock file pins by path and no member uses by path (a `[patch]` to a folder):
+    // the inputs do not read, by that reason.
+    r.write("forks/serde_json/Cargo.toml", "[package]\nname = \"serde_json\"\nversion = \"1.0.140\"\nedition = \"2024\"\n");
+    r.write("forks/serde_json/src/lib.rs", "\n");
+    let t = std::fs::read_to_string(r.path().join("Cargo.toml")).unwrap();
+    r.write("Cargo.toml", &format!("{t}\n[patch.crates-io]\nserde_json = {{ path = \"forks/serde_json\" }}\n"));
+    r.write("Cargo.lock", &lock.replace(&format!("name = \"serde_json\"\nversion = \"1.0.140\"\nsource = \"{}\"\nchecksum = \"4444\"\n", "registry+https://github.com/rust-lang/crates.io-index"), "name = \"serde_json\"\nversion = \"1.0.140\"\n"));
+    let c = r.commit("a patch to a folder");
+    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    assert_eq!(held["veredas-portal"].inputs, Err("its Cargo.lock's serde_json 1.0.140 has no source and is no member a release builds from its folder".to_string()));
 }

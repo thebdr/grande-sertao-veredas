@@ -104,8 +104,9 @@ fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vm
     assert_eq!(cache::sha256(&proof.vmdk).unwrap(), cache::sha256(&vmdk).unwrap(), "the disk proven is the OVA's");
 
     // C-293: the update command inside the machine. A newer release's bundle (this cut's, its
-    // release named one newer and its sums written again) handed in on a disk and installed at the
-    // serial console as a tester does, the shipped disk booted copy-on-write once more.
+    // release named one newer and stated cut for real, as the command installs no trial, its sums
+    // written again) handed in on a disk and installed at the serial console as a tester does, on
+    // an overlay of the shipped disk, then the machine booted again.
     let newer = "0.0.0-trial.293";
     let repack = work.join("newer");
     let _ = std::fs::remove_dir_all(&repack);
@@ -116,7 +117,9 @@ fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vm
     let manifest = repack.join(&new_name).join("release.toml");
     let text = std::fs::read_to_string(&manifest).unwrap();
     assert_eq!(text.matches(&format!("release = \"{release}\"")).count(), 1);
-    std::fs::write(&manifest, text.replace(&format!("release = \"{release}\""), &format!("release = \"{newer}\""))).unwrap();
+    assert_eq!(text.matches(&format!("suite = \"{}\"", cut::NOT_RUN)).count(), 1);
+    let text = text.replace(&format!("release = \"{release}\""), &format!("release = \"{newer}\"")).replace(&format!("suite = \"{}\"", cut::NOT_RUN), &format!("suite = \"{}\"", cut::SUITE));
+    std::fs::write(&manifest, text).unwrap();
     bundle::write_sums(&repack.join(&new_name)).unwrap();
     let newer_bundle = repack.join(format!("{new_name}.tar.gz"));
     bundle::pack(&repack, &new_name, "1795300000", &newer_bundle).unwrap();

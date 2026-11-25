@@ -33,9 +33,16 @@ scheme, one naming rule, and a clear role for each component.
 - **The tester machine.** A suite release also ships as a virtual machine for VMware, on a light
   Linux distribution, holding the whole release suite: testers and designers run the suite
   without building it (the architect, 2026-11-22). Both are planned in `docs/alforge-plan.md`
-  (the contract's C-290 to C-292, P-011 promoted into them, and P-022).
+  (the contract's C-290 to C-293, P-011 promoted into them, and P-022).
 - **Core ripples outward.** A MAJOR bump of `veredas-core` means every dependent is rebuilt
   and retested before its own next release.
+- **A version names its build's inputs** (the architect, 2026-11-25, `docs/questions.md` Q441):
+  in a release, a component's version names everything its build reads but the toolchain (its
+  folder, the members and path packages it uses, what its sources name outside them, the lock
+  file's entries of its dependencies, the workspace's manifest). A change to any of them bumps the
+  component's version before the next release pins it; the release refuses one version at two
+  sets of inputs (`docs/alforge-plan.md`; Q442 and Q445 ask how far the manifest and the folder
+  reach).
 - **Versioned files.** Every plain-text config and project file is TOML and states its
   schema as `format` and `version`; a misspelled key is refused. Portal migrates it or
   refuses it, and never guesses. Veredas 1's JSON project files are not carried as they are:

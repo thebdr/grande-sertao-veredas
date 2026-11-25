@@ -81,22 +81,46 @@ pub fn image(r: &Recipe, toolchain: &str, work: &Path) -> Result<PathBuf, VmErro
 pub const SRC: &str = "/build/src";
 pub const VENDOR: &str = "/build/vendor";
 
+/// What the builder builds of one component, alone: its executables, or, for a component that ships
+/// none, its library, so every component's build is held to its inputs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Build {
+    pub package: String,
+    pub bins: Vec<String>,
+    /// Its library target's name, built (`--lib`) when it ships no executable.
+    pub lib: Option<String>,
+    /// Its executables needing a feature its defaults leave off (C-290's reading): cargo building
+    /// one of them says that reading is wrong, and the script fails naming it.
+    pub left: Vec<String>,
+}
+
 /// The script the builder machine runs on the commit's tree: the toolchain's and the C library's
 /// versions written down, each component of `builds` built alone with `cargo build --release
-/// --locked --offline -p <component> --bins` (so cargo unifies features within its own inputs, never
-/// across components), as many jobs as the builder has processors, and every one of its
-/// executables copied out with cargo's dep-info for it; a bin cargo did not build (a required
-/// feature the defaults do not turn on) is named, never skipped, and fails the script, so the cut
-/// refuses a release that would ship less than its components name.
-pub fn script(r: &Recipe, builds: &[(String, Vec<String>)]) -> String {
+/// --locked --offline -p <component> --bins` (`--lib` for one that ships no executable), so cargo
+/// unifies features within its own inputs, never across components, as many jobs as the builder
+/// has processors, and every executable copied out with cargo's dep-info for it (a library's
+/// dep-info alone); a bin cargo did not build (a required feature the defaults do not turn on) is
+/// named, never skipped, and fails the script, so the cut refuses a release that would ship less
+/// than its components name.
+pub fn script(r: &Recipe, builds: &[Build]) -> String {
     let cargo: String = builds
         .iter()
-        .map(|(p, _)| format!("cargo build --release --locked --offline --jobs {} -p {p} --bins\n", r.builder.cpus))
+        .filter_map(|b| {
+            let what = if !b.bins.is_empty() { "--bins" } else if b.lib.is_some() { "--lib" } else { return None };
+            Some(format!("cargo build --release --locked --offline --jobs {} -p {} {what}\n", r.builder.cpus, b.package))
+        })
         .collect();
     let copies: String = builds
         .iter()
-        .flat_map(|(_, bins)| bins)
-        .map(|b| format!("if [ -f target/release/{b} ]; then cp target/release/{b} /build/out/bin/; cp target/release/{b}.d /build/out/deps/; else echo \"ALFORGE-MISSING {b}\"; missing=1; fi\n"))
+        .flat_map(|b| {
+            let lib = b.lib.iter().filter(|_| b.bins.is_empty()).map(|l| format!("cp target/release/lib{l}.d /build/out/deps/\n"));
+            b.bins
+                .iter()
+                .map(|b| format!("if [ -f target/release/{b} ]; then cp target/release/{b} /build/out/bin/; cp target/release/{b}.d /build/out/deps/; else echo \"ALFORGE-MISSING {b}\"; missing=1; fi\n"))
+                .chain(lib)
+                .chain(b.left.iter().map(|l| format!("if [ -f target/release/{l} ]; then echo \"ALFORGE-UNEXPECTED {l}\"; missing=1; fi\n")))
+                .collect::<Vec<_>>()
+        })
         .collect();
     format!(
         "set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
@@ -112,12 +136,11 @@ pub fn script(r: &Recipe, builds: &[(String, Vec<String>)]) -> String {
 /// unread) refused with the log's tail, or the console's when there is no log.
 pub fn outcome(log: &str, console: &str, unpacked: bool, log_path: &Path) -> Result<(), VmError> {
     let missing: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("ALFORGE-MISSING ")).collect();
-    if !missing.is_empty() {
-        return Err(VmError::Failed {
-            program: "the build in the builder machine".into(),
-            status: "refused".into(),
-            stderr: missing.iter().map(|b| format!("cargo built no `{b}` with the default features (a required feature they do not turn on): the release would not ship it")).collect::<Vec<_>>().join("\n"),
-        });
+    let unexpected: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("ALFORGE-UNEXPECTED ")).collect();
+    if !missing.is_empty() || !unexpected.is_empty() {
+        let mut said: Vec<String> = missing.iter().map(|b| format!("cargo built no `{b}` with the default features (a required feature they do not turn on): the release would not ship it")).collect();
+        said.extend(unexpected.iter().map(|b| format!("cargo built `{b}` with the default features, which the manifest leaves out as needing a feature they leave off: the reading of its features is wrong")));
+        return Err(VmError::Failed { program: "the build in the builder machine".into(), status: "refused".into(), stderr: said.join("\n") });
     }
     if !unpacked || !log.contains("ALFORGE-BUILD-OK") || !console.contains("ALFORGE-BUILD-EXIT 0") {
         return Err(VmError::Failed {
@@ -143,7 +166,7 @@ pub struct Built {
 /// Builds each of `builds`' components' executables at `commit` of the repository at `root` in a fresh copy of the
 /// builder: the commit's tree as git stores it, `cargo vendor` of its lock file, `cargo build --release
 /// --locked --offline` inside, the executables named in `bins` handed back.
-pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, builds: &[(String, Vec<String>)], work: &Path) -> Result<Built, VmError> {
+pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, builds: &[Build], work: &Path) -> Result<Built, VmError> {
     let builder = image(r, toolchain, work)?;
     let input = work.join("in");
     let _ = std::fs::remove_dir_all(&input);

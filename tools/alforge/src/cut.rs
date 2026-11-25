@@ -199,14 +199,20 @@ pub fn after_build(
     // What each executable's compilation read (cargo's dep-info for it, `deps/<bin>.d`) lies in
     // what its component's version names: a file outside would ship a change under the same
     // version (docs/questions.md Q441).
+    // A component that ships no executable is held to them by its library's build.
     let mut outside = Vec::new();
     for h in held.values() {
-        for b in &h.bins {
-            let d = built.out.join("deps").join(format!("{b}.d"));
-            let info = std::fs::read_to_string(&d).map_err(|e| refused(format!("the build left no dep-info for `{b}` ({}: {e})", d.display())))?;
+        let built_here: Vec<(String, String)> = if !h.bins.is_empty() {
+            h.bins.iter().map(|b| (format!("{b}.d"), format!("`{b}`"))).collect()
+        } else {
+            h.lib.iter().map(|l| (format!("lib{l}.d"), "the library".to_string())).collect()
+        };
+        for (file, what) in built_here {
+            let d = built.out.join("deps").join(&file);
+            let info = std::fs::read_to_string(&d).map_err(|e| refused(format!("the build left no dep-info for {what} of {} ({}: {e})", h.name, d.display())))?;
             let inputs = h.inputs.as_ref().map_err(|why| refused(format!("{}'s build inputs do not read: {why}", h.name)))?;
             for p in inputs::read_outside(&info, builder::SRC, builder::VENDOR, inputs) {
-                outside.push(format!("`{b}` of {} read {p}, which its version does not name", h.name));
+                outside.push(format!("{what} of {} read {p}, which its version does not name", h.name));
             }
         }
     }
@@ -340,7 +346,8 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
         }
     }
     // Each component built alone, its executables named.
-    let builds: Vec<(String, Vec<String>)> = held.values().filter(|h| !h.bins.is_empty()).map(|h| (h.name.clone(), h.bins.iter().cloned().collect())).collect();
+    let builds: Vec<builder::Build> =
+        held.values().map(|h| builder::Build { package: h.name.clone(), bins: h.bins.iter().cloned().collect(), lib: h.lib.clone(), left: h.left.iter().cloned().collect() }).collect();
     std::fs::create_dir_all(&o.work)?;
     let built = builder::build(&recipe, root, &commit, &toolchain, &builds, &o.work)?;
     eprintln!("alforge: built under {} on {}", built.toolchain, built.libc);

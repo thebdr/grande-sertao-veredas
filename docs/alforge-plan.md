@@ -155,8 +155,13 @@ Keys (each required unless a default is given):
    `target/alforge/<release>/`. No git tag marks the commit (Q432, ruled): the manifest alone
    names it.
 
-A MAJOR bump of `veredas-core` ripples (the plan): every dependent's next version is cut only once
-it has been rebuilt and retested against it, which the cut sees as the suite green at the commit.
+Core ripples outward (the plan), and since Q441 any change to what a component's build reads does:
+a change to core charges core and every component using it, a lock file update every component it
+reaches, an edit of the workspace's manifest every component (Q442). The cut refuses a release that
+pins such a component at its earlier version, before anything runs, naming each input that moved;
+each member bumps its own version (alforge edits no component's crate), asked through the
+orchestrator before a real cut. A bump an input forces is a PATCH by SemVer's own rule when the
+component's interface does not change.
 
 ## Part two: the tester machine
 
@@ -347,8 +352,10 @@ passed on 2026-11-23.
 - **Updates** (Q437, ruled "Update command"): `sudo veredas-atualizar <bundle.tar.gz>` in the
   machine (C-293), a Python 3 script the provisioning installs in `/usr/local/sbin`. Nothing is
   published (Q436), so it fetches nothing: it takes a bundle the tester has copied into the machine
-  (dragged onto the desktop, or downloaded in Chromium) and prints its SHA-256 to compare with the
-  one handed over; once a place is named it can fetch from it. It installs the bundle only if
+  (dragged onto the desktop, or downloaded in Chromium: VMware's to try) and prints the archive's
+  SHA-256 to compare with the one handed over, and its `SHA256SUMS`' digest, which the boot's check
+  says as `VEREDAS-BUNDLE`; once a place is named it can fetch from it. Bundles are handed over as
+  the OVA is, when a newer release exists and the orchestrator calls it (none is kept beside the OVA). It installs the bundle only if
   every file matches `SHA256SUMS`, its manifest is a `veredas-release` of the machine's target,
   newer than the installed release (SemVer's precedence) and naming exactly the executables in
   `bin/`, and every executable finds its libraries on the machine (`ldd`); then it moves it beside
@@ -358,7 +365,12 @@ passed on 2026-11-23.
   left as they are; the new release's own plant is in `/opt/veredas/current/planta`. Anything
   refused leaves the machine as it was, one update runs at a time (the release's folder locked),
   and a restart that fails says how to point `current` back. The boot's check names the release
-  `current` names, and says the command is there (`VEREDAS-ATUALIZAR ok`).
+  `current` names, and says the command is there (`VEREDAS-ATUALIZAR ok`). A trial's bundle is
+  never installed. The command watches the services after the restart (active, one main process,
+  at two looks): a release that refuses the kept plant exits and is restarted by systemd, and the
+  command says so with the way back (exit 3). Each old release stays (about 160 MB extracted on a
+  16 GB disk); nothing removes them. What a bundle cannot carry (the command itself, the services,
+  the packages, the desktop) still comes with a new OVA.
 
 ### What a cut and a machine cost in disk, and what is kept
 Measured on release 2.0.0-alpha.1 (2026-11-22):
@@ -404,9 +416,14 @@ Measured on release 2.0.0-alpha.1 (2026-11-22):
 - **C-292**, the tester machine: the OVA built by the recipe from a bundle, its disk booted under
   QEMU on VMware's devices, the plant live from the first boot and reached from the host
   (`tests/maquina.rs`).
+- **C-293**, the update command: a newer release's bundle checked and installed beside the old one
+  (`tests/atualizar.rs`), and run inside the machine C-292 builds (`tests/maquina.rs`: it rides on
+  that machine rather than building a second, so a change to that file re-stales both clauses).
 
 ## What a component is asked for
-Through the orchestrator, none needed for the first image:
+Through the orchestrator: before every real cut, a version bump of each component whose build
+inputs moved since the release before (Q441; the cut names them, and for 2.0.0-alpha.2 that is every
+component 2.0.0-alpha.1 pins). None was needed for the first image:
 - the executables stop when stdin closes; a service manager stops them with SIGTERM, which ends
   them abruptly. The bench and an in-memory store lose nothing by it, so the services keep stdin
   open meanwhile; a SIGTERM handled as stdin's close (maquinar, portal, supervisão) would make the

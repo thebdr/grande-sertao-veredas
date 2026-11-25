@@ -11,7 +11,7 @@ use crate::machine::Recipe;
 use crate::vm::{self, DataDisk, Hardware, Spec, Vm, VmError};
 
 /// Bumped when what the provisioning does changes.
-pub const PROVISIONING: u32 = 2;
+pub const PROVISIONING: u32 = 3;
 
 /// The machine's update command (docs/questions.md Q437, ruled "Update command"), installed by the
 /// provisioning as `/usr/local/sbin/veredas-atualizar`: a newer release's bundle, given by path,
@@ -34,7 +34,9 @@ pub fn provision_script(r: &Recipe, bundle_dir: &str) -> String {
 export DEBIAN_FRONTEND=noninteractive
 echo "ALFORGE-STEP packages"
 apt-get update
-apt-get install -y {packages}
+# Python 3 for the update command, which is this tool's and not the recipe's: a release's own recipe
+# may come from before the command (2.0.0-alpha.1's does).
+apt-get install -y {packages} python3
 if [ -n "{remove}" ]; then apt-get purge -y {remove}; fi
 apt-get -y autoremove --purge
 echo "ALFORGE-STEP user"
@@ -56,6 +58,18 @@ cat > /usr/local/sbin/veredas-atualizar <<'ATUALIZAR'
 chmod 755 /usr/local/sbin/veredas-atualizar
 cp -r /opt/veredas/current/planta /home/{u}/planta
 cp /alforge/guide.md /home/{u}/README-veredas.md
+cat >> /home/{u}/README-veredas.md <<'GUIDE'
+
+## Updating to a newer release
+Copy the newer release's bundle (`veredas-<release>-x86_64-unknown-linux-gnu.tar.gz`) into this
+machine, then, in a terminal: `sudo veredas-atualizar <the bundle>` (the password is the user's).
+It prints the bundle's SHA-256 (compare it with the one handed over), checks every file, the
+manifest and that the release is newer, installs it beside the release here under `/opt/veredas/`,
+points `/opt/veredas/current` at it, and restarts the bench and supervisão on it. Your plant in
+`~/planta/` is left as it is; the new release's own plant is in `/opt/veredas/current/planta/`.
+Refused, it changes nothing and says why. The release before stays in `/opt/veredas/`; to go back,
+`sudo ln -sfn <its folder's name> /opt/veredas/current` and restart both services.
+GUIDE
 echo "ALFORGE-STEP services"
 cat > /etc/systemd/system/veredas-bancada.service <<'UNIT'
 [Unit]
@@ -65,8 +79,10 @@ After=network.target
 [Service]
 User={u}
 WorkingDirectory=/home/{u}/planta
-# The executable runs until its stdin closes: a pipe from sleep holds it open.
-ExecStart=/bin/sh -c 'sleep infinity | exec /opt/veredas/current/bin/veredas-maquinar bench.toml'
+# The executable runs until its stdin closes: a pipe from sleep holds it open. It is the service's
+# main process (bash's `exec`, the pipe by process substitution), so its exit ends the service and
+# systemd starts it again; a shell's pipeline would wait on the sleep and hide the exit.
+ExecStart=/bin/bash -c 'exec /opt/veredas/current/bin/veredas-maquinar bench.toml < <(exec sleep infinity)'
 Restart=on-failure
 RestartSec=3
 
@@ -82,7 +98,7 @@ Wants=veredas-bancada.service
 [Service]
 User={u}
 WorkingDirectory=/home/{u}/planta
-ExecStart=/bin/sh -c 'sleep infinity | exec /opt/veredas/current/bin/veredas-supervisao supervisao.toml'
+ExecStart=/bin/bash -c 'exec /opt/veredas/current/bin/veredas-supervisao supervisao.toml < <(exec sleep infinity)'
 Restart=on-failure
 RestartSec=3
 
@@ -871,6 +887,9 @@ pub struct UpdateProof {
     pub console: String,
     /// The plant read from the host after the update.
     pub plant: crate::together::Report,
+    /// The console of the machine booted again after the update, and the plant read then.
+    pub reboot_console: String,
+    pub reboot_plant: crate::together::Report,
     /// The shipped disk's SHA-256 before and after.
     pub before: String,
     pub after: String,
@@ -892,22 +911,27 @@ pub fn prove_update(r: &Recipe, vmdk: &Path, newer: &Path, work: &Path) -> Resul
     let handed = work.join("update.tar");
     vm::run_clean("tar", &["-cf", &handed.display().to_string(), "-C", &newer.parent().unwrap_or(Path::new(".")).display().to_string(), &name], None)?;
     let before = cache::sha256(vmdk)?;
+    // An overlay of the shipped disk of the proof's own, so the machine boots twice on what the
+    // update wrote and the shipped disk takes nothing.
+    let overlay = work.join("update-overlay.qcow2");
+    vm::overlay(vmdk, &overlay, r.machine.disk_gb)?;
     let port = vm::free_port()?;
     let console = work.join("update-console.log");
-    let mut m = Vm::start(&Spec {
-        disk: vmdk.to_path_buf(),
+    let spec = |console: &Path, data: Vec<DataDisk>, serial_in: bool| Spec {
+        disk: overlay.clone(),
         hardware: Hardware::Vmware,
         cpus: r.machine.cpus,
         memory_mb: r.machine.memory_mb,
         seed: None,
-        data: vec![DataDisk { file: handed.clone(), serial: "alforge-update".into(), writable: false }],
+        data,
         forwards: vec![(port, r.machine.supervisao_port)],
-        snapshot: true,
+        snapshot: false,
         mac: Some(PROOF_MAC.into()),
         qmp: None,
-        console: console.clone(),
-        serial_in: true,
-    })?;
+        console: console.to_path_buf(),
+        serial_in,
+    };
+    let mut m = Vm::start(&spec(&console, vec![DataDisk { file: handed.clone(), serial: "alforge-update".into(), writable: false }], true))?;
     let u = &r.machine.user;
     let pw = &r.machine.password;
     m.wait_for("login:", Duration::from_secs(300))?;
@@ -942,11 +966,22 @@ pub fn prove_update(r: &Recipe, vmdk: &Path, newer: &Path, work: &Path) -> Resul
     }
     m.wait_for("ALFORGE-AGAIN-EXIT ", Duration::from_secs(300))?;
     let plant = crate::together::read_plant(([127, 0, 0, 1], port).into(), Duration::from_secs(300), Duration::from_secs(2));
+    // Restarted as a tester restarts it: QEMU ends on the guest's reboot (`-no-reboot`), and the
+    // machine is started again on the same overlay.
+    m.type_line(&format!("{sudo} systemctl reboot"))?;
+    m.wait_off(Duration::from_secs(180))?;
     let text = m.console();
+    let again = work.join("update-reboot-console.log");
+    let mut m = Vm::start(&spec(&again, vec![], false))?;
+    m.wait_for("VEREDAS-ATUALIZAR ", Duration::from_secs(300))?;
+    let reboot_plant = crate::together::read_plant(([127, 0, 0, 1], port).into(), Duration::from_secs(300), Duration::from_secs(2));
+    let reboot_console = m.console();
     m.kill();
     let after = cache::sha256(vmdk)?;
-    let _ = std::fs::remove_file(&handed);
-    Ok(UpdateProof { console: text, plant, before, after })
+    for f in [&handed, &overlay] {
+        let _ = std::fs::remove_file(f);
+    }
+    Ok(UpdateProof { console: text, plant, reboot_console, reboot_plant, before, after })
 }
 
 /// What an [`UpdateProof`] shows wrong, each named: release `newer` (on `target`) installed by the
@@ -994,8 +1029,15 @@ pub fn update_faults(p: &UpdateProof, release: &str, newer: &str, target: &str) 
         out.push(format!("the same bundle was not refused a second time (it exited {})", one("AGAIN-EXIT").unwrap_or_else(|| "with nothing said".into())));
     }
     out.extend(crate::together::plant_faults(&p.plant));
+    // Booted again: the boot's own check on the new release, the plant served from the boot.
+    for line in [format!("VEREDAS-SUMS-OK {newer}"), "VEREDAS-ON-PATH ok".to_string(), "VEREDAS-ATUALIZAR ok".to_string()] {
+        if !p.reboot_console.lines().any(|l| l.trim_end() == line) {
+            out.push(format!("booted again, the machine's check does not say `{line}`"));
+        }
+    }
+    out.extend(crate::together::plant_faults(&p.reboot_plant).into_iter().map(|f| format!("booted again: {f}")));
     if p.before != p.after {
-        out.push("the update's boot changed the shipped disk".into());
+        out.push("the update's boots changed the shipped disk".into());
     }
     out
 }

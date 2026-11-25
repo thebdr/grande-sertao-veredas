@@ -44,12 +44,15 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     // Each executable's dep-info, as the builder handed it back beside it (each component built
     // alone): its compilation read its own sources, and nothing outside what its component's
     // version names (C-290's inputs), or the cut would have stopped.
+    // A component that ships none, by its library's own build.
     for h in held.values() {
         let inputs = h.inputs.as_ref().unwrap();
-        for b in &h.bins {
-            let info = std::fs::read_to_string(work.join("out/deps").join(format!("{b}.d"))).unwrap();
-            assert!(info.contains(&format!("/build/src/{}/src/", h.dir)), "{b}: {info}");
-            assert_eq!(alforge::inputs::read_outside(&info, "/build/src", "/build/vendor", inputs), Vec::<String>::new(), "{b}");
+        let files: Vec<String> = if h.bins.is_empty() { h.lib.iter().map(|l| format!("lib{l}.d")).collect() } else { h.bins.iter().map(|b| format!("{b}.d")).collect() };
+        assert!(!files.is_empty(), "{} is built for its dep-info", h.name);
+        for f in files {
+            let info = std::fs::read_to_string(work.join("out/deps").join(&f)).unwrap();
+            assert!(info.contains(&format!("/build/src/{}/src/", h.dir)), "{f}: {info}");
+            assert_eq!(alforge::inputs::read_outside(&info, "/build/src", "/build/vendor", inputs), Vec::<String>::new(), "{f}");
         }
     }
     assert!(c.manifest.toolchain.starts_with("rustc "), "{}", c.manifest.toolchain);

@@ -1,6 +1,6 @@
 # The Veredas tester machine
 
-This machine holds one suite release of Veredas 2, built from the repository by its recipe
+This machine holds a suite release of Veredas 2, built from the repository by its recipe
 (`docs/alforge-plan.md` in the release's docs). Nothing here needs building.
 
 ## What runs from the first boot
@@ -20,7 +20,7 @@ veredas-bancada veredas-supervisao`.
 - The release: `/opt/veredas/current/` (its executables in `bin/`, on every user's `PATH`; its
   manifest `release.toml`; `SHA256SUMS`, checked at every boot).
 - The documents: `/opt/veredas/current/docs/`, the file references (`*-schema.md`) first.
-- The plant: `~/planta/`, your own copy; the original is `/opt/veredas/current/planta/`.
+- The plant: `~/planta/`, your own copy; the release's own is `/opt/veredas/current/planta/`.
 
 ## Running your own
 Each executable reads its file and runs until its standard input closes (Ctrl+D in a terminal):

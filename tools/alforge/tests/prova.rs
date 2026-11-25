@@ -175,7 +175,35 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
     let installed = &s[s.find("cat > /usr/local/sbin/veredas-atualizar <<'ATUALIZAR'\n").unwrap() + "cat > /usr/local/sbin/veredas-atualizar <<'ATUALIZAR'\n".len()..];
     assert_eq!(&installed[..installed.find("ATUALIZAR\n").unwrap()], maquina::ATUALIZAR);
     assert!(!maquina::ATUALIZAR.lines().any(|l| l == "ATUALIZAR"), "the heredoc's end never inside the script");
-    assert!(r.machine.packages.iter().any(|p| p == "python3"), "{:?}", r.machine.packages);
+    // Python 3 installed by the provisioning itself, not by the recipe: a release's own recipe may
+    // come from before the command (2.0.0-alpha.1's does).
+    assert!(s.lines().any(|l| l == format!("apt-get install -y {} python3", r.machine.packages.join(" "))), "python3 installed");
+    let first = std::process::Command::new("git").arg("-C").arg(repo_root()).args(["show", "d74be940d51a4510e353ccd91303fb3691080462:tools/entrega/maquina/maquina.toml"]).output().unwrap();
+    assert!(first.status.success() && !String::from_utf8_lossy(&first.stdout).contains("python3"), "the first release's recipe holds no python3");
+    // The bench and supervisão, each the service's own main process: an executable's exit ends its
+    // service (and systemd starts it again), where a shell's pipeline waits on the sleep.
+    for (exe, file) in [("veredas-maquinar", "bench.toml"), ("veredas-supervisao", "supervisao.toml")] {
+        let line = format!("ExecStart=/bin/bash -c 'exec /opt/veredas/current/bin/{exe} {file} < <(exec sleep infinity)'");
+        assert!(s.lines().any(|l| l == line), "{line}");
+    }
+    for (form, ends) in [("exec false < <(exec sleep 20)", true), ("sleep 20 | exec false", false)] {
+        let start = std::time::Instant::now();
+        let mut child = std::process::Command::new(if ends { "bash" } else { "sh" })
+            .args(["-c", form])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let done = child.try_wait().unwrap();
+        if done.is_none() {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        assert_eq!(done.is_some(), ends, "{form}: ended within {:?}", start.elapsed());
+    }
+    // The guide the user reads says how to update, as the tool that installs the command writes it.
+    assert!(s.contains("cat >> /home/veredas/README-veredas.md <<'GUIDE'\n\n## Updating to a newer release\n"), "the guide's update section");
     // The release's sums read by the boot's check from the release itself.
     let rel_line = s.lines().find(|l| l.starts_with("rel=")).unwrap();
     let probe = tempfile::tempdir().unwrap();

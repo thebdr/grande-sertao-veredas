@@ -25,6 +25,11 @@ fn exe(path: &Path, links: &[&str]) {
 /// A release's folder as the cut assembles it: its manifest, `bin/`, the plant and a README, its
 /// sums written.
 fn release_folder(parent: &Path, release: &str, target: &str, bins: &[&str]) -> PathBuf {
+    release_folder_tested(parent, release, target, bins, cut::SUITE)
+}
+
+/// [`release_folder`], its manifest saying `tested` was run (a trial says it was not).
+fn release_folder_tested(parent: &Path, release: &str, target: &str, bins: &[&str], tested: &str) -> PathBuf {
     let dir = parent.join(format!("veredas-{release}-{target}"));
     for b in bins {
         exe(&dir.join("bin").join(b), &[]);
@@ -33,7 +38,7 @@ fn release_folder(parent: &Path, release: &str, target: &str, bins: &[&str]) -> 
     std::fs::write(dir.join("planta/bench.toml"), format!("# the plant of {release}\n")).unwrap();
     std::fs::write(dir.join("README.md"), "Veredas\n").unwrap();
     let components = vec![("veredas-portal".to_string(), "2.0.0".to_string(), bins.iter().map(|b| b.to_string()).collect())];
-    let text = cut::manifest_text(&semver::Version::parse(release).unwrap(), &"ab".repeat(20), target, "rustc 1.100.0", &components, cut::NOT_RUN);
+    let text = cut::manifest_text(&semver::Version::parse(release).unwrap(), &"ab".repeat(20), target, "rustc 1.100.0", &components, tested);
     std::fs::write(dir.join("release.toml"), text).unwrap();
     bundle::write_sums(&dir).unwrap();
     dir
@@ -68,12 +73,31 @@ impl Machine {
         m
     }
 
-    /// The stand-in `systemctl`: logs its arguments, exits `code`.
+    /// The stand-in `systemctl`: logs a restart and exits `code`; asked to `show` the services, it
+    /// says each active with one main process, the same at every look.
     fn systemctl(&self, code: u8) {
+        self.systemctl_showing(code, &["ActiveState=active\nExecMainStartTimestampMonotonic=5\n\nActiveState=active\nExecMainStartTimestampMonotonic=6\n"]);
+    }
+
+    /// [`Machine::systemctl`], its `show` answering each of `looks` in turn (the last one again).
+    fn systemctl_showing(&self, code: u8, looks: &[&str]) {
         use std::os::unix::fs::PermissionsExt;
-        let p = self.stub.path().join("systemctl");
-        std::fs::write(&p, format!("#!/bin/sh\necho \"$*\" >> '{}'\nexit {code}\n", self.stub.path().join("calls").display())).unwrap();
+        let d = self.stub.path();
+        for (i, l) in looks.iter().enumerate() {
+            std::fs::write(d.join(format!("look-{i}")), l).unwrap();
+        }
+        let last = looks.len() - 1;
+        let p = d.join("systemctl");
+        std::fs::write(
+            &p,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = show ]; then n=$(cat '{d}/looked' 2>/dev/null || echo 0); [ $n -gt {last} ] && n={last}; cat '{d}/look-'$n; echo $((n + 1)) > '{d}/looked'; exit 0; fi\necho \"$*\" >> '{d}/calls'\nexit {code}\n",
+                d = d.display()
+            ),
+        )
+        .unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_file(d.join("looked"));
     }
 
     fn calls(&self) -> String {
@@ -88,6 +112,7 @@ impl Machine {
             .arg(&script)
             .args(args)
             .env("VEREDAS_ROOT", self.root.path())
+            .env("VEREDAS_SETTLE", "0")
             .env("PATH", format!("{}:/usr/bin:/bin", self.stub.path().display()))
             .output()
             .unwrap();
@@ -154,12 +179,14 @@ fn a_newer_release_is_installed_beside_the_old_and_current_moved_to_it() {
     assert_eq!(
         out,
         format!(
-            "veredas-atualizar: {} (SHA-256 {})\nveredas-atualizar: release 1.0.0 -> 1.1.0-alpha.1 (commit {})\n\
+            "veredas-atualizar: {} (SHA-256 {})\nveredas-atualizar: its SHA256SUMS {} (what the boot's check says as VEREDAS-BUNDLE)\n\
+             veredas-atualizar: release 1.0.0 -> 1.1.0-alpha.1 (commit {})\n\
              veredas-atualizar: installed at {}; the old release kept at {}\n\
              veredas-atualizar: the plant's files in the home folder left as they are; the release's own plant is in /opt/veredas/current/planta\n\
-             veredas-atualizar: the bench and supervisão restarted on it\n",
+             veredas-atualizar: the bench and supervisão restarted on it and stayed up\n",
             b.display(),
             sha256_file(&b),
+            sha256_file(&m.path(&format!("opt/veredas/veredas-1.1.0-alpha.1-{TARGET}/SHA256SUMS"))),
             "ab".repeat(20),
             opt.join(format!("veredas-1.1.0-alpha.1-{TARGET}")).display(),
             opt.join(format!("veredas-1.0.0-{TARGET}")).display(),
@@ -281,6 +308,59 @@ fn every_bundle_the_command_refuses_leaves_the_machine_as_it_was() {
     let b = w.path().join("two.tar.gz");
     alforge::vm::run("tar", &["-czf", &b.display().to_string(), "-C", &two.display().to_string(), &format!("veredas-1.1.0-{TARGET}"), "another"], None).unwrap();
     assert_eq!(refused(&b, &m), ["the bundle holds 2 folders at its top, not one"]);
+    // A trial's bundle: never installed, its suite not run.
+    let w = work(());
+    let trial = release_folder_tested(w.path(), "1.1.0", TARGET, &ok, cut::NOT_RUN);
+    let b = w.path().join("trial.tar.gz");
+    bundle::pack(w.path(), trial.file_name().unwrap().to_str().unwrap(), "1795300000", &b).unwrap();
+    assert_eq!(refused(&b, &m), ["the bundle is a trial cut's (its suite `not run: a trial cut`): only a release cut for real is installed"]);
+    // A manifest missing what every manifest states, and an executable two components name.
+    let w = work(());
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &ok, |d| {
+        let t = std::fs::read_to_string(d.join("release.toml")).unwrap();
+        let t: String = t.lines().filter(|l| !l.starts_with("commit = ") && !l.starts_with("toolchain = ")).map(|l| format!("{l}\n")).collect();
+        std::fs::write(d.join("release.toml"), t).unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    assert_eq!(refused(&b, &m), ["release.toml states no `commit`", "release.toml states no `toolchain`"]);
+    let w = work(());
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &ok, |d| {
+        let t = std::fs::read_to_string(d.join("release.toml")).unwrap() + "\n[[component]]\nname = \"veredas-maquinar\"\nversion = \"2.0.0\"\nbins = [\"veredas-portal\"]\n";
+        std::fs::write(d.join("release.toml"), t).unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    assert_eq!(refused(&b, &m), ["bin/veredas-portal is named by more than one component"]);
+    // Not the room on the disk (the room it keeps free asked larger than any disk).
+    let w = work(());
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &ok, |_| {});
+    let before = m.snapshot();
+    let script = m.stub.path().join("veredas-atualizar");
+    let out = Command::new("python3")
+        .arg(&script)
+        .arg(&b)
+        .env("VEREDAS_ROOT", m.root.path())
+        .env("VEREDAS_RESERVE_MB", "1000000000")
+        .env("PATH", format!("{}:/usr/bin:/bin", m.stub.path().display()))
+        .output()
+        .unwrap();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(err.contains("  the bundle needs ") && err.contains(" MB left free; ") && err.ends_with(" MB are free\n"), "{err}");
+    assert_eq!(m.snapshot(), before);
+    // An I/O error once the release is moved and `current` pointed at it (the PATH's folder not
+    // writable): all of it put back.
+    use std::os::unix::fs::PermissionsExt;
+    let bin = m.path("usr/local/bin");
+    let w = work(());
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal", "veredas-novo"], |_| {});
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let before = m.snapshot();
+    let (code, out, err) = m.run(&[&b]);
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(code, Some(2), "{out}{err}");
+    assert_eq!(err, format!("veredas-atualizar: not installed, the machine is as it was:\n  {}: Permission denied\n", bin.join("veredas-novo.new").display()));
+    assert_eq!(m.snapshot(), before, "current, the links and the folder put back");
+    assert_eq!(m.calls(), "");
     // No archive at all, and no file.
     let w = work(());
     let b = w.path().join("notes.tar.gz");
@@ -324,12 +404,28 @@ fn the_command_says_how_it_was_run_wrong_and_what_it_could_not_do() {
     assert_eq!((code, err.as_str()), (Some(2), "veredas-atualizar: another update is running\n"));
     assert_eq!(std::fs::read_link(opt.join("current")).unwrap(), PathBuf::from(format!("veredas-1.0.0-{TARGET}")));
     // The services that do not restart: installed, said, and the way back named.
+    let back = format!("sudo ln -sfn veredas-1.0.0-{TARGET} /opt/veredas/current && sudo systemctl restart veredas-bancada.service veredas-supervisao.service");
     m.systemctl(1);
     let (code, out, err) = m.run(&[&b]);
     assert_eq!(code, Some(3), "{out}{err}");
     assert_eq!(m.calls(), "restart veredas-bancada.service veredas-supervisao.service\n");
     assert_eq!(std::fs::read_link(opt.join("current")).unwrap(), PathBuf::from(format!("veredas-1.1.0-{TARGET}")));
-    assert_eq!(err, format!("veredas-atualizar: the bench and supervisão did not restart (systemctl exited 1); to go back: sudo ln -sfn veredas-1.0.0-{TARGET} /opt/veredas/current\n"));
+    assert_eq!(err, format!("veredas-atualizar: the bench and supervisão did not stay up on it (systemctl exited 1); to go back: {back}\n"));
+    // Restarted, but one does not stay up (the new release refuses the kept plant, exits, and
+    // systemd starts it again): exit 3, the way back named.
+    for looks in [
+        vec!["ActiveState=active\nExecMainStartTimestampMonotonic=5\n\nActiveState=activating\nExecMainStartTimestampMonotonic=6\n"],
+        vec![
+            "ActiveState=active\nExecMainStartTimestampMonotonic=5\n\nActiveState=active\nExecMainStartTimestampMonotonic=6\n",
+            "ActiveState=active\nExecMainStartTimestampMonotonic=5\n\nActiveState=active\nExecMainStartTimestampMonotonic=9\n",
+        ],
+    ] {
+        let m = Machine::new();
+        m.systemctl_showing(0, &looks);
+        let (code, out, err) = m.run(&[&b]);
+        assert_eq!(code, Some(3), "{out}{err}");
+        assert!(err.starts_with("veredas-atualizar: the bench and supervisão did not stay up on it (they did not stay active: ") && err.ends_with(&format!("); to go back: {back}\n")), "{err}");
+    }
 }
 
 /// A plant served as it should be, as the host reads it.
@@ -369,7 +465,16 @@ fn the_update_inside_the_machine_is_judged_by_what_its_console_and_the_host_say(
          ALFORGE-CHECK VEREDAS-SUMS-OK 1.1.0\nALFORGE-CHECK VEREDAS-ON-PATH ok\nALFORGE-CHECK VEREDAS-ATUALIZAR ok\n\
          ALFORGE-PLANT-AFTER {sum}\nveredas-atualizar: not installed, the machine is as it was:\nALFORGE-AGAIN-EXIT 2\n"
     );
-    let proof = |console: &str, page: u16, after: &str| maquina::UpdateProof { console: console.into(), plant: served(page), before: "a".into(), after: after.into() };
+    let reboot = format!("VEREDAS-SUMS-OK 1.1.0\nVEREDAS-BUNDLE {}\nVEREDAS-ON-PATH ok\nVEREDAS-ATUALIZAR ok\n", "e".repeat(64));
+    let full = |console: &str, page: u16, again: &str, again_page: u16, after: &str| maquina::UpdateProof {
+        console: console.into(),
+        plant: served(page),
+        reboot_console: again.into(),
+        reboot_plant: served(again_page),
+        before: "a".into(),
+        after: after.into(),
+    };
+    let proof = |console: &str, page: u16, after: &str| full(console, page, &reboot, 200, after);
     let faults = |console: &str| maquina::update_faults(&proof(console, 200, "a"), "1.0.0", "1.1.0", TARGET);
     assert_eq!(faults(&good), Vec::<String>::new());
     for (from, to, want) in [
@@ -395,5 +500,12 @@ fn the_update_inside_the_machine_is_judged_by_what_its_console_and_the_host_say(
     // The plant from the host, and the shipped disk, after the update's boot.
     assert_eq!(maquina::update_faults(&proof(&good, 500, "a"), "1.0.0", "1.1.0", TARGET), alforge::together::plant_faults(&served(500)));
     assert!(!alforge::together::plant_faults(&served(500)).is_empty());
-    assert_eq!(maquina::update_faults(&proof(&good, 200, "b"), "1.0.0", "1.1.0", TARGET), ["the update's boot changed the shipped disk"]);
+    assert_eq!(maquina::update_faults(&proof(&good, 200, "b"), "1.0.0", "1.1.0", TARGET), ["the update's boots changed the shipped disk"]);
+    // Booted again after the update: the boot's own check on the new release, and the plant.
+    assert_eq!(
+        maquina::update_faults(&full(&good, 200, &reboot.replace("VEREDAS-SUMS-OK 1.1.0", "VEREDAS-SUMS-OK 1.0.0"), 200, "a"), "1.0.0", "1.1.0", TARGET),
+        ["booted again, the machine's check does not say `VEREDAS-SUMS-OK 1.1.0`"]
+    );
+    let got = maquina::update_faults(&full(&good, 200, &reboot, 500, "a"), "1.0.0", "1.1.0", TARGET);
+    assert_eq!(got, alforge::together::plant_faults(&served(500)).into_iter().map(|f| format!("booted again: {f}")).collect::<Vec<_>>());
 }
