@@ -102,7 +102,7 @@ const ALLOWED: &[&str] = &[
     // listener, an address, an error, its own exit (and, reading where a session's database file
     // would be, a folder through its links, a link's own target, and a path's bytes as the system
     // keeps them). Nothing that writes, runs or dials.
-    "std::fs::read_to_string", "std::fs::read_dir", "std::fs::read", "std::fs::canonicalize", "std::fs::read_link", "std::os::unix::ffi::OsStrExt", "std::os::unix::ffi::OsStringExt", "std::io", "std::io::Error", "std::io::ErrorKind::Interrupted", "std::io::Result", "std::io::stdin",
+    "std::fs::read_to_string", "std::fs::read_dir", "std::fs::read", "std::fs::canonicalize", "std::fs::read_link", "std::os::unix::ffi::OsStrExt", "std::io", "std::io::Error", "std::io::ErrorKind::Interrupted", "std::io::Result", "std::io::stdin",
     "std::io::BufRead", "std::net::SocketAddr", "std::process::exit", "tokio::net::TcpListener::bind",
 ];
 

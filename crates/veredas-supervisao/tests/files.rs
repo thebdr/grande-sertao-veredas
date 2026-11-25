@@ -616,64 +616,55 @@ fn two_sessions_never_open_one_database_file() {
         chain_in(dir.path(), "stores", "a.duckdb");
         let got = refused(config::load_file(&path));
         assert!(got.starts_with("session `yard`: ") && got.contains(" is the database file session `hall` opens for its store"), "no place ahead of two sharing a file: {got}");
-        // A path read as the engine reads it before the drive does (DuckDB's `ExpandPath`): the
-        // supervisão file given by a path whose first part is a folder named `~` (a quoted `~`, a
-        // service file that expands nothing), so portal hands the engine `~/loop/../one.duckdb`, the
-        // home folder's `one.duckdb`, refused beside a store pinned there; and one whose first part
-        // is a folder named `file:`, the rest a file URL's path, refused beside the file it names.
-        // The executable's own check, run in a folder of its own with a home of its own.
-        let check = |cwd: &std::path::Path, home: &std::path::Path, file: &str| {
+        // A path the engine may read otherwise than as a file here (Q190, DECISION PENDING), refused
+        // by name: the supervisão file given by a path whose first part is a folder named with a colon
+        // (a database's type, the engine's own or another's; a file system's or a URL's scheme; one
+        // letter before it, no drive on Linux) or beginning with `~` (the home folder), so the
+        // project's store under it is at such a path. The executable's own check, run in a folder of
+        // its own with a home of its own.
+        let check = |cwd: &std::path::Path, home: &std::path::Path, file: &std::ffi::OsStr| {
             let out = std::process::Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(file).arg("--check").current_dir(cwd).env("HOME", home).output().unwrap();
             (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned())
         };
         let dir = tempfile::tempdir().unwrap();
         let (cwd, home) = (dir.path().join("cwd"), dir.path().join("home"));
         std::fs::create_dir_all(&home).unwrap();
-        lay(&cwd.join("~"), "store = { disk = \"../one.duckdb\" }", &format!("store = {{ disk = \"{}/one.duckdb\" }}", home.display()), "the hall");
-        let (code, err) = check(&cwd, &home, "~/supervisao.toml");
-        assert!(code == Some(2) && err.contains(&tail("store")), "a path the engine reads from the home folder: {code:?} {err}");
-        // A leading `~` and whatever follows it: `~x/…`, the home folder's own name and `x` after it.
-        lay(&cwd.join("~x"), "store = { disk = \"../one.duckdb\" }", &format!("store = {{ disk = \"{}x/one.duckdb\" }}", home.display()), "the hall");
-        let (code, err) = check(&cwd, &home, "~x/supervisao.toml");
-        assert!(code == Some(2) && err.contains(&tail("store")), "a path the engine reads from the home folder's name: {code:?} {err}");
-        // The forms the engine reads as a file URL (`file:///`, `file://localhost/`), each refused
-        // beside the file it names; the engine's own type before a colon (`duckdb:`, in any case)
-        // dropped, the rest read alike; and a type of another (`file:` with one slash, `sqlite:`), a
-        // database the engine opens through an extension or nowhere, refused by name.
+        let otherwise = "a path whose first part holds a colon or which begins with `~`, which the database engine may read otherwise than as a file here (a database's type, another file system, a URL, the home folder): give the supervisão file and the project a plain path";
+        for first in ["~", "~x", "duckdb:", "DuckDB:", "file:", "sqlite:", "sqlite3:", "my_ext:", "md:", "s3:", "http:", "c:"] {
+            for after in ["", "/b", "//b", "///b"] {
+                let given = format!("{first}{after}/supervisao.toml");
+                lay(&cwd.join(std::path::Path::new(&format!("{first}{after}"))), "store = { disk = \"../one.duckdb\" }", "store = \"ram\"", "the hall");
+                let (code, err) = check(&cwd, &home, std::ffi::OsStr::new(&given));
+                assert!(code == Some(2) && err.contains(otherwise), "{given}: {code:?} {err}");
+                std::fs::remove_dir_all(cwd.join(first)).unwrap();
+            }
+        }
+        // A plain relative path loads (no colon in its first part, none beginning with `~`, though one
+        // stands further on), its store refused beside the file it names.
         let real = dir.path().join("real");
         std::fs::create_dir_all(&real).unwrap();
-        let under = |first: &std::path::Path| first.join(real.strip_prefix("/").unwrap());
-        let pinned = format!("store = {{ disk = \"{}/one.duckdb\" }}", real.display());
-        for (first, given) in [
-            (cwd.join("file:"), format!("file://{}/supervisao.toml", real.display())),
-            (cwd.join("file:").join("localhost"), format!("file://localhost{}/supervisao.toml", real.display())),
-            (cwd.join("duckdb:"), format!("duckdb:{}/supervisao.toml", real.display())),
-            (cwd.join("DuckDB:"), format!("DuckDB:{}/supervisao.toml", real.display())),
-        ] {
-            lay(&under(&first), "store = { disk = \"../one.duckdb\" }", &pinned, "the hall");
-            let (code, err) = check(&cwd, &home, &given);
-            assert!(code == Some(2) && err.contains(&tail("store")), "{given}: the file the engine opens: {code:?} {err}");
-            std::fs::remove_dir_all(&first).unwrap();
-        }
-        for (first, given, kind) in [(cwd.join("file:"), format!("file:{}/supervisao.toml", real.display()), "file"), (cwd.join("sqlite:"), format!("sqlite:{}/supervisao.toml", real.display()), "sqlite")] {
-            lay(&under(&first), "store = { disk = \"../one.duckdb\" }", "store = \"ram\"", "the hall");
-            let (code, err) = check(&cwd, &home, &given);
-            assert!(code == Some(2) && err.contains(&format!("which the database engine reads as a database of type `{kind}` (the part before its first colon), opened through an extension if at all")), "{given}: a database of another type: {code:?} {err}");
-            std::fs::remove_dir_all(&first).unwrap();
-        }
-        // A path that is no UTF-8, read as its bytes: the supervisão file under `~/\xff/`, a store
-        // pinned through a link to the home folder's `\xff`, the file the engine opens for both.
+        lay(&cwd.join("b").join("x:y"), "store = { disk = \"../one.duckdb\" }", &format!("store = {{ disk = \"{}/b/x:y/one.duckdb\" }}", cwd.display()), "the hall");
+        let (code, err) = check(&cwd, &home, std::ffi::OsStr::new("b/x:y/supervisao.toml"));
+        assert!(code == Some(2) && err.contains(&tail("store")), "a colon past the first part, a plain path: {code:?} {err}");
+        // A path that is no UTF-8, read as its bytes: the supervisão file under `\xff/`, a store
+        // pinned through a link to that folder, one file for both.
         {
             use std::os::unix::ffi::OsStrExt;
             let odd = std::ffi::OsStr::from_bytes(b"\xff");
-            std::fs::create_dir_all(home.join(odd)).unwrap();
-            std::os::unix::fs::symlink(home.join(odd), real.join("lnk")).unwrap();
-            lay(&cwd.join("~").join(odd), "store = { disk = \"../one.duckdb\" }", &format!("store = {{ disk = \"{}/lnk/one.duckdb\" }}", real.display()), "the hall");
-            let given = std::path::Path::new("~").join(odd).join("supervisao.toml");
-            let out = std::process::Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(&given).arg("--check").current_dir(&cwd).env("HOME", &home).output().unwrap();
-            let err = String::from_utf8_lossy(&out.stderr);
-            assert!(out.status.code() == Some(2) && err.contains(&tail("store")), "a path that is no UTF-8: {:?} {err}", out.status.code());
+            std::os::unix::fs::symlink(cwd.join(odd), real.join("lnk")).unwrap();
+            lay(&cwd.join(odd), "store = { disk = \"../one.duckdb\" }", &format!("store = {{ disk = \"{}/lnk/one.duckdb\" }}", real.display()), "the hall");
+            let (code, err) = check(&cwd, &home, std::path::Path::new(odd).join("supervisao.toml").as_os_str());
+            assert!(code == Some(2) && err.contains(&tail("store")), "a path that is no UTF-8: {code:?} {err}");
         }
+        // The write-ahead log the engine keeps beside each database (`<file>.wal`): a store pinned to
+        // another's log refused, either way round, and one pinned to a record's log.
+        let wal = |what: &str| format!(" is the write-ahead log the engine keeps beside the database file session `loop` opens for its {what} (`.wal`): two sessions of one host open no file alike");
+        let got = refused(two("store = { disk = \"../one.duckdb\" }", "store = { disk = \"../one.duckdb.wal\" }", "the hall"));
+        assert!(got.contains(&wal("store")), "a store pinned to another's log: {got}");
+        let got = refused(two("store = { disk = \"../one.duckdb.wal\" }", "store = { disk = \"../one.duckdb\" }", "the hall"));
+        assert!(got.contains("the write-ahead log the engine keeps beside its store (") && got.contains("(`.wal`) is the database file session `loop` opens for its store: two sessions of one host open no file alike"), "a store whose log is another's file: {got}");
+        let got = refused(two("store = \"ram\"\nrecord = { dir = \"../records\", max_mb = 5 }", "store = { disk = \"../records/the_loop-19700101-000000.record.duckdb.wal\" }", "the hall"));
+        assert!(got.contains(&wal("record")), "a store pinned to a record's log: {got}");
     }
     // One file written relative and absolute, the supervisão file read by a path relative to the
     // folder the test runs in: refused.

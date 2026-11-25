@@ -145,6 +145,8 @@ fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
     use veredas_portal::store::Residency;
     let at = chrono::NaiveDateTime::default();
     let mut opened: Vec<(PathBuf, &str, String)> = Vec::new();
+    // Each database's write-ahead log, which the engine keeps beside it (`<file>.wal`).
+    let mut logs: Vec<(PathBuf, &str, String)> = Vec::new();
     for s in sessions {
         let cfg = s.project.session_config(at);
         let name = s.project.name.trim();
@@ -160,25 +162,33 @@ fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
             files.push((r.file.clone(), format!("its record (a file of each run's own in {}, named from the project's name `{name}` and the start)", rec.dir.display())));
         }
         for (file, what) in files {
-            // A path the engine reads as a database of another type than its own (an extension's,
-            // `sqlite:`, a lone `file:/`) is opened through that extension or nowhere: refused by
-            // name, this host placing the engine's own databases alone.
-            let engine = as_the_engine_reads(&file).map_err(|kind| {
-                ConfigError::Invalid(format!(
-                    "session `{}`: {what} is at {}, which the database engine reads as a database of type `{kind}` (the part before its first colon), opened through an extension if at all: give the project a folder whose path the engine reads as its own",
+            // A path the engine may read otherwise than as a file here is refused by name (Q190,
+            // DECISION PENDING): the host places plain paths alone.
+            if engine_reads_otherwise(&file) {
+                return Err(ConfigError::Invalid(format!(
+                    "session `{}`: {what} is at {}, a path whose first part holds a colon or which begins with `~`, which the database engine may read otherwise than as a file here (a database's type, another file system, a URL, the home folder): give the supervisão file and the project a plain path",
                     s.name,
                     file.display(),
-                ))
-            })?;
+                )));
+            }
             // A path through more than forty links opens nowhere (the drive refuses it): no place,
             // so nothing to share.
-            let Some(at) = same_place(&engine) else { continue };
+            let Some(at) = same_place(&file) else { continue };
+            let tail = "two sessions of one host open no file alike (give one project another folder, or a name portal writes as another file name)";
+            let short = |theirs: &str| theirs.split(" (").next().unwrap_or(theirs).to_string();
             if let Some((_, other, theirs)) = opened.iter().find(|(k, _, _)| *k == at) {
-                return Err(ConfigError::Invalid(format!(
-                    "session `{}`: {what} is the database file session `{other}` opens for {theirs}: two sessions of one host open no file alike (give one project another folder, or a name portal writes as another file name)",
-                    s.name,
-                    theirs = theirs.split(" (").next().unwrap_or(theirs),
-                )));
+                return Err(ConfigError::Invalid(format!("session `{}`: {what} is the database file session `{other}` opens for {}: {tail}", s.name, short(theirs))));
+            }
+            if let Some((_, other, theirs)) = logs.iter().find(|(k, _, _)| *k == at) {
+                return Err(ConfigError::Invalid(format!("session `{}`: {what} is the write-ahead log the engine keeps beside the database file session `{other}` opens for {} (`.wal`): {tail}", s.name, short(theirs))));
+            }
+            let mut log = file.clone().into_os_string();
+            log.push(".wal");
+            if let Some(wal) = same_place(Path::new(&log)) {
+                if let Some((_, other, theirs)) = opened.iter().find(|(k, _, _)| *k == wal) {
+                    return Err(ConfigError::Invalid(format!("session `{}`: the write-ahead log the engine keeps beside {what} (`.wal`) is the database file session `{other}` opens for {}: {tail}", s.name, short(theirs))));
+                }
+                logs.push((wal, &s.name, what.clone()));
             }
             opened.push((at, &s.name, what));
         }
@@ -186,8 +196,8 @@ fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// A file's place, read as one place however its path is written (its caller hands it the path as
-/// the engine reads it, `as_the_engine_reads`): made absolute, then read part by
+/// A file's place, read as one place however its path is written (a plain one: its caller refuses a
+/// path the engine may read otherwise, `engine_reads_otherwise`): made absolute, then read part by
 /// part as the drive reads it, a part that is a link replaced by where it leads (its target taken
 /// from its folder, read part by part in turn), standing or not yet; a `..` the parent of what is
 /// read so far, so a `..` after a link, written or in a link's target, is the parent of where the
@@ -240,56 +250,19 @@ fn same_place(p: &Path) -> Option<PathBuf> {
     Some(out)
 }
 
-/// A database file's path as the engine reads it before the drive does (DuckDB 1.5.4, the engine
-/// portal bundles, for the database it opens and for one it attaches), read as its bytes: first its
-/// type (`ExtractExtensionPrefixFromPath`: what stands before the path's first colon, two or more
-/// ASCII letters, digits or `_`, no `://` after the colon), its own type (`duckdb`, in any case)
-/// dropped and any other returned as the type the engine opens the path through (an extension's,
-/// `sqlite:`, a lone `file:/`); then the rest as `FileSystem::ExpandPath` reads it: a leading `~` the
-/// home folder (`HOME`, on Windows `USERPROFILE`; the engine's `home_directory` setting, which
-/// portal leaves unset, apart) and the rest after it as written; a leading `file:` URL its path
-/// (`file:///`, `file://localhost/`; on Windows without the slash before the drive's letter); any
-/// other path as it is.
-fn as_the_engine_reads(p: &Path) -> Result<PathBuf, String> {
+/// Whether the database engine may read a file's path otherwise than as a file here (Q190, DECISION
+/// PENDING): read as its bytes, a path whose first part holds a colon (DuckDB reads what stands before
+/// a path's first colon as a database's type, `duckdb:` its own and any other an extension's, and a
+/// `scheme://` as another file system's or a URL's; a one-letter drive on Windows apart), or which
+/// begins with `~` (the engine's home folder).
+fn engine_reads_otherwise(p: &Path) -> bool {
     #[cfg(unix)]
-    let (bytes, from) = {
-        use std::os::unix::ffi::{OsStrExt, OsStringExt};
-        (p.as_os_str().as_bytes().to_vec(), |b: Vec<u8>| PathBuf::from(std::ffi::OsString::from_vec(b)))
-    };
+    let bytes = { use std::os::unix::ffi::OsStrExt; p.as_os_str().as_bytes().to_vec() };
     #[cfg(not(unix))]
-    let (bytes, from) = (p.to_string_lossy().into_owned().into_bytes(), |b: Vec<u8>| PathBuf::from(String::from_utf8_lossy(&b).into_owned()));
-    let mut rest: &[u8] = &bytes;
-    if let Some(colon) = bytes.iter().position(|&c| c == b':') {
-        if colon >= 2 && bytes.get(colon..colon + 3) != Some(b"://".as_slice()) && bytes[..colon].iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_') {
-            let kind = String::from_utf8_lossy(&bytes[..colon]).to_ascii_lowercase();
-            if kind != "duckdb" {
-                return Err(kind);
-            }
-            rest = &bytes[colon + 1..];
-        }
-    }
-    if let Some(after) = rest.strip_prefix(b"~") {
-        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap_or_default();
-        #[cfg(unix)]
-        let mut out = { use std::os::unix::ffi::OsStrExt; home.as_bytes().to_vec() };
-        #[cfg(not(unix))]
-        let mut out = home.to_string_lossy().into_owned().into_bytes();
-        out.extend_from_slice(after);
-        return Ok(from(out));
-    }
-    let win = usize::from(cfg!(windows));
-    let offset = if !rest.starts_with(b"file:/") {
-        0
-    } else if rest.get(6) != Some(&b'/') {
-        5 + win
-    } else if rest.get(7) == Some(&b'/') {
-        7 + win
-    } else if rest.get(7..17) == Some(b"localhost/".as_slice()) {
-        16 + win
-    } else {
-        0
-    };
-    Ok(from(rest[offset..].to_vec()))
+    let bytes = p.to_string_lossy().into_owned().into_bytes();
+    let first = &bytes[..bytes.iter().position(|&c| c == b'/' || (cfg!(windows) && c == b'\\')).unwrap_or(bytes.len())];
+    let drive = cfg!(windows) && first.len() == 2 && first[0].is_ascii_alphabetic() && first[1] == b':';
+    bytes.first() == Some(&b'~') || (first.contains(&b':') && !drive)
 }
 
 /// Read a supervisão file from disk; its folder is where its references live.
