@@ -1119,3 +1119,191 @@ mod round_3 {
         });
     }
 }
+
+/// C-116's fourth refute round: the critic's probes (`~/.cache/veredas/critic-c116-r4/probes`), kept
+/// as pins: LLDP taken only to its group address, a shorter TTL heard again, the same ids' TTL-0
+/// from another MAC, ids at the edges of visible ASCII, a datagram with IPv4 options, the read
+/// error's activity and sequence, unanswered datagrams not counted.
+mod round_4 {
+    use std::net::Ipv4Addr;
+    use std::time::Duration;
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::profinet::record::INDEX_IM0;
+    use veredas_aranha::profinet::rpc::{self, ByteOrder, PNIO_PORT, PnioStatus, ReadRequest, RpcPdu, Uuid};
+    use veredas_aranha::wire::raw::RawLink;
+    use veredas_maquinar::profinet::ip;
+    use veredas_maquinar::profinet::*;
+
+    use super::round_2::{DEVICE, config, heard, host_address, lldp_link, port_data, read_req, send_pdu, socket};
+
+    fn send(raw: &RawLink, src: Mac, chassis: ChassisId, port: PortId, ttl: u16) {
+        raw.send(&lldp::frame(src, &LldpPdu::new(chassis, port, ttl)).unwrap()).unwrap();
+    }
+
+    /// On the machine's lock: the same neighbour heard again with a TTL of 1 s after 120 s.
+    #[test]
+    fn a_shorter_ttl_heard_again_is_the_one_kept() {
+        netns::isolated("round_4::a_shorter_ttl_heard_again_is_the_one_kept", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            let sw = raw.mac();
+            heard(&raw, &dev, sw, ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 120);
+            send(&raw, sw, ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 1);
+            std::thread::sleep(Duration::from_millis(1700));
+            let (st, pd) = port_data(&s, 1);
+            assert_eq!((st, pd.map(|p| p.peers.len()), dev.neighbour()), (PnioStatus::OK, Some(0), None), "aged out at its last frame's TTL");
+        });
+    }
+
+    /// On the machine's lock: another neighbour heard last with a TTL of 1 s after one of 120 s.
+    #[test]
+    fn the_last_heard_neighbour_ages_at_its_own_ttl() {
+        netns::isolated("round_4::the_last_heard_neighbour_ages_at_its_own_ttl", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            heard(&raw, &dev, raw.mac(), ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 120);
+            heard(&raw, &dev, Mac([0x02, 0xBB, 0, 0, 0, 0x01]), ChassisId::Local { id: "switch-2".into() }, PortId::Local { id: "port-004".into() }, 1);
+            std::thread::sleep(Duration::from_millis(1700));
+            let (st, pd) = port_data(&s, 1);
+            assert_eq!((st, pd.map(|p| p.peers.len()), dev.neighbour()), (PnioStatus::OK, Some(0), None));
+        });
+    }
+
+    #[test]
+    fn the_same_ids_ttl_0_from_another_mac_clears_the_neighbour() {
+        netns::isolated("round_4::the_same_ids_ttl_0_from_another_mac_clears_the_neighbour", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = lldp_link();
+            heard(&raw, &dev, raw.mac(), ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 120);
+            heard(&raw, &dev, Mac([0x02, 0xBB, 0, 0, 0, 0x01]), ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 0);
+            assert_eq!(dev.neighbour(), None, "the same chassis and port ids are the same neighbour, whatever the source");
+        });
+    }
+
+    #[test]
+    fn bytes_outside_visible_ascii_are_escaped_or_hex_and_the_port_data_answered() {
+        netns::isolated("round_4::bytes_outside_visible_ascii_are_escaped_or_hex_and_the_port_data_answered", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            let sw = raw.mac();
+            // DEL (0x7F) above visible ASCII, a tab and a NUL under it, a reserved subtype's DEL.
+            let cases: [(ChassisId, PortId, (&str, &str)); 3] = [
+                (ChassisId::Local { id: "sw\u{7f}1".into() }, PortId::Local { id: "port-003".into() }, ("sw\\x7f1", "port-003")),
+                (ChassisId::Local { id: "sw\t1".into() }, PortId::IfName { name: "Gi\u{0}1".into() }, ("sw\\x091", "Gi\\x001")),
+                (ChassisId::Other { subtype: 8, data: b"ab\x7f".to_vec() }, PortId::Local { id: "port-005".into() }, ("61627f", "port-005")),
+            ];
+            for (n, (chassis, port, want)) in cases.into_iter().enumerate() {
+                heard(&raw, &dev, sw, chassis, port, 120);
+                let (st, pd) = port_data(&s, n as u16 + 1);
+                let got = pd.map(|p| (p.peers[0].chassis_id.clone(), p.peers[0].port_id.clone()));
+                assert_eq!((st.to_bytes(), got), ([0, 0, 0, 0], Some((want.0.to_string(), want.1.to_string()))), "case {n}");
+            }
+        });
+    }
+
+    #[test]
+    fn an_lldp_frame_to_any_address_but_its_group_s_is_not_heard() {
+        netns::isolated("round_4::an_lldp_frame_to_any_address_but_its_group_s_is_not_heard", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            // Another station's MAC, broadcast, another group, another of 802.1AB's, the device's own.
+            for dst in [[0x02, 0xEE, 0, 0, 0, 0x01], [0xFF; 6], [0x01, 0x00, 0x5E, 0, 0, 0x01], [0x01, 0x80, 0xC2, 0, 0, 0x03], dev.mac.0] {
+                let mut f = lldp::frame(raw.mac(), &LldpPdu::new(ChassisId::Local { id: "elsewhere".into() }, PortId::Local { id: "port-007".into() }, 120)).unwrap();
+                f[0..6].copy_from_slice(&dst);
+                raw.send(&f).unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(400));
+            let (st, pd) = port_data(&s, 1);
+            assert_eq!((st, pd.map(|p| p.peers.len()), dev.neighbour()), (PnioStatus::OK, Some(0), None), "a frame to another address heard");
+            // To the group address: heard.
+            heard(&raw, &dev, raw.mac(), ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 120);
+        });
+    }
+
+    fn checksum(bytes: &[u8]) -> u16 {
+        let mut acc: u32 = bytes.chunks(2).map(|c| u32::from(u16::from_be_bytes([c[0], *c.get(1).unwrap_or(&0)]))).sum();
+        while acc > 0xFFFF {
+            acc = (acc & 0xFFFF) + (acc >> 16);
+        }
+        !(acc as u16)
+    }
+
+    #[test]
+    fn a_datagram_with_ipv4_options_is_taken_whole() {
+        let mac = Mac([0x02, 0, 0, 0, 0, 0x10]);
+        let me = Ipv4Addr::new(192, 168, 0, 10);
+        let peer = (Mac([0x02, 0, 0, 0, 0, 0x01]), Ipv4Addr::new(192, 168, 0, 1), 50000u16);
+        let payload = b"hello".to_vec();
+        let mut udp = Vec::new();
+        udp.extend_from_slice(&peer.2.to_be_bytes());
+        udp.extend_from_slice(&PNIO_PORT.to_be_bytes());
+        udp.extend_from_slice(&((8 + payload.len()) as u16).to_be_bytes());
+        udp.extend_from_slice(&[0, 0]);
+        udp.extend_from_slice(&payload);
+        let mut pseudo = Vec::new();
+        pseudo.extend_from_slice(&peer.1.octets());
+        pseudo.extend_from_slice(&me.octets());
+        pseudo.extend_from_slice(&[0, 17]);
+        pseudo.extend_from_slice(&(udp.len() as u16).to_be_bytes());
+        let c = checksum(&[pseudo, udp.clone()].concat());
+        udp[6..8].copy_from_slice(&c.to_be_bytes());
+        // IHL 6: a header of 24 bytes, one word of options.
+        let mut iph = vec![0x46, 0];
+        iph.extend_from_slice(&((24 + udp.len()) as u16).to_be_bytes());
+        iph.extend_from_slice(&[0, 7, 0x40, 0, 64, 17, 0, 0]);
+        iph.extend_from_slice(&peer.1.octets());
+        iph.extend_from_slice(&me.octets());
+        iph.extend_from_slice(&[1, 1, 1, 0]);
+        let c = checksum(&iph);
+        iph[10..12].copy_from_slice(&c.to_be_bytes());
+        let mut f = Vec::new();
+        f.extend_from_slice(&mac.0);
+        f.extend_from_slice(&peer.0.0);
+        f.extend_from_slice(&[0x08, 0x00]);
+        f.extend(iph);
+        f.extend(udp);
+        f.resize(f.len().max(60), 0);
+        assert_eq!(ip::udp_to(&f, me, PNIO_PORT), Some((peer.0, peer.1, peer.2, payload)));
+    }
+
+    #[test]
+    fn the_read_error_s_answer_carries_the_request_s_activity_and_sequence() {
+        netns::isolated("round_4::the_read_error_s_answer_carries_the_request_s_activity_and_sequence", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            let act = Uuid([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+            let (answer, args) = read_req(&s, &ReadRequest::implicit(7, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 32, act).expect("an answer");
+            assert_eq!((answer.activity, answer.sequence, args.status.to_bytes()), (act, 7, [0xDE, 0x80, 0xA0, 0x00]));
+        });
+    }
+
+    #[test]
+    fn an_unanswered_datagram_is_counted_neither_read_nor_refused() {
+        netns::isolated("round_4::an_unanswered_datagram_is_counted_neither_read_nor_refused", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            assert!(read_req(&s, &ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160, Uuid([1; 16])).is_some());
+            let connect = RpcPdu::pnio_request(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([9; 16]), 2, rpc::opnum::CONNECT, &rpc::RequestArgs::new(1024, vec![]));
+            assert!(send_pdu(&s, &connect).is_none());
+            let mut fragment = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([3; 16]), 3, &ReadRequest::implicit(3, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+            fragment.flags1 |= rpc::flags1::FRAGMENT;
+            assert!(send_pdu(&s, &fragment).is_none());
+            let mut response = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([4; 16]), 4, &ReadRequest::implicit(4, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+            response.packet_type = rpc::PacketType::Response;
+            assert!(send_pdu(&s, &response).is_none());
+            let st = dev.status();
+            assert_eq!((st.reads, st.reads_refused), (1, 0));
+        });
+    }
+
+}

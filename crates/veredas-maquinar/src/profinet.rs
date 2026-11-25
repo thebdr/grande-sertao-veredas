@@ -491,6 +491,11 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
         let Ok(frame) = ether::parse(&received.bytes) else { continue };
         match frame.ethertype {
             ether::ETHERTYPE_LLDP => {
+                // 802.1AB's nearest-bridge group address alone, as PROFINET sends LLDP: a frame to
+                // another address is not this port's neighbour (a card takes every group here).
+                if frame.dst != Mac::LLDP_MULTICAST {
+                    continue;
+                }
                 if let Ok(pdu) = lldp::decode(frame.payload) {
                     let peer = neighbour_of(&pdu, frame.src);
                     let mut state = shared.lock();

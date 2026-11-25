@@ -457,10 +457,12 @@ Recorded as the port meets them.
   | test(round_7::the_read_ahead_stops_at_64_kib_and_a_request_past_it_is_judged_when_it_is_read)
   | test(round_7::a_connection_past_the_limit_is_closed_within_300_ms)
   | test(round_4::an_identify_read_before_a_mute_is_not_taken_after_it)
-  | test(round_4::the_runner_keeps_its_scene_s_own_step)`
+  | test(round_4::the_runner_keeps_its_scene_s_own_step)
+  | test(round_4::a_shorter_ttl_heard_again_is_the_one_kept)
+  | test(round_4::the_last_heard_neighbour_ages_at_its_own_ttl)`
   (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23; the adapter's
   multiplier at 3 and its restart within a second; the PROFINET neighbour aged out by its TTL, and
-  kept to its last frame's when heard again; the Modbus server's read-ahead filled during a delay
+  kept to its last frame's when heard again, a shorter one and another's included; the Modbus server's read-ahead filled during a delay
   and its refusal at the limit within 300 ms; the
   executable's status lines a second apart; the Modbus server's delays side by side and a close
   behind many requests seen at once; the PROFINET device's strict mute, whose bursts meet the mute
