@@ -194,7 +194,7 @@ fn read(text: &str) -> Reading {
 
 /// The names a source of comissionador never holds, each with why.
 const REFUSED: &[(&str, &str)] = &[
-    ("set_writes_armed", "arms portal's switch"),
+    ("set_writes_armed", "arms portal's switch: once, in `main.rs`, the session's arming handed to the run alone"),
     ("WriteGate", "a gate of its own"),
     ("spawn", "a worker of its own: every one that writes takes a gate"),
     ("opc", "core's or portal's OPC UA layer, past the session"),
@@ -363,14 +363,27 @@ fn its_library_and_executable_are_built_from_its_src_folder_alone() {
     }
 }
 
+/// The one file the switch is armed in: the executable's, whose session hands the run its arming,
+/// used by a run for a test whose gated writes the person confirmed (Q314 (b)).
+const ARMING_FILE: &str = "main.rs";
+
 #[test]
-fn its_sources_reach_the_plant_through_portal_alone_and_never_arm_the_switch() {
+fn its_sources_reach_the_plant_through_portal_alone_and_arm_the_switch_in_one_place() {
+    let mut armings = Vec::new();
     for f in files_under(&crate_dir().join("src")) {
         let text = std::fs::read_to_string(&f).unwrap();
-        assert_eq!(breaches_of(&text), Vec::<String>::new(), "{}", f.display());
+        let mut breaches = breaches_of(&text);
+        let name = f.file_name().unwrap().to_string_lossy().into_owned();
+        let arming = |b: &String| b.starts_with("set_writes_armed:");
+        armings.extend(breaches.iter().filter(|b| arming(b)).map(|_| name.clone()));
+        if name == ARMING_FILE {
+            breaches.retain(|b| !arming(b));
+        }
+        assert_eq!(breaches, Vec::<String>::new(), "{}", f.display());
         assert_eq!(portal_breaches(&text), Vec::<String>::new(), "{}", f.display());
         assert!(!fs_outside(&f, &text), "{} reaches files of its own: `fs` is the engine's own files', in {FS_FILES:?} alone", f.display());
     }
+    assert_eq!(armings, [ARMING_FILE], "the switch is armed once, in {ARMING_FILE}");
 }
 
 /// The files that read and write the engine's own files (a test and its function files, the runs
@@ -430,10 +443,10 @@ fn its_normal_dependencies_are_the_reviewed_ones() {
 #[test]
 fn the_reading_finds_every_refused_form() {
     let one = |t: &str| breaches_of(t);
-    assert_eq!(one("fn f(s: &Session) { s.set_writes_armed(true); }"), ["set_writes_armed: arms portal's switch"]);
-    assert_eq!(one("fn f(s: &Session) { s.r#set_writes_armed(true); }"), ["set_writes_armed: arms portal's switch"]);
+    assert_eq!(one("fn f(s: &Session) { s.set_writes_armed(true); }"), ["set_writes_armed: arms portal's switch: once, in `main.rs`, the session's arming handed to the run alone"]);
+    assert_eq!(one("fn f(s: &Session) { s.r#set_writes_armed(true); }"), ["set_writes_armed: arms portal's switch: once, in `main.rs`, the session's arming handed to the run alone"]);
     assert_eq!(one("fn f() { let g = WriteGate::new(true); }"), ["WriteGate: a gate of its own"]);
-    assert_eq!(one("macro_rules! m { () => { x.set_writes_armed(true) } }"), ["set_writes_armed: arms portal's switch"]);
+    assert_eq!(one("macro_rules! m { () => { x.set_writes_armed(true) } }"), ["set_writes_armed: arms portal's switch: once, in `main.rs`, the session's arming handed to the run alone"]);
     // A gate made by `Default` is only of use to a worker, and no worker is spawned.
     assert_eq!(
         one("fn f() { let g = Default::default(); let w = veredas_core::opc::spawn(s, t, g); }"),

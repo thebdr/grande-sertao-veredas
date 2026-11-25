@@ -73,8 +73,11 @@ seed of 2026-10-24), and the acceptance tests of a plant were run by hand, watch
 ## Rules
 - **Through portal, both ways.** Every value a test reads is a row of portal's store, read through
   portal's library; every write is portal's OPC UA handle or channel handle, behind portal's
-  master switch and whitelist (C-043, C-044). Comissionador never sets the switch: its sources
-  name no call that arms it, and a test holds that by reading them (Q314).
+  master switch and whitelist (C-043, C-044). A run arms the switch for itself only once the
+  person has confirmed its test's gated writes (their list's fingerprint), by the session's own
+  arming its embedder hands it, and disarms it at its end; a switch it finds armed it leaves as it
+  found it (Q314 (b), the confirmation's form Q320). Its sources name the arming once, in the
+  executable, and a test holds that by reading them.
 - **The test file is the program.** What a run does is what the file says; the flow chart is a
   view of it, and positions are the one thing the view adds (the `layout` block). Nothing about a
   test lives elsewhere: no hidden settings, no state between runs but the runs folder.
@@ -185,7 +188,7 @@ veredas_comissionador
    `lex`, `parse`, `model`, `check`; the reference's worked examples loaded from
    `docs/test-schema.md` and every statement of it held against the reader; every refusal by its
    text and place. Clauses: C-200, the component (P-006 promoted: a library and one executable,
-   core and portal alone, its plan before its code, the switch never armed by its sources);
+   core and portal alone, its plan before its code, the switch armed in one place, for a run alone);
    C-201, the test file and the function file read and checked.
 2. **The engine, live.** `eval`, `plant`, `run` against a portal session fed by the bench: the
    worked example against the controller reference's machine, and tests of every action, route,
@@ -206,20 +209,27 @@ Each phase ends with `cargo nextest run --workspace -E 'rdeps(veredas-comissiona
 package(leis)'` green, its clauses recorded, refuted and verified, and a push.
 
 ## Questions
-Asked in `docs/questions.md`, each with the option taken meanwhile:
-- **Q310** the test file's syntax: the design's language, refined, with the suite's stamp
-  (taken), or TOML throughout, or a subset of Rust.
-- **Q311** the script box's language: the test language's own statements (taken), an embedded
-  scripting language, or Python.
-- **Q312** what an acceptance report holds, its form, and who signs it: a TOML record per run with
-  the evidence beside it and the PDF drawn by Oficina (taken).
-- **Q313** how the engine reaches portal: in process (taken first), over portal's HTTP interface,
-  or both behind one interface.
-- **Q314** who arms portal's write switch for a run: never comissionador (taken).
-- **Q315** what a write does in a replay: not sent, noted (taken).
-- **Q316** how retries count and how they show: per route, per run, never reset (taken).
-- **Q317** how a test names plant data: portal's own `table.column` (taken), aliases, or the
-  plant's symbolic names.
+Asked in `docs/questions.md`; Q310 to Q319 decided by the architect on 2026-11-25:
+- **Q310** the test file's syntax: the design's language, refined, with the suite's stamp.
+- **Q311** the script box's language: the test language's own statements.
+- **Q312** what an acceptance report holds and who signs it: a TOML record per run with the
+  evidence beside it, the PDF drawn by Oficina; anyone signs by a typed name, a signed report is
+  frozen, and a test may name the roles that must sign, its report awaiting them until they have
+  ((e), to be built).
+- **Q313** how the engine reaches portal: in process now, over portal's HTTP interface once the
+  link between two portals exists (P-019), behind the one `Plant` ((c)).
+- **Q314** who arms portal's write switch for a run: the run, once the person has confirmed its
+  test's gated writes, disarming it at its end ((b)).
+- **Q315** what a write does in a replay: not sent, noted.
+- **Q316** how retries count: per route, over the whole run, never reset.
+- **Q317** how a test names plant data: portal's own `table.column`, aliases when tests over many
+  alike objects need them.
+- **Q318** where a replay's clock stands after a write: portal stores each write with the moment
+  it was answered ((a), waiting on portal; the limit stands meanwhile).
+- **Q319** how a replay knows a session start's read-in is done: portal says so ((a), waiting on
+  portal; the stillness and its limit stand meanwhile).
+- **Q320** how a person confirms a run's gated writes with no screen, and what a run does with a
+  switch it finds armed: by the list's fingerprint (`--arm`), and leaves it as found (taken).
 
 Open and not asked yet, because nothing waits on them: a step in which a person enters a
 measurement or confirms what they saw (the seed's "minimal manual work"); how many ports a

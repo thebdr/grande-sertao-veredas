@@ -776,3 +776,52 @@ fn a_row_copied_through_min_or_max_is_bound_as_the_row() {
     let e = run_with(&checked_with(&test_of("  use f.fn\n  step c call F() -> s\n"), f), s.live(), &RunOptions::live()).unwrap_err();
     assert_eq!(e.0, ["`plc_main` has no column `nosuch`, read as `p.nosuch`"]);
 }
+
+// ---- the architect's Q314 (b) ----------------------------------------------------------------
+
+#[test]
+fn a_run_arms_the_switch_for_the_writes_it_was_confirmed_for_and_disarms_it_after() {
+    use veredas_comissionador::run::{Event, gated_writes, run, writes_fingerprint};
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = std::rc::Rc::new(session(dir.path(), &project_text(&bench, false, 4)));
+    let arming = || {
+        let s = s.clone();
+        veredas_comissionador::plant::LivePlant::with_arming(s.live(), Box::new(move |on| s.set_writes_armed(on))).unwrap()
+    };
+    let c = checked(&test_of("  step go write plc_main.run := 1\n  step w wait plc_main.speed >= 2.0 timeout 5s\n"));
+    let writes = gated_writes(&c);
+    let fp = writes_fingerprint(&writes);
+    assert_eq!((writes, fp.len()), (vec!["write plc_main.run := 1".to_string()], 16));
+    // Not confirmed, or confirmed for another list: refused, the fingerprint named, nothing written.
+    let p = arming();
+    let e = run(&c, &p, &RunOptions::live(), &mut |_| {}).unwrap_err();
+    assert_eq!(e.0, [format!("the test writes, and portal's write switch is off: its 1 gated write, confirmed as `{fp}`, arm it for the run")]);
+    let e = run(&c, &p, &RunOptions::live().confirming("feedfacefeedface"), &mut |_| {}).unwrap_err();
+    assert_eq!(e.0, [format!("the test writes, and portal's write switch is off: `feedfacefeedface` confirms no list of this test's; its 1 gated write, confirmed as `{fp}`, arm it for the run")]);
+    assert_eq!((tag(&bench, "run"), s.live().writes_armed()), ("Int32(0)".to_string(), false));
+    // Confirmed: armed for the run, the write lands, the switch off again after.
+    let mut armed_at_write = None;
+    let r = run(&c, &p, &RunOptions::live().confirming(fp.clone()), &mut |e| {
+        if let Event::Write(_) = e {
+            armed_at_write = Some(s.live().writes_armed());
+        }
+    })
+    .unwrap();
+    assert_eq!((r.verdict, armed_at_write, s.live().writes_armed()), (RunVerdict::Passed, Some(true), false), "{:?}", steps(&r));
+    assert_eq!(tag(&bench, "run"), "Int32(1)");
+    // A run that aborts disarms too.
+    let aborting = checked(&test_of("  step go write plc_main.run := 1\n  step w wait plc_main.speed >= 9.0 timeout 300ms\n"));
+    let r = run(&aborting, &p, &RunOptions::live().confirming(writes_fingerprint(&gated_writes(&aborting))), &mut |_| {}).unwrap();
+    assert_eq!((r.verdict, s.live().writes_armed()), (RunVerdict::Aborted, false));
+    // A switch the run found armed: left as found, confirmed or not.
+    s.set_writes_armed(true);
+    let r = run(&c, &p, &RunOptions::live(), &mut |_| {}).unwrap();
+    assert_eq!((r.verdict, s.live().writes_armed()), (RunVerdict::Passed, true));
+    s.set_writes_armed(false);
+    // A plant its embedder handed no arming: refused as before, confirmed or not.
+    drop(p);
+    let bare = veredas_comissionador::plant::LivePlant::new(s.live()).unwrap();
+    let e = run(&c, &bare, &RunOptions::live().confirming(fp), &mut |_| {}).unwrap_err();
+    assert_eq!(e.0, ["the test writes, and portal's write switch is off"]);
+}

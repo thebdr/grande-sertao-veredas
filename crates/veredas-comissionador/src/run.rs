@@ -157,15 +157,41 @@ pub struct RunOptions {
     pub mode: RunMode,
     /// Set by the tester to stop the run: it ends aborted at the next look.
     pub stop: Arc<AtomicBool>,
+    /// The fingerprint of the gated writes the person confirmed ([`writes_fingerprint`]): a live
+    /// run whose test writes arms portal's switch for itself when it is this test's (Q314 (b)).
+    pub confirmed: Option<String>,
 }
 
 impl RunOptions {
     pub fn live() -> RunOptions {
-        RunOptions { mode: RunMode::Live, stop: Arc::new(AtomicBool::new(false)) }
+        RunOptions { mode: RunMode::Live, stop: Arc::new(AtomicBool::new(false)), confirmed: None }
     }
     pub fn replay(from_ms: i64, to_ms: i64) -> RunOptions {
-        RunOptions { mode: RunMode::Replay { from_ms, to_ms }, stop: Arc::new(AtomicBool::new(false)) }
+        RunOptions { mode: RunMode::Replay { from_ms, to_ms }, stop: Arc::new(AtomicBool::new(false)), confirmed: None }
     }
+    /// The same, the person having confirmed the gated writes of this fingerprint.
+    pub fn confirming(mut self, fingerprint: impl Into<String>) -> RunOptions {
+        self.confirmed = Some(fingerprint.into());
+        self
+    }
+}
+
+/// A test's gated actions (its writes and sends), each as the test writes it, its blanks and line
+/// ends one space, in the order of its steps: the list a person confirms before a run arms
+/// portal's switch for it.
+pub fn gated_writes(c: &Checked) -> Vec<String> {
+    c.test.steps.iter().flat_map(|s| s.actions.iter()).filter(|a| a.is_gated()).map(|a| squash(c.text.get(a.span.start..a.span.end).unwrap_or(""))).collect()
+}
+
+/// The fingerprint of a list of gated writes: FNV-1a over the list, one per line, in 16 hex digits,
+/// so a confirmation is of that list and of no other.
+pub fn writes_fingerprint(writes: &[String]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in writes.join("\n").bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
 }
 
 // ---- binding -----------------------------------------------------------------------------------
@@ -351,9 +377,11 @@ fn row_columns(exprs: &[&Expr], rows: &HashMap<String, BTreeSet<String>>, tables
 pub struct Bound {
     pub tables: HashMap<String, Table>,
     pub read: BTreeSet<String>,
+    /// Whether the run arms portal's switch for itself, and disarms it at its end.
+    pub arm: bool,
 }
 
-pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode) -> Result<Bound, Refused> {
+pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode, confirmed: Option<&str>) -> Result<Bound, Refused> {
     let mut problems = Vec::new();
     let t = &c.test;
     if let Some(p) = t.portal()
@@ -483,10 +511,20 @@ pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode) -> Result<Bound, Ref
             problems.push(format!("`{table}` has no column `{column}`, read as `{base}.{column}`"));
         }
     }
+    // Live, a test that writes with the switch off: the run arms it for itself when the person
+    // confirmed this test's gated writes and the embedder handed it the way (Q314 (b)).
+    let mut arm = false;
     if mode == &RunMode::Live && writes > 0 && !plant.armed() {
-        problems.push("the test writes, and portal's write switch is off".to_string());
+        let fp = writes_fingerprint(&gated_writes(c));
+        let what = if writes == 1 { "its 1 gated write, confirmed".to_string() } else { format!("its {writes} gated writes, confirmed") };
+        match confirmed {
+            _ if !plant.can_arm() => problems.push("the test writes, and portal's write switch is off".to_string()),
+            Some(given) if given == fp => arm = true,
+            Some(given) => problems.push(format!("the test writes, and portal's write switch is off: `{given}` confirms no list of this test's; {what} as `{fp}`, arm it for the run")),
+            None => problems.push(format!("the test writes, and portal's write switch is off: {what} as `{fp}`, arm it for the run")),
+        }
     }
-    if problems.is_empty() { Ok(Bound { tables, read }) } else { Err(Refused(problems)) }
+    if problems.is_empty() { Ok(Bound { tables, read, arm }) } else { Err(Refused(problems)) }
 }
 
 // ---- the run -------------------------------------------------------------------------------------
@@ -632,7 +670,7 @@ struct Runner<'a> {
 /// Run a checked test against a plant: bound first (nothing runs when it is refused), then step
 /// by step until a step ends it or it runs past its last step.
 pub fn run(c: &Checked, plant: &dyn Plant, opts: &RunOptions, listener: &mut dyn FnMut(&Event)) -> Result<RunResult, Refused> {
-    let Bound { tables, read } = bind(c, plant, &opts.mode)?;
+    let Bound { tables, read, arm } = bind(c, plant, &opts.mode, opts.confirmed.as_deref())?;
     let (start, horizon) = match opts.mode {
         RunMode::Live => (plant.now_ms(), i64::MAX),
         RunMode::Replay { from_ms, to_ms } => (from_ms, to_ms),
@@ -676,6 +714,18 @@ pub fn run(c: &Checked, plant: &dyn Plant, opts: &RunOptions, listener: &mut dyn
         listener,
         tables,
     };
+    // Armed for the run before its first step, disarmed at its end whichever way it ends; a switch
+    // the run found armed it leaves as it found it.
+    struct Disarm<'p>(&'p dyn Plant);
+    impl Drop for Disarm<'_> {
+        fn drop(&mut self) {
+            self.0.set_armed(false);
+        }
+    }
+    let _disarm = arm.then(|| {
+        plant.set_armed(true);
+        Disarm(plant)
+    });
     r.main();
     Ok(r.result)
 }

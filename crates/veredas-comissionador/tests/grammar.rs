@@ -2094,7 +2094,11 @@ is not in the session, a column is read through a name no table it may hold a ro
 `await`'s table, and through every copy of the name, in any order: which await reached the read
 is the routes' to say, so a name rebound to another table's rows is judged where it runs), a
 `write`'s column is not an OPC UA tag marked writable, a `send`'s channel or message is not the
-session's, or, live, the test writes and portal's switch is off.
+session's, or, live, the test writes, portal's switch is off and the run may not arm it (the person
+has not confirmed the test's gated writes by their fingerprint, or nothing handed the run the way
+to arm it): a run so confirmed arms the switch before its first step and disarms it at its end,
+whichever way it ends, and a switch it finds armed it leaves as it found it (`docs/questions.md`
+Q314, Q320).
 
 ## Grammar
 

@@ -25,12 +25,12 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use veredas_comissionador::plant::LivePlant;
-use veredas_comissionador::run::{Event, RunMode, RunOptions, RunVerdict, run};
+use veredas_comissionador::run::{Event, RunMode, RunOptions, RunVerdict, gated_writes, run};
 use veredas_comissionador::{Checked, Problem, load_functions, load_test, record};
 use veredas_portal::session::{HealthState, Session};
 
 const USAGE: &str = "usage: veredas-comissionador check <file.test | file.fn>
-       veredas-comissionador run <file.test> --project <project.toml> [--runs <folder>]
+       veredas-comissionador run <file.test> --project <project.toml> [--runs <folder>] [--arm <fingerprint>]
        veredas-comissionador replay <file.test> --project <project.toml> --from <moment> --to <moment> [--runs <folder>]";
 
 /// How long a live run waits for the session's OPC UA sources and channels to read live before it
@@ -121,22 +121,26 @@ fn go(args: &[String]) -> ExitCode {
     let replay = args[0] == "replay";
     let Some(test) = args.get(1).filter(|t| !t.starts_with("--")) else { return usage() };
     // Each option once, its value the word after it, never another option.
-    const OPTIONS: [&str; 4] = ["--project", "--runs", "--from", "--to"];
-    let mut values: [Option<String>; 4] = Default::default();
+    const OPTIONS: [&str; 5] = ["--project", "--runs", "--from", "--to", "--arm"];
+    let mut values: [Option<String>; 5] = Default::default();
     let mut i = 2;
     while i < args.len() {
         let Some(k) = OPTIONS.iter().position(|o| *o == args[i]) else { return usage() };
-        if (k >= 2 && !replay) || values[k].is_some() {
+        // `--from` and `--to` are a replay's, `--arm` a live run's.
+        if (k == 2 || k == 3) != replay && k >= 2 || values[k].is_some() {
             return usage();
         }
         let Some(value) = args.get(i + 1).filter(|v| !v.is_empty() && !v.starts_with("--")) else { return usage() };
         values[k] = Some(value.clone());
         i += 2;
     }
-    let [project, runs, from, to] = values;
+    let [project, runs, from, to, arm] = values;
     let Some(project) = project.map(PathBuf::from) else { return usage() };
     let mode = match (replay, from, to) {
-        (false, ..) => RunOptions::live(),
+        (false, ..) => match arm {
+            Some(fp) => RunOptions::live().confirming(fp),
+            None => RunOptions::live(),
+        },
         (true, Some(f), Some(t)) => match (moment(&f), moment(&t)) {
             (Some(f), Some(t)) => RunOptions::replay(f, t),
             _ => {
@@ -195,6 +199,14 @@ fn make_folders(path: &Path) -> (Vec<PathBuf>, std::io::Result<()>) {
     (made, Ok(()))
 }
 
+/// The session stopped, once the plant that holds its arming is gone.
+fn stop(session: std::rc::Rc<Session>, plant: LivePlant) {
+    drop(plant);
+    if let Ok(s) = std::rc::Rc::try_unwrap(session) {
+        s.stop();
+    }
+}
+
 /// The plant's session started from its project file, the test run against it and kept: the exit
 /// code.
 fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> u8 {
@@ -210,7 +222,7 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
     // The session's start on the store's axis: a log stamped at or after it has read its history.
     let begun_at = chrono::Local::now().naive_local();
     let session = match Session::start(loaded.session_config(begun_at)) {
-        Ok(s) => s,
+        Ok(s) => std::rc::Rc::new(s),
         Err(e) => {
             eprintln!("{}: the session did not start: {e}", project.display());
             return 4;
@@ -285,7 +297,13 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
             std::thread::sleep(Duration::from_millis(100));
         }
     }
-    let plant = match LivePlant::new(live) {
+    // The session's own way to arm its switch, handed to the run: it arms it only for a test whose
+    // gated writes `--arm` confirmed, and disarms it at the run's end (Q314 (b)).
+    let arming: Box<dyn Fn(bool)> = {
+        let s = session.clone();
+        Box::new(move |on| s.set_writes_armed(on))
+    };
+    let plant = match LivePlant::with_arming(live, arming) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("{e}");
@@ -307,12 +325,18 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
         Ok(r) => r,
         Err(refused) => {
             eprintln!("{refused}");
-            session.stop();
+            // The writes a confirmation is of, each on its line.
+            if refused.0.iter().any(|p| p.starts_with("the test writes, and portal's write switch is off:")) {
+                for w in gated_writes(c) {
+                    eprintln!("  {w}");
+                }
+            }
+            stop(session, plant);
             return 4;
         }
     };
     let kept = record::keep(runs, c, &r, &mode.mode, &plant);
-    session.stop();
+    stop(session, plant);
     match kept {
         Ok(folder) => println!("kept: {}", folder.display()),
         Err(e) => {

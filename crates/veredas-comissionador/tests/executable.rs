@@ -114,10 +114,26 @@ fn run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict() {
     let (code, stdout, _) = out(&exe(dir.path(), &["run", "abort.test", "--project", "project.toml"]));
     assert_eq!((code, stdout[1].as_str()), (3, "aborted at a: `a` timed out: plc_main.speed >= 9 did not hold within 300ms"));
     assert!(dir.path().join("runs/t/0002/report.toml").exists(), "both runs of `T` kept");
+    // With the switch off: refused, the gated writes listed with their fingerprint; confirmed by
+    // it, the run arms the switch for itself, passes, and leaves it off (Q314 (b)).
+    let c = veredas_comissionador::load_test(&dir.path().join("chk-012.test")).unwrap();
+    let writes = veredas_comissionador::run::gated_writes(&c);
+    let fp = veredas_comissionador::run::writes_fingerprint(&writes);
     let (code, stdout, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off.toml"]));
     assert_eq!((code, stdout.len()), (4, 0));
-    assert_eq!(stderr, ["the run is refused: the test writes, and portal's write switch is off"]);
+    let mut want = vec![format!("the run is refused: the test writes, and portal's write switch is off: its 3 gated writes, confirmed as `{fp}`, arm it for the run")];
+    want.extend(writes.iter().map(|w| format!("  {w}")));
+    assert_eq!(stderr, want);
+    assert_eq!(writes, ["send sorter.command(code: 1)", "send sorter.command(code: 0)", "send sorter.command(code: 0)"]);
     assert!(!dir.path().join("runs/chk-012/0002").exists(), "a refused run is no run");
+    let (code, _, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off.toml", "--arm", "0123456789abcdef"]));
+    assert_eq!((code, stderr[0].starts_with("the run is refused: the test writes, and portal's write switch is off: `0123456789abcdef` confirms no list of this test's")), (4, true), "{stderr:?}");
+    let (code, stdout, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off.toml", "--arm", &fp]));
+    assert_eq!((code, stdout[7].as_str()), (0, "passed at summary: `summary` passed the run"), "{stdout:?} {stderr:?}");
+    assert_eq!(stdout[8], format!("kept: {}", Path::new("runs/chk-012/0002").display()));
+    // `--arm` is a live run's: a replay given it is a wrong command line.
+    let (code, ..) = out(&exe(dir.path(), &["replay", "chk-012.test", "--project", "off.toml", "--from", "2026-11-23 10:00", "--to", "2026-11-23 10:01", "--arm", &fp]));
+    assert_eq!(code, 2);
     // The folders made for a refused run are removed, those that were there kept.
     let (code, ..) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off.toml", "--runs", "fresh/deep"]));
     assert_eq!((code, dir.path().join("fresh").exists()), (4, false));

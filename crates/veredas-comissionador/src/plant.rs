@@ -69,8 +69,15 @@ pub trait Plant {
     fn rows(&self, table: &Table, after: i64, upto: i64) -> Result<Vec<Row>, PlantError>;
     /// The latest value of `column` stamped at or before `at` (a hole read past), with its stamp.
     fn latest(&self, table: &Table, column: &str, at: i64) -> Result<Option<(i64, Value)>, PlantError>;
-    /// Whether portal's write switch is armed. Read, never set.
+    /// Whether portal's write switch is armed.
     fn armed(&self) -> bool;
+    /// Whether a run may arm the switch for itself: the embedder handed the plant the way.
+    fn can_arm(&self) -> bool {
+        false
+    }
+    /// Arm or disarm the switch by the way the embedder handed, for a run whose gated writes the
+    /// person confirmed (Q314 (b)); nothing when none was handed.
+    fn set_armed(&self, _armed: bool) {}
     /// Whether `table.column` is an OPC UA tag the session marks writable.
     fn writable(&self, table: &str, column: &str) -> bool;
     /// Whether `channel` is a channel of the session with `message` in its catalog.
@@ -85,6 +92,8 @@ pub trait Plant {
 pub struct LivePlant {
     live: Arc<Live>,
     runtime: tokio::runtime::Runtime,
+    /// The embedder's way to arm and disarm the session's switch, when it handed one.
+    arming: Option<Box<dyn Fn(bool)>>,
 }
 
 impl LivePlant {
@@ -93,7 +102,15 @@ impl LivePlant {
             .enable_all()
             .build()
             .map_err(|e| PlantError::Store(format!("no runtime for the writes: {e}")))?;
-        Ok(LivePlant { live, runtime })
+        Ok(LivePlant { live, runtime, arming: None })
+    }
+
+    /// The same, with the embedder's way to arm and disarm the session's switch (its session's
+    /// own), which a run whose gated writes the person confirmed uses for itself.
+    pub fn with_arming(live: Arc<Live>, arming: Box<dyn Fn(bool)>) -> Result<LivePlant, PlantError> {
+        let mut p = LivePlant::new(live)?;
+        p.arming = Some(arming);
+        Ok(p)
     }
 
     /// The OPC UA source and the tag's node id text of a writable column.
@@ -240,6 +257,16 @@ impl Plant for LivePlant {
 
     fn armed(&self) -> bool {
         self.live.writes_armed()
+    }
+
+    fn can_arm(&self) -> bool {
+        self.arming.is_some()
+    }
+
+    fn set_armed(&self, armed: bool) {
+        if let Some(arm) = &self.arming {
+            arm(armed);
+        }
     }
 
     fn writable(&self, table: &str, column: &str) -> bool {
