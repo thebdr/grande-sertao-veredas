@@ -13,6 +13,8 @@ thread_local! {
     static WATCHED: Cell<bool> = const { Cell::new(false) };
     // this thread's own count, so a test running beside it on another thread never adds to it
     static ASKED: Cell<usize> = const { Cell::new(0) };
+    // the bytes asked for, while watched
+    static BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
 fn note() {
@@ -21,10 +23,17 @@ fn note() {
     }
 }
 
+fn note_bytes(n: usize) {
+    if WATCHED.with(|w| w.get()) {
+        BYTES.with(|b| b.set(b.get().saturating_add(n)));
+    }
+}
+
 // SAFETY: every call is handed to the system's allocator unchanged; counting touches no memory it returns.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         note();
+        note_bytes(layout.size());
         unsafe { System.alloc(layout) }
     }
 
@@ -35,6 +44,7 @@ unsafe impl GlobalAlloc for Counting {
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         note();
+        note_bytes(new_size);
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
@@ -232,6 +242,14 @@ fn every_kind_of_instruction_and_every_core_operation_allocates_nothing_in_a_mac
         ],
     });
     entries.push((f, vec![vec![int(Int::U8, 5)], vec![int(Int::Usize, 2)]]));
+    // a goto, the commonest terminator
+    let f = b.function(Function {
+        name: "goto".into(),
+        params: 0,
+        locals: locals(&[u8t]),
+        blocks: vec![block(vec![], Terminator::Goto(BlockId(1))), block(vec![assign(place(0), Value::Use(c8(3)), 1)], ret())],
+    });
+    entries.push((f, vec![]));
     // every operation of the closed list, by value where core's function takes a value
     for (op, result, params, args) in [
         (CoreOp::SaturatingAdd(Int::U8), u8t, vec![u8t, u8t], vec![vec![int(Int::U8, 200)], vec![int(Int::U8, 100)]]),
@@ -307,4 +325,26 @@ fn every_kind_of_instruction_and_every_core_operation_allocates_nothing_in_a_mac
     let mut copy = m.clone();
     let ((), asked) = watching(|| run_all(&mut copy));
     assert_eq!(asked, 0, "allocations while a copy of the machine runs them");
+}
+
+#[test]
+fn loading_a_program_with_a_huge_array_aggregate_asks_for_no_memory_of_the_array_s_size() {
+    // `[u8; u32::MAX]` built from no part: refused for its parts' count, never by building a list as long
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let huge = b.ty(Type::Array { element: u8t, len: u32::MAX });
+    let unit = b.unit();
+    let r = b.reference(huge, true);
+    b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[unit, r]),
+        blocks: vec![block(vec![assign(proj(1, vec![Projection::Deref]), Value::Aggregate(huge, None, vec![]), 1)], ret())],
+    });
+    let program = b.program;
+    let before = BYTES.with(|b| b.get());
+    let (got, _) = watching(|| Machine::load(program, &[]).map(|_| ()));
+    let asked = BYTES.with(|b| b.get()) - before;
+    assert_eq!(got, Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "an aggregate with too many or too few parts" }));
+    assert!(asked < 1 << 20, "{asked} bytes asked for while loading");
 }

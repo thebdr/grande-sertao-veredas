@@ -339,3 +339,62 @@ fn an_empty_program_is_written_and_read_back() {
     let bytes = file::write(&header(), &Program::default());
     assert_eq!(file::read(&bytes), Ok((header(), Program::default())));
 }
+
+/// The pinned small program's file: `fn f() -> bool { _0 = const true; return }`, under the header "n", "r".
+fn small() -> Vec<u8> {
+    let mut b = Build::default();
+    let boolean = b.bool();
+    let span = Span { file: 0, line: 2, column: 5 };
+    b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[boolean]),
+        blocks: vec![Block {
+            statements: vec![Statement { place: place(0), value: Value::Use(konst(boolean, vec![Scalar::Bool(true)])), at: span }],
+            terminator: Terminator::Return { at: span },
+        }],
+    });
+    b.program.files.push("f.rs".into());
+    file::write(&Header { language: 1, nightly: "n".into(), revision: "r".into() }, &b.program)
+}
+
+#[test]
+fn a_tag_no_program_has_is_refused_at_its_own_byte_for_every_kind_of_tag() {
+    // the small file's bytes, as the pinned test spells them: the type's tag at 36, the value's at 75, the
+    // operand's at 76, the scalar's at 85, the terminator's at 99
+    let bytes = small();
+    for (at, was, what) in [
+        (36, 0, "no such type kind"),
+        (75, 0, "no such value kind"),
+        (76, 2, "no such operand kind"),
+        (85, 1, "no such scalar kind"),
+        (99, 2, "no such terminator"),
+    ] {
+        assert_eq!(bytes[at], was, "the tag at {at}");
+        let mut d = bytes.clone();
+        d[at] = 0xEE;
+        assert_eq!(file::read(&d), Err(FileError::Malformed { at, what }), "a tag of 0xEE at {at}");
+    }
+}
+
+#[test]
+fn a_count_one_past_the_bytes_left_is_refused_at_the_count() {
+    let mut bytes = small();
+    // the functions' count, after the one type's byte
+    let at = 37;
+    assert_eq!(bytes[at..at + 4], [1, 0, 0, 0]);
+    let left = (bytes.len() - at - 4) as u32;
+    bytes[at..at + 4].copy_from_slice(&(left + 1).to_le_bytes());
+    assert_eq!(file::read(&bytes), Err(FileError::Malformed { at, what: "a count past the file's end" }));
+    // as many functions as bytes left is not refused for its count: the reader reads the one there is, then finds
+    // the file's end
+    bytes[at..at + 4].copy_from_slice(&left.to_le_bytes());
+    assert_eq!(file::read(&bytes), Err(FileError::Malformed { at: bytes.len(), what: "cut short" }));
+    // a count inside a function, its blocks' at 59, one past its own bytes left
+    let mut bytes = small();
+    let at = 59;
+    assert_eq!(bytes[at..at + 4], [1, 0, 0, 0]);
+    let left = (bytes.len() - at - 4) as u32;
+    bytes[at..at + 4].copy_from_slice(&(left + 1).to_le_bytes());
+    assert_eq!(file::read(&bytes), Err(FileError::Malformed { at, what: "a count past the file's end" }));
+}

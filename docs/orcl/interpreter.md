@@ -67,6 +67,9 @@ Everything a program needs is sized when it is loaded, so nothing is allocated d
   file is refused at load, naming the cycle.
 - a reference is the index of a slot in that memory; it never outlives its call (O3), so it never dangles.
 
+A slot takes 32 bytes as built, and a program's memory is allocated whole at load; a limit on it belongs to the
+target's settings (`veredas-alvo`), not built yet.
+
 ## Running
 - **A machine** holds the loaded program, its memory and its stack. It calls an entry with its arguments and runs it
   one instruction at a time; a host asks for one step, for steps until the entry returns, or for steps until a

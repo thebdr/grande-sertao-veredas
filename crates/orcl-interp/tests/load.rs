@@ -480,28 +480,75 @@ const UNREACHABLE: [&str; 5] = ["too many types", "too many functions", "too man
 
 #[test]
 fn every_reason_the_loader_gives_is_met_by_a_test_here() {
-    let loader = include_str!("../src/layout.rs");
-    // the tests above this one, so a reason named only in this test or in the list below is not met
+    // every reason literal of the loader's two sources: `layout.rs`'s, and the ones `Machine::load` gives in
+    // `machine.rs`, each read from its `reason: "..."` (the tests above this one, so a reason named only here is
+    // not met)
     let here = include_str!("load.rs").split("/// Reasons no program can meet").next().unwrap_or_default();
-    let mut reasons: Vec<&str> = loader
+    let layout = include_str!("../src/layout.rs");
+    let machine = include_str!("../src/machine.rs");
+    let mut reasons: Vec<&str> = layout
         .split('"')
         .skip(1)
         .step_by(2)
         .filter(|s| s.chars().next().is_some_and(|c| c.is_ascii_lowercase()) && !s.contains('{'))
         .collect();
-    reasons.push("a region of no such type");
-    reasons.push("memory past the machine's reach");
+    for text in [layout, machine] {
+        reasons.extend(text.split("reason: \"").skip(1).filter_map(|part| part.split('"').next()));
+    }
     reasons.sort();
     reasons.dedup();
     assert!(reasons.len() > 50, "{} reasons read", reasons.len());
+    assert!(reasons.contains(&"a region of no such type") && reasons.contains(&"memory past the machine's reach"));
     for reason in reasons {
         if UNREACHABLE.contains(&reason) {
             continue;
         }
-        let quoted = format!("\"{reason}\"");
-        assert!(here.contains(&quoted), "no test here meets \"{reason}\"");
+        assert!(here.contains(&format!("\"{reason}\"")), "no test here meets \"{reason}\"");
     }
     for reason in UNREACHABLE {
-        assert!(loader.contains(&format!("\"{reason}\"")), "\"{reason}\" is still the loader's");
+        assert!(layout.contains(&format!("\"{reason}\"")), "\"{reason}\" is still the loader's");
     }
+}
+
+#[test]
+fn a_core_operation_at_another_integer_type_or_into_another_option_is_refused() {
+    let call = |b: &mut Build, op: CoreOp, dest: TypeId, args: &[TypeId]| {
+        let mut types = vec![dest];
+        types.extend_from_slice(args);
+        b.function(Function {
+            name: "f".into(),
+            params: args.len() as u32,
+            locals: locals(&types),
+            blocks: vec![
+                block(vec![], Terminator::Call { callee: Callee::Core(op), args: (1..=args.len() as u32).map(copy).collect(), dest: place(0), next: BlockId(1), at: at(1) }),
+                block(vec![], ret()),
+            ],
+        });
+    };
+    let refused_core = || at_terminator("a core operation called with types it does not take");
+    let mut b = Build::default();
+    let u16t = b.int(Int::U16);
+    call(&mut b, CoreOp::SaturatingAdd(Int::U8), u16t, &[u16t, u16t]);
+    assert_eq!(refused(b.program), refused_core(), "the whole call at another integer type");
+    let mut b = Build::default();
+    let (u8t, u16t, u32t) = (b.int(Int::U8), b.int(Int::U16), b.int(Int::U32));
+    let opt16 = b.option(u16t);
+    call(&mut b, CoreOp::CheckedShl(Int::U8), opt16, &[u8t, u32t]);
+    assert_eq!(refused(b.program), refused_core(), "a checked shift into an Option of another integer");
+    let mut b = Build::default();
+    let (u8t, d) = (b.int(Int::U8), b.ty(Type::Duration));
+    let optu8 = b.option(u8t);
+    let (ropt, rd) = (b.reference(optu8, true), b.reference(d, true));
+    call(&mut b, CoreOp::OptionGetOrInsert, rd, &[ropt, d]);
+    assert_eq!(refused(b.program), refused_core(), "a value of another type than the Option's");
+}
+
+#[test]
+fn a_reference_to_the_type_just_past_the_last_is_refused() {
+    let mut b = Build::default();
+    b.ty(Type::Ref { to: TypeId(1), mutable: false });
+    assert_eq!(refused(b.program), LoadError::Type { ty: 0, reason: "a reference to no such type" });
+    let mut b = Build::default();
+    b.ty(Type::Ref { to: TypeId(0), mutable: false });
+    assert!(Machine::load(b.program, &[]).is_ok(), "a reference to itself is a slot");
 }

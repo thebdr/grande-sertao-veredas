@@ -326,18 +326,30 @@ impl Checker<'_> {
                 ok(good && self.same(*to, dest), "a cast `as` does not make")
             }
             Value::Aggregate(ty, variant, ops) => {
-                let wanted: Vec<TypeId> = match (self.ty(*ty), variant) {
-                    (Some(Type::Struct { fields, .. }), None) => fields.iter().map(|f| f.ty).collect(),
-                    (Some(Type::Array { element, len }), None) => vec![*element; *len as usize],
+                // the parts' types, read where they stand: an array's element is one type for every part, so
+                // nothing as long as the array is built to check it
+                let fields: Option<&[crate::program::Field]> = match (self.ty(*ty), variant) {
+                    (Some(Type::Struct { fields, .. }), None) => Some(fields),
+                    (Some(Type::Array { .. }), None) => None,
                     (Some(Type::Enum { variants, .. }), Some(v)) => match variants.get(*v as usize) {
-                        Some(variant) => variant.fields.iter().map(|f| f.ty).collect(),
+                        Some(variant) => Some(&variant.fields),
                         None => return Err(self.fail("no such variant")),
                     },
                     _ => return Err(self.fail("an aggregate of what is built otherwise")),
                 };
-                ok(wanted.len() == ops.len(), "an aggregate with too many or too few parts")?;
-                for (want, op) in wanted.iter().zip(ops) {
-                    ok(self.same(*want, self.operand(op, layout)?), "a part of another type than its place")?;
+                let (count, element) = match (fields, self.ty(*ty)) {
+                    (Some(fields), _) => (fields.len(), None),
+                    (None, Some(Type::Array { element, len })) => (*len as usize, Some(*element)),
+                    _ => return Err(self.fail("an aggregate of what is built otherwise")),
+                };
+                ok(count == ops.len(), "an aggregate with too many or too few parts")?;
+                for (i, op) in ops.iter().enumerate() {
+                    let want = match (fields, element) {
+                        (Some(fields), _) => fields.get(i).map(|f| f.ty),
+                        (None, element) => element,
+                    };
+                    let part = self.operand(op, layout)?;
+                    ok(want.is_some_and(|w| self.same(w, part)), "a part of another type than its place")?;
                 }
                 ok(*ty == dest, "an aggregate of another type than its place")
             }

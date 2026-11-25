@@ -632,3 +632,246 @@ fn a_local_is_unwritten_again_at_every_start_and_every_call() {
         m.abort();
     }
 }
+
+#[test]
+fn rustc_s_bounds_check_asserts_true_and_a_shift_check_too() {
+    // fn get(a: [u8; 4], i: usize) -> u8 { a[i] } as rustc lowers it at opt-level 0:
+    //   _3 = const 4_usize; _4 = Lt(_2, _3); assert(move _4, "index out of bounds") -> bb1; bb1: _0 = _1[_2]
+    // fn shl(x: u8, n: u32) -> u8 { x << n }: _3 = Lt(_2, const 8_u32); assert(move _3, "shift left with overflow")
+    let mut b = Build::default();
+    let (u8t, usize_t, boolean, u32t) = (b.int(Int::U8), b.int(Int::Usize), b.bool(), b.int(Int::U32));
+    let arr = b.ty(Type::Array { element: u8t, len: 4 });
+    let get = b.function(Function {
+        name: "get".into(),
+        params: 2,
+        locals: locals(&[u8t, arr, usize_t, usize_t, boolean]),
+        blocks: vec![
+            block(
+                vec![
+                    assign(place(3), Value::Use(konst(usize_t, vec![int(Int::Usize, 4)])), 1),
+                    assign(place(4), Value::Binary(BinOp::Lt, copy(2), copy(3)), 1),
+                ],
+                Terminator::Assert { cond: copy(4), expected: true, check: Check::Bounds, next: BlockId(1), at: at(1) },
+            ),
+            block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Index(Local(2))]))), 1)], ret()),
+        ],
+    });
+    let shl = b.function(Function {
+        name: "shl".into(),
+        params: 2,
+        locals: locals(&[u8t, u8t, u32t, boolean]),
+        blocks: vec![
+            block(
+                vec![assign(place(3), Value::Binary(BinOp::Lt, copy(2), konst(u32t, vec![int(Int::U32, 8)])), 2)],
+                Terminator::Assert { cond: copy(3), expected: true, check: Check::Overflow(BinOp::Shl), next: BlockId(1), at: at(2) },
+            ),
+            block(vec![assign(place(0), Value::Binary(BinOp::Shl, copy(1), copy(2)), 2)], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let a = [int(Int::U8, 10), int(Int::U8, 20), int(Int::U8, 30), int(Int::U8, 40)];
+    for i in 0..4 {
+        let arg = [int(Int::Usize, i)];
+        assert_eq!(m.call(get, &[Arg::Value(&a), Arg::Value(&arg)]).unwrap(), &[int(Int::U8, 10 * (i + 1))], "a[{i}]");
+    }
+    let past = [int(Int::Usize, 4)];
+    assert_eq!(
+        m.call(get, &[Arg::Value(&a), Arg::Value(&past)]),
+        Err(CallError::Program(ProgramError { function: get, block: BlockId(0), statement: None, at: at(1), kind: ErrorKind::Check(Check::Bounds) }))
+    );
+    m.abort();
+    for n in 0..8 {
+        let args = ([int(Int::U8, 3)], [int(Int::U32, n)]);
+        assert_eq!(m.call(shl, &[Arg::Value(&args.0), Arg::Value(&args.1)]).unwrap(), &[int(Int::U8, (3 << n) & 0xFF)], "3 << {n}");
+    }
+    let args = ([int(Int::U8, 3)], [int(Int::U32, 8)]);
+    assert_eq!(
+        m.call(shl, &[Arg::Value(&args.0), Arg::Value(&args.1)]).map(|r| r.to_vec()).unwrap_err(),
+        CallError::Program(ProgramError { function: shl, block: BlockId(0), statement: None, at: at(2), kind: ErrorKind::Check(Check::Overflow(BinOp::Shl)) })
+    );
+}
+
+#[test]
+fn a_callee_s_result_of_several_slots_reaches_its_caller_whole() {
+    // fn pair(x: u8) -> (u8, bool, Duration) { (x, true, d) }  fn main(x: u8) -> (u8, bool, Duration) { pair(x) },
+    // and a callee's Option: fn none() -> Option<u8> { None }, its payload unwritten in the caller's place too
+    let mut b = Build::default();
+    let (u8t, boolean, d) = (b.int(Int::U8), b.bool(), b.ty(Type::Duration));
+    let t = b.tuple(&[u8t, boolean, d]);
+    let opt = b.option(u8t);
+    let pair = b.function(Function {
+        name: "pair".into(),
+        params: 1,
+        locals: locals(&[t, u8t]),
+        blocks: vec![block(
+            vec![assign(
+                place(0),
+                Value::Aggregate(t, None, vec![copy(1), konst(boolean, vec![Scalar::Bool(true)]), konst(d, vec![int(Int::U64, 7), int(Int::U32, 9)])]),
+                1,
+            )],
+            ret(),
+        )],
+    });
+    let none = b.function(Function {
+        name: "none".into(),
+        params: 0,
+        locals: locals(&[opt]),
+        blocks: vec![block(vec![assign(place(0), Value::Aggregate(opt, Some(0), vec![]), 1)], ret())],
+    });
+    let main = b.function(Function {
+        name: "main".into(),
+        params: 1,
+        locals: locals(&[t, u8t, opt]),
+        blocks: vec![
+            block(vec![assign(place(2), Value::Aggregate(opt, Some(1), vec![copy(1)]), 2)], Terminator::Call { callee: Callee::Function(pair), args: vec![copy(1)], dest: place(0), next: BlockId(1), at: at(2) }),
+            block(vec![], Terminator::Call { callee: Callee::Function(none), args: vec![], dest: place(2), next: BlockId(2), at: at(3) }),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let arg = [int(Int::U8, 9)];
+    assert_eq!(m.call(main, &[Arg::Value(&arg)]).unwrap(), &[int(Int::U8, 9), Scalar::Bool(true), int(Int::U64, 7), int(Int::U32, 9)]);
+    // main's frame follows its result's four slots and its u8: the Option written by `none` over `Some(9)`
+    assert_eq!(m.memory()[5..7], [int(Int::Isize, 0), Scalar::Uninit], "the callee's None whole in the caller's place");
+}
+
+#[test]
+fn an_enum_s_variant_is_written_with_a_discriminant_of_its_own_type() {
+    // #[repr(u8)] enum E { A = 0, B = 1 }; fn set(e: &mut E) { *e = E::B }
+    let mut b = Build::default();
+    let unit = b.unit();
+    let e = b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::U8,
+        variants: vec![Variant { name: "A".into(), discriminant: 0, fields: vec![] }, Variant { name: "B".into(), discriminant: 1, fields: vec![] }],
+    });
+    let re = b.reference(e, true);
+    let set = b.function(Function {
+        name: "set".into(),
+        params: 1,
+        locals: locals(&[unit, re]),
+        blocks: vec![block(vec![assign(proj(1, vec![Projection::Deref]), Value::Aggregate(e, Some(1), vec![]), 1)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[e]).unwrap();
+    m.set_region(RegionId(0), &[int(Int::U8, 0)]).unwrap();
+    m.call(set, &[Arg::Ref(RegionId(0))]).unwrap();
+    assert_eq!(m.region(RegionId(0)).unwrap(), &[int(Int::U8, 1)]);
+}
+
+/// `fn f(x: u8) -> u8 { x + 255 }` with MIR's checked addition and assertion: an overflow for any `x` but 0.
+fn overflow() -> (Program, FunctionId) {
+    let mut b = Build::default();
+    let (u8t, boolean) = (b.int(Int::U8), b.bool());
+    let pair = b.tuple(&[u8t, boolean]);
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[u8t, u8t, pair]),
+        blocks: vec![
+            block(
+                vec![assign(place(2), Value::Checked(BinOp::Add, copy(1), konst(u8t, vec![int(Int::U8, 255)])), 1)],
+                Terminator::Assert { cond: copy_at(proj(2, vec![Projection::Field(1)])), expected: false, check: Check::Overflow(BinOp::Add), next: BlockId(1), at: at(1) },
+            ),
+            block(vec![assign(place(0), Value::Use(copy_at(proj(2, vec![Projection::Field(0)]))), 2)], ret()),
+        ],
+    });
+    (b.program, f)
+}
+
+#[test]
+fn a_copy_of_a_failed_machine_stands_where_it_failed_and_a_failed_entry_shows_no_result() {
+    let (program, f) = overflow();
+    let mut m = Machine::load(program, &[]).unwrap();
+    let zero = [int(Int::U8, 0)];
+    assert_eq!(m.call(f, &[Arg::Value(&zero)]).unwrap(), &[int(Int::U8, 255)]);
+    let one = [int(Int::U8, 1)];
+    let Err(CallError::Program(e)) = m.call(f, &[Arg::Value(&one)]) else { panic!("an overflow") };
+    assert_eq!(m.result(), &[] as &[Scalar], "the failed entry gave no result, nor shows the one before");
+    let mut copy = m.clone();
+    assert_eq!(copy.run(0), Err(e), "a copy of a failed machine, a budget of zero");
+    assert_eq!(copy.step(), Err(e));
+    assert_eq!((copy.steps(), copy.position(), copy.memory(), copy.running()), (m.steps(), m.position(), m.memory(), true));
+    copy.abort();
+    assert_eq!(m.step(), Err(e), "and the original, its copy aborted, still failed");
+}
+
+#[test]
+fn a_value_never_written_is_an_error_wherever_an_instruction_reads_it() {
+    // each function reads its local 1, never written, in one way; the error names that instruction
+    let mut b = Build::default();
+    let (u8t, boolean, usize_t, f32t, d, unit) = (b.int(Int::U8), b.bool(), b.int(Int::Usize), b.ty(Type::F32), b.ty(Type::Duration), b.unit());
+    let arr = b.ty(Type::Array { element: u8t, len: 2 });
+    let opt = b.option(u8t);
+    let (ru8, sopt, isize_t) = (b.reference(u8t, true), b.reference(opt, false), b.int(Int::Isize));
+    let one_statement = |b: &mut Build, name: &str, types: &[TypeId], value: Value| {
+        b.function(Function { name: name.into(), params: 0, locals: locals(types), blocks: vec![block(vec![assign(place(0), value, 5)], ret())] })
+    };
+    let one_terminator = |b: &mut Build, name: &str, types: &[TypeId], t: Terminator| {
+        b.function(Function { name: name.into(), params: 0, locals: locals(types), blocks: vec![block(vec![], t), block(vec![], ret())] })
+    };
+    let mut cases = vec![
+        (one_statement(&mut b, "binary", &[u8t, u8t], Value::Binary(BinOp::Add, copy(1), konst(u8t, vec![int(Int::U8, 1)]))), Some(0)),
+        (one_statement(&mut b, "unary", &[u8t, u8t], Value::Unary(UnOp::Not, copy(1))), Some(0)),
+        (one_statement(&mut b, "cast", &[f32t, u8t], Value::Cast(copy(1), f32t)), Some(0)),
+        (one_statement(&mut b, "discriminant", &[isize_t, opt], Value::Discriminant(place(1))), Some(0)),
+        (one_statement(&mut b, "deref", &[u8t, ru8], Value::Use(copy_at(proj(1, vec![Projection::Deref])))), Some(0)),
+        (one_statement(&mut b, "index", &[u8t, usize_t, arr], Value::Use(copy_at(proj(2, vec![Projection::Index(Local(1))])))), Some(0)),
+        (one_terminator(&mut b, "switch", &[unit, boolean], Terminator::SwitchInt { value: copy(1), targets: vec![], otherwise: BlockId(1), at: at(5) }), None),
+        (one_terminator(&mut b, "assert", &[unit, boolean], Terminator::Assert { cond: copy(1), expected: true, check: Check::Bounds, next: BlockId(1), at: at(5) }), None),
+    ];
+    let core = |b: &mut Build, name: &str, op: CoreOp, types: &[TypeId], args: Vec<Operand>| {
+        let t = Terminator::Call { callee: Callee::Core(op), args, dest: place(0), next: BlockId(1), at: at(5) };
+        b.function(Function { name: name.into(), params: 0, locals: locals(types), blocks: vec![block(vec![], t), block(vec![], ret())] })
+    };
+    cases.push((core(&mut b, "saturating", CoreOp::SaturatingAdd(Int::U8), &[u8t, u8t], vec![copy(1), copy(1)]), None));
+    cases.push((core(&mut b, "duration", CoreOp::DurationMin, &[d, d], vec![copy(1), copy(1)]), None));
+    cases.push((core(&mut b, "is_none", CoreOp::OptionIsNone, &[boolean, sopt], vec![copy(1)]), None));
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    for (f, statement) in cases {
+        let name = m.program().functions[f.0 as usize].name.clone();
+        let got = m.call(f, &[]).map(|r| r.to_vec());
+        assert_eq!(got, Err(CallError::Program(ProgramError { function: f, block: BlockId(0), statement, at: at(5), kind: ErrorKind::Uninit })), "{name}");
+        m.abort();
+    }
+}
+
+#[test]
+fn a_duration_read_through_another_variant_is_an_internal_error_and_never_a_panic() {
+    // enum E { A(Duration), B(u64, u32) }; let e = E::B(u64::MAX, 2_000_000_000); (e as A).0.min(...)
+    let mut b = Build::default();
+    let (u64t, u32t, d) = (b.int(Int::U64), b.int(Int::U32), b.ty(Type::Duration));
+    let e = b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::Isize,
+        variants: vec![
+            Variant { name: "A".into(), discriminant: 0, fields: vec![Field { name: "0".into(), ty: d }] },
+            Variant { name: "B".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: u64t }, Field { name: "1".into(), ty: u32t }] },
+        ],
+    });
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[d, e, d]),
+        blocks: vec![
+            block(
+                vec![
+                    assign(place(1), Value::Aggregate(e, Some(1), vec![konst(u64t, vec![int(Int::U64, u64::MAX as i128)]), konst(u32t, vec![int(Int::U32, 2_000_000_000)])]), 1),
+                    assign(place(2), Value::Use(copy_at(proj(1, vec![Projection::Downcast(0), Projection::Field(0)]))), 2),
+                ],
+                Terminator::Call { callee: Callee::Core(CoreOp::DurationMin), args: vec![copy(2), copy(2)], dest: place(0), next: BlockId(1), at: at(3) },
+            ),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    assert_eq!(
+        m.call(f, &[]),
+        Err(CallError::Program(ProgramError {
+            function: f,
+            block: BlockId(0),
+            statement: None,
+            at: at(3),
+            kind: ErrorKind::Internal("a duration's slots are not a duration"),
+        }))
+    );
+}

@@ -331,3 +331,41 @@ fn a_checked_shift_s_none_after_a_some_into_the_same_place_leaves_no_payload() {
         assert_eq!(call(&mut m, f, &[vec![int(Int::U8, 3)]]), vec![int(Int::Isize, 0), Scalar::Uninit]);
     }
 }
+
+#[test]
+fn get_or_insert_writes_the_option_s_own_discriminant_type() {
+    // an Option whose discriminant the program gives as u8
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let opt = b.ty(Type::Enum {
+        name: "Option".into(),
+        discriminant: Int::U8,
+        variants: vec![
+            Variant { name: "None".into(), discriminant: 0, fields: vec![] },
+            Variant { name: "Some".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: u8t }] },
+        ],
+    });
+    let (ropt, ru8) = (b.reference(opt, true), b.reference(u8t, true));
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[ru8, ropt]),
+        blocks: vec![
+            block(
+                vec![],
+                Terminator::Call {
+                    callee: Callee::Core(CoreOp::OptionGetOrInsert),
+                    args: vec![copy(1), konst(u8t, vec![int(Int::U8, 4)])],
+                    dest: place(0),
+                    next: BlockId(1),
+                    at: at(1),
+                },
+            ),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[opt]).unwrap();
+    m.set_region(RegionId(0), &[int(Int::U8, 0), Scalar::Uninit]).unwrap();
+    m.call(f, &[Arg::Ref(RegionId(0))]).unwrap();
+    assert_eq!(m.region(RegionId(0)).unwrap(), &[int(Int::U8, 1), int(Int::U8, 4)]);
+}
