@@ -14,6 +14,20 @@ use crate::vm::{self, DataDisk, Hardware, Spec, Vm, VmError};
 /// Bumped when the builder's provisioning changes, so a cached builder of the old kind is not used.
 const PROVISIONING: u32 = 1;
 
+/// A cached builder's disk made to name `base` as its backing file. The disk names its base by
+/// absolute path, so a cache moved (the member's rename moved `~/.cache/veredas/entrega` to
+/// `alforge`) leaves it pointing where the base no longer is; its key holds the base's digest, so
+/// the base it was made on is this one, and only the name in its header is rewritten
+/// (`qemu-img rebase -u`).
+pub fn reuse(disk: &Path, base: &Path) -> Result<(), VmError> {
+    let info = vm::run("qemu-img", &["info", "--output=json", &disk.display().to_string()], None)?;
+    let backing = serde_json::from_str::<serde_json::Value>(&info).ok().and_then(|v| v["backing-filename"].as_str().map(PathBuf::from));
+    if backing.as_deref() != Some(base) {
+        vm::run("qemu-img", &["rebase", "-u", "-F", "qcow2", "-b", &base.display().to_string(), &disk.display().to_string()], None)?;
+    }
+    Ok(())
+}
+
 /// The builder's disk for a toolchain (`1.100.0`), built once and kept in the cache: the base, the
 /// recipe's packages, and the toolchain from rustup's official source under `/opt`.
 pub fn image(r: &Recipe, toolchain: &str, work: &Path) -> Result<PathBuf, VmError> {
@@ -21,6 +35,7 @@ pub fn image(r: &Recipe, toolchain: &str, work: &Path) -> Result<PathBuf, VmErro
     let key = cache::sha256_text(&format!("{PROVISIONING}\n{}\n{}\n{toolchain}\n", r.base.sha512, r.builder.packages.join(" ")));
     let path = cache::dir()?.join(format!("builder-{toolchain}-{}.qcow2", &key[..16]));
     if path.exists() {
+        reuse(&path, &base)?;
         return Ok(path);
     }
     eprintln!("alforge: building the builder machine for rustc {toolchain} (once)");

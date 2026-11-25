@@ -1229,3 +1229,31 @@ fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
     assert_eq!((builder::SRC, builder::VENDOR), ("/build/src", "/build/vendor"));
     assert_eq!(alforge::inputs::read_outside("/build/src/target/release/x: /build/src/crates/veredas-core/src/lib.rs\n", builder::SRC, builder::VENDOR, &inputs), Vec::<String>::new());
 }
+
+#[test]
+fn a_cached_builder_disk_follows_its_base_where_the_cache_now_holds_it() {
+    // A base and the builder's overlay on it, then the cache moved (as the member's rename moved
+    // it): the overlay names the old place until it is reused.
+    let d = tempfile::tempdir().unwrap();
+    let old = d.path().join("entrega");
+    std::fs::create_dir_all(&old).unwrap();
+    let base = old.join("base.qcow2");
+    let disk = old.join("builder.qcow2");
+    vm::run("qemu-img", &["create", "-q", "-f", "qcow2", &base.display().to_string(), "64M"], None).unwrap();
+    vm::overlay(&base, &disk, 1).unwrap();
+    let moved = d.path().join("alforge");
+    std::fs::rename(&old, &moved).unwrap();
+    let backing = |p: &Path| -> String {
+        let info: serde_json::Value = serde_json::from_str(&vm::run("qemu-img", &["info", "--output=json", &p.display().to_string()], None).unwrap()).unwrap();
+        info["backing-filename"].as_str().unwrap_or_default().to_string()
+    };
+    let disk = moved.join("builder.qcow2");
+    assert_eq!(backing(&disk), base.display().to_string());
+    builder::reuse(&disk, &moved.join("base.qcow2")).unwrap();
+    assert_eq!(backing(&disk), moved.join("base.qcow2").display().to_string());
+    vm::run("qemu-img", &["check", "-q", &disk.display().to_string()], None).unwrap();
+    // Reused again where it already names its base: nothing to rewrite.
+    let before = std::fs::read(&disk).unwrap();
+    builder::reuse(&disk, &moved.join("base.qcow2")).unwrap();
+    assert_eq!(std::fs::read(&disk).unwrap(), before);
+}

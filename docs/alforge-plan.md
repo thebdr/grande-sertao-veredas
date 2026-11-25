@@ -436,3 +436,8 @@ Recorded as the work meets them.
   the worktree's next run tests the mutant (2026-11-23: two of `tests/bundle.rs` red on correct
   code until `cargo clean -p alforge`). A clone or a critic gets a target folder of its own, seeded
   from `~/.cache/veredas/target-seed`.
+- **A cached disk names its base by absolute path.** Moving the cache (the rename moved
+  `~/.cache/veredas/entrega` to `alforge`, 2026-11-25) left the builder's disk pointing at a base
+  that was no longer there, and the cut stopped at `qemu-img create`. A cached builder now has its
+  backing file rewritten to the base the cache holds (`builder::reuse`, `qemu-img rebase -u`: its
+  key holds the base's digest, so the base is the one it was made on).
