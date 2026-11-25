@@ -163,6 +163,9 @@ fn sending_is_paced_bounded_and_only_where_it_listens() {
     let two = Listener::start(vec![Box::new(hub.port("x", LAN0)), Box::new(hub.port("x", LAN1))], Options::default());
     assert!(matches!(two, Err(ListenError::TwoWires(n)) if n == "x"));
     assert!(matches!(Listener::start(vec![], Options { rate: 0, ..Options::default() }), Err(ListenError::Options)));
+    let fast = Listener::start(vec![], Options { rate: 1001, ..Options::default() }).map(|_| ()).unwrap_err();
+    assert_eq!(fast.to_string(), "a listener sends one to a thousand frames a second and keeps at least one frame");
+    assert!(Listener::start(vec![], Options { rate: 1000, ..Options::default() }).is_ok());
     assert!(matches!(Listener::start(vec![], Options { max_frames: 0, ..Options::default() }), Err(ListenError::Options)));
 }
 
@@ -228,7 +231,9 @@ fn the_kept_frames_are_bounded_and_damage_is_kept_with_its_frame() {
         }
     }
     let listener = Listener::start(vec![Box::new(Refusing)], Options::default()).unwrap();
-    listener.send("refusing", vec![0; 60]).unwrap();
+    let told = listener.send_tracked("refusing", vec![0; 60]).unwrap();
+    assert_eq!(told.recv_timeout(WAIT), Ok(Outcome::Refused("a frame of 60000 bytes is past the 65536 a wire carries".into())));
+    assert_eq!(told.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected), "told once");
     assert!(listener.until(WAIT, |s| s.stats.interfaces["refusing"].refused == 1));
     let s = listener.snapshot();
     assert_eq!((s.stats.interfaces["refusing"].sent, s.stats.damage.back().cloned()), (0, Some("refusing: send refused: a frame of 60000 bytes is past the 65536 a wire carries".to_string())));
@@ -309,25 +314,123 @@ impl Wire for FailsAfterSend {
 #[test]
 fn the_defaults_and_the_pace_are_what_the_listener_promises() {
     assert_eq!(Options::default(), Options { max_frames: 200_000, rate: 20, queue: 100, poll: Duration::from_millis(20) });
-    // Measured where the wire is handed each frame: the first at once, then one a gap, no slower.
-    for (rate, n) in [(2u32, 4usize), (20, 10)] {
+    // Measured where the wire is handed each frame: the first within the poll (20 ms, at most half
+    // a gap), then one a gap, no slower over twenty gaps; and after a quiet second, no burst.
+    for (rate, n, idle) in [(2u32, 4usize, false), (20, 21, false), (100, 21, false), (20, 10, true)] {
         let sends = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let l = Listener::start(vec![Box::new(Recording { sends: std::sync::Arc::clone(&sends) })], Options { rate, ..Options::default() }).unwrap();
+        if idle {
+            l.send("rec", vec![0; 60]).unwrap();
+            std::thread::sleep(Duration::from_secs(1));
+            sends.lock().unwrap().clear();
+        }
         let gap = Duration::from_secs(1) / rate;
+        let poll = Duration::from_millis(20).min(gap / 2);
         let start = Instant::now();
         for _ in 0..n {
             l.send("rec", vec![0; 60]).unwrap();
         }
-        assert!(l.until(WAIT, |s| s.stats.interfaces["rec"].sent == n as u64));
+        assert!(l.until(WAIT, |s| s.stats.interfaces["rec"].queued == 0 && sends.lock().unwrap().len() == n));
         let at = sends.lock().unwrap().clone();
-        assert_eq!(at.len(), n);
-        assert!(at[0] - start < gap / 2, "at {rate} a second the first went after {:?}", at[0] - start);
+        assert!(at[0] - start <= poll + Duration::from_millis(15), "at {rate} a second the first went after {:?}", at[0] - start);
         for w in at.windows(2) {
             assert!(w[1] - w[0] >= gap - Duration::from_millis(1), "at {rate} a second a gap of {:?}", w[1] - w[0]);
         }
         let span = at[n - 1] - at[0];
-        assert!(span <= gap * (n as u32 - 1) + gap.max(Duration::from_millis(150)), "at {rate} a second {n} frames spanned {span:?}");
+        assert!(span <= gap * (n as u32 - 1) + Duration::from_millis(100), "at {rate} a second {n} frames spanned {span:?}");
     }
+    // A frame handed over while the worker waits on its wire goes within half a gap, not a whole
+    // poll: at a thousand a second (a poll of half a millisecond), eleven single frames handed
+    // over at different moments of the worker's wait, their median delay a few milliseconds at
+    // most (an unbounded poll of 20 ms gives about ten).
+    let sends = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let l = Listener::start(vec![Box::new(Recording { sends: std::sync::Arc::clone(&sends) })], Options { rate: 1000, ..Options::default() }).unwrap();
+    let mut delays = Vec::new();
+    for k in 0..11u64 {
+        std::thread::sleep(Duration::from_millis(3 + k % 7 * 2));
+        let before = sends.lock().unwrap().len();
+        let handed = Instant::now();
+        l.send("rec", vec![0; 60]).unwrap();
+        assert!(l.until(WAIT, |_| sends.lock().unwrap().len() > before));
+        delays.push(sends.lock().unwrap()[before] - handed);
+    }
+    delays.sort();
+    assert!(delays[5] <= Duration::from_millis(5), "a thousand a second, the delays {delays:?}");
+    // Frames the wire refuses keep the pace too.
+    let handed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let l = Listener::start(vec![Box::new(RefusingRecorder { handed: std::sync::Arc::clone(&handed) })], Options::default()).unwrap();
+    for _ in 0..3 {
+        l.send("refuses", vec![0; 60]).unwrap();
+    }
+    assert!(l.until(WAIT, |s| s.stats.interfaces["refuses"].refused == 3));
+    let at = handed.lock().unwrap().clone();
+    assert!(at.windows(2).all(|w| w[1] - w[0] >= Duration::from_millis(49)), "{at:?}");
+}
+
+/// A wire with a MAC that records when each frame was handed to it, and refuses it.
+struct RefusingRecorder {
+    handed: std::sync::Arc<std::sync::Mutex<Vec<Instant>>>,
+}
+impl Wire for RefusingRecorder {
+    fn name(&self) -> &str {
+        "refuses"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, frame: &[u8]) -> Result<(), WireError> {
+        self.handed.lock().unwrap().push(Instant::now());
+        Err(WireError::TooLong(frame.len() * 1000))
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
+/// A wire that panics on its first read after it has sent a frame (a tenth of a second later).
+struct Panicking {
+    sent: bool,
+}
+impl Wire for Panicking {
+    fn name(&self) -> &str {
+        "panics"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, _: &[u8]) -> Result<(), WireError> {
+        self.sent = true;
+        Ok(())
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        if self.sent {
+            std::thread::sleep(Duration::from_millis(100));
+            panic!("the wire broke");
+        }
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
+#[test]
+fn a_worker_that_panics_ends_with_its_reason_and_a_wire_name_may_hold_a_nul() {
+    let l = Listener::start(vec![Box::new(Panicking { sent: false })], Options { rate: 1, ..Options::default() }).unwrap();
+    let first = l.send_tracked("panics", vec![0; 60]).unwrap();
+    let second = l.send_tracked("panics", vec![1; 60]).unwrap();
+    assert!(matches!(first.recv_timeout(WAIT), Ok(Outcome::Sent { .. })));
+    let reason = "its worker panicked: the wire broke".to_string();
+    assert_eq!(second.recv_timeout(WAIT), Ok(Outcome::Unsent(reason.clone())));
+    assert_eq!(second.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected), "told once");
+    let i = l.interface("panics").unwrap();
+    assert_eq!((i.sent, i.unsent, i.queued, i.ended.clone()), (1, 1, 0, Some(reason.clone())));
+    assert!(matches!(l.send("panics", vec![0; 60]), Err(ListenError::Ended { reason: r, .. }) if r == reason));
+    // A wire named with a NUL: its worker starts, and every worker stops with the listener.
+    let hub = Hub::new();
+    let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0)), Box::new(Replay::new("cap\0ture", Vec::new()))], Options::default()).unwrap();
+    assert!(l.until(WAIT, |s| s.stats.interfaces["cap\0ture"].ended.is_some()));
+    l.stop();
+    assert_eq!(hub.ports(), 0);
 }
 
 #[test]
@@ -350,6 +453,7 @@ fn an_ended_worker_takes_nothing_more_and_says_what_it_never_sent() {
     assert!(l.until(WAIT, |s| s.stats.interfaces["fails"].ended.is_some()));
     let reason = "a frame of 1 bytes is shorter than an Ethernet header".to_string();
     assert_eq!(told.recv_timeout(WAIT), Ok(Outcome::Unsent(reason.clone())));
+    assert_eq!(told.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected), "told once");
     let i = l.interface("fails").unwrap();
     assert_eq!((i.sent, i.queued, i.unsent, i.refused, i.ended), (1, 0, 4, 0, Some(reason)));
     std::thread::sleep(Duration::from_millis(200));
@@ -365,6 +469,7 @@ fn an_ended_worker_takes_nothing_more_and_says_what_it_never_sent() {
     let i = &s.stats.interfaces["lan0"];
     assert_eq!((i.sent, i.queued, i.unsent, i.ended.clone()), (1, 0, 2, None));
     assert_eq!(told.recv_timeout(WAIT), Ok(Outcome::Unsent("the listener stopped".into())));
+    assert_eq!(told.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected), "told once");
 }
 
 #[test]
@@ -395,14 +500,20 @@ fn every_frame_is_the_interface_s_that_heard_it_and_its_account_says_so() {
     let mut dev = hub.port("dev", DEV);
     let l = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options::default()).unwrap();
     let before = veredas_aranha::wire::stamp(std::time::SystemTime::now());
-    for n in [14, 65_536] {
-        l.send("lan0", vec![0; n]).unwrap();
-    }
+    let told: Vec<_> = [14, 65_536].map(|n| l.send_tracked("lan0", vec![0; n]).unwrap()).into_iter().collect();
     assert!(l.until(WAIT, |s| s.stats.interfaces["lan0"].sent == 2));
     let after = veredas_aranha::wire::stamp(std::time::SystemTime::now());
+    // Each told where its frame was kept, once.
+    for (rx, n) in told.iter().zip([14, 65_536]) {
+        let Ok(Outcome::Sent { index, at_ns }) = rx.recv_timeout(WAIT) else { panic!("{n} bytes: not told sent") };
+        let kept = l.frame(index).unwrap();
+        assert_eq!((kept.sent, kept.frame.iface.as_str(), kept.frame.at_ns, kept.frame.bytes.len()), (true, "lan0", at_ns, n));
+        assert_eq!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected), "told once");
+    }
     let s = l.snapshot();
     let i = &s.stats.interfaces["lan0"];
     assert_eq!((i.heard, i.sent, i.queued, s.stats.heard), (0, 2, 0, 0));
+    assert_eq!((s.stats.first_ns, s.stats.last_ns), (None, None), "the stamps heard, none");
     assert!(l.frames().iter().all(|k| k.sent && (before..=after).contains(&k.frame.at_ns)));
     assert_eq!([dev.recv(WAIT).unwrap().unwrap().bytes.len(), dev.recv(WAIT).unwrap().unwrap().bytes.len()], [14, 65_536]);
 }

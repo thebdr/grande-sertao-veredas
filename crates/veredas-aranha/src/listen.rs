@@ -10,6 +10,7 @@
 //! then is said unsent.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -67,7 +68,7 @@ pub struct Interface {
     pub mac: Option<Mac>,
     pub heard: u64,
     pub sent: u64,
-    /// Frames its wire refused to send, and the last reason.
+    /// Frames its wire refused to send (each reason among the damage).
     pub refused: u64,
     pub queued: usize,
     /// Frames still queued when its worker ended or the listener stopped: never sent.
@@ -117,13 +118,16 @@ pub enum ListenError {
     QueueFull { iface: String, queued: usize },
     #[error("{0}")]
     Frame(WireError),
-    #[error("a listener sends at least one frame a second and keeps at least one frame")]
+    #[error("a listener sends one to a thousand frames a second and keeps at least one frame")]
     Options,
     #[error("start a worker: {0}")]
     Thread(std::io::Error),
 }
 
 const DAMAGE_KEPT: usize = 50;
+
+/// The fastest a listener sends on an interface: a thousand frames a second.
+pub const MAX_RATE: u32 = 1000;
 
 /// A frame waiting its turn, and who is to be told what became of it.
 type Queued = (Vec<u8>, Option<Sender<Outcome>>);
@@ -171,7 +175,7 @@ pub struct Listener {
 impl Listener {
     /// Start one worker per wire. Two wires of one name are refused.
     pub fn start(wires: Vec<Box<dyn Wire>>, options: Options) -> Result<Listener, ListenError> {
-        if options.rate == 0 || options.max_frames == 0 {
+        if !(1..=MAX_RATE).contains(&options.rate) || options.max_frames == 0 {
             return Err(ListenError::Options);
         }
         let mut names = BTreeSet::new();
@@ -196,7 +200,8 @@ impl Listener {
         let mut workers = Vec::new();
         for wire in wires {
             let s = Arc::clone(&shared);
-            let name = format!("aranha-listen-{}", wire.name());
+            // (A thread's name holds no NUL.)
+            let name = format!("aranha-listen-{}", wire.name().replace('\0', ""));
             match std::thread::Builder::new().name(name).spawn(move || work(wire, s)) {
                 Ok(h) => workers.push(h),
                 Err(e) => {
@@ -218,7 +223,8 @@ impl Listener {
     }
 
     /// Queue a frame as [`Listener::send`] does, and be told what became of it once its worker
-    /// has sent it or its wire refused it (nothing comes if the worker ends first).
+    /// has sent it or its wire refused it, or that it never will (its worker ended first, or the
+    /// listener stopped): told once, then the channel closes.
     pub fn send_tracked(&self, iface: &str, frame: Vec<u8>) -> Result<Receiver<Outcome>, ListenError> {
         let (tx, rx) = channel();
         self.queue(iface, frame, Some(tx))?;
@@ -323,12 +329,19 @@ impl Drop for Listener {
     }
 }
 
-/// One wire's worker: hear, keep, decode, fuse; send what is queued, paced.
-/// A worker: its wire heard and sent on until the listener stops or the wire ends; then what is
-/// still queued for it said unsent, and nothing queued for it again.
+/// One wire's worker: its wire heard and sent on until the listener stops or the wire ends (a
+/// panic of the wire's or of the worker's own ends it too, said so); then what is still queued for
+/// it said unsent, and nothing queued for it again.
 fn work(wire: Box<dyn Wire>, s: Arc<Shared>) {
     let iface = wire.name().to_string();
-    let ended = run(wire, &s, &iface);
+    let (shared, name) = (Arc::clone(&s), iface.clone());
+    let ended = match std::panic::catch_unwind(AssertUnwindSafe(move || run(wire, &shared, &name))) {
+        Ok(ended) => ended,
+        Err(panic) => {
+            let what = panic.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| panic.downcast_ref::<String>().cloned());
+            Some(format!("its worker panicked: {}", what.unwrap_or_else(|| "no message".to_string())))
+        }
+    };
     let mut st = lock(&s.state);
     let why = ended.clone().unwrap_or_else(|| "the listener stopped".to_string());
     let left: Vec<Queued> = st.queues.get_mut(&iface).map(|q| q.drain(..).collect()).unwrap_or_default();
@@ -349,6 +362,9 @@ fn work(wire: Box<dyn Wire>, s: Arc<Shared>) {
 fn run(mut wire: Box<dyn Wire>, s: &Shared, iface: &str) -> Option<String> {
     let iface = iface.to_string();
     let gap = Duration::from_secs(1) / s.options.rate;
+    // A frame queued while the worker waits on its wire goes when the wait ends: no wait is longer
+    // than half a gap, so the first goes within it and none is late by more.
+    let poll = s.options.poll.min(gap / 2);
     let mut next_send = Instant::now();
     while !s.stop.load(Ordering::SeqCst) {
         // A frame queued, its turn come: sent, and kept as sent.
@@ -392,7 +408,7 @@ fn run(mut wire: Box<dyn Wire>, s: &Shared, iface: &str) -> Option<String> {
         }
         // Hear, waiting no longer than the poll, nor past the next send's turn when one is queued.
         let queued = lock(&s.state).queues.get(&iface).is_some_and(|q| !q.is_empty());
-        let wait = if queued { s.options.poll.min(next_send.saturating_duration_since(Instant::now())) } else { s.options.poll };
+        let wait = if queued { poll.min(next_send.saturating_duration_since(Instant::now())) } else { poll };
         match wire.recv(wait) {
             Ok(Some(frame)) => hear(s, &iface, frame),
             Ok(None) => {}
