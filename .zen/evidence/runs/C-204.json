@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(record)"
   ],
   "exitCode": 0,
-  "outputSha": "1f15913e835172e3c27c159b7c8002c9d524eae57f43a4bdfcfcf6190dad984c",
-  "outputTail": "   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/crates/veredas-abaco)\n   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.28s\n────────────\n Nextest run ID 7488478c-1a52-4246-b03a-e90034953651 with nextest profile: default\n    Starting 6 tests across 1 binary (130 binaries skipped)\n        PASS [   0.007s] (1/6) veredas-comissionador::record a_csv_cell_is_quoted_when_it_must_be\n        PASS [   0.010s] (2/6) veredas-comissionador::record the_reference_is_the_text_this_test_holds\n        PASS [   0.034s] (3/6) veredas-comissionador::record the_reference_s_worked_example_reads_as_a_report\n        PASS [   0.210s] (4/6) veredas-comissionador::record two_changes_of_one_report_at_once_never_cross\n        PASS [   6.629s] (5/6) veredas-comissionador::record the_evidence_s_arrival_is_on_the_store_s_axis_whatever_the_zone\n        PASS [   6.978s] (6/6) veredas-comissionador::record a_run_is_kept_whole_read_back_listed_noted_and_signed\n────────────\n     Summary [   6.978s] 6 tests run: 6 passed, 0 skipped",
-  "ranAt": "2026-11-24T23:31:13.627Z",
-  "headCommit": "2643abd27f578152f3c9e1e37ae4bd8981de0b74",
+  "outputSha": "094423b4c5eb74e1168184a0adfccc1a67f7a216fd71e7a3722bba2c2a6ea7da",
+  "outputTail": "   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/crates/veredas-abaco)\n   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.30s\n────────────\n Nextest run ID 74942a86-f215-4291-bd81-725e6d40a8f5 with nextest profile: default\n    Starting 7 tests across 1 binary (132 binaries skipped)\n        PASS [   0.010s] (1/7) veredas-comissionador::record the_reference_is_the_text_this_test_holds\n        PASS [   0.012s] (2/7) veredas-comissionador::record a_csv_cell_is_quoted_when_it_must_be\n        PASS [   0.033s] (3/7) veredas-comissionador::record the_roles_a_test_names_sign_its_report_each_once_and_it_awaits_them\n        PASS [   0.045s] (4/7) veredas-comissionador::record the_reference_s_worked_example_reads_as_a_report\n        PASS [   0.234s] (5/7) veredas-comissionador::record two_changes_of_one_report_at_once_never_cross\n        PASS [   6.825s] (6/7) veredas-comissionador::record the_evidence_s_arrival_is_on_the_store_s_axis_whatever_the_zone\n        PASS [   7.104s] (7/7) veredas-comissionador::record a_run_is_kept_whole_read_back_listed_noted_and_signed\n────────────\n     Summary [   7.105s] 7 tests run: 7 passed, 0 skipped",
+  "ranAt": "2026-11-25T00:34:41.667Z",
+  "headCommit": "71ed111877c5283acc4ef65d408fe21f8672f8ba",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/record.rs",
       "file": "crates/veredas-comissionador/tests/record.rs",
-      "fileSha": "2ca2c2dade3d9d88738fa8c25a433fb2d8525815ea322dc580cff5ca63427dc1"
+      "fileSha": "5d84e0dbcaea010475ae67f3ad20a35123d404598d8c866ffc6059ad3397e25f"
     }
   ]
 }
