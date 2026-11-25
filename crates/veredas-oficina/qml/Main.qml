@@ -19,6 +19,15 @@ ApplicationWindow {
         anchors.fill: parent
         uniqueName: "workbench"
 
+        // The docks as they stand, for a test to read (Spix reaches items, not the docks
+        // themselves): each dock's name, open, floating, and whether its pane is drawn in this
+        // window, set by `describeDocks`.
+        property string docks: ""
+
+        function describeDocks() {
+            docks = JSON.stringify([[projectDock, projectPane]].map(([dock, pane]) => [dock.uniqueName, dock.isOpen, dock.isFloating, pane.Window.window === window]));
+        }
+
         KDDW.DockWidget {
             id: projectDock
             uniqueName: "project"
