@@ -14,15 +14,15 @@
     "ask"
   ],
   "exitCode": 0,
-  "outputSha": "f41596959324c8fb83d09b895e1d8c89efe1b3023cca73cedfb2c7b75b85e157",
-  "outputTail": "\nrunning 5 tests\ntest answers_let_go_past_the_listener_s_bound_are_counted_lost ... ok\ntest an_identify_is_answered_by_what_it_matches_and_only_its_answers_count ... ok\ntest asking_is_refused_where_it_cannot_be_heard_sent_or_bounded ... ok\ntest the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_segment ... ok\ntest an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.80s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running tests/ask.rs (target/debug/build/veredas-aranha/79e8d25a70a9eddf/out/ask-79e8d25a70a9eddf)",
-  "ranAt": "2026-11-25T02:45:53.685Z",
-  "headCommit": "2b604f8c046d3e4644dbe3225ed4de635873585e",
+  "outputSha": "82c6172693a03f01662a58845eca3733e6d844585719ab30764748823ecd3ec3",
+  "outputTail": "\nrunning 8 tests\ntest an_answer_a_capture_cut_is_not_counted ... ok\ntest answers_let_go_past_the_listener_s_bound_are_counted_lost ... ok\ntest an_identify_is_answered_by_what_it_matches_and_only_its_answers_count ... ok\ntest asking_is_refused_where_it_cannot_be_heard_sent_or_bounded ... ok\ntest an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer ... ok\ntest askers_at_once_each_take_their_turn_and_their_answers ... ok\ntest frames_let_go_while_answers_flood_are_counted_at_the_moment_they_are_read ... ok\ntest the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_segment ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running tests/ask.rs (target/debug/build/veredas-aranha/79e8d25a70a9eddf/out/ask-79e8d25a70a9eddf)",
+  "ranAt": "2026-11-25T04:22:51.000Z",
+  "headCommit": "5e1841cf5fbf5a945bde88d29b9b302c27789864",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/ask.rs",
       "file": "crates/veredas-aranha/tests/ask.rs",
-      "fileSha": "48fa246bbce04a601a7bba911138040e5eb765fe6dfaccb985a8775d0647430f"
+      "fileSha": "c05a101d7f99e34e95a1de2ace3ea496d9825272993b70c228ed7a642e6040ee"
     }
   ]
 }
