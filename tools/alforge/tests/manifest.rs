@@ -1755,3 +1755,116 @@ fn round_twenty_a_shebang_and_raw_identifiers_as_rustc_reads_them() {
     assert_eq!(named("r#include!(\"sub/inc.rs\");\n"), [("sub/inc.rs".to_string(), true)]);
     assert_eq!(literals("#[r#cfg_attr(all(), path = \"sub/m.rs\")]\nmod m;\n"), ["sub/m.rs"]);
 }
+
+#[test]
+fn round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_path() {
+    // `foo`, a crate of crates.io patched to the member `tools/foo`, which includes a file outside
+    // its folder and uses `baz` (and, for its tests alone, `qux`); and `itoa`, patched to a fork
+    // in its own workspace that veredas-b uses by path. veredas-a reaches both only through crates
+    // of the registry (`bar`, `serde_json`), as cargo builds it, and no dep-info of its own names
+    // them: its version names them all.
+    let reg = "registry+https://github.com/rust-lang/crates.io-index";
+    let r = Repo::new();
+    r.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/*\", \"tools/foo\"]\nexclude = [\"forks\"]\n\n[patch.crates-io]\nfoo = { path = \"tools/foo\" }\nitoa = { path = \"forks/itoa\" }\n",
+    );
+    r.write("crates/veredas-a/Cargo.toml", "[package]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nbar = \"1\"\nserde_json = \"1\"\n");
+    r.write("crates/veredas-a/src/main.rs", "fn main() {}\n");
+    r.write("crates/veredas-b/Cargo.toml", "[package]\nname = \"veredas-b\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nitoa = { path = \"../../forks/itoa\" }\n");
+    r.write("crates/veredas-b/src/lib.rs", "\n");
+    r.write("tools/foo/Cargo.toml", "[package]\nname = \"foo\"\nversion = \"1.0.0\"\nedition = \"2024\"\n\n[dependencies]\nbaz = \"1\"\n\n[dev-dependencies]\nqux = \"1\"\n");
+    r.write("tools/foo/src/lib.rs", "pub const T: &str = include_str!(\"../../../docs/foo.txt\");\n");
+    r.write("docs/foo.txt", "text one\n");
+    r.write("forks/itoa/Cargo.toml", "[workspace]\n\n[package]\nname = \"itoa\"\nversion = \"1.0.18\"\nedition = \"2024\"\n");
+    r.write("forks/itoa/src/lib.rs", "\n");
+    let lock = |baz: &str, qux: &str| {
+        format!(
+            "version = 4\n\n[[package]]\nname = \"bar\"\nversion = \"1.0.0\"\nsource = \"{reg}\"\nchecksum = \"1111\"\ndependencies = [\n \"foo\",\n]\n\n\
+             [[package]]\nname = \"baz\"\nversion = \"{baz}\"\nsource = \"{reg}\"\nchecksum = \"2222{baz}\"\n\n\
+             [[package]]\nname = \"foo\"\nversion = \"1.0.0\"\ndependencies = [\n \"baz\",\n \"qux\",\n]\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\n\n\
+             [[package]]\nname = \"qux\"\nversion = \"{qux}\"\nsource = \"{reg}\"\nchecksum = \"3333{qux}\"\n\n\
+             [[package]]\nname = \"serde_json\"\nversion = \"1.0.140\"\nsource = \"{reg}\"\nchecksum = \"5555\"\ndependencies = [\n \"itoa\",\n]\n\n\
+             [[package]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\ndependencies = [\n \"bar\",\n \"serde_json\",\n]\n\n[[package]]\nname = \"veredas-b\"\nversion = \"2.0.0\"\ndependencies = [\n \"itoa\",\n]\n"
+        )
+    };
+    r.write("Cargo.lock", &lock("1.0.0", "1.0.0"));
+    let c1 = r.commit("crates patched to a member and to a fork");
+    let mut refusals = Vec::new();
+    let held = manifest::components_at(r.path(), &c1, &mut refusals).unwrap();
+    assert_eq!(refusals, Vec::<String>::new());
+    let (inputs, packages) = (held["veredas-a"].inputs.as_ref().unwrap(), &held["veredas-a"].packages);
+    let keys: Vec<&String> = inputs.0.keys().filter(|k| !["Cargo.toml", ".cargo/config", ".cargo/config.toml"].contains(&k.as_str())).collect();
+    assert_eq!(
+        keys,
+        [
+            "Cargo.lock: bar 1.0.0",
+            "Cargo.lock: baz 1.0.0",
+            "Cargo.lock: serde_json 1.0.140",
+            "crates/veredas-a/",
+            "docs/foo.txt",
+            "forks/itoa/",
+            "forks/itoa/Cargo.toml",
+            "tools/foo/",
+        ],
+        "the patched member's own dependency and outside file, the fork and its workspace's manifest; never the member's test-only `qux`"
+    );
+    assert_eq!(packages.vendored.iter().collect::<Vec<_>>(), ["bar-1.0.0", "baz-1.0.0", "serde_json-1.0.140"]);
+    assert!(packages.names.contains("foo") && packages.names.contains("itoa") && !packages.names.contains("qux"), "{packages:?}");
+    let pin = |release: &str, commit: &str| -> (PathBuf, Manifest) {
+        let text = format!(
+            "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
+             [[component]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nbins = [\"veredas-a\"]\n\n[tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+        );
+        (PathBuf::from(format!("{release}.toml")), manifest::load(&text).unwrap())
+    };
+    let charged = |c2: &str| -> Vec<String> { manifest::check_together(r.path(), &[pin("2.0.0", &c1), pin("2.0.1", c2)]).unwrap() };
+    let refusal = |what: &str| format!("veredas-a 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs ({what}): a version names everything its build reads");
+    // The file the patched member includes changed: charged.
+    r.write("docs/foo.txt", "text two\n");
+    let c2 = r.commit("the patched member's file changed");
+    assert_eq!(charged(&c2), [refusal("docs/foo.txt")]);
+    // Its own dependency updated: charged. Its test-only dependency updated: not.
+    r.write("docs/foo.txt", "text one\n");
+    r.write("Cargo.lock", &lock("1.0.1", "1.0.0"));
+    let c3 = r.commit("cargo update -p baz");
+    assert_eq!(charged(&c3), [refusal("Cargo.lock: baz 1.0.0, Cargo.lock: baz 1.0.1")]);
+    r.write("Cargo.lock", &lock("1.0.0", "1.0.1"));
+    let c4 = r.commit("cargo update -p qux");
+    assert_eq!(charged(&c4), Vec::<String>::new());
+    // The fork's workspace manifest changed (its edition, which cargo compiles it with): charged.
+    r.write("Cargo.lock", &lock("1.0.0", "1.0.0"));
+    r.write("forks/itoa/Cargo.toml", "[workspace]\n\n[package]\nname = \"itoa\"\nversion = \"1.0.18\"\nedition = \"2015\"\n");
+    let c5 = r.commit("the fork's edition");
+    assert_eq!(charged(&c5), [refusal("forks/itoa/, forks/itoa/Cargo.toml")]);
+    // The patched member's library at a path outside its folder: that file is named.
+    r.write("forks/itoa/Cargo.toml", "[workspace]\n\n[package]\nname = \"itoa\"\nversion = \"1.0.18\"\nedition = \"2024\"\n");
+    r.write("tools/foo/Cargo.toml", "[package]\nname = \"foo\"\nversion = \"1.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"../../docs/foo-lib.rs\"\n\n[dependencies]\nbaz = \"1\"\n\n[dev-dependencies]\nqux = \"1\"\n");
+    r.write("docs/foo-lib.rs", "pub const L: &str = \"lib one\";\n");
+    let c6 = r.commit("the patched member's library outside its folder");
+    let held = manifest::components_at(r.path(), &c6, &mut Vec::new()).unwrap();
+    assert!(held["veredas-a"].inputs.as_ref().unwrap().0.contains_key("docs/foo-lib.rs"), "{:?}", held["veredas-a"].inputs);
+    r.write("docs/foo-lib.rs", "pub const L: &str = \"lib two\";\n");
+    let c7 = r.commit("the library changed");
+    assert_eq!(manifest::check_together(r.path(), &[pin("2.0.0", &c6), pin("2.0.1", &c7)]).unwrap(), [refusal("docs/foo-lib.rs")]);
+}
+
+#[test]
+fn round_twenty_one_rustcs_whitespace_its_escapes_and_a_debugger_visualizer() {
+    use alforge::inputs::{literals, named};
+    // Rust's whitespace between `#!` and `[` (NEL, a vertical tab, a left-to-right mark): an inner
+    // attribute, as rustc reads it.
+    for ws in ["\u{85}", "\u{b}", "\u{200e}"] {
+        assert_eq!(literals(&format!("#!{ws}[doc = include_str!(\"w.md\")]\n")), ["w.md"], "{ws:?}");
+    }
+    // A `\u{…}` escape with an underscore between its digits; a line continued, rustc skipping
+    // only the ASCII whitespace after it.
+    assert_eq!(literals("const A: &str = include_str!(\"d\\u{2E_}md\");\n"), ["d.md"]);
+    assert_eq!(literals("const A: &str = include_str!(\"a\\\n \\t\u{a0}b.md\");\n"), ["a\t\u{a0}b.md"]);
+    assert_eq!(literals("const A: &str = include_str!(\"a\\\n\u{a0}\u{c}b.md\");\n"), ["a\u{a0}\u{c}b.md"], "NBSP and a form feed kept");
+    // A debugger visualizer's file, which rustc reads and embeds: named, read as data.
+    assert_eq!(
+        named("#![debugger_visualizer(gdb_script_file = \"../../docs/pretty.py\")]\n#![debugger_visualizer(natvis_file = \"v.natvis\")]\n"),
+        [("../../docs/pretty.py".to_string(), false), ("v.natvis".to_string(), false)]
+    );
+}

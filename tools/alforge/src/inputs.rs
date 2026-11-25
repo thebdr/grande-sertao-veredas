@@ -156,73 +156,62 @@ impl Workspace<'_> {
         for f in ["Cargo.toml", ".cargo/config.toml", ".cargo/config"] {
             named.insert(f.to_string(), self.object(f)?);
         }
-        // The members it uses, by path, transitively.
+        // The packages by path it uses, transitively: those it names by path, and those the lock
+        // file reaches through an external crate (a `[patch]` to a member or to a fork kept in the
+        // tree), each read alike: its folder, its workspace's manifest, its own dependencies by
+        // its metadata (normal and build, never a member's dev-dependencies, which its lock entry
+        // holds too), and the files its sources name. The lock file's entries for the external
+        // ones, transitively.
         let by_dir: BTreeMap<&str, &Member> = self.members.iter().map(|m| (m.dir.as_str(), m)).collect();
         let start = self.members.iter().find(|m| m.name == name).ok_or_else(|| format!("{name} is no member"))?;
         let mut used: Vec<&Member> = vec![start];
         let mut seen: BTreeSet<&str> = BTreeSet::from([start.dir.as_str()]);
-        let mut i = 0;
-        while i < used.len() {
-            let m = used[i];
-            i += 1;
-            for d in &m.deps {
-                let Some(dir) = d.dir.as_deref() else { continue };
-                let Some(other) = by_dir.get(dir) else {
-                    return Err(self.unread.get(dir).cloned().unwrap_or_else(|| format!("{} depends on `{}` by a path ({dir}) where cargo names no package", m.name, d.name)));
-                };
-                if seen.insert(dir) {
-                    used.push(other);
-                }
-            }
-        }
-        for m in &used {
-            named.insert(format!("{}/", m.dir), self.object(&m.dir)?);
-            // A package of another workspace inherits keys from that workspace's manifest.
-            if !m.workspace.is_empty() {
-                let f = format!("{}/Cargo.toml", m.workspace);
-                let id = self.object(&f)?;
-                named.insert(f, id);
-            }
-        }
-        // Files outside those folders their sources name.
-        let folders: Vec<String> = used.iter().map(|m| format!("{}/", m.dir)).collect();
-        for path in self.named_outside(&used, &folders)? {
-            let id = self.object(&path)?;
-            named.insert(path, id);
-        }
-        // The lock file's entries for their external dependencies, transitively.
         let mut queue: Vec<usize> = Vec::new();
-        for m in &used {
-            // By name and requirement: a test's other version of the same crate charges none.
-            let wanted_by: Vec<(&str, Option<semver::VersionReq>)> =
-                m.deps.iter().filter(|d| d.dir.is_none()).map(|d| (d.name.as_str(), semver::VersionReq::parse(&d.req).ok())).collect();
-            let wanted: BTreeSet<&str> = wanted_by.iter().map(|(n, _)| *n).collect();
-            if wanted.is_empty() {
+        let mut taken: BTreeSet<usize> = BTreeSet::new();
+        let mut i = 0;
+        loop {
+            if i < used.len() {
+                let m = used[i];
+                i += 1;
+                for d in &m.deps {
+                    let Some(dir) = d.dir.as_deref() else { continue };
+                    let Some(other) = by_dir.get(dir) else {
+                        return Err(self.unread.get(dir).cloned().unwrap_or_else(|| format!("{} depends on `{}` by a path ({dir}) where cargo names no package", m.name, d.name)));
+                    };
+                    if seen.insert(dir) {
+                        used.push(other);
+                    }
+                }
+                // By name and requirement: a test's other version of the same crate charges none.
+                let wanted_by: Vec<(&str, Option<semver::VersionReq>)> =
+                    m.deps.iter().filter(|d| d.dir.is_none()).map(|d| (d.name.as_str(), semver::VersionReq::parse(&d.req).ok())).collect();
+                let wanted: BTreeSet<&str> = wanted_by.iter().map(|(n, _)| *n).collect();
+                if wanted.is_empty() {
+                    continue;
+                }
+                let Some(lock) = &lock else {
+                    return Err(format!("{} depends on `{}` and the commit holds no Cargo.lock to pin it", m.name, wanted.iter().next().copied().unwrap_or_default()));
+                };
+                let own = lock
+                    .iter()
+                    .find(|l| l.name == m.name && l.version == m.version && l.source.is_none())
+                    .ok_or_else(|| format!("its Cargo.lock does not pin {} {}: the lock file is not this workspace's", m.name, m.version))?;
+                for d in &own.dependencies {
+                    let at = resolve(lock, d)?;
+                    let l = &lock[at];
+                    // `*` is cargo's "any version" for a git or path dependency stated without one,
+                    // which a pre-release meets too (SemVer's `*` would refuse it).
+                    let meets = |req: &Option<semver::VersionReq>| match (req, semver::Version::parse(&l.version)) {
+                        (Some(r), Ok(v)) => r.comparators.is_empty() || r.matches(&v),
+                        _ => true,
+                    };
+                    if wanted_by.iter().any(|(n, req)| *n == l.name && meets(req)) {
+                        queue.push(at);
+                    }
+                }
                 continue;
             }
-            let Some(lock) = &lock else {
-                return Err(format!("{} depends on `{}` and the commit holds no Cargo.lock to pin it", m.name, wanted.iter().next().copied().unwrap_or_default()));
-            };
-            let own = lock
-                .iter()
-                .find(|l| l.name == m.name && l.version == m.version && l.source.is_none())
-                .ok_or_else(|| format!("its Cargo.lock does not pin {} {}: the lock file is not this workspace's", m.name, m.version))?;
-            for d in &own.dependencies {
-                let at = resolve(lock, d)?;
-                let l = &lock[at];
-                // `*` is cargo's "any version" for a git or path dependency stated without one,
-                // which a pre-release meets too (SemVer's `*` would refuse it).
-                let meets = |req: &Option<semver::VersionReq>| match (req, semver::Version::parse(&l.version)) {
-                    (Some(r), Ok(v)) => r.comparators.is_empty() || r.matches(&v),
-                    _ => true,
-                };
-                if wanted_by.iter().any(|(n, req)| *n == l.name && meets(req)) {
-                    queue.push(at);
-                }
-            }
-        }
-        let mut taken: BTreeSet<usize> = BTreeSet::new();
-        while let Some(at) = queue.pop() {
+            let Some(at) = queue.pop() else { break };
             if !taken.insert(at) {
                 continue;
             }
@@ -230,18 +219,12 @@ impl Workspace<'_> {
             let l = &lock[at];
             if l.source.is_none() {
                 // A package by path the workspace knows (a member, or a fork one uses by path, as
-                // a `[patch]` may name it too): its folder, and its workspace's manifest.
+                // a `[patch]` may name it too): used as one reached by path.
                 let Some(known) = self.members.iter().find(|m| m.name == l.name && m.version == l.version) else {
                     return Err(format!("its Cargo.lock's {} {} has no source and is no member a release builds from its folder", l.name, l.version));
                 };
-                named.insert(format!("{}/", known.dir), self.object(&known.dir)?);
-                if !known.workspace.is_empty() {
-                    let f = format!("{}/Cargo.toml", known.workspace);
-                    let id = self.object(&f)?;
-                    named.insert(f, id);
-                }
-                for d in &l.dependencies {
-                    queue.push(resolve(lock, d)?);
+                if seen.insert(known.dir.as_str()) {
+                    used.push(known);
                 }
                 continue;
             }
@@ -260,6 +243,21 @@ impl Workspace<'_> {
                 };
                 queue.push(at.ok_or_else(|| format!("its Cargo.lock replaces {} {} by `{r}`, which it does not pin", l.name, l.version))?);
             }
+        }
+        for m in &used {
+            named.insert(format!("{}/", m.dir), self.object(&m.dir)?);
+            // A package of another workspace inherits keys from that workspace's manifest.
+            if !m.workspace.is_empty() {
+                let f = format!("{}/Cargo.toml", m.workspace);
+                let id = self.object(&f)?;
+                named.insert(f, id);
+            }
+        }
+        // Files outside those folders their sources name.
+        let folders: Vec<String> = used.iter().map(|m| format!("{}/", m.dir)).collect();
+        for path in self.named_outside(&used, &folders)? {
+            let id = self.object(&path)?;
+            named.insert(path, id);
         }
         let mut packages = Packages { names: used.iter().map(|m| m.name.clone()).collect(), vendored: BTreeSet::new() };
         if let Some(lock) = &lock {
@@ -502,6 +500,20 @@ fn attribute(ts: proc_macro2::TokenStream, out: &mut Vec<(String, bool)>) {
                 out.push((s, true));
             }
         }
+        // `debugger_visualizer(gdb_script_file = "…")` or `natvis_file`: a file rustc reads and
+        // embeds, from the attribute's own file's folder, as data.
+        [TokenTree::Ident(id), TokenTree::Group(g), ..] if id.to_string().trim_start_matches("r#") == "debugger_visualizer" && g.delimiter() == Delimiter::Parenthesis => {
+            let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+            for w in inner.windows(3) {
+                if let [TokenTree::Ident(k), TokenTree::Punct(eq), TokenTree::Literal(lit)] = w
+                    && ["gdb_script_file", "natvis_file"].contains(&k.to_string().trim_start_matches("r#"))
+                    && eq.as_char() == '='
+                    && let Some(s) = string_of(lit)
+                {
+                    out.push((s, false));
+                }
+            }
+        }
         [TokenTree::Ident(id), TokenTree::Group(g), ..] if id.to_string().trim_start_matches("r#") == "cfg_attr" && g.delimiter() == Delimiter::Parenthesis => {
             // The predicate, then attributes apart by commas at the top.
             let mut parts: Vec<Vec<TokenTree>> = vec![vec![]];
@@ -681,11 +693,13 @@ fn literal(s: &str) -> Option<String> {
                     if chars.next()? != '{' {
                         return None;
                     }
-                    let hex: String = chars.by_ref().take_while(|c| *c != '}').collect();
+                    // Underscores between the digits, as rustc reads them (`\u{2E_}`).
+                    let hex: String = chars.by_ref().take_while(|c| *c != '}').filter(|c| *c != '_').collect();
                     out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
                 }
+                // A line continued: rustc skips the ASCII whitespace that follows, no other.
                 '\n' => {
-                    while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                    while chars.peek().is_some_and(|c| matches!(c, ' ' | '\t' | '\n' | '\r')) {
                         chars.next();
                     }
                 }
