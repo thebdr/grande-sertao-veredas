@@ -73,12 +73,10 @@ impl Tof {
 }
 
 /// Pulse timer (IEC TP). A rising edge of `input` starts a pulse: `q` is on for exactly `pt`, whatever `input`
-/// does meanwhile, and re-triggering during the pulse is ignored. After the pulse, `et` holds at `pt` while
-/// `input` stays on, and resets once it is off.
-///
-/// DECISION PENDING (Q229): like every timer here, a pulse is judged on each scan against that scan's `pt`, and
-/// it measures from its edge for as long as its input stays on. So a `pt` raised past the elapsed time after the
-/// pulse ended, with the input still on, turns it on again with no new edge, as carried from Veredas 1.
+/// does meanwhile, and re-triggering during the pulse is ignored. A pulse is judged on each scan against that
+/// scan's `pt`, as every timer here, and once it has ended it stays off until the next rising edge, whatever `pt`
+/// or the time then does (`docs/questions.md` Q229): one pulse per rising edge. After the pulse, `et` holds at
+/// that scan's `pt` while `input` stays on, and resets once it is off.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Tp {
     q: bool,
@@ -94,26 +92,18 @@ impl Tp {
         if rising && self.since.is_none() {
             self.since = Some(scan.now);
         }
-        match self.since {
-            Some(since) => {
-                let elapsed = scan.now.saturating_sub(since);
-                if elapsed >= pt {
-                    self.q = false;
-                    self.et = pt;
-                    if !input {
-                        self.since = None;
-                        self.et = Duration::ZERO;
-                    }
-                } else {
-                    self.q = true;
-                    self.et = elapsed;
-                }
+        if let Some(since) = self.since {
+            let elapsed = scan.now.saturating_sub(since);
+            if elapsed < pt {
+                self.q = true;
+                self.et = elapsed;
+                return self.q;
             }
-            None => {
-                self.q = false;
-                self.et = Duration::ZERO;
-            }
+            // The pulse is over: only a new rising edge starts another.
+            self.since = None;
         }
+        self.q = false;
+        self.et = if input { pt } else { Duration::ZERO };
         self.q
     }
 

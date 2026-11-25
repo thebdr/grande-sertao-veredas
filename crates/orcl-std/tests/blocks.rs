@@ -1073,17 +1073,22 @@ fn a_timer_s_elapsed_time_is_measured_from_its_start_on_a_scan_whose_time_goes_b
     let mut pulse = Tp::default();
     let mut tp = |t: u64, input: bool| (pulse.scan(&at(t), input, pt), pulse.et());
     assert_eq!(tp(100, true), (true, ms(0)));
-    assert_eq!(tp(150, true), (true, ms(50)));
+    assert_eq!(tp(180, true), (true, ms(80)));
+    assert_eq!(tp(150, true), (true, ms(50)), "back mid-pulse: 50 ms from its edge");
+    assert_eq!(tp(50, true), (true, ms(0)), "back before its edge: nothing elapsed");
+    assert_eq!(tp(120, true), (true, ms(20)), "and its edge where it was");
     assert_eq!(tp(199, true), (true, ms(99)));
     assert_eq!(tp(200, true), (false, ms(100)));
     assert_eq!(tp(210, true), (false, ms(100)));
-    assert_eq!(tp(150, true), (true, ms(50)), "back after the pulse, its input on: 50 ms from its edge");
-    assert_eq!(tp(50, true), (true, ms(0)), "back before its edge: nothing elapsed");
-    assert_eq!(tp(120, true), (true, ms(20)), "and its edge where it was");
+    assert_eq!(tp(150, true), (false, ms(100)), "back after the pulse, its input on: over it stays (Q229)");
+    assert_eq!(tp(50, true), (false, ms(100)), "back before its edge: over all the same");
     assert_eq!(tp(210, true), (false, ms(100)));
-    assert_eq!(tp(150, false), (true, ms(50)), "its input off on a scan back: 50 ms from its edge");
-    assert_eq!(tp(220, false), (false, ms(0)), "over, its input off: reset");
+    assert_eq!(tp(150, false), (false, ms(0)), "its input off on a scan back: reset");
+    assert_eq!(tp(220, false), (false, ms(0)));
     assert_eq!(tp(230, true), (true, ms(0)), "the next edge pulses again");
+    assert_eq!(tp(180, true), (true, ms(0)), "back before the new edge, mid-pulse: nothing elapsed");
+    assert_eq!(tp(329, true), (true, ms(99)));
+    assert_eq!(tp(330, true), (false, ms(100)), "pt from the new edge");
 }
 
 #[test]
@@ -1168,13 +1173,15 @@ fn every_timer_is_judged_on_each_scan_against_that_scan_s_preset_time() {
     };
     assert_eq!(tp(0, true, 100), (true, ms(0)));
     assert_eq!(tp(50, true, 40), (false, ms(40)), "pt lowered below the elapsed time: over at once");
-    assert_eq!(tp(60, true, 100), (true, ms(60)), "raised past it, the input still on: on again (Q229)");
+    assert_eq!(tp(60, true, 100), (false, ms(100)), "raised past it, the input still on: over it stays, et at it (Q229)");
     assert_eq!(tp(100, true, 100), (false, ms(100)));
     assert_eq!(tp(120, true, 50), (false, ms(50)), "held after the pulse, lowered: over, et at the new pt");
     assert_eq!(tp(130, true, 110), (false, ms(110)), "raised below the elapsed time: over, et at it");
-    assert_eq!(tp(150, true, 200), (true, ms(150)), "raised after the pulse, the input on: on again, no new edge (Q229)");
-    assert_eq!(tp(160, false, 200), (true, ms(160)), "its input off: on to the raised pt");
-    assert_eq!(tp(200, false, 200), (false, ms(0)), "over, its input off: reset");
+    assert_eq!(tp(150, true, 200), (false, ms(200)), "raised after the pulse past the elapsed time: over, no new edge (Q229)");
+    assert_eq!(tp(160, false, 200), (false, ms(0)), "its input off: reset");
+    assert_eq!(tp(170, true, 200), (true, ms(0)), "a new edge: a pulse of the raised pt");
+    assert_eq!(tp(369, true, 200), (true, ms(199)));
+    assert_eq!(tp(370, true, 200), (false, ms(200)), "over at it");
     // a pt lowered to zero: an on-delay mid-delay on at once, a pulse mid-pulse over, each elapsed time at zero; an
     // off-delay dropped at a zero pt off at once, and off still when its pt is raised again, its input off
     let mut on = Ton::default();
@@ -1584,6 +1591,69 @@ fn a_held_pulse_at_exactly_its_pt_after_its_end_stays_over() {
     assert_eq!((p.scan(&at(100), true, ms(100)), p.q()), (false, false));
     assert_eq!((p.scan(&at(100), true, ms(100)), p.q(), p.et()), (false, false, ms(100)), "a second scan at that instant");
     assert_eq!((p.scan(&at(150), true, ms(150)), p.q(), p.et()), (false, false, ms(150)), "pt raised to exactly it");
+}
+
+// Q229, ruled on 2026-11-25 (b): a pulse that has ended stays off until the next rising edge, whatever its pt or its
+// time then does, while each scan's pt still counts as long as the pulse runs. One pulse per rising edge.
+
+#[test]
+fn a_pulse_that_has_ended_stays_off_until_a_new_rising_edge_whatever_its_pt_or_its_time_does() {
+    let tp = |p: &mut Tp, t: u64, input: bool, pt: u64| (p.scan(&at(t), input, ms(pt)), p.q(), p.et());
+    // over at pt, its input held: pt raised far past the time since its edge, a second scan at one instant, scans
+    // back to its edge and before it, pt to zero and up again, long after: never on again, et at each scan's pt
+    let mut p = Tp::default();
+    assert_eq!(tp(&mut p, 10, true, 100), (true, true, ms(0)));
+    assert_eq!(tp(&mut p, 110, true, 100), (false, false, ms(100)), "over at pt");
+    assert_eq!(tp(&mut p, 120, true, 1_000), (false, false, ms(1_000)), "pt raised past the time since its edge");
+    assert_eq!(tp(&mut p, 120, true, 1_000), (false, false, ms(1_000)), "a second scan at that instant");
+    assert_eq!(tp(&mut p, 10, true, 100), (false, false, ms(100)), "a scan back at its edge");
+    assert_eq!(tp(&mut p, 0, true, 100), (false, false, ms(100)), "and before it");
+    assert_eq!(tp(&mut p, 130, true, 0), (false, false, ms(0)), "pt to zero");
+    for t in (140..2_000).step_by(10) {
+        assert_eq!(tp(&mut p, t, true, 5_000), (false, false, ms(5_000)), "held at {t} ms, pt raised again");
+    }
+    assert_eq!(tp(&mut p, 2_000, false, 5_000), (false, false, ms(0)), "dropped: reset");
+    assert_eq!(tp(&mut p, 2_010, true, 5_000), (true, true, ms(0)), "the next rising edge pulses");
+    assert_eq!(tp(&mut p, 7_000, true, 5_000), (true, true, ms(4_990)), "for the pt it is given");
+    assert_eq!(tp(&mut p, 7_010, true, 5_000), (false, false, ms(5_000)));
+    assert_eq!(tp(&mut p, 2_010, true, 5_000), (false, false, ms(5_000)), "back at the new edge: over it stays");
+    // over through a pt lowered mid-pulse: raised again, its input held, it stays over
+    let mut p = Tp::default();
+    tp(&mut p, 0, true, 100);
+    assert_eq!(tp(&mut p, 30, true, 20), (false, false, ms(20)), "pt lowered below the elapsed time: over");
+    assert_eq!(tp(&mut p, 40, true, 100), (false, false, ms(100)), "raised again: over it stays");
+    assert_eq!(tp(&mut p, 50, false, 100), (false, false, ms(0)));
+    assert_eq!(tp(&mut p, 60, true, 100), (true, true, ms(0)), "the next edge pulses");
+    // an edge at a pt of zero is a pulse over at once: enabled with its input held, no pulse
+    let mut p = Tp::default();
+    assert_eq!(tp(&mut p, 0, true, 0), (false, false, ms(0)));
+    assert_eq!(tp(&mut p, 10, true, 100), (false, false, ms(100)), "pt raised, its input held: no pulse");
+    assert_eq!(tp(&mut p, 20, false, 100), (false, false, ms(0)));
+    assert_eq!(tp(&mut p, 30, true, 100), (true, true, ms(0)), "the next edge pulses");
+    // a press held for a second at a pt that grows by 50 ms a scan: one rising edge, one pulse, then off
+    let mut p = Tp::default();
+    let mut starts = 0;
+    let mut last = false;
+    for k in 0..100u64 {
+        let q = p.scan(&at(k * 10), true, ms(100 + 50 * k));
+        if q && !last {
+            starts += 1;
+        }
+        last = q;
+    }
+    assert_eq!((starts, last), (1, true), "a pt growing faster than the time keeps the one pulse running");
+    let mut p = Tp::default();
+    let mut starts = 0;
+    let mut last = false;
+    for k in 0..100u64 {
+        let pt = if k % 20 < 10 { 50 } else { 5_000 };
+        let q = p.scan(&at(k * 10), true, ms(pt));
+        if q && !last {
+            starts += 1;
+        }
+        last = q;
+    }
+    assert_eq!((starts, last), (1, false), "a pt switched between 50 ms and 5 s: one pulse, over at the first 50 ms");
 }
 
 #[test]
