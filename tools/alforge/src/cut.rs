@@ -241,6 +241,39 @@ pub fn unpack_checked(packed: &Path, check: &Path, name: &str) -> Result<PathBuf
     Ok(extracted)
 }
 
+/// The components as built: each ships its bins without required features and those with required
+/// features cargo's default build made (in `bin`, what the builder handed back), each one cargo did
+/// not make said; the manifest written from them, read back and checked against the repository again.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn as_built(
+    root: &Path,
+    release: &semver::Version,
+    commit: &str,
+    target: &str,
+    rustc: &str,
+    tested: &str,
+    held: &std::collections::BTreeMap<String, manifest::Held>,
+    bin: &Path,
+) -> Result<(std::collections::BTreeMap<String, manifest::Held>, String, Manifest), CutError> {
+    let mut shipped = held.clone();
+    for h in shipped.values_mut() {
+        let made: std::collections::BTreeSet<String> = h.optional.iter().filter(|b| bin.join(b).is_file()).cloned().collect();
+        for b in h.optional.difference(&made) {
+            eprintln!("alforge: {}'s `{b}` was not built with its default features: not shipped (docs/questions.md Q443)", h.name);
+        }
+        h.bins.extend(made);
+        h.optional.clear();
+    }
+    let components: Vec<(String, String, Vec<String>)> = shipped.values().map(|h| (h.name.clone(), h.version.clone(), h.bins.iter().cloned().collect())).collect();
+    let text = manifest_text(release, commit, target, rustc, &components, tested);
+    let manifest = manifest::load(&text).map_err(|e| refused(format!("the manifest to be written does not read back: {e}")))?;
+    let against = manifest::check(root, &manifest)?;
+    if !against.is_empty() {
+        return Err(refused(format!("release {release} would not check as built:\n{}", against.join("\n"))));
+    }
+    Ok((shipped, text, manifest))
+}
+
 pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     let git_text = |args: &[&str]| -> Result<String, CutError> {
         git::text(root, args).map_err(|e| refused(e.to_string()))?.ok_or_else(|| refused(format!("git {} answered no", args.join(" "))))
@@ -275,7 +308,7 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     // two components build would ship one of them where the manifest names both.
     let mut builders: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
     for h in held.values() {
-        for b in &h.bins {
+        for b in h.bins.iter().chain(&h.optional) {
             builders.entry(b.as_str()).or_default().push(h.name.as_str());
         }
     }
@@ -286,12 +319,6 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
         .collect();
     if !shared.is_empty() {
         return Err(refused(shared.join("\n")));
-    }
-    // A bin needing a feature its component's defaults leave off is not shipped, and said so.
-    for h in held.values() {
-        for b in &h.left {
-            eprintln!("alforge: {}'s `{b}` needs a feature its default features leave off: not shipped (docs/questions.md Q443)", h.name);
-        }
     }
     // What each version names must read at the commit: the build is held to it.
     let unread: Vec<String> = held.values().filter_map(|h| h.inputs.as_ref().err().map(|why| format!("{}'s build inputs do not read: {why}", h.name))).collect();
@@ -304,9 +331,12 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     let rustc = suite_rustc(root, &tmp, std::env::vars_os())?;
     let toolchain = rustc.split_whitespace().nth(1).ok_or_else(|| refused(format!("rustc printed `{rustc}`")))?.to_string();
     let target = "x86_64-unknown-linux-gnu";
+    // Planned with every bin it may ship; written once the build has said which of those with
+    // required features cargo made.
+    let tested = if o.run_suite { SUITE } else { NOT_RUN };
     let components: Vec<(String, String, Vec<String>)> =
-        held.values().map(|h| (h.name.clone(), h.version.clone(), h.bins.iter().cloned().collect())).collect();
-    let text = manifest_text(&o.release, &commit, target, &rustc, &components, if o.run_suite { SUITE } else { NOT_RUN });
+        held.values().map(|h| (h.name.clone(), h.version.clone(), h.bins.iter().chain(&h.optional).cloned().collect())).collect();
+    let text = manifest_text(&o.release, &commit, target, &rustc, &components, tested);
     let manifest = manifest::load(&text).map_err(|e| refused(format!("the manifest to be written does not read back: {e}")))?;
     // Checked as any manifest is, against the repository and, for a real cut, against every
     // release already cut (here and in `--out`), before anything is built: a version names one
@@ -346,11 +376,14 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
         }
     }
     // Each component built alone, its executables named.
-    let builds: Vec<builder::Build> =
-        held.values().map(|h| builder::Build { package: h.name.clone(), bins: h.bins.iter().cloned().collect(), lib: h.lib.clone(), left: h.left.iter().cloned().collect() }).collect();
+    let builds: Vec<builder::Build> = held
+        .values()
+        .map(|h| builder::Build { package: h.name.clone(), bins: h.bins.iter().cloned().collect(), lib: h.lib.clone(), optional: h.optional.iter().cloned().collect() })
+        .collect();
     std::fs::create_dir_all(&o.work)?;
     let built = builder::build(&recipe, root, &commit, &toolchain, &builds, &o.work)?;
     eprintln!("alforge: built under {} on {}", built.toolchain, built.libc);
+    let (held, text, manifest) = as_built(root, &o.release, &commit, target, &rustc, tested, &held, &built.out.join("bin"))?;
     let name = format!("veredas-{}-{target}", o.release);
     let (packed, extracted) = after_build(&recipe, root, &commit, &rustc, &built, &name, &held, &text, &o.work)?;
     eprintln!("alforge: running the bundle's bench and supervisão together");

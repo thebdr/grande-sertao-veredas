@@ -3080,8 +3080,9 @@ refused a release that would ship less than the manifest names; since Oficina la
 HEAD would stop at the builder, "cargo built no `veredas-oficina`".
 
 Options:
-- (a) A release ships what the default features build (taken meanwhile): Oficina pinned at its
-  version with no executable, the cut saying so; a manifest naming such a bin refused by why.
+- (a) A release ships what the default features build (taken meanwhile): cargo's own build with
+  them decides, at the cut (alforge models no feature), so Oficina is pinned at its version with no
+  executable and the cut says so.
 - (b) No release until Oficina's window builds by default (the suite's build needing Qt, against
   Q370).
 - (c) The builder builds each component with the features its executables need, and the tester

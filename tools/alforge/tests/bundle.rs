@@ -721,7 +721,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
                 name: "veredas-aranha".into(),
                 version: "2.0.0".into(),
                 bins: Default::default(),
-                left: Default::default(),
+                optional: Default::default(),
                 lib: Some("veredas_aranha".into()),
                 inputs: Ok(lib_inputs),
             },
@@ -733,7 +733,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
                 name: "veredas-core".into(),
                 version: "2.0.0".into(),
                 bins: bins.iter().cloned().collect(),
-                left: Default::default(),
+                optional: Default::default(),
                 lib: Some("veredas_core".into()),
                 inputs: Ok(inputs),
             },
@@ -856,9 +856,9 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
     assert_eq!(r.builder.cpus, 4);
     // Each component built alone, so cargo unifies features within its own inputs.
     // A component that ships no executable has its library built alone, for its dep-info.
-    let build = |p: &str, bins: &[&str], lib: &str| builder::Build { package: p.into(), bins: bins.iter().map(|b| b.to_string()).collect(), lib: Some(lib.into()), left: vec![] };
+    let build = |p: &str, bins: &[&str], lib: &str| builder::Build { package: p.into(), bins: bins.iter().map(|b| b.to_string()).collect(), lib: Some(lib.into()), optional: vec![] };
     let mut portal = build("veredas-portal", &["veredas-portal"], "veredas_portal");
-    portal.left = vec!["porteiro".into()];
+    portal.optional = vec!["porteiro".into()];
     let builds = vec![build("veredas-aranha", &[], "veredas_aranha"), build("veredas-maquinar", &["veredas-bancada"], "veredas_maquinar"), portal];
     let script = builder::script(&r, &builds);
     assert_eq!(
@@ -871,13 +871,14 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
          cp target/release/libveredas_aranha.d /build/out/deps/\n\
          if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; cp target/release/veredas-bancada.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-bancada\"; missing=1; fi\n\
          if [ -f target/release/veredas-portal ]; then cp target/release/veredas-portal /build/out/bin/; cp target/release/veredas-portal.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-portal\"; missing=1; fi\n\
-         if [ -f target/release/porteiro ]; then echo \"ALFORGE-UNEXPECTED porteiro\"; missing=1; fi\n\
+         if [ -f target/release/porteiro ]; then cp target/release/porteiro /build/out/bin/; cp target/release/porteiro.d /build/out/deps/; fi\n\
          [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n"
     );
     // The script run here as the builder runs it (its `/build` a folder of the test's, stand-ins
     // for `cargo` and `rustc` first on its PATH), once with every bin built and once with one not.
     use std::os::unix::fs::PermissionsExt;
-    // A third time cargo builds the one left out (`porteiro`): its reading of the features is wrong.
+    // A third time cargo also builds `porteiro`, which has required features: copied out with its
+    // dep-info, shipped as cargo made it (docs/questions.md Q443).
     for built in [vec!["veredas-bancada", "veredas-portal"], vec!["veredas-bancada"], vec!["veredas-bancada", "veredas-portal", "porteiro"]] {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("build");
@@ -904,8 +905,8 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         assert_eq!(std::fs::read_to_string(root.join("out/toolchain")).unwrap(), "rustc 1.100.0 (0ef1bc386 2026-11-09)\n");
         let mut shipped: Vec<String> = std::fs::read_dir(root.join("out/bin")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         shipped.sort();
-        let built: Vec<&str> = built.iter().copied().filter(|b| *b != "porteiro").collect();
-        let unexpected = built.len() == 2 && shipped.len() == 2 && log.contains("ALFORGE-UNEXPECTED");
+        let mut built = built.clone();
+        built.sort();
         assert_eq!(shipped, built);
         let mut infos: Vec<String> = std::fs::read_dir(root.join("out/deps")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         infos.sort();
@@ -914,16 +915,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         assert_eq!(infos, want, "each executable's dep-info beside it, and the library's of the component that ships none");
         let console = format!("ALFORGE-BUILD-EXIT {}", status.code().unwrap());
         let judged = builder::outcome(&log, &console, true, &log_path);
-        if unexpected {
-            assert_eq!((status.code(), log.as_str()), (Some(1), "ALFORGE-UNEXPECTED porteiro\n"));
-            match judged {
-                Err(VmError::Failed { stderr, .. }) => assert_eq!(
-                    stderr,
-                    "cargo built `porteiro` with the default features, which the manifest leaves out as needing a feature they leave off: the reading of its features is wrong"
-                ),
-                other => panic!("not refused: {other:?}"),
-            }
-        } else if built.len() == 2 {
+        if built.contains(&"veredas-portal") {
             assert!(status.success() && log.ends_with("ALFORGE-BUILD-OK\n"), "{log}");
             assert!(judged.is_ok(), "{judged:?}");
         } else {
@@ -935,7 +927,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
                     (
                         "the build in the builder machine",
                         "refused",
-                        "cargo built no `veredas-portal` with the default features (a required feature they do not turn on): the release would not ship it"
+                        "cargo built no `veredas-portal` with the default features: the release would not ship it"
                     )
                 ),
                 other => panic!("not refused: {other:?}"),

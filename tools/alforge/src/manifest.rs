@@ -189,12 +189,13 @@ pub struct Held {
     pub name: String,
     /// Its version, as cargo reads its manifest.
     pub version: String,
-    /// Its executables: every `bin` target cargo itself names for it whose required features its
-    /// default features turn on. Whether cargo does build each is still the cut's to see (C-291).
+    /// Its executables every release ships: each `bin` target cargo names for it with no required
+    /// feature.
     pub bins: BTreeSet<String>,
-    /// The `bin` targets cargo names for it that need a feature its default features leave off:
-    /// a release does not ship them (docs/questions.md Q443).
-    pub left: BTreeSet<String>,
+    /// Its `bin` targets with required features: a release ships each one cargo's build with the
+    /// default features builds, which the cut sees (C-291), never a model of cargo's features
+    /// (docs/questions.md Q443).
+    pub optional: BTreeSet<String>,
     /// Its library target's name (`veredas_core`), if it has one: what the cut builds of a
     /// component that ships no executable, to hold that build too to its inputs.
     pub lib: Option<String>,
@@ -331,7 +332,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| ["lib", "rlib", "bin", "custom-build", "proc-macro"].contains(&k.as_str().unwrap_or_default()))))
+                    .filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| ["lib", "rlib", "dylib", "cdylib", "staticlib", "bin", "custom-build", "proc-macro"].contains(&k.as_str().unwrap_or_default()))))
                     .filter_map(|t| t["src_path"].as_str().map(|p| from_root(Path::new(p)).unwrap_or_else(|| p.to_string())))
                     .collect();
                 out.push(inputs::Member {
@@ -373,6 +374,21 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                     unread.insert(dir, why);
                     continue;
                 };
+                // What cargo read for it lies in the commit's tree too, as the root's must.
+                for pkg in meta["packages"].as_array().into_iter().flatten() {
+                    let name = pkg["name"].as_str().unwrap_or_default();
+                    if !inside(Path::new(pkg["manifest_path"].as_str().unwrap_or_default())) {
+                        return Ok(Some(format!("commit {commit}: the package `{name}` lies outside the commit's tree")));
+                    }
+                    for dep in pkg["dependencies"].as_array().into_iter().flatten() {
+                        if let Some(path) = dep["path"].as_str()
+                            && !inside(Path::new(path))
+                        {
+                            let dep_name = dep["name"].as_str().unwrap_or_default();
+                            return Ok(Some(format!("commit {commit}: the package `{name}` depends on `{dep_name}` by a path outside the commit's tree")));
+                        }
+                    }
+                }
                 let ws = PathBuf::from(meta["workspace_root"].as_str().unwrap_or_default());
                 let found = packages_of(&meta, &from_root(&ws).unwrap_or_default());
                 if found.iter().all(|m| m.dir != dir) {
@@ -391,16 +407,25 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
             let Some(dir) = manifest.parent().and_then(from_root).filter(|d| d.starts_with("crates/")) else { continue };
             let name = pkg["name"].as_str().unwrap_or_default().to_string();
             let version = pkg["version"].as_str().unwrap_or_default().to_string();
-            // DECISION PENDING (Q443): a bin needing a feature the defaults leave off is not shipped.
-            let (bins, left) = shipped_bins(pkg);
+            // DECISION PENDING (Q443): a bin with required features ships when cargo's default build
+            // makes it, as the cut sees.
+            let (mut bins, mut optional) = (BTreeSet::new(), BTreeSet::new());
+            for t in pkg["targets"].as_array().into_iter().flatten().filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "bin"))) {
+                let Some(b) = t["name"].as_str() else { continue };
+                if t["required-features"].as_array().is_some_and(|r| !r.is_empty()) {
+                    optional.insert(b.to_string());
+                } else {
+                    bins.insert(b.to_string());
+                }
+            }
             let lib = pkg["targets"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .find(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "lib" || k == "rlib")))
+                .find(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| ["lib", "rlib", "dylib", "cdylib", "staticlib"].contains(&k.as_str().unwrap_or_default()))))
                 .and_then(|t| t["name"].as_str().map(String::from));
             let inputs = workspace.inputs(&name);
-            held.insert(name.clone(), Held { dir, name, version, bins, left, lib, inputs });
+            held.insert(name.clone(), Held { dir, name, version, bins, optional, lib, inputs });
         }
         Ok(None)
     })();
@@ -416,62 +441,6 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         }
     }
     Ok(held)
-}
-
-/// A package's `bin` targets (cargo metadata's `pkg`) split into those its default features build and
-/// those needing a feature they leave off, as cargo reads features: from `default`, a feature's
-/// entries naming other features, `dep:x` enabling the optional dependency `x`, `x/f` enabling `x`
-/// (and its implicit feature, when it has one) with its feature `f`, `x?/f` asking `f` of `x` only
-/// if something else enables it. A required `x/f` holds when `x` is built (not optional, or
-/// enabled) and `f` is asked of it, by its dependency's own `features` or a feature turned on. The
-/// cut holds this reading to cargo: a bin left out that cargo builds stops it (C-291).
-pub fn shipped_bins(pkg: &serde_json::Value) -> (BTreeSet<String>, BTreeSet<String>) {
-    let features = pkg["features"].as_object();
-    let entries = |f: &str| -> Vec<String> { features.and_then(|fs| fs.get(f)).and_then(|v| v.as_array()).into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect() };
-    let has = |f: &str| features.is_some_and(|fs| fs.contains_key(f));
-    // A dependency by the name the package gives it (its rename, or the package's name).
-    let deps: Vec<&serde_json::Value> = pkg["dependencies"].as_array().into_iter().flatten().filter(|d| d["kind"].as_str() != Some("dev")).collect();
-    let dep_name = |d: &serde_json::Value| d["rename"].as_str().or(d["name"].as_str()).unwrap_or_default().to_string();
-    let mut on: BTreeSet<String> = BTreeSet::new();
-    let mut enabled: BTreeSet<String> = deps.iter().filter(|d| d["optional"].as_bool() != Some(true)).map(|d| dep_name(d)).collect();
-    let mut asked: BTreeSet<(String, String)> = deps.iter().flat_map(|d| d["features"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(|f| (dep_name(d), f.to_string()))).collect::<Vec<_>>()).collect();
-    let mut queue: Vec<String> = if has("default") { vec!["default".into()] } else { vec![] };
-    while let Some(f) = queue.pop() {
-        if !on.insert(f.clone()) {
-            continue;
-        }
-        for e in entries(&f) {
-            if let Some(d) = e.strip_prefix("dep:") {
-                enabled.insert(d.to_string());
-            } else if let Some((d, feat)) = e.split_once('/') {
-                if let Some(weak) = d.strip_suffix('?') {
-                    asked.insert((weak.to_string(), feat.to_string()));
-                } else {
-                    enabled.insert(d.to_string());
-                    asked.insert((d.to_string(), feat.to_string()));
-                    if has(d) {
-                        queue.push(d.to_string());
-                    }
-                }
-            } else if has(&e) {
-                queue.push(e);
-            }
-        }
-    }
-    let holds = |r: &str| match r.split_once('/') {
-        None => on.contains(r),
-        Some((d, f)) => enabled.contains(d) && asked.contains(&(d.to_string(), f.to_string())),
-    };
-    let (mut bins, mut left) = (BTreeSet::new(), BTreeSet::new());
-    for t in pkg["targets"].as_array().into_iter().flatten().filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "bin"))) {
-        let Some(b) = t["name"].as_str() else { continue };
-        if t["required-features"].as_array().into_iter().flatten().all(|r| r.as_str().is_some_and(holds)) {
-            bins.insert(b.to_string());
-        } else {
-            left.insert(b.to_string());
-        }
-    }
-    (bins, left)
 }
 
 /// Checks a manifest against the repository at `root`: its commit there and an ancestor of HEAD,
@@ -534,12 +503,9 @@ pub fn check(root: &Path, m: &Manifest) -> Result<Vec<String>, CheckError> {
         for b in h.bins.difference(&listed) {
             refusals.push(format!("{} builds `{b}` at {c} and the manifest does not ship it", x.name));
         }
-        for b in listed.difference(&h.bins) {
-            if h.left.contains(b) {
-                refusals.push(format!("{} builds `{b}` at {c} only with a feature its default features leave off: a release does not ship it", x.name));
-            } else {
-                refusals.push(format!("{} builds no `{b}` at {c}", x.name));
-            }
+        // One with required features is shipped or not as the cut saw cargo build it.
+        for b in listed.difference(&h.bins).filter(|b| !h.optional.contains(*b)) {
+            refusals.push(format!("{} builds no `{b}` at {c}", x.name));
         }
     }
     Ok(refusals)

@@ -89,9 +89,9 @@ pub struct Build {
     pub bins: Vec<String>,
     /// Its library target's name, built (`--lib`) when it ships no executable.
     pub lib: Option<String>,
-    /// Its executables needing a feature its defaults leave off (C-290's reading): cargo building
-    /// one of them says that reading is wrong, and the script fails naming it.
-    pub left: Vec<String>,
+    /// Its executables with required features: copied out when cargo's build with the default
+    /// features made them, and so shipped (docs/questions.md Q443).
+    pub optional: Vec<String>,
 }
 
 /// The script the builder machine runs on the commit's tree: the toolchain's and the C library's
@@ -103,10 +103,18 @@ pub struct Build {
 /// named, never skipped, and fails the script, so the cut refuses a release that would ship less
 /// than its components name.
 pub fn script(r: &Recipe, builds: &[Build]) -> String {
+    // A component with an executable every release ships builds its bins; one without builds its
+    // library too, whose dep-info then holds the build to its inputs.
     let cargo: String = builds
         .iter()
         .filter_map(|b| {
-            let what = if !b.bins.is_empty() { "--bins" } else if b.lib.is_some() { "--lib" } else { return None };
+            let what = match (b.bins.is_empty(), b.optional.is_empty(), b.lib.is_some()) {
+                (false, _, _) => "--bins",
+                (true, false, true) => "--lib --bins",
+                (true, false, false) => "--bins",
+                (true, true, true) => "--lib",
+                (true, true, false) => return None,
+            };
             Some(format!("cargo build --release --locked --offline --jobs {} -p {} {what}\n", r.builder.cpus, b.package))
         })
         .collect();
@@ -117,8 +125,8 @@ pub fn script(r: &Recipe, builds: &[Build]) -> String {
             b.bins
                 .iter()
                 .map(|b| format!("if [ -f target/release/{b} ]; then cp target/release/{b} /build/out/bin/; cp target/release/{b}.d /build/out/deps/; else echo \"ALFORGE-MISSING {b}\"; missing=1; fi\n"))
+                .chain(b.optional.iter().map(|o| format!("if [ -f target/release/{o} ]; then cp target/release/{o} /build/out/bin/; cp target/release/{o}.d /build/out/deps/; fi\n")))
                 .chain(lib)
-                .chain(b.left.iter().map(|l| format!("if [ -f target/release/{l} ]; then echo \"ALFORGE-UNEXPECTED {l}\"; missing=1; fi\n")))
                 .collect::<Vec<_>>()
         })
         .collect();
@@ -136,11 +144,12 @@ pub fn script(r: &Recipe, builds: &[Build]) -> String {
 /// unread) refused with the log's tail, or the console's when there is no log.
 pub fn outcome(log: &str, console: &str, unpacked: bool, log_path: &Path) -> Result<(), VmError> {
     let missing: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("ALFORGE-MISSING ")).collect();
-    let unexpected: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("ALFORGE-UNEXPECTED ")).collect();
-    if !missing.is_empty() || !unexpected.is_empty() {
-        let mut said: Vec<String> = missing.iter().map(|b| format!("cargo built no `{b}` with the default features (a required feature they do not turn on): the release would not ship it")).collect();
-        said.extend(unexpected.iter().map(|b| format!("cargo built `{b}` with the default features, which the manifest leaves out as needing a feature they leave off: the reading of its features is wrong")));
-        return Err(VmError::Failed { program: "the build in the builder machine".into(), status: "refused".into(), stderr: said.join("\n") });
+    if !missing.is_empty() {
+        return Err(VmError::Failed {
+            program: "the build in the builder machine".into(),
+            status: "refused".into(),
+            stderr: missing.iter().map(|b| format!("cargo built no `{b}` with the default features: the release would not ship it")).collect::<Vec<_>>().join("\n"),
+        });
     }
     if !unpacked || !log.contains("ALFORGE-BUILD-OK") || !console.contains("ALFORGE-BUILD-EXIT 0") {
         return Err(VmError::Failed {

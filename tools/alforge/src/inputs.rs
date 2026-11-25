@@ -215,10 +215,18 @@ impl Workspace<'_> {
         let mut out = BTreeSet::new();
         for m in used {
             walk(self.tree, &m.dir, &mut files).map_err(|e| format!("{}'s sources do not read: {e}", m.dir))?;
+        }
+        // Every Rust file a target starts from or a source names is read, wherever it lies (a
+        // shipped target's source may sit in a folder's `examples/`, which the sweep leaves out).
+        let mut scanned: BTreeSet<String> = files.iter().cloned().collect();
+        for m in used {
             // A target whose source lies outside the folders: that file, and what it names.
             for s in &m.sources {
                 let path = normal(Path::new(s)).ok_or_else(|| format!("{} builds from `{s}`, outside the commit's tree", m.name))?;
-                if !folders.iter().any(|f| path.starts_with(f.as_str())) && out.insert(path.clone()) {
+                if !folders.iter().any(|f| path.starts_with(f.as_str())) {
+                    out.insert(path.clone());
+                }
+                if scanned.insert(path.clone()) {
                     files.push(path);
                 }
             }
@@ -231,10 +239,10 @@ impl Workspace<'_> {
             let from = Path::new(&file).parent().unwrap_or(Path::new(""));
             for lit in literals(&text) {
                 let path = normal(&from.join(&lit)).ok_or_else(|| format!("{file} names `{lit}`, outside the commit's tree"))?;
-                if folders.iter().any(|f| path.starts_with(f.as_str())) || !out.insert(path.clone()) {
-                    continue;
+                if !folders.iter().any(|f| path.starts_with(f.as_str())) {
+                    out.insert(path.clone());
                 }
-                if path.ends_with(".rs") && self.tree.join(&path).is_file() {
+                if path.ends_with(".rs") && self.tree.join(&path).is_file() && scanned.insert(path.clone()) {
                     files.push(path);
                 }
             }
@@ -299,10 +307,16 @@ pub fn literals(text: &str) -> Vec<String> {
         let Some(open) = rest.trim_start().strip_prefix('(') else { continue };
         let mut depth = 1;
         let mut end = open.len();
-        for (i, c) in open.char_indices() {
+        let mut in_string = false;
+        let mut chars = open.char_indices();
+        while let Some((i, c)) = chars.next() {
             match c {
-                '(' => depth += 1,
-                ')' => {
+                '\\' if in_string => {
+                    chars.next();
+                }
+                '"' => in_string = !in_string,
+                '(' if !in_string => depth += 1,
+                ')' if !in_string => {
                     depth -= 1;
                     if depth == 0 {
                         end = i;
@@ -325,7 +339,15 @@ pub fn literals(text: &str) -> Vec<String> {
             }
         }
     }
-    for (token, sep) in [("#[path", '='), ("include_str!", '('), ("include_bytes!", '('), ("include!", '(')] {
+    // `#[path = "…"]`, spaces inside the brackets allowed.
+    let mut rest = text;
+    while let Some(at) = rest.find("#[") {
+        rest = &rest[at + 2..];
+        if let Some(lit) = rest.trim_start().strip_prefix("path").and_then(|s| s.trim_start().strip_prefix('=')).and_then(|s| literal(s.trim_start())) {
+            out.push(lit);
+        }
+    }
+    for (token, sep) in [("include_str!", '('), ("include_bytes!", '('), ("include!", '(')] {
         let mut rest = text;
         while let Some(at) = rest.find(token) {
             rest = &rest[at + token.len()..];
@@ -339,7 +361,9 @@ pub fn literals(text: &str) -> Vec<String> {
     out
 }
 
-/// The string literal `s` starts with, unescaped (`"…"` with `\\` and `\"`, or `r"…"`, `r#"…"#`).
+/// The string literal `s` starts with, unescaped as Rust reads it (`\\`, `\"`, `\n`, `\t`, `\r`,
+/// `\0`, `\'`, `\xNN`, `\u{…}`, a `\` before a line break dropping it and the next line's
+/// leading spaces), or a raw one (`r"…"`, `r#"…"#`).
 fn literal(s: &str) -> Option<String> {
     if let Some(raw) = s.strip_prefix('r') {
         let hashes = raw.len() - raw.trim_start_matches('#').len();
@@ -349,11 +373,33 @@ fn literal(s: &str) -> Option<String> {
     }
     let body = s.strip_prefix('"')?;
     let mut out = String::new();
-    let mut chars = body.chars();
+    let mut chars = body.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '"' => return Some(out),
-            '\\' => out.push(chars.next()?),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                '0' => out.push('\0'),
+                'x' => {
+                    let hex: String = [chars.next()?, chars.next()?].iter().collect();
+                    out.push(char::from(u8::from_str_radix(&hex, 16).ok()?));
+                }
+                'u' => {
+                    if chars.next()? != '{' {
+                        return None;
+                    }
+                    let hex: String = chars.by_ref().take_while(|c| *c != '}').collect();
+                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+                }
+                '\n' => {
+                    while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                        chars.next();
+                    }
+                }
+                other => out.push(other),
+            },
             c => out.push(c),
         }
     }

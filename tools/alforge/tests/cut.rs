@@ -36,6 +36,15 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     assert_eq!(c.manifest_path, out.path().join("0.0.0-trial.291.toml"));
     assert_eq!(manifest::check(&root, &c.manifest).unwrap(), Vec::<String>::new());
     let held = manifest::components_at(&root, &head, &mut Vec::new()).unwrap();
+    // Each component ships its bins without required features and those cargo's default build made
+    // (oficina's window, needing `shell`, not among them).
+    for x in &c.manifest.components {
+        let h = &held[&x.name];
+        let mut want: Vec<String> = h.bins.iter().cloned().chain(h.optional.iter().filter(|b| work.join("out/bin").join(b).is_file()).cloned()).collect();
+        want.sort();
+        assert_eq!(x.bins, want, "{}", x.name);
+    }
+    assert!(c.manifest.components.iter().any(|x| x.name == "veredas-oficina" && x.bins.is_empty()), "oficina's window is not built without `shell`");
     let pinned: Vec<(String, String)> = c.manifest.components.iter().map(|x| (x.name.clone(), x.version.to_string())).collect();
     let at_head: Vec<(String, String)> = held.values().map(|h| (h.name.clone(), h.version.clone())).collect();
     assert_eq!(pinned, at_head);
@@ -47,7 +56,8 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     // A component that ships none, by its library's own build.
     for h in held.values() {
         let inputs = h.inputs.as_ref().unwrap();
-        let files: Vec<String> = if h.bins.is_empty() { h.lib.iter().map(|l| format!("lib{l}.d")).collect() } else { h.bins.iter().map(|b| format!("{b}.d")).collect() };
+        let shipped = &c.manifest.components.iter().find(|x| x.name == h.name).unwrap().bins;
+        let files: Vec<String> = if shipped.is_empty() { h.lib.iter().map(|l| format!("lib{l}.d")).collect() } else { shipped.iter().map(|b| format!("{b}.d")).collect() };
         assert!(!files.is_empty(), "{} is built for its dep-info", h.name);
         for f in files {
             let info = std::fs::read_to_string(work.join("out/deps").join(&f)).unwrap();
