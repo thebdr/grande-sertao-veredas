@@ -799,3 +799,73 @@ fn a_constant_array_of_an_enum_of_many_variants_finds_each_variant_by_its_discri
         }
     }
 }
+
+#[test]
+fn a_wide_part_of_no_slot_inside_a_type_with_a_slot_is_checked_at_once() {
+    // T0 = (), Tk = (Tk-1, Tk-1) to T64; then S = (bool, T64): one slot, beside a part 2^64 leaves wide
+    let (mut p, wide) = wide_of_no_slot(64);
+    p.types.push(Type::Bool);
+    let boolean = TypeId(p.types.len() as u32 - 1);
+    p.types.push(Type::Struct { name: "S".into(), fields: vec![Field { name: "a".into(), ty: boolean }, Field { name: "w".into(), ty: wide }] });
+    let s = TypeId(p.types.len() as u32 - 1);
+    let one = vec![Scalar::Bool(true)];
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[TypeId(0), s, s]),
+        blocks: vec![block(vec![assign(place(2), Value::Use(konst(s, one.clone())), 1)], ret())],
+    });
+    let got = within_a_minute(move || {
+        let mut m = Machine::load(p, &[s]).unwrap();
+        (m.set_region(RegionId(0), &one), m.start(FunctionId(0), &[Arg::Value(&one)]), m.run(u64::MAX))
+    });
+    assert_eq!(got, Some((Ok(()), Ok(()), Ok(Step::Returned))));
+}
+
+#[test]
+fn a_structure_of_one_slot_beside_many_fields_of_no_slot_is_checked_by_its_one_slot() {
+    // S = { bool, 100 000 x () }, and a constant [S; 100 000]: walked field by field, 10^10 checks; by the fields
+    // that hold a slot, 100 000
+    let mut p = Program::default();
+    p.types.push(Type::Struct { name: "()".into(), fields: vec![] });
+    p.types.push(Type::Bool);
+    let mut fields = vec![Field { name: "b".into(), ty: TypeId(1) }];
+    fields.extend((0..100_000).map(|_| Field { name: String::new(), ty: TypeId(0) }));
+    p.types.push(Type::Struct { name: "S".into(), fields });
+    p.types.push(Type::Array { element: TypeId(2), len: 100_000 });
+    let slots = vec![Scalar::Bool(true); 100_000];
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[TypeId(3)]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(konst(TypeId(3), slots)), 1)], ret())],
+    });
+    let mut bad = p.clone();
+    if let Value::Use(Operand::Const(c)) = &mut bad.functions[0].blocks[0].statements[0].value {
+        c.slots[77_777] = int(Int::U8, 1);
+    }
+    assert_eq!(within_a_minute(move || Machine::load(p, &[]).map(|_| ())), Some(Ok(())));
+    assert_eq!(within_a_minute(move || Machine::load(bad, &[]).map(|_| ())), Some(Err(at_statement("a constant whose slots are not its type's"))), "one slot of another kind");
+}
+
+#[test]
+fn a_nesting_past_the_limit_names_a_type_nested_past_it_wherever_the_chain_starts_and_walks_on_a_small_stack() {
+    // type 0 a u8; types 1 to 258 each holding the next, 258 holding type 0: type k is 260 - k deep
+    let mut p = Program::default();
+    p.types.push(Type::Int(Int::U8));
+    for k in 1..=258u32 {
+        p.types.push(struct1(TypeId(if k == 258 { 0 } else { k + 1 })));
+    }
+    match refused(p) {
+        LoadError::Type { ty, reason: "nested too deep" } => assert!(ty >= 1 && 260 - ty > 256, "type {ty} named"),
+        other => panic!("{other:?}"),
+    }
+    // 100 000 structures outermost first, on Rust's default thread stack of 2 MiB: the walk stops at the limit
+    let mut p = Program::default();
+    for k in 0..100_000u32 {
+        p.types.push(struct1(TypeId(k + 1)));
+    }
+    p.types.push(Type::Int(Int::U8));
+    let got = std::thread::Builder::new().stack_size(2 << 20).spawn(move || Machine::load(p, &[]).map(|_| ())).unwrap().join().ok();
+    assert!(matches!(got, Some(Err(LoadError::Type { reason: "nested too deep", .. }))), "{got:?}");
+}

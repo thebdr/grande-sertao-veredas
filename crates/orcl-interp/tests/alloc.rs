@@ -371,3 +371,18 @@ fn an_entry_returning_more_slots_than_the_first_function_allocates_nothing_in_a_
     let (got, asked) = watching(|| copy.call(f, &[Arg::Value(&arg)]).map(|r| r == want.as_slice()));
     assert_eq!((got, asked), (Ok(true), 0), "the copy's first return");
 }
+
+#[test]
+fn a_type_the_program_only_declares_asks_for_no_room_at_load() {
+    // [u8; u32::MAX] declared and used by no local: no scratch of its size, which would be 128 GiB
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let _ = b.ty(Type::Array { element: u8t, len: u32::MAX });
+    let f = b.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 3)])), 1)], ret())] });
+    let program = b.program;
+    let before = BYTES.with(|b| b.get());
+    let (m, _) = watching(|| Machine::load(program, &[]));
+    let asked = BYTES.with(|b| b.get()) - before;
+    assert!(asked < 1 << 20, "{asked} bytes asked for while loading");
+    assert_eq!(m.unwrap().call(f, &[]).unwrap(), &[int(Int::U8, 3)]);
+}

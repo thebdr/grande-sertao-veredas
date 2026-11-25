@@ -958,3 +958,102 @@ fn a_duration_whose_seconds_are_not_a_u64_and_a_structure_of_other_slots_are_ref
     assert_eq!(m.start(takes_pair, &[Arg::Value(&[int(Int::U8, 1), int(Int::U16, 2), int(Int::U8, 3)])]), Err(HostError::Arguments), "a slot too many");
     assert_eq!(m.start(takes_pair, &[Arg::Value(&[int(Int::U8, 1), int(Int::U16, 2)])]), Ok(()));
 }
+
+/// `enum E { A = 0, B(u8, bool) = 5, C(i64) = -3 }`: its variants listed out of their discriminants' order.
+fn out_of_order(b: &mut Build) -> TypeId {
+    let (u8t, boolean, i64t) = (b.int(Int::U8), b.bool(), b.int(Int::I64));
+    b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::Isize,
+        variants: vec![
+            Variant { name: "A".into(), discriminant: 0, fields: vec![] },
+            Variant { name: "B".into(), discriminant: 5, fields: vec![Field { name: "0".into(), ty: u8t }, Field { name: "1".into(), ty: boolean }] },
+            Variant { name: "C".into(), discriminant: -3, fields: vec![Field { name: "0".into(), ty: i64t }] },
+        ],
+    })
+}
+
+fn out_of_order_values() -> Vec<(&'static str, Vec<Scalar>, bool)> {
+    let u = Scalar::Uninit;
+    vec![
+        ("A", vec![int(Int::Isize, 0), u, u], true),
+        ("B(7, true)", vec![int(Int::Isize, 5), int(Int::U8, 7), Scalar::Bool(true)], true),
+        ("C(-9)", vec![int(Int::Isize, -3), int(Int::I64, -9), u], true),
+        ("C with its payload unwritten", vec![int(Int::Isize, -3), u, u], false),
+        ("A with B's payload", vec![int(Int::Isize, 0), int(Int::U8, 7), Scalar::Bool(true)], false),
+        ("no variant, below the least", vec![int(Int::Isize, -4), u, u], false),
+        ("no variant, between two", vec![int(Int::Isize, 2), u, u], false),
+        ("no variant, past the greatest", vec![int(Int::Isize, 6), u, u], false),
+    ]
+}
+
+#[test]
+fn an_enum_listed_out_of_order_takes_each_of_its_values_and_no_other_as_a_region_a_constant_and_an_argument() {
+    let mut b = Build::default();
+    let e = out_of_order(&mut b);
+    let mut m = Machine::load(b.program, &[e]).unwrap();
+    for (name, slots, good) in out_of_order_values() {
+        assert_eq!(m.set_region(RegionId(0), &slots), if good { Ok(()) } else { Err(HostError::Slots) }, "region {name}");
+    }
+    for (name, slots, good) in out_of_order_values() {
+        let mut b = Build::default();
+        let e = out_of_order(&mut b);
+        b.function(Function { name: "f".into(), params: 0, locals: locals(&[e]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(e, slots.clone())), 1)], ret())] });
+        let got = Machine::load(b.program, &[]).map(|_| ());
+        if good {
+            assert_eq!(got, Ok(()), "constant {name}");
+        } else {
+            assert!(matches!(got, Err(LoadError::Instruction { reason: "a constant whose slots are not its type's", .. })), "constant {name}: {got:?}");
+        }
+        let mut b = Build::default();
+        let e = out_of_order(&mut b);
+        let f = b.function(Function { name: "g".into(), params: 1, locals: locals(&[e, e]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
+        let mut m = Machine::load(b.program, &[]).unwrap();
+        let got = m.call(f, &[Arg::Value(&slots)]).map(|r| r.to_vec());
+        assert_eq!(got, if good { Ok(slots.clone()) } else { Err(CallError::Host(HostError::Arguments)) }, "argument {name}");
+    }
+    // an Option's discriminant below None is no variant either
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let opt = b.option(u8t);
+    let mut m = Machine::load(b.program, &[opt]).unwrap();
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, -1), Scalar::Uninit]), Err(HostError::Slots), "below None");
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 0), Scalar::Uninit]), Ok(()), "None");
+}
+
+#[test]
+fn a_type_of_no_slot_given_a_slot_is_refused_as_a_constant_a_region_and_an_argument_never_by_a_panic() {
+    let one = [Scalar::Bool(true)];
+    let mut b = Build::default();
+    let (unit, boolean) = (b.unit(), b.bool());
+    b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[boolean, unit, boolean]),
+        blocks: vec![block(
+            vec![
+                assign(place(2), Value::Use(konst(boolean, vec![Scalar::Bool(false)])), 1),
+                assign(place(1), Value::Use(konst(unit, one.to_vec())), 2),
+                assign(place(0), Value::Use(copy(2)), 3),
+            ],
+            ret(),
+        )],
+    });
+    let got = Machine::load(b.program, &[]).map(|_| ());
+    assert!(matches!(got, Err(LoadError::Instruction { reason: "a constant whose slots are not its type's", .. })), "a constant: {got:?}");
+    let mut b = Build::default();
+    let (unit, boolean) = (b.unit(), b.bool());
+    let mut m = Machine::load(b.program, &[unit, boolean]).unwrap();
+    m.set_region(RegionId(1), &[Scalar::Bool(false)]).unwrap();
+    let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.set_region(RegionId(0), &one)));
+    assert_eq!(got.ok(), Some(Err(HostError::Slots)), "a region: refused, never a panic");
+    assert_eq!(m.region(RegionId(1)), Some(&[Scalar::Bool(false)][..]), "the region beside it untouched");
+    assert_eq!(m.set_region(RegionId(0), &[]), Ok(()), "and given none, taken");
+    let mut b = Build::default();
+    let (unit, boolean) = (b.unit(), b.bool());
+    let f = b.function(Function { name: "g".into(), params: 2, locals: locals(&[boolean, unit, boolean]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(2)), 1)], ret())] });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let got = m.call(f, &[Arg::Value(&one), Arg::Value(&[Scalar::Bool(false)])]).map(|r| r.to_vec());
+    assert_eq!(got, Err(CallError::Host(HostError::Arguments)), "an argument");
+    assert_eq!(m.call(f, &[Arg::Value(&[]), Arg::Value(&[Scalar::Bool(false)])]).unwrap(), &[Scalar::Bool(false)]);
+}

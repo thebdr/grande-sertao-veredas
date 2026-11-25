@@ -473,6 +473,11 @@ pub(crate) struct Sizes {
     /// Each enum's discriminants sorted, with the variant each names: a variant found by its discriminant in a
     /// search, however many variants there are. Empty for any other type.
     pub by_discriminant: Vec<Vec<(i128, u32)>>,
+    /// Each structure's fields that hold a slot, by index: a field of no slot has one value and fits at once, so a
+    /// value's check walks these alone, however many fields of no slot stand beside them. Empty otherwise.
+    pub slotted_fields: Vec<Vec<u32>>,
+    /// Each enum's variants' fields that hold a slot, likewise.
+    pub slotted_variants: Vec<Vec<Vec<u32>>>,
 }
 
 /// Whether `slots` are a value of `ty`: every scalar of the type's kind and range, a `Duration`'s nanoseconds
@@ -495,18 +500,17 @@ pub(crate) fn fits(types: &[Type], sizes: &Sizes, ty: TypeId, slots: &[Scalar]) 
         (Some(Type::Duration), [Scalar::Int(Int::U64, _), Scalar::Int(Int::U32, n)]) => *n < 1_000_000_000,
         (Some(Type::Struct { fields, .. }), _) => {
             let offsets = sizes.fields.get(ty.0 as usize);
-            fields.iter().enumerate().all(|(i, field)| {
-                let at = offsets.and_then(|o| o.get(i)).copied().unwrap_or(u32::MAX) as usize;
+            let slotted = sizes.slotted_fields.get(ty.0 as usize).map_or(&[][..], |s| s.as_slice());
+            slotted.iter().all(|&i| {
+                let Some(field) = fields.get(i as usize) else { return false };
+                let at = offsets.and_then(|o| o.get(i as usize)).copied().unwrap_or(u32::MAX) as usize;
                 let len = sizes.size.get(field.ty.0 as usize).copied().unwrap_or(u32::MAX) as usize;
                 slots.get(at..at.saturating_add(len)).is_some_and(|part| fits(types, sizes, field.ty, part))
             })
         }
         (Some(Type::Array { element, len }), _) => {
+            // an array of no slot fitted above; here every element holds a slot, so the walk is as long as `slots`
             let each = sizes.size.get(element.0 as usize).copied().unwrap_or(u32::MAX) as usize;
-            if each == 0 {
-                // elements of no slot are all alike: one stands for every one of them, however long the array
-                return *len == 0 || fits(types, sizes, *element, &[]);
-            }
             (0..*len as usize).all(|i| {
                 let at = i.saturating_mul(each);
                 slots.get(at..at.saturating_add(each)).is_some_and(|part| fits(types, sizes, *element, part))
@@ -522,8 +526,10 @@ pub(crate) fn fits(types: &[Type], sizes: &Sizes, ty: TypeId, slots: &[Scalar]) 
             else {
                 return false;
             };
+            let slotted = sizes.slotted_variants.get(ty.0 as usize).and_then(|all| all.get(v)).map_or(&[][..], |s| s.as_slice());
             let mut end = 1usize;
-            let fields_fit = variant.fields.iter().zip(offsets).all(|(field, at)| {
+            let fields_fit = slotted.iter().all(|&i| {
+                let (Some(field), Some(at)) = (variant.fields.get(i as usize), offsets.get(i as usize)) else { return false };
                 let at = *at as usize;
                 let len = sizes.size.get(field.ty.0 as usize).copied().unwrap_or(u32::MAX) as usize;
                 end = end.max(at.saturating_add(len));
@@ -551,8 +557,43 @@ pub(crate) fn lay_out(program: &Program) -> Result<Layout, LoadError> {
         let ty = TypeId(u32::try_from(i).map_err(|_| LoadError::Type { ty: u32::MAX, reason: "too many types" })?);
         sizer.size_of(ty, 0, ty)?;
     }
-    let sizes = Sizes { size: sizer.size, fields: sizer.fields, variants: sizer.variants, by_discriminant: sizer.by_discriminant };
-    let largest = sizes.size.iter().copied().max().unwrap_or(0);
+    let size_of = |t: TypeId| sizer.size.get(t.0 as usize).copied().unwrap_or(0);
+    let slotted = |fields: &[crate::program::Field]| -> Vec<u32> {
+        fields.iter().enumerate().filter(|(_, f)| size_of(f.ty) > 0).filter_map(|(i, _)| u32::try_from(i).ok()).collect()
+    };
+    let slotted_fields: Vec<Vec<u32>> = program
+        .types
+        .iter()
+        .map(|t| match t {
+            Type::Struct { fields, .. } => slotted(fields),
+            _ => Vec::new(),
+        })
+        .collect();
+    let slotted_variants: Vec<Vec<Vec<u32>>> = program
+        .types
+        .iter()
+        .map(|t| match t {
+            Type::Enum { variants, .. } => variants.iter().map(|v| slotted(&v.fields)).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let sizes = Sizes {
+        size: sizer.size,
+        fields: sizer.fields,
+        variants: sizer.variants,
+        by_discriminant: sizer.by_discriminant,
+        slotted_fields,
+        slotted_variants,
+    };
+    // the largest value built is a local's or a part of one (a region's is the machine's to add): a type the
+    // program only declares asks for no room
+    let largest = program
+        .functions
+        .iter()
+        .flat_map(|f| f.locals.iter())
+        .filter_map(|l| sizes.size.get(l.ty.0 as usize).copied())
+        .max()
+        .unwrap_or(0);
 
     let mut frames = Vec::with_capacity(program.functions.len());
     for function in &program.functions {

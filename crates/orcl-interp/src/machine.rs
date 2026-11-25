@@ -674,7 +674,8 @@ impl Machine {
             .filter_map(|l| layout.sizes.size.get(l.ty.0 as usize).copied())
             .max()
             .unwrap_or(0) as usize;
-        let largest = layout.largest as usize;
+        let regions_largest = regions.iter().filter_map(|t| layout.sizes.size.get(t.0 as usize).copied()).max().unwrap_or(0);
+        let largest = layout.largest.max(regions_largest) as usize;
         Ok(Machine {
             code: Code { program, layout, regions: placed, stack, room: Room { frames, result: returns, scratch: largest } },
             state: State {
@@ -718,6 +719,11 @@ impl Machine {
         }
         let end = base.checked_add(self.size_of(ty).ok_or(HostError::NoSuchRegion)?).ok_or(HostError::NoSuchRegion)?;
         let target = self.state.memory.get_mut(base as usize..end as usize).ok_or(HostError::NoSuchRegion)?;
+        // `fits` holds the length to the type's; said again here, so a copy of another length is a refusal and never
+        // the slice copy's panic
+        if target.len() != slots.len() {
+            return Err(HostError::Slots);
+        }
         target.copy_from_slice(slots);
         Ok(())
     }
