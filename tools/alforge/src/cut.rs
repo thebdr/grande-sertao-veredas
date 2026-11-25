@@ -211,7 +211,7 @@ pub fn after_build(
             let d = built.out.join("deps").join(&file);
             let info = std::fs::read_to_string(&d).map_err(|e| refused(format!("the build left no dep-info for {what} of {} ({}: {e})", h.name, d.display())))?;
             let inputs = h.inputs.as_ref().map_err(|why| refused(format!("{}'s build inputs do not read: {why}", h.name)))?;
-            for p in inputs::read_outside(&info, builder::SRC, builder::VENDOR, inputs) {
+            for p in inputs::read_outside(&info, builder::SRC, builder::VENDOR, inputs, &h.packages) {
                 outside.push(format!("{what} of {} read {p}, which its version does not name", h.name));
             }
         }
@@ -258,7 +258,11 @@ pub fn not_made(held: &std::collections::BTreeMap<String, manifest::Held>, bin: 
 /// The components as built: each ships its bins without required features and those with required
 /// features cargo's default build made (in `bin`, what the builder handed back), each one cargo did
 /// not make said; the manifest written from them, read back and checked against the repository again.
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+/// The components as built, the manifest's text and the manifest read back, and what the cut says
+/// of each bin it does not ship.
+pub type AsBuilt = (std::collections::BTreeMap<String, manifest::Held>, String, Manifest, Vec<String>);
+
+#[allow(clippy::too_many_arguments)]
 pub fn as_built(
     root: &Path,
     release: &semver::Version,
@@ -268,10 +272,8 @@ pub fn as_built(
     tested: &str,
     held: &std::collections::BTreeMap<String, manifest::Held>,
     bin: &Path,
-) -> Result<(std::collections::BTreeMap<String, manifest::Held>, String, Manifest), CutError> {
-    for line in not_made(held, bin) {
-        eprintln!("alforge: {line}");
-    }
+) -> Result<AsBuilt, CutError> {
+    let said = not_made(held, bin);
     let mut shipped = held.clone();
     for h in shipped.values_mut() {
         let made: std::collections::BTreeSet<String> = h.optional.iter().filter(|b| bin.join(b).is_file()).cloned().collect();
@@ -285,7 +287,7 @@ pub fn as_built(
     if !against.is_empty() {
         return Err(refused(format!("release {release} would not check as built:\n{}", against.join("\n"))));
     }
-    Ok((shipped, text, manifest))
+    Ok((shipped, text, manifest, said))
 }
 
 pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
@@ -402,7 +404,10 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     std::fs::create_dir_all(&o.work)?;
     let built = builder::build(&recipe, root, &commit, &toolchain, &builds, &o.work)?;
     eprintln!("alforge: built under {} on {}", built.toolchain, built.libc);
-    let (held, text, manifest) = as_built(root, &o.release, &commit, target, &rustc, tested, &held, &built.out.join("bin"))?;
+    let (held, text, manifest, said) = as_built(root, &o.release, &commit, target, &rustc, tested, &held, &built.out.join("bin"))?;
+    for line in said {
+        eprintln!("alforge: {line}");
+    }
     let name = format!("veredas-{}-{target}", o.release);
     let (packed, extracted) = after_build(&recipe, root, &commit, &rustc, &built, &name, &held, &text, &o.work)?;
     eprintln!("alforge: running the bundle's bench and supervisão together");

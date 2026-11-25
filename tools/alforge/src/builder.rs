@@ -179,22 +179,28 @@ pub fn vendor_config(stanza: &str) -> String {
     stanza.replace("directory = \"../vendor\"", "directory = \"vendor\"")
 }
 
+/// The builder's input at `input` (emptied first): the commit's tree as git stores it in `src/`,
+/// the `cargo vendor` of its lock file in `vendor/`, and the vendored sources' stanza in
+/// `.cargo/config.toml` beside the tree, never over a configuration the commit holds (cargo merges
+/// the folders' configurations upward from where it runs).
+pub fn prepare(root: &Path, commit: &str, input: &Path) -> Result<(), VmError> {
+    let _ = std::fs::remove_dir_all(input);
+    std::fs::create_dir_all(input.join("src"))?;
+    crate::git::export_tree(root, commit, &[], &input.join("src")).map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?;
+    eprintln!("alforge: vendoring the dependencies Cargo.lock pins");
+    let config = vm::run("cargo", &["vendor", "--locked", "--versioned-dirs", "../vendor"], Some(&input.join("src")))?;
+    std::fs::create_dir_all(input.join(".cargo"))?;
+    std::fs::write(input.join(".cargo/config.toml"), vendor_config(&config))?;
+    Ok(())
+}
+
 /// Builds each of `builds`' components' executables at `commit` of the repository at `root` in a fresh copy of the
 /// builder: the commit's tree as git stores it, `cargo vendor` of its lock file, `cargo build --release
 /// --locked --offline` inside, the executables named in `bins` handed back.
 pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, builds: &[Build], work: &Path) -> Result<Built, VmError> {
     let builder = image(r, toolchain, work)?;
     let input = work.join("in");
-    let _ = std::fs::remove_dir_all(&input);
-    std::fs::create_dir_all(input.join("src"))?;
-    // The commit's tree as git stores it, no attribute or filter applied.
-    crate::git::export_tree(root, commit, &[], &input.join("src")).map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?;
-    eprintln!("alforge: vendoring the dependencies Cargo.lock pins");
-    let config = vm::run("cargo", &["vendor", "--locked", "--versioned-dirs", "../vendor"], Some(&input.join("src")))?;
-    // Beside the tree, never over a configuration the commit holds: cargo merges the folders'
-    // configurations upward from where it runs, the tree's own winning.
-    std::fs::create_dir_all(input.join(".cargo"))?;
-    std::fs::write(input.join(".cargo/config.toml"), vendor_config(&config))?;
+    prepare(root, commit, &input)?;
     std::fs::write(input.join("build.sh"), script(r, builds))?;
     let in_tar = work.join("in.tar");
     vm::run("tar", &["-cf", &in_tar.display().to_string(), "-C", &input.display().to_string(), "."], None)?;

@@ -128,14 +128,38 @@ impl Workspace<'_> {
 
     /// The build inputs of the member `name`, or why they cannot be read.
     pub fn inputs(&self, name: &str) -> Result<Inputs, String> {
+        self.inputs_and_packages(name).map(|(i, _)| i)
+    }
+
+    /// [`Workspace::inputs`], and the names of every package its build compiles (the component,
+    /// the members and packages by path it uses, the locked ones), whose own build output and
+    /// vendored sources its build may read.
+    pub fn inputs_and_packages(&self, name: &str) -> Result<(Inputs, BTreeSet<String>), String> {
         let lock = self.lock()?;
         // A cargo configuration's `paths` builds folders in place of the packages the lock pins,
-        // by a rule no lock entry records.
+        // by a rule no lock entry records; its sources, patches, compilers, wrappers and linkers
+        // likewise bring in programs or code no version names.
         for f in [".cargo/config.toml", ".cargo/config"] {
-            if let Ok(text) = std::fs::read_to_string(self.tree.join(f))
-                && toml::from_str::<toml::Table>(&text).map_or(true, |t| t.contains_key("paths"))
-            {
+            let Ok(text) = std::fs::read_to_string(self.tree.join(f)) else { continue };
+            let Ok(t) = toml::from_str::<toml::Table>(&text) else {
                 return Err(format!("its {f} overrides packages by `paths` (or does not read), which a release does not follow"));
+            };
+            if t.contains_key("paths") {
+                return Err(format!("its {f} overrides packages by `paths` (or does not read), which a release does not follow"));
+            }
+            let mut set: Vec<String> = ["source", "patch", "host"].iter().filter(|k| t.contains_key(**k)).map(|k| k.to_string()).collect();
+            if let Some(b) = t.get("build").and_then(|b| b.as_table()) {
+                set.extend(["rustc", "rustc-wrapper", "rustc-workspace-wrapper", "rustdoc"].iter().filter(|k| b.contains_key(**k)).map(|k| format!("build.{k}")));
+            }
+            if let Some(targets) = t.get("target").and_then(|v| v.as_table()) {
+                for (triple, v) in targets {
+                    if let Some(v) = v.as_table() {
+                        set.extend(["linker", "ar", "runner"].iter().filter(|k| v.contains_key(**k)).map(|k| format!("target.{triple}.{k}")));
+                    }
+                }
+            }
+            if !set.is_empty() {
+                return Err(format!("its {f} sets {}: programs or code a version does not name, which a release does not follow", set.join(", ")));
             }
         }
         let mut named = BTreeMap::new();
@@ -240,7 +264,11 @@ impl Workspace<'_> {
                 queue.push(at.ok_or_else(|| format!("its Cargo.lock replaces {} {} by `{r}`, which it does not pin", l.name, l.version))?);
             }
         }
-        Ok(Inputs(named))
+        let mut packages: BTreeSet<String> = used.iter().map(|m| m.name.clone()).collect();
+        if let Some(lock) = &lock {
+            packages.extend(taken.iter().map(|&at| lock[at].name.clone()));
+        }
+        Ok((Inputs(named), packages))
     }
 
     /// The files outside `folders` that the Rust sources of `used` (but their tests', benches' and
@@ -653,7 +681,11 @@ fn normal(p: &Path) -> Option<String> {
 /// compilation read, its build scripts' declared ones too) names that `inputs` does not: each file
 /// under `src` (the tree's root in the builder) outside them, and each file elsewhere but the
 /// build's own output (`src/target/`) and the vendored sources the lock file pins (`vendor`).
-pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs) -> Vec<String> {
+pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs, packages: &BTreeSet<String>) -> Vec<String> {
+    // The builds share one output folder and one copy of the vendored sources: a build may read
+    // there only what its own packages made or brought (a build script's `OUT_DIR`,
+    // `build/<package>-<hash>/`, and `vendor/<package>-<version>/`), never another's.
+    let own = |dir: &str| packages.iter().any(|p| dir.strip_prefix(p.as_str()).and_then(|r| r.strip_prefix('-')).is_some_and(|r| r.starts_with(|c: char| c.is_ascii_alphanumeric())));
     let mut out = BTreeSet::new();
     for path in dep_info_paths(dep_info) {
         // A path as rustc or cargo writes it may climb back (`crates/x/src/../../../docs/y.rs`, a
@@ -667,7 +699,19 @@ pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs) ->
             continue;
         }
         let landed = PathBuf::from(format!("/{}", rooted(&path)));
-        if landed.starts_with(Path::new(src).join("target")) || landed.starts_with(vendor) {
+        let built = Path::new(src).join("target/release/build");
+        if let Ok(rest) = landed.strip_prefix(&built)
+            && rest.components().next().is_some_and(|c| own(&c.as_os_str().to_string_lossy()))
+        {
+            continue;
+        }
+        if let Ok(rest) = landed.strip_prefix(vendor)
+            && rest.components().next().is_some_and(|c| own(&c.as_os_str().to_string_lossy()))
+        {
+            continue;
+        }
+        if landed.starts_with(vendor) {
+            out.insert(path);
             continue;
         }
         match landed.strip_prefix(src) {

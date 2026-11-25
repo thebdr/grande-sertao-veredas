@@ -202,6 +202,8 @@ pub struct Held {
     /// What its version names: everything a build of it reads but the toolchain
     /// ([`crate::inputs`]), or why that cannot be read at the commit.
     pub inputs: Result<Inputs, String>,
+    /// The packages its build compiles (empty when its inputs do not read).
+    pub packages: BTreeSet<String>,
 }
 
 /// Why a manifest could not be checked at all.
@@ -424,8 +426,11 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                 .flatten()
                 .find(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"].contains(&k.as_str().unwrap_or_default()))))
                 .and_then(|t| t["name"].as_str().map(String::from));
-            let inputs = workspace.inputs(&name);
-            held.insert(name.clone(), Held { dir, name, version, bins, optional, lib, inputs });
+            let (inputs, packages) = match workspace.inputs_and_packages(&name) {
+                Ok((i, p)) => (Ok(i), p),
+                Err(e) => (Err(e), BTreeSet::new()),
+            };
+            held.insert(name.clone(), Held { dir, name, version, bins, optional, lib, inputs, packages });
         }
         Ok(None)
     })();

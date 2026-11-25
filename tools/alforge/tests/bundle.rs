@@ -724,6 +724,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
                 optional: Default::default(),
                 lib: Some("veredas_aranha".into()),
                 inputs: Ok(lib_inputs),
+                packages: ["veredas-aranha".to_string()].into_iter().collect(),
             },
         ),
         (
@@ -736,6 +737,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
                 optional: Default::default(),
                 lib: Some("veredas_core".into()),
                 inputs: Ok(inputs),
+                packages: ["veredas-core".to_string(), "x".to_string()].into_iter().collect(),
             },
         ),
     ]
@@ -749,7 +751,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
             let more = if b == "segundo" { extra } else { "" };
             std::fs::write(
                 deps.join(format!("{b}.d")),
-                format!("/build/src/target/release/{b}: /build/src/crates/veredas-core/src/main.rs /build/src/docs/shared.rs /build/src/target/release/build/x/out/gen.rs{more}\n"),
+                format!("/build/src/target/release/{b}: /build/src/crates/veredas-core/src/main.rs /build/src/docs/shared.rs /build/src/target/release/build/x-1a2b/out/gen.rs{more}\n"),
             )
             .unwrap();
         }
@@ -1273,6 +1275,8 @@ fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
     let inputs = alforge::inputs::Inputs(
         [("crates/veredas-portal/", "1"), ("crates/veredas-core/", "2"), ("docs/shared.rs", "3"), ("Cargo.toml", "4")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
     );
+    // The packages the build compiles: their build output and vendored sources it may read.
+    let packages: std::collections::BTreeSet<String> = ["veredas-portal", "veredas-core", "x", "y", "serde"].iter().map(|s| s.to_string()).collect();
     // Cargo's own form: the rule's target, then what it read; a space in a name escaped, a `$`
     // doubled, a line continued; a rule with no prerequisites; the build's own output and the
     // vendored sources left out.
@@ -1280,13 +1284,13 @@ fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
                 /build/src/docs/a\\ b.rs /build/src/docs/shared.rs /build/src/docs/cost$$.txt /build/src/target/release/build/x-1/out/gen.rs \
                 /build/vendor/serde-1.0.200/src/lib.rs /etc/fora.conf /build/src/crates/veredas-portalx/src/lib.rs \
                 /build/src/crates/veredas-portal/src/../../../docs/unix.rs /build/src/crates/veredas-core/../../docs/shared.rs \
-                /build/src/crates/../../etc/climbed.rs /build/src/crates/veredas-portal/../../target/release/build/y/out/z.rs \
+                /build/src/crates/../../etc/climbed.rs /build/src/crates/veredas-portal/../../target/release/build/y-9f/out/z.rs \
                 /build/src/target/release/build/x/h/out/../../../../../../docs/fora.rs /build/vendor/../src/docs/fora2.rs /build/vendor/serde-1/../../src/docs/fora3.rs\n\n\
                 /build/src/crates/veredas-portal/src/main.rs:\n";
     // A path that climbs back (as rustc writes a `#[path]` module's) is judged where it lands: in a
     // named file, in another folder, out of the tree, in the build's own output.
     assert_eq!(
-        alforge::inputs::read_outside(info, builder::SRC, builder::VENDOR, &inputs),
+        alforge::inputs::read_outside(info, builder::SRC, builder::VENDOR, &inputs, &packages),
         ["/build/src/crates/../../etc/climbed.rs", "/etc/fora.conf", "crates/veredas-portalx/src/lib.rs", "docs/a b.rs", "docs/cost$$.txt", "docs/fora.rs", "docs/fora2.rs", "docs/fora3.rs", "docs/unix.rs"],
         "a path is judged where it lands, out of the build's output and the vendored sources too",
     );
@@ -1295,10 +1299,18 @@ fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
     // the space between two paths reads as one word holding ` /`, refused as it stands rather
     // than taken for a file of core's folder; a relative path refused; `/..` resolved as `/`,
     // climbing above the root onto a named file passing and elsewhere refused.
-    let cargo_wrote = "/build/src/target/release/x: /build/src/crates/veredas-core/src/zz\\ /build/src/docs/fora.rs docs/r.rs /build/src/../../../etc/x /../../build/src/crates/veredas-core/src/lib.rs\n";
+    let cargo_wrote = "/build/src/target/release/x: /build/src/crates/veredas-core/src/zz\\ /build/src/docs/fora.rs docs/r.rs /build/src/../../../etc/x /../../build/src/crates/veredas-core/src/lib.rs build/src/crates/veredas-core/src/lib.rs\n";
     assert_eq!(
-        alforge::inputs::read_outside(cargo_wrote, builder::SRC, builder::VENDOR, &inputs),
-        ["/build/src/../../../etc/x", "/build/src/crates/veredas-core/src/zz /build/src/docs/fora.rs", "docs/r.rs"]
+        alforge::inputs::read_outside(cargo_wrote, builder::SRC, builder::VENDOR, &inputs, &packages),
+        ["/build/src/../../../etc/x", "/build/src/crates/veredas-core/src/zz /build/src/docs/fora.rs", "build/src/crates/veredas-core/src/lib.rs", "docs/r.rs"],
+        "a relative path refused even where it would land on a named folder read from the root"
+    );
+    // The shared output folder and vendored sources: another component's executable, another
+    // package's build script output and a crate the build does not pin, each refused.
+    let shared = "/build/src/target/release/x: /build/src/target/release/veredas-a /build/src/target/release/build/veredas-a-77/out/a.rs /build/vendor/other-1.0.0/src/lib.rs /build/src/target/release/build/x-1/out/ok.rs /build/vendor/serde-1.0.200/src/lib.rs\n";
+    assert_eq!(
+        alforge::inputs::read_outside(shared, builder::SRC, builder::VENDOR, &inputs, &packages),
+        ["/build/vendor/other-1.0.0/src/lib.rs", "target/release/build/veredas-a-77/out/a.rs", "target/release/veredas-a"]
     );
     // The vendored sources' stanza, written beside the tree (never over a configuration it holds),
     // names its folder from there.
@@ -1306,7 +1318,7 @@ fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
         builder::vendor_config("[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"../vendor\"\n"),
         "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"vendor\"\n"
     );
-    assert_eq!(alforge::inputs::read_outside("/build/src/target/release/x: /build/src/crates/veredas-core/src/lib.rs\n", builder::SRC, builder::VENDOR, &inputs), Vec::<String>::new());
+    assert_eq!(alforge::inputs::read_outside("/build/src/target/release/x: /build/src/crates/veredas-core/src/lib.rs\n", builder::SRC, builder::VENDOR, &inputs, &packages), Vec::<String>::new());
 }
 
 #[test]
@@ -1433,5 +1445,48 @@ fn round_fifteen_shared_names_with_required_features_crate_types_and_a_tracked_o
     let bin = tempfile::tempdir().unwrap();
     std::fs::write(bin.path().join("feito"), "").unwrap();
     assert_eq!(cut::not_made(&one, bin.path()), ["veredas-rl's `nao-feito` was not built with its default features: not shipped (docs/questions.md Q443)"]);
+}
+
+#[test]
+fn round_sixteen_a_control_character_in_a_name_and_the_builders_input_beside_the_trees_config() {
+    // A name holding a newline, which would cut cargo's reading of rustc's dep-info short.
+    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    r.write("crates/veredas-core/src/a\nb.txt", "x\n");
+    let c = r.commit("a newline in a name");
+    let mut refusals = Vec::new();
+    alforge::manifest::components_at(r.dir.path(), &c, &mut refusals).unwrap();
+    assert_eq!(refusals, [format!("commit {c}: the path \"crates/veredas-core/src/a\\nb.txt\" holds a control character: a release's tree names its files without one")]);
+    // The builder's input: the tree as git holds it, a configuration it tracks left byte for byte,
+    // the vendored sources' stanza beside it.
+    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let tracked = "[build]\nrustflags = [\"-Cdebuginfo=0\"]\n";
+    r.write(".cargo/config.toml", tracked);
+    r.write("Cargo.lock", "version = 4\n\n[[package]]\nname = \"veredas-core\"\nversion = \"2.0.0\"\n");
+    let c = r.commit("a tracked configuration");
+    let input = tempfile::tempdir().unwrap();
+    builder::prepare(r.dir.path(), &c, &input.path().join("in")).unwrap();
+    assert_eq!(std::fs::read_to_string(input.path().join("in/src/.cargo/config.toml")).unwrap(), tracked);
+    let stanza = std::fs::read_to_string(input.path().join("in/.cargo/config.toml")).unwrap();
+    assert!(!stanza.contains("../vendor"), "{stanza}");
+}
+
+#[test]
+fn what_the_cut_says_of_bins_it_does_not_ship_comes_back_from_as_built() {
+    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    r.write(
+        "crates/veredas-core/Cargo.toml",
+        "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\nf = []\n\n[[bin]]\nname = \"feito\"\npath = \"src/a.rs\"\nrequired-features = [\"f\"]\n\n[[bin]]\nname = \"nao-feito\"\npath = \"src/b.rs\"\nrequired-features = [\"f\"]\n",
+    );
+    r.write("crates/veredas-core/src/a.rs", "fn main() {}\n");
+    r.write("crates/veredas-core/src/b.rs", "fn main() {}\n");
+    let c = r.commit("two bins with required features");
+    let held = alforge::manifest::components_at(r.dir.path(), &c, &mut Vec::new()).unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    std::fs::write(bin.path().join("feito"), "").unwrap();
+    let (shipped, _, m, said) =
+        cut::as_built(r.dir.path(), &semver::Version::parse("9.9.9").unwrap(), &c, "x86_64-unknown-linux-gnu", "rustc 1.100.0", cut::NOT_RUN, &held, bin.path()).unwrap();
+    assert_eq!(said, ["veredas-core's `nao-feito` was not built with its default features: not shipped (docs/questions.md Q443)"]);
+    assert_eq!(shipped["veredas-core"].bins.iter().collect::<Vec<_>>(), ["feito"]);
+    assert_eq!(m.components[0].bins, ["feito"]);
 }
 

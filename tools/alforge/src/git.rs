@@ -117,6 +117,11 @@ pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) ->
             return Err(ExportError::Refused(format!("the path `{path}` is not UTF-8: a release's tree names its files in UTF-8")));
         };
         let Some((info, path)) = rec.split_once('\t') else { continue };
+        // A control character in a name (a newline) would cut a build's dep-info short, as cargo
+        // reads it, and hide every read after it.
+        if path.chars().any(char::is_control) {
+            return Err(ExportError::Refused(format!("the path {path:?} holds a control character: a release's tree names its files without one")));
+        }
         if path.split('/').any(|part| part.is_empty() || part == "." || part == "..") {
             return Err(ExportError::Refused(format!("the path `{path}` has a `..`, `.` or empty part: it would be written outside its place")));
         }

@@ -1259,7 +1259,7 @@ fn a_bin_with_required_features_ships_as_cargos_own_build_makes_it() {
     let built: Vec<String> = bins.iter().map(|(b, _)| b.to_string()).filter(|b| target.path().join("debug").join(b).exists()).collect();
     assert_eq!(built, ["needs-b", "needs-cx", "needs-cy"], "cargo's own reading: the dependency's default turns `y` on");
     let release = semver::Version::parse("9.9.9").unwrap();
-    let (shipped, text, m) = alforge::cut::as_built(r.path(), &release, &c, "x86_64-unknown-linux-gnu", "rustc 1.100.0", alforge::cut::NOT_RUN, &held, &target.path().join("debug")).unwrap();
+    let (shipped, text, m, said) = alforge::cut::as_built(r.path(), &release, &c, "x86_64-unknown-linux-gnu", "rustc 1.100.0", alforge::cut::NOT_RUN, &held, &target.path().join("debug")).unwrap();
     let mut want = built.clone();
     want.push("sempre".into());
     assert_eq!(names(&shipped["veredas-core"].bins), want);
@@ -1267,6 +1267,7 @@ fn a_bin_with_required_features_ships_as_cargos_own_build_makes_it() {
     let listed = &m.components.iter().find(|x| x.name == "veredas-core").unwrap().bins;
     assert_eq!(listed, &want);
     assert_eq!(manifest::load(&text).unwrap(), m);
+    assert_eq!(said.len(), 2, "{said:?}");
 }
 
 /// A suite for what [`wider`] leaves out: portal uses core, which uses `veredas-base`, by path;
@@ -1561,5 +1562,29 @@ fn the_lock_file_is_read_as_cargo_writes_it() {
     let c3 = r.commit("a paths override without its extension");
     let held = manifest::components_at(r.path(), &c3, &mut Vec::new()).unwrap();
     assert_eq!(held["veredas-a"].inputs, Err("its .cargo/config overrides packages by `paths` (or does not read), which a release does not follow".to_string()));
+}
+
+#[test]
+fn a_root_cargo_configuration_naming_programs_or_code_is_refused() {
+    // Sources, patches, a compiler or a wrapper, a linker: what a configuration would bring into a
+    // build from outside what a version names.
+    for (config, set) in [
+        ("[source.crates-io]\nreplace-with = \"tree\"\n[source.tree]\ndirectory = \"third_party\"\n", "source"),
+        ("[build]\nrustc-wrapper = \"tools/wrap.sh\"\n", "build.rustc-wrapper"),
+        ("[target.x86_64-unknown-linux-gnu]\nlinker = \"tools/ld.sh\"\n", "target.x86_64-unknown-linux-gnu.linker"),
+        ("[patch.crates-io]\nserde = { path = \"forks/serde\" }\n", "patch"),
+    ] {
+        let r = wider();
+        r.write(".cargo/config.toml", config);
+        let c = r.commit(set);
+        let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+        assert_eq!(held["veredas-core"].inputs, Err(format!("its .cargo/config.toml sets {set}: programs or code a version does not name, which a release does not follow")), "{set}");
+    }
+    // Flags alone are an input like any other, charged by the file.
+    let r = wider();
+    r.write(".cargo/config.toml", "[build]\nrustflags = [\"-Cdebuginfo=0\"]\n");
+    let c = r.commit("flags");
+    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    assert!(held["veredas-core"].inputs.as_ref().unwrap().0.contains_key(".cargo/config.toml"));
 }
 

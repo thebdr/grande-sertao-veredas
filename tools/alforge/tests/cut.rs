@@ -62,7 +62,7 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
         for f in files {
             let info = std::fs::read_to_string(work.join("out/deps").join(&f)).unwrap();
             assert!(info.contains(&format!("/build/src/{}/src/", h.dir)), "{f}: {info}");
-            assert_eq!(alforge::inputs::read_outside(&info, "/build/src", "/build/vendor", inputs), Vec::<String>::new(), "{f}");
+            assert_eq!(alforge::inputs::read_outside(&info, "/build/src", "/build/vendor", inputs, &h.packages), Vec::<String>::new(), "{f}");
         }
     }
     assert!(c.manifest.toolchain.starts_with("rustc "), "{}", c.manifest.toolchain);
