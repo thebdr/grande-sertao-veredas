@@ -6,8 +6,9 @@
 //! privileges: it is `std::time::Instant`, never the settable `SystemTime` that NTP or a rewind moves, and its wait
 //! judges the deadline on that reading. Since another crate or unsafe code would reach the system's clock, or the
 //! operating system, without naming either, cargo's own report pins the engine to orcl-std and orcl-interp all the
-//! way down, with every feature on, and each root to `forbid(unsafe_code)`; std is used only at the paths the engine
-//! needs, and the interpreter's sources name it nowhere.
+//! way down, with every feature on, and each root to `forbid(unsafe_code)`; none of the three runs a build script,
+//! which could link a native library defining the system's clock without any of that; std is used only at the paths
+//! the engine needs, and the interpreter's sources name it nowhere.
 use orcl_runtime::{Clock, Io, MonoClock, RunState, Task, TaskConfig};
 use orcl_std::{Program, Scan};
 use std::time::{Duration, Instant};
@@ -245,6 +246,22 @@ fn the_engine_depends_on_orcl_std_and_orcl_interp_alone_and_forbids_unsafe_code(
     assert!(root.contains("#![no_std]") && root.contains("externcratestd;"), "lib.rs: no_std, std by name");
     for (file, text) in SOURCES {
         assert!(!code_squeezed(text).contains("macro_use"), "{file} imports macros wholesale");
+    }
+}
+
+#[test]
+fn no_crate_of_the_engine_runs_a_build_script() {
+    // a build script links what it likes, a static archive defining libc's clock among it, with no crate in cargo's
+    // tree, no unsafe code and no line of src/: cargo runs one found at a crate's root or named by its manifest
+    for krate in ["orcl-runtime", "orcl-interp", "orcl-std"] {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(krate);
+        assert!(!dir.join("build.rs").exists(), "{krate} has a build script");
+        let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        for line in manifest.lines().filter(|line| !line.trim_start().starts_with('#')) {
+            let Some((key, _)) = line.split_once('=') else { continue };
+            let last = key.rsplit('.').next().unwrap_or(key).trim().trim_matches(['"', '\'']);
+            assert!(last != "build" && last != "links", "{krate}'s manifest names `{}`", key.trim());
+        }
     }
 }
 

@@ -15,8 +15,13 @@
 //! watchdog's fault early in most sequences, one scan in forty failing), every scan held to twice the period and none
 //! failing (the task runs the whole way), and held so until a step drawn late in the run, after a drawn streak of time
 //! errors, where the task faults by the watchdog, by the program's error, or by both on one scan. After every step the
-//! model and the engine must agree on everything the clause states.
+//! model and the engine must agree on everything the clause states. Every sequence runs twice: the program as a
+//! `TaskProgram` of its own, and as a native `orcl_std::Program`, which the engine runs through its blanket
+//! implementation, the path of every program controlador runs today; a native program has no error, so its runs draw
+//! the same timings with no scan failing.
 use std::cell::RefCell;
+use std::convert::Infallible;
+use std::ops::Range;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -89,7 +94,76 @@ impl TaskProgram for Program1 {
     }
 
     fn safe_outputs(&mut self) -> u64 {
+        self.safe()
+    }
+}
+
+impl Program1 {
+    fn safe(&self) -> u64 {
         1000 + self.last_input
+    }
+}
+
+/// `Program1` as a native program, which the engine runs through `impl<P: Program> TaskProgram for P`: it scans as
+/// `Program1` does, never told to fail, and declares the same safe outputs.
+struct Native1(Program1);
+
+impl Program for Native1 {
+    type Inputs = u64;
+    type Outputs = u64;
+
+    fn scan(&mut self, scan: &Scan, inputs: &u64, outputs: &mut u64) {
+        let scanned = TaskProgram::scan(&mut self.0, scan, inputs, outputs);
+        assert_eq!(scanned, Ok(()), "a native program's scan is never told to fail");
+    }
+
+    fn safe_outputs(&self) -> u64 {
+        self.0.safe()
+    }
+}
+
+/// The two ways a sequence runs `Program1`: as it is, its scans failing as drawn, or as a native program, none failing.
+trait Twin: TaskProgram<Inputs = u64, Outputs = u64> {
+    /// Whether its scans fail as drawn.
+    const FAILS: bool;
+
+    fn wrap(program: Program1) -> Self;
+
+    fn inner(&self) -> &Program1;
+
+    /// The error of the scan of that index.
+    fn error(index: usize) -> Self::Error;
+}
+
+impl Twin for Program1 {
+    const FAILS: bool = true;
+
+    fn wrap(program: Program1) -> Self {
+        program
+    }
+
+    fn inner(&self) -> &Program1 {
+        self
+    }
+
+    fn error(index: usize) -> usize {
+        index
+    }
+}
+
+impl Twin for Native1 {
+    const FAILS: bool = false;
+
+    fn wrap(program: Program1) -> Self {
+        Native1(program)
+    }
+
+    fn inner(&self) -> &Program1 {
+        &self.0
+    }
+
+    fn error(_index: usize) -> Infallible {
+        unreachable!("a native program's scan never fails")
     }
 }
 
@@ -337,12 +411,13 @@ impl Clock for WakesLate {
     }
 }
 
-/// One sequence of `steps` scans, drawn as `mix` says.
-fn run_one(seed: u64, steps: usize, mix: Mix) {
+/// One sequence of `steps` scans, drawn as `mix` says, the program run as `P`: a native program's scans drawn failing
+/// do not fail, the other draws, kept apart from those, the same.
+fn run_one<P: Twin>(seed: u64, steps: usize, mix: Mix) {
     let (mut draw, mut fails, period, late_fault) = draw_sequence(seed, mix);
     let clock = VirtualClock::new();
     let costs = Rc::new(RefCell::new(Costs::default()));
-    let program = Program1 { clock: clock.clone(), costs: costs.clone(), scans: 0, last_input: 0, last_scan: None };
+    let program = P::wrap(Program1 { clock: clock.clone(), costs: costs.clone(), scans: 0, last_input: 0, last_scan: None });
     let mut task = Task::new(TaskConfig { name: "model", period: ns(period) }, program).unwrap();
     let mut plant = Plant { clock: clock.clone(), costs: costs.clone(), reads: Vec::new(), writes: Vec::new() };
     let mut model = Model { period, ..Model::default() };
@@ -350,7 +425,7 @@ fn run_one(seed: u64, steps: usize, mix: Mix) {
 
     for step in 0..steps {
         let [host, wake, read, scan, write, fail] = draw_step(&mut draw, &mut fails, &model, mix, late_fault, step);
-        let fail = fail == 1;
+        let fail = fail == 1 && P::FAILS;
         {
             let mut c = costs.borrow_mut();
             c.read.push(read);
@@ -376,11 +451,11 @@ fn run_one(seed: u64, steps: usize, mix: Mix) {
         let state = match model.faulted {
             None => RunState::Running,
             Some((at, Why::Watchdog(exec))) => RunState::Faulted { at: ns(at), fault: Fault::Watchdog { exec: ns(exec) } },
-            Some((at, Why::Program(index))) => RunState::Faulted { at: ns(at), fault: Fault::Program { error: index } },
+            Some((at, Why::Program(index))) => RunState::Faulted { at: ns(at), fault: Fault::Program { error: P::error(index) } },
         };
         assert_eq!(report.state, state, "{at}: the state");
         if want.program_scanned {
-            assert_eq!(report.program.last_scan, Some(report.scan), "{at}: the scan the program is handed");
+            assert_eq!(report.program.inner().last_scan, Some(report.scan), "{at}: the scan the program is handed");
         }
         let s = *report.stats;
         let mean = |total: u128| total / model.cycles;
@@ -409,10 +484,18 @@ fn run_one(seed: u64, steps: usize, mix: Mix) {
     assert!(writes.iter().all(|&(_, v)| v != JUNK), "seed {seed}: no failed scan's outputs written");
 }
 
+/// Every run of the model: its mix, its seeds and its steps.
+const RUNS: [(Mix, Range<u64>, usize); 4] = [
+    (Mix::Free, 0..4_000, 50),
+    (Mix::Free, 10_000..10_040, 2_000),
+    (Mix::NeverFaults, 20_000..20_040, 2_000),
+    (Mix::FaultsLate, 30_000..30_100, 2_000),
+];
+
 #[test]
 fn the_engine_agrees_with_the_clause_s_model_over_four_thousand_random_sequences() {
     for seed in 0..4_000 {
-        run_one(seed, 50, Mix::Free);
+        run_one::<Program1>(seed, 50, Mix::Free);
     }
 }
 
@@ -420,7 +503,7 @@ fn the_engine_agrees_with_the_clause_s_model_over_four_thousand_random_sequences
 fn the_engine_agrees_with_the_model_over_forty_runs_of_two_thousand_scans() {
     // long enough that a statistic kept over a window, or reset every so many scans, shows
     for seed in 10_000..10_040 {
-        run_one(seed, 2_000, Mix::Free);
+        run_one::<Program1>(seed, 2_000, Mix::Free);
     }
 }
 
@@ -428,7 +511,7 @@ fn the_engine_agrees_with_the_model_over_forty_runs_of_two_thousand_scans() {
 fn a_task_that_never_faults_agrees_with_the_model_over_forty_runs_of_two_thousand_scans() {
     // the faulting runs fault early; these run the whole way, with hundreds of time errors, late starts and skips each
     for seed in 20_000..20_040 {
-        run_one(seed, 2_000, Mix::NeverFaults);
+        run_one::<Program1>(seed, 2_000, Mix::NeverFaults);
     }
 }
 
@@ -437,7 +520,18 @@ fn a_task_that_faults_late_in_its_run_agrees_with_the_model_over_a_hundred_runs_
     // the watchdog met far into a run: after hundreds of scans, time errors, skips and long absences, and after a
     // streak of time errors in a row
     for seed in 30_000..30_100 {
-        run_one(seed, 2_000, Mix::FaultsLate);
+        run_one::<Program1>(seed, 2_000, Mix::FaultsLate);
+    }
+}
+
+#[test]
+fn a_native_program_agrees_with_the_model_over_every_run_none_failing() {
+    // the path of every program controlador runs today: what it is handed, its time to the nanosecond, the output
+    // image as the last scan left it, on every step of every run
+    for (mix, seeds, steps) in RUNS {
+        for seed in seeds {
+            run_one::<Native1>(seed, steps, mix);
+        }
     }
 }
 
@@ -573,9 +667,7 @@ fn the_draws_reach_every_case_the_clause_names() {
     let mut woke_late = 0;
     let (mut program_faults, mut program_faults_on_a_time_error, mut failing_past_twice) = (0, 0, 0);
     let (mut program_faults_past_scan_1000, mut program_faults_in_free_sequences) = (0, 0);
-    let runs = [(Mix::Free, 0..4_000, 50), (Mix::Free, 10_000..10_040, 2_000), (Mix::NeverFaults, 20_000..20_040, 2_000)];
-    let runs = runs.into_iter().chain([(Mix::FaultsLate, 30_000..30_100, 2_000)]);
-    for (mix, seeds, steps) in runs {
+    for (mix, seeds, steps) in RUNS {
         for seed in seeds {
             let (mut draw, mut fails, period, late_fault) = draw_sequence(seed, mix);
             if period >= 1_000_000_000 && steps == 50 {
