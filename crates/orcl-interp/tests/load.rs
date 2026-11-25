@@ -650,3 +650,152 @@ fn an_enum_of_many_variants_is_checked_for_two_with_one_discriminant_without_com
     b.ty(Type::Enum { name: "E".into(), discriminant: Int::I32, variants: variants(200_000, false) });
     assert!(Machine::load(b.program, &[]).is_ok());
 }
+
+fn on_a_thread_of_8_mib(p: Program) -> Result<(), LoadError> {
+    std::thread::Builder::new().stack_size(8 << 20).spawn(move || Machine::load(p, &[]).map(|_| ())).unwrap().join().unwrap()
+}
+
+/// `u8`, then `n` types each holding the one before through `wrap`, the innermost first; a function holding a
+/// constant of the outermost, its slots `slots`.
+fn wrapped_inner_first(n: u32, wrap: impl Fn(TypeId) -> Type, slots: Vec<Scalar>) -> Program {
+    let mut p = Program::default();
+    p.types.push(Type::Int(Int::U8));
+    for k in 0..n {
+        p.types.push(wrap(TypeId(k)));
+    }
+    let outer = TypeId(n);
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[outer]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(konst(outer, slots)), 1)], ret())],
+    });
+    p
+}
+
+fn array1(t: TypeId) -> Type {
+    Type::Array { element: t, len: 1 }
+}
+
+fn enum1(t: TypeId) -> Type {
+    Type::Enum { name: "E".into(), discriminant: Int::U8, variants: vec![Variant { name: "A".into(), discriminant: 0, fields: vec![Field { name: "0".into(), ty: t }] }] }
+}
+
+fn struct1(t: TypeId) -> Type {
+    Type::Struct { name: String::new(), fields: vec![Field { name: String::new(), ty: t }] }
+}
+
+fn too_deep(r: Result<(), LoadError>) -> bool {
+    matches!(r, Err(LoadError::Type { reason: "nested too deep", .. }))
+}
+
+#[test]
+fn arrays_and_enums_nested_past_the_limit_innermost_first_are_refused_and_a_structure_counts_its_deepest_field() {
+    let one = || vec![int(Int::U8, 1)];
+    assert!(too_deep(on_a_thread_of_8_mib(wrapped_inner_first(256, array1, one()))), "256 arrays around a u8");
+    assert!(on_a_thread_of_8_mib(wrapped_inner_first(255, array1, one())).is_ok(), "255 arrays");
+    assert!(too_deep(on_a_thread_of_8_mib(wrapped_inner_first(100_000, array1, one()))), "100 000 arrays");
+    // a constant of n enums around a u8: n discriminants of 0, then the u8
+    let slots = |n: usize| {
+        let mut s = vec![int(Int::U8, 0); n];
+        s.push(int(Int::U8, 1));
+        s
+    };
+    assert!(too_deep(on_a_thread_of_8_mib(wrapped_inner_first(256, enum1, slots(256)))), "256 enums around a u8");
+    assert!(on_a_thread_of_8_mib(wrapped_inner_first(255, enum1, slots(255))).is_ok(), "255 enums");
+    assert!(too_deep(on_a_thread_of_8_mib(wrapped_inner_first(100_000, enum1, slots(100_000)))), "100 000 enums");
+    // 255 structures around a u8 (256 deep, at the limit), then one holding (that, u8): 257 deep by its first field
+    let mut p = Program::default();
+    p.types.push(Type::Int(Int::U8));
+    for k in 0..255u32 {
+        p.types.push(struct1(TypeId(k)));
+    }
+    p.types.push(Type::Struct { name: String::new(), fields: vec![Field { name: "a".into(), ty: TypeId(255) }, Field { name: "b".into(), ty: TypeId(0) }] });
+    assert!(too_deep(on_a_thread_of_8_mib(p)), "a structure whose first field is the deep one");
+}
+
+#[test]
+fn a_nesting_of_100_000_outermost_first_is_refused_through_every_kind_of_part_and_names_a_type_nested_too_deep() {
+    for wrap in [array1 as fn(TypeId) -> Type, enum1, struct1] {
+        let mut p = Program::default();
+        for k in 0..100_000u32 {
+            p.types.push(wrap(TypeId(k + 1)));
+        }
+        p.types.push(Type::Int(Int::U8));
+        assert!(too_deep(on_a_thread_of_8_mib(p)));
+    }
+    // S0 holds S1 ... S257 holds a u8: S0 is 259 deep, S257 two; the type named is one past the limit
+    let mut p = Program::default();
+    for k in 0..258u32 {
+        p.types.push(struct1(TypeId(k + 1)));
+    }
+    p.types.push(Type::Int(Int::U8));
+    match refused(p) {
+        LoadError::Type { ty, reason: "nested too deep" } => assert!(259 - ty > 256, "type {ty} named, {} deep", 259 - ty),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// `f` on a thread of its own, given 60 seconds: a guard against a hang, not a measure.
+fn within_a_minute<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(60)).ok()
+}
+
+/// T0 = (), Tk = (T(k-1), T(k-1)): types of no slot, `k + 1` deep, each twice as wide as the one before.
+fn wide_of_no_slot(k: u32) -> (Program, TypeId) {
+    let mut p = Program::default();
+    p.types.push(Type::Struct { name: "()".into(), fields: vec![] });
+    for i in 1..=k {
+        p.types.push(Type::Struct { name: String::new(), fields: vec![Field { name: String::new(), ty: TypeId(i - 1) }, Field { name: String::new(), ty: TypeId(i - 1) }] });
+    }
+    (p, TypeId(k))
+}
+
+#[test]
+fn a_constant_an_argument_and_a_region_of_a_wide_type_of_no_slot_are_checked_at_once() {
+    // 65 deep and 2^64 leaves wide, a file of under 2 kB: walked as a tree, its check would never end
+    let (mut p, top) = wide_of_no_slot(64);
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[TypeId(0), top, top]),
+        blocks: vec![block(vec![assign(place(2), Value::Use(konst(top, vec![])), 1)], ret())],
+    });
+    let got = within_a_minute(move || {
+        let mut m = Machine::load(p, &[top]).unwrap();
+        (m.set_region(RegionId(0), &[]), m.start(FunctionId(0), &[Arg::Value(&[])]), m.run(u64::MAX))
+    });
+    assert_eq!(got, Some((Ok(()), Ok(()), Ok(Step::Returned))));
+}
+
+#[test]
+fn a_constant_array_of_an_enum_of_many_variants_finds_each_variant_by_its_discriminant() {
+    // 200 000 variants and 200 000 elements, each the last variant: 4 * 10^10 comparisons if searched one by one
+    let n = 200_000u32;
+    let mut p = Program::default();
+    let variants = (0..n).map(|d| Variant { name: String::new(), discriminant: i128::from(d), fields: vec![] }).collect();
+    p.types.push(Type::Enum { name: "E".into(), discriminant: Int::I32, variants });
+    p.types.push(Type::Array { element: TypeId(0), len: n });
+    let slots = vec![Scalar::Int(Int::I32, i128::from(n) - 1); n as usize];
+    let mut wrong = slots.clone();
+    wrong[n as usize / 2] = Scalar::Int(Int::I32, i128::from(n));
+    for (s, good) in [(slots, true), (wrong, false)] {
+        let mut q = p.clone();
+        q.functions.push(Function {
+            name: "f".into(),
+            params: 0,
+            locals: locals(&[TypeId(1)]),
+            blocks: vec![block(vec![assign(place(0), Value::Use(konst(TypeId(1), s)), 1)], ret())],
+        });
+        let got = within_a_minute(move || Machine::load(q, &[]).map(|_| ()));
+        if good {
+            assert_eq!(got, Some(Ok(())));
+        } else {
+            assert_eq!(got, Some(Err(at_statement("a constant whose slots are not its type's"))), "a discriminant no variant has");
+        }
+    }
+}

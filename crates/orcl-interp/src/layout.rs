@@ -82,10 +82,13 @@ struct Sizer<'a> {
     depth: Vec<u32>,
     fields: Vec<Vec<u32>>,
     variants: Vec<Vec<Vec<u32>>>,
+    by_discriminant: Vec<Vec<(i128, u32)>>,
 }
 
 impl Sizer<'_> {
-    fn size_of(&mut self, ty: TypeId, nesting: u32) -> Result<u32, LoadError> {
+    /// The size of `ty`, `nesting` parts below `root`, the type whose walk this is: the one named when the walk
+    /// goes deeper than the limit, since it is nested past it.
+    fn size_of(&mut self, ty: TypeId, nesting: u32, root: TypeId) -> Result<u32, LoadError> {
         let index = ty.0 as usize;
         let err = |reason| LoadError::Type { ty: ty.0, reason };
         match self.state.get(index) {
@@ -95,7 +98,7 @@ impl Sizer<'_> {
             Some(_) => {}
         }
         if nesting > NESTING {
-            return Err(err("nested too deep"));
+            return Err(LoadError::Type { ty: root.0, reason: "nested too deep" });
         }
         if let Some(s) = self.state.get_mut(index) {
             *s = 1;
@@ -117,7 +120,7 @@ impl Sizer<'_> {
                 let mut at = 0u32;
                 for field in fields {
                     offsets.push(at);
-                    at = add(at, self.size_of(field.ty, nesting.saturating_add(1))?).ok_or(err("too large"))?;
+                    at = add(at, self.size_of(field.ty, nesting.saturating_add(1), root)?).ok_or(err("too large"))?;
                     deepest = deepest.max(self.depth.get(field.ty.0 as usize).copied().unwrap_or(u32::MAX));
                 }
                 if let Some(slot) = self.fields.get_mut(index) {
@@ -129,10 +132,16 @@ impl Sizer<'_> {
                 let mut largest = 0u32;
                 let mut all = Vec::with_capacity(variants.len());
                 // sorted, so two variants with one discriminant are found side by side, however many there are
-                let mut discriminants: Vec<i128> = variants.iter().map(|v| v.discriminant).collect();
+                let mut discriminants: Vec<(i128, u32)> = Vec::with_capacity(variants.len());
+                for (i, v) in variants.iter().enumerate() {
+                    discriminants.push((v.discriminant, u32::try_from(i).map_err(|_| err("too large"))?));
+                }
                 discriminants.sort_unstable();
-                if discriminants.windows(2).any(|w| w.first() == w.get(1)) {
+                if discriminants.windows(2).any(|w| w.first().map(|x| x.0) == w.get(1).map(|x| x.0)) {
                     return Err(err("two variants with one discriminant"));
+                }
+                if let Some(slot) = self.by_discriminant.get_mut(index) {
+                    *slot = discriminants;
                 }
                 for variant in variants {
                     if !discriminant.holds(variant.discriminant) {
@@ -142,7 +151,7 @@ impl Sizer<'_> {
                     let mut at = 1u32;
                     for field in &variant.fields {
                         offsets.push(at);
-                        at = add(at, self.size_of(field.ty, nesting.saturating_add(1))?).ok_or(err("too large"))?;
+                        at = add(at, self.size_of(field.ty, nesting.saturating_add(1), root)?).ok_or(err("too large"))?;
                         deepest = deepest.max(self.depth.get(field.ty.0 as usize).copied().unwrap_or(u32::MAX));
                     }
                     largest = largest.max(at);
@@ -154,7 +163,7 @@ impl Sizer<'_> {
                 largest.max(1)
             }
             Some(Type::Array { element, len }) => {
-                let size = self.size_of(*element, nesting.saturating_add(1))?.checked_mul(*len).ok_or(err("too large"))?;
+                let size = self.size_of(*element, nesting.saturating_add(1), root)?.checked_mul(*len).ok_or(err("too large"))?;
                 deepest = self.depth.get(element.0 as usize).copied().unwrap_or(u32::MAX);
                 size
             }
@@ -461,6 +470,9 @@ pub(crate) struct Sizes {
     pub fields: Vec<Vec<u32>>,
     /// Each enum's variants' fields' offsets from the enum's first slot, its discriminant; empty otherwise.
     pub variants: Vec<Vec<Vec<u32>>>,
+    /// Each enum's discriminants sorted, with the variant each names: a variant found by its discriminant in a
+    /// search, however many variants there are. Empty for any other type.
+    pub by_discriminant: Vec<Vec<(i128, u32)>>,
 }
 
 /// Whether `slots` are a value of `ty`: every scalar of the type's kind and range, a `Duration`'s nanoseconds
@@ -470,6 +482,10 @@ pub(crate) fn fits(types: &[Type], sizes: &Sizes, ty: TypeId, slots: &[Scalar]) 
     let size = sizes.size.get(ty.0 as usize).copied().unwrap_or(u32::MAX);
     if slots.len() != size as usize {
         return false;
+    }
+    if size == 0 {
+        // a type of no slot has one value, no slots at all: it fits at once, however wide its parts' tree is
+        return true;
     }
     match (types.get(ty.0 as usize), slots) {
         (Some(Type::Bool), [Scalar::Bool(_)]) | (Some(Type::F32), [Scalar::F32(_)]) | (Some(Type::F64), [Scalar::F64(_)]) => {
@@ -497,7 +513,10 @@ pub(crate) fn fits(types: &[Type], sizes: &Sizes, ty: TypeId, slots: &[Scalar]) 
             })
         }
         (Some(Type::Enum { discriminant, variants, .. }), [Scalar::Int(u, d), rest @ ..]) => {
-            let Some(v) = variants.iter().position(|v| v.discriminant == *d) else { return false };
+            let table = sizes.by_discriminant.get(ty.0 as usize).map_or(&[][..], |t| t.as_slice());
+            let Ok(found) = table.binary_search_by_key(d, |(disc, _)| *disc) else { return false };
+            let Some(&(_, v)) = table.get(found) else { return false };
+            let v = v as usize;
             let (Some(variant), Some(offsets)) =
                 (variants.get(v), sizes.variants.get(ty.0 as usize).and_then(|all| all.get(v)))
             else {
@@ -526,11 +545,13 @@ pub(crate) fn lay_out(program: &Program) -> Result<Layout, LoadError> {
         depth: vec![0; n],
         fields: vec![Vec::new(); n],
         variants: vec![Vec::new(); n],
+        by_discriminant: vec![Vec::new(); n],
     };
     for i in 0..n {
-        sizer.size_of(TypeId(u32::try_from(i).map_err(|_| LoadError::Type { ty: u32::MAX, reason: "too many types" })?), 0)?;
+        let ty = TypeId(u32::try_from(i).map_err(|_| LoadError::Type { ty: u32::MAX, reason: "too many types" })?);
+        sizer.size_of(ty, 0, ty)?;
     }
-    let sizes = Sizes { size: sizer.size, fields: sizer.fields, variants: sizer.variants };
+    let sizes = Sizes { size: sizer.size, fields: sizer.fields, variants: sizer.variants, by_discriminant: sizer.by_discriminant };
     let largest = sizes.size.iter().copied().max().unwrap_or(0);
 
     let mut frames = Vec::with_capacity(program.functions.len());

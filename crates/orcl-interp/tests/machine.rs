@@ -942,3 +942,19 @@ fn a_variant_s_field_after_a_field_of_two_slots_is_read_where_it_was_written() {
     assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 1), int(Int::U8, 42), int(Int::U64, 7), int(Int::U32, 9)]), Err(HostError::Slots), "the fields the other way round");
     assert_eq!(m.set_region(RegionId(0), &[int(Int::U8, 1), int(Int::U64, 7), int(Int::U32, 9), int(Int::U8, 42)]), Err(HostError::Slots), "a discriminant of another integer type");
 }
+
+#[test]
+fn a_duration_whose_seconds_are_not_a_u64_and_a_structure_of_other_slots_are_refused_by_the_host_s_calls() {
+    let mut b = Build::default();
+    let (unit, d, u8t, u16t) = (b.unit(), b.ty(Type::Duration), b.int(Int::U8), b.int(Int::U16));
+    let pair = b.tuple(&[u8t, u16t]);
+    let takes_d = b.function(Function { name: "d".into(), params: 1, locals: locals(&[unit, d]), blocks: vec![block(vec![], ret())] });
+    let takes_pair = b.function(Function { name: "p".into(), params: 1, locals: locals(&[unit, pair]), blocks: vec![block(vec![], ret())] });
+    let mut m = Machine::load(b.program, &[d]).unwrap();
+    let u32_seconds = [int(Int::U32, 5), int(Int::U32, 0)];
+    assert_eq!(m.set_region(RegionId(0), &u32_seconds), Err(HostError::Slots), "seconds of a u32");
+    assert_eq!(m.start(takes_d, &[Arg::Value(&u32_seconds)]), Err(HostError::Arguments));
+    assert_eq!(m.start(takes_pair, &[Arg::Value(&[int(Int::U16, 1), int(Int::U8, 2)])]), Err(HostError::Arguments), "the fields the other way round");
+    assert_eq!(m.start(takes_pair, &[Arg::Value(&[int(Int::U8, 1), int(Int::U16, 2), int(Int::U8, 3)])]), Err(HostError::Arguments), "a slot too many");
+    assert_eq!(m.start(takes_pair, &[Arg::Value(&[int(Int::U8, 1), int(Int::U16, 2)])]), Ok(()));
+}

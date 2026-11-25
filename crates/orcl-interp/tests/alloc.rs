@@ -348,3 +348,26 @@ fn loading_a_program_with_a_huge_array_aggregate_asks_for_no_memory_of_the_array
     assert_eq!(got, Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "an aggregate with too many or too few parts" }));
     assert!(asked < 1 << 20, "{asked} bytes asked for while loading");
 }
+
+#[test]
+fn an_entry_returning_more_slots_than_the_first_function_allocates_nothing_in_a_machine_or_its_copy() {
+    // function 0 returns (); function 1 returns (u8, u8, u8): the result's room is the largest return's
+    let mut b = Build::default();
+    let (unit, u8t) = (b.unit(), b.int(Int::U8));
+    let triple = b.tuple(&[u8t, u8t, u8t]);
+    b.function(Function { name: "first".into(), params: 0, locals: locals(&[unit]), blocks: vec![block(vec![], ret())] });
+    let f = b.function(Function {
+        name: "three".into(),
+        params: 1,
+        locals: locals(&[triple, u8t]),
+        blocks: vec![block(vec![assign(place(0), Value::Aggregate(triple, None, vec![copy(1), copy(1), copy(1)]), 1)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut copy = m.clone();
+    let arg = [int(Int::U8, 7)];
+    let want = [int(Int::U8, 7); 3];
+    let (got, asked) = watching(|| m.call(f, &[Arg::Value(&arg)]).map(|r| r == want.as_slice()));
+    assert_eq!((got, asked), (Ok(true), 0), "the machine's first return");
+    let (got, asked) = watching(|| copy.call(f, &[Arg::Value(&arg)]).map(|r| r == want.as_slice()));
+    assert_eq!((got, asked), (Ok(true), 0), "the copy's first return");
+}
