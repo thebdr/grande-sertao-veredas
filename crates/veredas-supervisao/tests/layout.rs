@@ -2081,6 +2081,12 @@ const LINES_SVG: &str = r##"  <line id="ln-normal" x1="15" y1="240" x2="15" y2="
   <path id="la-dotz" d="M 450 530 a 20 20 0 1 0 0.01 0 Z M 450 495 z" fill="none" stroke="#3a3a40" stroke-width="12" stroke-linecap="round"/>
   <path id="la-dotsq" d="M 450 610 a 20 20 0 1 0 0.01 0 Z M 450 575 l 0 0" fill="none" stroke="#3a3a40" stroke-width="12" stroke-linecap="square"/>
   <g transform="translate(500 500) scale(3)"><circle id="la-hair" cx="10" cy="20" r="10" fill="none" stroke="#3a3a40" stroke-width="1.4" style="vector-effect:non-scaling-stroke"/></g>
+  <g transform="translate(410 670) rotate(45)"><path id="la-hair2" d="M 0 0 L 40 0 L 40 20" fill="none" stroke="#3a3a40" stroke-width="12" stroke-linecap="square" style="vector-effect:non-scaling-stroke"/></g>
+  <path id="la-rev1" d="M 480 790 V 760 H 500 V 730 V 760 H 520 V 790" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linejoin="round"/>
+  <path id="la-rev2" d="M 540 790 V 760 H 560 C 560 720 560 720 560 760 H 580 V 790" fill="none" stroke="#3a3a40" stroke-width="6"/>
+  <g transform="translate(250 530)"><path id="la-leaf1" d="m 207.704,196.350 c 12.702,11.341 12.702,20.703 0,32.044 c -12.702,-11.341 -12.702,-20.703 0,-32.044 z" fill="none" stroke="#3a3a40" stroke-width="6"/></g>
+  <g transform="translate(311 607)"><path id="la-leaf2" d="m 268.865,33.484 c 8.704,23.531 8.704,18.749 0,42.280 c -8.704,-23.531 -8.704,-18.749 0,-42.280 z" fill="none" stroke="#3a3a40" stroke-width="6"/></g>
+  <g transform="translate(480 600)"><path id="la-leaf3" d="m 53.7,49.4 l 25.3,18.4 -22.6,0.8 -2.7,-19.2 z" fill="none" stroke="#3a3a40" stroke-width="6"/></g>
 </svg>"##;
 
 /// Each shape drawn as a line and bound to show its state: its id, its state, the width it was drawn
@@ -2117,7 +2123,7 @@ const BODY_CASES: [(&str, (f64, f64)); 3] = [("nf-zero", (205.0, 320.0)), ("nf-b
 /// on its lines below its level, on them above it, and inside what they close (off every line), in
 /// its own coordinates.
 #[allow(clippy::type_complexity)]
-const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 39] = [
+const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 45] = [
     ("la-ring", 0.35, "normal", 6.0, &[(40.0, 386.0)], &[(40.0, 354.0), (24.0, 370.0)], &[(40.0, 370.0), (40.0, 380.0)]),
     ("la-bent", 0.35, "normal", 8.0, &[(100.0, 390.0), (80.0, 385.0), (122.5, 390.0)], &[(80.0, 360.0)], &[(95.0, 380.0)]),
     ("la-hollow", 1.0, "normal", 4.0, &[(160.0, 350.0), (140.0, 370.0), (180.0, 370.0), (160.0, 390.0)], &[], &[(160.0, 370.0)]),
@@ -2167,6 +2173,12 @@ const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64,
     ("la-dotz", 1.0, "normal", 12.0, &[], &[], &[]),
     ("la-dotsq", 1.0, "normal", 12.0, &[], &[], &[]),
     ("la-hair", 1.0, "normal", 1.4, &[], &[], &[]),
+    ("la-hair2", 1.0, "normal", 12.0, &[], &[], &[]),
+    ("la-rev1", 1.0, "normal", 6.0, &[], &[], &[]),
+    ("la-rev2", 1.0, "normal", 6.0, &[], &[], &[]),
+    ("la-leaf1", 1.0, "normal", 6.0, &[], &[], &[]),
+    ("la-leaf2", 1.0, "normal", 6.0, &[], &[], &[]),
+    ("la-leaf3", 1.0, "normal", 6.0, &[], &[], &[]),
 ];
 
 /// The state's colours on a line, read from the page's own tokens as the browser computes a stroke:
@@ -2438,6 +2450,17 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
     let carried: Vec<String> = ts.split_once("const CARRIED = [").and_then(|(_, r)| r.split_once(']')).map(|(l, _)| l.split(',').map(|s| s.trim().trim_matches('"').to_string()).collect()).unwrap();
     assert_eq!(carried.iter().map(String::as_str).collect::<std::collections::BTreeSet<_>>(), ["fill-rule", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit"].into_iter().collect(), "what a level's copy carries");
     assert_eq!(page.eval(&format!("{}({}, {})", script(ALONG_PAINT), json!(along), json!(carried))), json!([]), "a level along lines not drawn along them, over its track, to its level");
+    // A stroke that does not scale read again at another scale of the view (six zooms in, about four
+    // times the fit), where its width on the screen and in the drawing's units part; then Fit.
+    page.eval(r#"(() => { for (let k = 0; k < 6; k++) document.querySelector('.zoom button[title="Zoom in"]').click(); return true; })()"#);
+    std::thread::sleep(Duration::from_millis(800));
+    page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running") || null"#, Duration::from_secs(5));
+    let hair: Vec<Value> = along.iter().filter(|c| c[0].as_str().is_some_and(|id| id.starts_with("la-hair"))).cloned().collect();
+    assert_eq!(hair.len(), 2);
+    assert_eq!(page.eval(&format!("{}({}, {})", script(ALONG_PAINT), json!(hair), json!(carried))), json!([]), "a stroke that does not scale, at about four times the fit");
+    page.eval(r#"document.querySelector('.zoom button[title="Fit"]').click(); true"#);
+    std::thread::sleep(Duration::from_millis(800));
+    page.wait_for(r#"document.getAnimations().every((a) => a.playState !== "running") || null"#, Duration::from_secs(5));
     let grows = |level: f64, state: &str, below: Value, above: Value| json!([["la-grows", level, state, 1.0, below, above, [[20.0, 163.0]]]]);
     assert_eq!(page.eval(&format!("{}({}, {})", script(ALONG_PAINT), grows(0.75, "normal", json!([[20.0, 168.2], [15.0, 163.0]]), json!([[20.0, 157.8]])), json!(carried))), json!([]), "a thin level along a ring under a scale");
     // A bound group of one shape of every kind the page draws on (the reader's `DRAWN`, a group and a

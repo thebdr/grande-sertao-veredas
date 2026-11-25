@@ -152,14 +152,19 @@ function painted(g: SVGGeometryElement, m: DOMMatrix, w: number, cap: string, jo
       outs: shape.outs && (shape.outs.map((o) => ({ x: m.a * o.x + m.c * o.y, y: m.b * o.x + m.d * o.y })) as [Pt, Pt]),
     };
     // Its points, each once (a point written twice, a curve's handle on its node), a closed run's
-    // start not again at its end; a point a corner where any of its copies is.
+    // start not again at its end; a point a corner where any of its copies is. One point within
+    // rounding of the shape's size (a billionth of it): relative coordinates summed in doubles miss
+    // the point they come back to by a hair, a leaf closed on its tip by its last curve and a `Z`.
+    const xs = run.pts.map((p) => p.x), ys = run.pts.map((p) => p.y);
+    const eps = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1) * 1e-9;
+    const same = (a: Pt, b: Pt) => Math.abs(a.x - b.x) <= eps && Math.abs(a.y - b.y) <= eps;
     const pts: Pt[] = [], corner: boolean[] = [];
     run.pts.forEach((p, k) => {
       const last = pts[pts.length - 1];
-      if (last && last.x === p.x && last.y === p.y) corner[corner.length - 1] ||= run.corner[k];
+      if (last && same(last, p)) corner[corner.length - 1] ||= run.corner[k];
       else { pts.push(p); corner.push(run.corner[k]); }
     });
-    if (run.closed && pts.length > 1 && pts[0].x === pts[pts.length - 1].x && pts[0].y === pts[pts.length - 1].y) { pts.pop(); corner[0] ||= corner.pop()!; }
+    if (run.closed && pts.length > 1 && same(pts[0], pts[pts.length - 1])) { pts.pop(); corner[0] ||= corner.pop()!; }
     for (const p of pts) put(p.x, p.y);
     if (!h) continue;
     if (pts.length === 1) {
@@ -195,6 +200,9 @@ function painted(g: SVGGeometryElement, m: DOMMatrix, w: number, cap: string, jo
         let da = a2 - a1;
         while (da > Math.PI) da -= 2 * Math.PI;
         while (da < -Math.PI) da += 2 * Math.PI;
+        // A line turning exactly back on itself: its half disc on the side of its tip, the way it
+        // was going.
+        if (Math.abs(cross) < 1e-9) da = Math.sign(n1.x * d1.y - n1.y * d1.x) * Math.PI;
         const steps = Math.max(1, Math.ceil(Math.abs(da) / (Math.PI / 16)));
         for (let q = 1; q < steps; q++) put(v.x + h * Math.cos(a1 + (da * q) / steps), v.y + h * Math.sin(a1 + (da * q) / steps));
       } else if (joined !== "bevel") {
