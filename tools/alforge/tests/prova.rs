@@ -266,7 +266,7 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
     assert!(unit.lines().any(|l| l == "Type=oneshot"), "{unit}");
     // The script stops at its first failing step and says OK last.
     assert_eq!(s.lines().next(), Some("set -eu"));
-    assert_eq!(s.lines().filter(|l| !l.trim().is_empty()).last(), Some("echo ALFORGE-PROVISION-OK"));
+    assert_eq!(s.lines().rfind(|l| !l.trim().is_empty()), Some("echo ALFORGE-PROVISION-OK"));
     // The guide at the commit copied, then the update's section appended to it.
     let copied = s.find("cp /alforge/guide.md /home/veredas/README-veredas.md\n").expect("the guide copied");
     assert!(copied < s.find("cat >> /home/veredas/README-veredas.md <<'GUIDE'").unwrap());
