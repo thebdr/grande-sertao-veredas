@@ -209,6 +209,36 @@ thread_local! {
     /// Each state of a view `every_mark_shown` read, as the view names what it draws (`data-screen`):
     /// "Tables page", "Series waiting".
     static READ_DRAWN: std::cell::RefCell<std::collections::BTreeSet<String>> = const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+    /// Each read of a view `refused_whole` read refused, as `reads_made` names it: "Tables tables".
+    static READ_REFUSED: std::cell::RefCell<std::collections::BTreeSet<String>> = const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+}
+
+/// Every read each view makes, by the page's own source: the route each `getJson` call names under
+/// portal's `/portal/api/`, the Tables view's before the Series class and the Series view's after
+/// it, each once.
+fn reads_made() -> std::collections::BTreeSet<String> {
+    let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src/tables.ts")).unwrap().replace("\r\n", "\n");
+    let (tables, series) = src.split_once("export class Series").unwrap();
+    let mut out = std::collections::BTreeSet::new();
+    for (view, part) in [("Tables", tables), ("Series", series)] {
+        for (at, _) in part.match_indices("getJson<") {
+            let line = part[at..].lines().next().unwrap();
+            let route = line.split_once("/portal/api/").map(|(_, r)| r).unwrap_or_else(|| panic!("a read of no route of portal's: {line}"));
+            let name: String = route.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '/' || *c == '_').collect();
+            assert!(out.insert(format!("{view} {name}")), "the {view} view reading {name} by more than one call");
+        }
+    }
+    out
+}
+
+/// A refusal the page draws for `read` (a view and the route it reads, as `reads_made` names it):
+/// its words `want` read as the browser renders them (`innerText`, its white space as written) and
+/// every mark of the view through the census (`every_mark_shown`).
+fn refused_whole(page: &mut Browser, when: &str, read: &str, want: &str) {
+    let said = page.wait_for(&format!("(() => {{ const t = document.querySelector('.list-main > p.error')?.innerText; return t === {} ? t : null; }})()", serde_json::to_string(want).unwrap()), Duration::from_secs(20));
+    assert_eq!(said, json!(want), "{when}: the refusal's own words, its white space as written");
+    every_mark_shown(page, when);
+    READ_REFUSED.with(|r| r.borrow_mut().insert(read.to_string()));
 }
 
 /// Every state each view draws, by the page's own source: the name each `draw` call gives, the
@@ -277,7 +307,11 @@ const KEEP_ANSWERS: &str = r#"(() => {
     const url = String(a[0]);
     if (window.__fail && url.includes("/api/table/data")) {
       window.__fail = false;
-      return new Response(JSON.stringify({ error: "probe failure" }), { status: 500, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ error: "probe  failure,\tpage" }), { status: 500, headers: { "content-type": "application/json" } });
+    }
+    if (window.__failSeries && new URL(url, location.href).pathname.endsWith("/portal/api/series")) {
+      window.__failSeries = false;
+      return new Response(JSON.stringify({ error: "probe  failure,\tlisting" }), { status: 500, headers: { "content-type": "application/json" } });
     }
     const slow = window.__slow && url.includes(window.__slow);
     const refuse = slow && window.__slowRefuse;
@@ -906,9 +940,11 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // A window portal refuses: the refusal drawn in the chart's place, every mark of it shown.
     page.eval(&format!(r#"(() => {{ window.__slowSent = false; window.__slowRefuse = true; window.__slow = "/api/series/data"; {}; return true; }})()"#, series_button("plc/fill1")));
     page.wait_for("window.__slowSent || null", Duration::from_secs(10));
-    let refused = page.wait_for(r#"document.querySelector(".list-main > p.error")?.textContent ?? null"#, Duration::from_secs(20));
-    assert_eq!(refused, json!("Error: probe  refusal,\tlate"), "the refusal's own words, its white space as written");
-    every_mark_shown(&mut page, "a refused window");
+    refused_whole(&mut page, "a refused window", "Series series/data", "Error: probe  refusal,\tlate");
+    // The listing portal refuses (its own address, not a window's), a series picked: said in its own
+    // words in the chart's place.
+    page.eval(&format!(r#"(() => {{ window.__failSeries = true; {}; return true; }})()"#, series_button("plc/fill1")));
+    refused_whole(&mut page, "the series' listing refused", "Series series", "Error: probe  failure,\tlisting");
     // A series whose samples are, for a while, no finite number (the bench writes NaN, then an
     // infinity; portal keeps them and writes each as null): the line and the axes of its finite
     // points alone, none drawn at 0, and the words saying how many were left out.
@@ -1150,18 +1186,14 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // The listing refused for the latest pick is said where the page was.
     page.eval(r#"(() => { window.__slowSent = false; window.__slowRefuse = true; window.__slow = "/api/tables"; document.querySelector('.list button[data-table="outlets"]').click(); return true; })()"#);
     page.wait_for("window.__slowSent || null", Duration::from_secs(10));
-    let refused = page.wait_for(r#"document.querySelector(".list-main p.error")?.innerText ?? null"#, Duration::from_secs(10));
-    assert_eq!(refused, json!("Error: probe  refusal,\tlate"), "the latest pick's listing refused");
-    every_mark_shown(&mut page, "the latest pick's listing refused");
+    refused_whole(&mut page, "the latest pick's listing refused", "Tables tables", "Error: probe  refusal,\tlate");
     // Shown anew, the table's window takes the rows stored since; a page portal refuses is said in
     // its place.
     pick(&mut page, "sorts");
     shown_at(&mut page, "1-50/110");
     page.eval("window.__fail = true; true");
     click(&mut page, "Older ›");
-    let refused = page.wait_for(r#"document.querySelector(".list-main p.error")?.textContent ?? null"#, Duration::from_secs(10));
-    assert_eq!(refused, json!("Error: probe failure"));
-    every_mark_shown(&mut page, "a refused page");
+    refused_whole(&mut page, "a refused page", "Tables table/data", "Error: probe  failure,\tpage");
     // The limit the clause states: a row stamped inside the frozen window but stored after it was
     // frozen (a late line, the tail's lag) joins it and shifts its pages. The first page shown, a
     // sort stamped just before the newest ten stored, the next page opens on the first page's last.
@@ -1420,6 +1452,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     drop(blind);
     // Every state each view draws (the page's own `draw` calls) read with every mark shown.
     assert_eq!(READ_DRAWN.with(|r| r.borrow().clone()), drawn_states(), "each state a view draws, read as shown");
+    // And every read each view makes (the page's own `getJson` calls) refused for the latest pick,
+    // its refusal said whole.
+    assert_eq!(READ_REFUSED.with(|r| r.borrow().clone()), reads_made(), "each read a view makes, refused and said in its own words");
 
     // The other session's page reads the other session's router alone: its catalog (no sort
     // logged there), never this one's.
