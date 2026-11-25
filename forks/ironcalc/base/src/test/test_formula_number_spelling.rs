@@ -93,8 +93,8 @@ fn an_operation_under_an_implicit_intersection_keeps_its_bracket() {
         ("=@(B1:B3*C1)", "=@(B1:B3*C1)", "1000"),
         ("=@A1:A3*B1", "=@A1:A3*B1", "20"),
         ("=@(A1:A3%)", "=@(A1:A3%)", "0.01"),
-        // (its value is the engine's own gap: `:` takes INDEX's value, not the cell it names)
-        ("=@(A1:INDEX(A1:A3,3))", "=@(A1:INDEX(A1:A3,3))", ""),
+        // (its value read since fork change 32: `:` takes the cell INDEX names)
+        ("=@(A1:INDEX(A1:A3,3))", "=@(A1:INDEX(A1:A3,3))", "2"),
     ] {
         model.set_user_input(0, 2, 6, typed.to_string()).unwrap();
         model.evaluate();

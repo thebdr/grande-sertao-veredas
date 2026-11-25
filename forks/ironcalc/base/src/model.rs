@@ -629,8 +629,14 @@ impl<'a> Model<'a> {
     }
 
     fn get_range(&mut self, left: &Node, right: &Node, cell: CellReferenceIndex) -> CalcResult {
-        let left_result = self.evaluate_node_with_reference(left, cell);
-        let right_result = self.evaluate_node_with_reference(right, cell);
+        // an INDEX on either side is the reference it names, a cell of one too (`A1:INDEX(A:A,n)`,
+        // Excel's dynamic range; Veredas fork change 32)
+        let side = |model: &mut Self, node: &Node| match node {
+            Node::FunctionKind { kind: crate::functions::Function::Index, args } => model.index_reference(args, cell),
+            _ => model.evaluate_node_with_reference(node, cell),
+        };
+        let left_result = side(self, left);
+        let right_result = side(self, right);
         match (left_result, right_result) {
             (
                 CalcResult::Range {
@@ -658,6 +664,8 @@ impl<'a> Model<'a> {
                     message: "Invalid range".to_string(),
                 }
             }
+            // a side's own error stands (an INDEX out of its range is `#REF!`)
+            (error @ CalcResult::Error { .. }, _) | (_, error @ CalcResult::Error { .. }) => error,
             _ => CalcResult::Error {
                 error: Error::VALUE,
                 origin: cell,

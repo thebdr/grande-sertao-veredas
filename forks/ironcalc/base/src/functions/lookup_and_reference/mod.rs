@@ -251,6 +251,16 @@ impl<'a> Model<'a> {
     // At the moment IronCalc does not support references with multiple areas,
     // so area_num = 1 (or missing).
     pub(crate) fn fn_index(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
+        self.index_with(args, cell, false)
+    }
+
+    /// INDEX read as the reference it names, a cell of one as much as an area: what the range
+    /// operator takes (`A1:INDEX(A1:A3,3)` is `A1:A3`, Veredas fork change 32).
+    pub(crate) fn index_reference(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
+        self.index_with(args, cell, true)
+    }
+
+    fn index_with(&mut self, args: &[Node], cell: CellReferenceIndex, as_reference: bool) -> CalcResult {
         if !(2..=4).contains(&args.len()) {
             return CalcResult::new_args_number_error(cell);
         }
@@ -333,7 +343,7 @@ impl<'a> Model<'a> {
                     let c = left.column + col_eff as i32 - 1;
                     (c, c)
                 };
-                if row_start == row_end && col_start == col_end {
+                if row_start == row_end && col_start == col_end && !as_reference {
                     self.evaluate_cell(CellReferenceIndex {
                         sheet: left.sheet,
                         row: row_start,

@@ -306,9 +306,11 @@ serves its tab is agreed with Oficina's plan.
 ## The engine's known gaps
 Found beside the corpus, which holds none of them (the parity measure stands), each the engine's
 own to close in a fork change of its own:
-- **A reference a function returns, in the range operator:** `A1:INDEX(A1:A3,3)` evaluates
-  `#VALUE!` (Excel's dynamic-range idiom `SUM(A1:INDEX(A:A,n))` among it): `:` takes INDEX's value,
-  not the cell it names. Spelled right since fork change 30b; its evaluation is next.
+- **A reference a function returns, in the range operator:** `A1:INDEX(A1:A3,3)` evaluated
+  `#VALUE!`: `:` took INDEX's value, not the cell it names. Fork change 32 reads an INDEX there as
+  the reference it names (Excel's dynamic range `SUM(A1:INDEX(A:A,n))`). Whether OFFSET,
+  INDIRECT, CHOOSE and IF returning a reference beside `:` read as Excel reads them is not yet
+  measured.
 
 ## On this machine
 - No Excel, no Office: Excel's acceptance of a written file is owed elsewhere (Rules).
