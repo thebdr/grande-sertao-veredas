@@ -1934,13 +1934,13 @@ mod round_5 {
     use super::{config, device, wait};
 
     /// One session's TCP connection.
-    struct Conn {
+    pub(super) struct Conn {
         s: TcpStream,
         log: Vec<(bool, Vec<u8>)>,
         session: u32,
     }
 
-    fn frame(command: u16, session: u32, body: &[u8]) -> Vec<u8> {
+    pub(super) fn frame(command: u16, session: u32, body: &[u8]) -> Vec<u8> {
         let mut f = Vec::new();
         f.extend_from_slice(&command.to_le_bytes());
         f.extend_from_slice(&(body.len() as u16).to_le_bytes());
@@ -1952,7 +1952,7 @@ mod round_5 {
         f
     }
 
-    fn read_frame(s: &mut TcpStream) -> Vec<u8> {
+    pub(super) fn read_frame(s: &mut TcpStream) -> Vec<u8> {
         let mut h = [0u8; 24];
         s.read_exact(&mut h).unwrap();
         let len = u16::from_le_bytes([h[2], h[3]]) as usize;
@@ -1961,7 +1961,7 @@ mod round_5 {
         [h.to_vec(), b].concat()
     }
 
-    fn rr_body(request: &[u8], extra: &[(u16, Vec<u8>)]) -> Vec<u8> {
+    pub(super) fn rr_body(request: &[u8], extra: &[(u16, Vec<u8>)]) -> Vec<u8> {
         let mut b = vec![0, 0, 0, 0, 5, 0];
         b.extend_from_slice(&(2 + extra.len() as u16).to_le_bytes());
         b.extend_from_slice(&[0, 0, 0, 0]);
@@ -1976,7 +1976,7 @@ mod round_5 {
         b
     }
 
-    fn items(reply: &[u8]) -> Vec<(u16, Vec<u8>)> {
+    pub(super) fn items(reply: &[u8]) -> Vec<(u16, Vec<u8>)> {
         let b = &reply[24 + 6..];
         let n = u16::from_le_bytes([b[0], b[1]]) as usize;
         let mut at = 2;
@@ -1991,7 +1991,7 @@ mod round_5 {
     }
 
     impl Conn {
-        fn open(addr: SocketAddr) -> Conn {
+        pub(super) fn open(addr: SocketAddr) -> Conn {
             let s = TcpStream::connect(addr).unwrap();
             s.set_nodelay(true).unwrap();
             s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
@@ -2017,16 +2017,16 @@ mod round_5 {
             assert_eq!(&r[8..12], &[0, 0, 0, 0], "SendRRData status {r:02X?}");
             items(&r)
         }
-        fn cip(&mut self, request: &[u8]) -> Vec<u8> {
+        pub(super) fn cip(&mut self, request: &[u8]) -> Vec<u8> {
             self.rr(request, &[]).into_iter().find(|i| i.0 == 0x00B2).unwrap().1
         }
-        fn cip_with(&mut self, request: &[u8], extra: &[(u16, Vec<u8>)]) -> (Vec<u8>, Vec<(u16, Vec<u8>)>) {
+        pub(super) fn cip_with(&mut self, request: &[u8], extra: &[(u16, Vec<u8>)]) -> (Vec<u8>, Vec<(u16, Vec<u8>)>) {
             let items = self.rr(request, extra);
             (items.iter().find(|i| i.0 == 0x00B2).unwrap().1.clone(), items)
         }
     }
 
-    fn sockaddr_item(udp: &UdpSocket) -> (u16, Vec<u8>) {
+    pub(super) fn sockaddr_item(udp: &UdpSocket) -> (u16, Vec<u8>) {
         let SocketAddr::V4(me) = udp.local_addr().unwrap() else { panic!() };
         let mut d = 2u16.to_be_bytes().to_vec();
         d.extend_from_slice(&me.port().to_be_bytes());
@@ -2035,13 +2035,13 @@ mod round_5 {
         (0x8001, d)
     }
 
-    fn o_to_t_addr(items: &[(u16, Vec<u8>)]) -> SocketAddr {
+    pub(super) fn o_to_t_addr(items: &[(u16, Vec<u8>)]) -> SocketAddr {
         let d = &items.iter().find(|i| i.0 == 0x8000).expect("an O->T item").1;
         SocketAddr::from(([d[4], d[5], d[6], d[7]], u16::from_be_bytes([d[2], d[3]])))
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn fo_raw(serial: u16, vendor: u16, originator: u32, rpi: u32, multiplier: u8, o_size: u16, t_size: u16, transport: u8, path: &[u8]) -> Vec<u8> {
+    pub(super) fn fo_raw(serial: u16, vendor: u16, originator: u32, rpi: u32, multiplier: u8, o_size: u16, t_size: u16, transport: u8, path: &[u8]) -> Vec<u8> {
         let mut b = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
         b.extend_from_slice(&0u32.to_le_bytes());
         b.extend_from_slice(&(0x8000_0000u32 | u32::from(serial)).to_le_bytes());
@@ -2059,7 +2059,7 @@ mod round_5 {
         b
     }
 
-    fn wrap_us(inner: &[u8], route: &[u8]) -> Vec<u8> {
+    pub(super) fn wrap_us(inner: &[u8], route: &[u8]) -> Vec<u8> {
         let mut r = vec![0x52, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
         r.extend_from_slice(&(inner.len() as u16).to_le_bytes());
         r.extend_from_slice(inner);
@@ -2072,13 +2072,13 @@ mod round_5 {
         r
     }
 
-    fn status_of(reply: &[u8]) -> (u8, Vec<u16>) {
+    pub(super) fn status_of(reply: &[u8]) -> (u8, Vec<u16>) {
         let n = reply[3] as usize;
         (reply[2], (0..n).map(|i| u16::from_le_bytes([reply[4 + 2 * i], reply[5 + 2 * i]])).collect())
     }
 
     /// A Class 1 frame: sequenced address, connected data (count, run/idle when given, data).
-    fn class1(connection: u32, sequence: u32, count: u16, run: Option<bool>, data: &[u8]) -> Vec<u8> {
+    pub(super) fn class1(connection: u32, sequence: u32, count: u16, run: Option<bool>, data: &[u8]) -> Vec<u8> {
         let mut payload = count.to_le_bytes().to_vec();
         if let Some(r) = run {
             payload.extend_from_slice(&(r as u32).to_le_bytes());
@@ -2095,7 +2095,7 @@ mod round_5 {
         f
     }
 
-    const PATH: [u8; 8] = [0x20, 0x04, 0x24, 151, 0x2C, 150, 0x2C, 100];
+    pub(super) const PATH: [u8; 8] = [0x20, 0x04, 0x24, 151, 0x2C, 150, 0x2C, 100];
     #[test]
     fn an_electronic_key_matching_the_device_exactly_is_taken() {
         let adapter = start(&config(&device(201))).unwrap();
@@ -2292,5 +2292,100 @@ mod round_5 {
         let (r, _) = c.cip_with(&fo_raw(0x0909, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, 0x01, &PATH), &[item]);
         assert_eq!(r[2], 0);
         assert_eq!(adapter.status().connections[0].sends_to, SocketAddr::from(([127, 0, 0, 1], 2222)));
+    }
+}
+
+/// C-111's sixth refute round: the critic's probes (`~/.cache/veredas/critic-c111-r6/probes`), kept
+/// as pins: the produced count every frame that went out, a send that fails taken back, and taken
+/// back from its own connection when two originators chose the same T->O id.
+mod round_6 {
+    use std::net::UdpSocket;
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::ethernetip::*;
+
+    use super::round_5::{Conn, PATH, fo_raw, sockaddr_item};
+    use super::{config, device};
+
+    /// The frames waiting on `udp`, read till 100 ms pass without one.
+    fn drain(udp: &UdpSocket) -> usize {
+        let mut buf = [0u8; 1500];
+        udp.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+        let mut n = 0;
+        while udp.recv_from(&mut buf).is_ok() {
+            n += 1;
+        }
+        n
+    }
+
+    /// The frames `udp` receives over `within`, production then stalled and the rest drained.
+    fn received(adapter: &EnipHandle, udp: &UdpSocket, within: Duration) -> u64 {
+        let mut buf = [0u8; 1500];
+        udp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let (mut got, t) = (0, Instant::now());
+        while t.elapsed() < within {
+            udp.recv_from(&mut buf).unwrap();
+            got += 1;
+        }
+        adapter.set_producing(false);
+        (got + drain(udp)) as u64
+    }
+
+    #[test]
+    fn the_produced_count_is_every_frame_that_went_out() {
+        let adapter = start(&config(&device(221))).unwrap();
+        let mut c = Conn::open(adapter.addr);
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (r, _) = c.cip_with(&fo_raw(0x0101, 0x00FE, 1, 20_000, 2, 4 + 6, 8 + 2, 0x01, &PATH), &[sockaddr_item(&udp)]);
+        assert_eq!(r[2], 0, "{r:02X?}");
+        let got = received(&adapter, &udp, Duration::from_millis(600));
+        assert_eq!(adapter.status().connections[0].produced, got, "the produced count against the frames received");
+    }
+
+    /// In a private network: UDP to port 47001 dropped on output, so a send there fails (EPERM).
+    #[cfg(target_os = "linux")]
+    fn drop_port_47001() {
+        for rule in [&["add", "table", "inet", "t"][..], &["add", "chain", "inet", "t", "out", "{ type filter hook output priority 0; }"], &["add", "rule", "inet", "t", "out", "udp", "dport", "47001", "drop"]] {
+            let out = std::process::Command::new("nft").args(rule).output().expect("nft");
+            assert!(out.status.success(), "nft {rule:?}: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_send_that_fails_is_taken_back() {
+        veredas_aranha::netns::isolated("round_6::a_send_that_fails_is_taken_back", &[], || {
+            drop_port_47001();
+            let adapter = start(&config(&device(1))).unwrap();
+            let mut c = Conn::open(adapter.addr);
+            let dropped = UdpSocket::bind("127.0.0.1:47001").unwrap();
+            let (r, _) = c.cip_with(&fo_raw(0x0101, 0x00FE, 1, 20_000, 2, 4 + 6, 8 + 2, 0x01, &PATH), &[sockaddr_item(&dropped)]);
+            assert_eq!(r[2], 0, "{r:02X?}");
+            std::thread::sleep(Duration::from_millis(1000));
+            assert_eq!((drain(&dropped), adapter.status().connections[0].produced), (0, 0), "every send failed: none counted produced");
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_failed_send_is_taken_back_from_its_own_connection() {
+        veredas_aranha::netns::isolated("round_6::a_failed_send_is_taken_back_from_its_own_connection", &[], || {
+            drop_port_47001();
+            // Two connections whose originators chose the same T->O id (0x8000_0000 | serial).
+            let text = device(1)
+                .replace("{ instance = 151, size = 2 } ]", "{ instance = 151, size = 2 }, { instance = 152, size = 4 }, { instance = 101, size = 8 } ]")
+                .replace("connections = [ { config = 151, output = 150, input = 100 } ]", "connections = [ { config = 151, output = 150, input = 100 }, { config = 151, output = 152, input = 101 } ]");
+            let adapter = start(&config(&text)).unwrap();
+            let (mut a, mut b) = (Conn::open(adapter.addr), Conn::open(adapter.addr));
+            let (ua, ub) = (UdpSocket::bind("127.0.0.1:47002").unwrap(), UdpSocket::bind("127.0.0.1:47001").unwrap());
+            let path_b = [0x20, 0x04, 0x24, 151, 0x2C, 152, 0x2C, 101];
+            let (ra, _) = a.cip_with(&fo_raw(0x0101, 0x00FE, 0x0BAD_CAFE, 20_000, 2, 4 + 6, 8 + 2, 0x01, &PATH), &[sockaddr_item(&ua)]);
+            let (rb, _) = b.cip_with(&fo_raw(0x0101, 0x0001, 7, 20_000, 2, 4 + 6, 8 + 2, 0x01, &path_b), &[sockaddr_item(&ub)]);
+            assert_eq!((ra[2], rb[2]), (0, 0));
+            let got = received(&adapter, &ua, Duration::from_millis(1000));
+            let s = adapter.status();
+            assert_eq!(s.connections[0].t_to_o_id, s.connections[1].t_to_o_id, "one T->O id for both");
+            assert_eq!((s.connections[0].produced, s.connections[1].produced, drain(&ub)), (got, 0, 0), "A's count its own, B's none");
+        });
     }
 }

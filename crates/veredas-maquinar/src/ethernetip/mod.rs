@@ -1206,7 +1206,9 @@ async fn class1(io: Arc<UdpSocket>, shared: Arc<Shared>) {
                 c.produce_count = c.produce_count.wrapping_add(1);
                 let run = (c.input_header == DataHeader::RunIdle).then_some(true);
                 let data = assemblies.get(&c.status.input).cloned().unwrap_or_default();
-                out.push((c.status.t_to_o_id, c.status.sends_to, class1_frame(c.status.t_to_o_id, c.produce_sequence, c.produce_count, run, &data)));
+                // Keyed by the adapter's own O->T id, one to an open connection: the T->O id is the
+                // originator's, and two originators may choose the same.
+                out.push((c.status.o_to_t_id, c.status.sends_to, class1_frame(c.status.t_to_o_id, c.produce_sequence, c.produce_count, run, &data)));
                 // Counted as it goes out, so whoever reads the frame finds it counted; a send that
                 // fails takes it back.
                 c.status.produced += 1;
@@ -1214,7 +1216,7 @@ async fn class1(io: Arc<UdpSocket>, shared: Arc<Shared>) {
         }
         for (id, to, frame) in out {
             if io.send_to(&frame, to).await.is_err()
-                && let Some(c) = shared.lock().conns.iter_mut().find(|c| c.status.t_to_o_id == id)
+                && let Some(c) = shared.lock().conns.iter_mut().find(|c| c.status.o_to_t_id == id)
             {
                 c.status.produced = c.status.produced.saturating_sub(1);
             }
