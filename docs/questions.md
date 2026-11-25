@@ -1528,6 +1528,13 @@ architect wants upstream pull requests to flow often.
 **Reversible?** Yes: a `git mv` and two path dependencies for (b) or (d); (c) replaces the folder
 with a git dependency.
 
+**Decided** 2026-11-25, by the architect: asked "Where does ábaco's fork of IronCalc (the
+spreadsheet engine) live, and how do its fixes go upstream? Taken meanwhile: a copy at the
+repository's root, `forks/ironcalc`, excluded from the workspace.", "forks/ironcalc here
+(Recommended)", (e), against a fork repository on GitHub, a full-history subtree and
+`crates/ironcalc`. What was taken stands; a fix goes upstream as a patch, and opening a pull request
+there stays the architect's act.
+
 ---
 
 ## Q341 - What becomes of Veredas 1's grid, now that the grid's surface is Oficina's?
@@ -1557,6 +1564,12 @@ planned; the egui crate is not carried.
 
 **Reversible?** Yes: nothing is written.
 
+**Decided** 2026-11-25, by the architect: asked "What becomes of Veredas 1's spreadsheet grid, now
+that the grid's surface is a tab of Oficina (Qt Quick)? Taken meanwhile: nothing of the grid is
+ported until Oficina's tab is planned.", "Carry nothing", (c), against the recommendation (a):
+nothing of Veredas 1's grid is carried, neither its egui crate nor its renderer-neutral core, and
+Oficina writes the grid's behaviour itself.
+
 ---
 
 ## Q342 - Is Veredas 1's Excel host carried?
@@ -1580,6 +1593,11 @@ Options:
 
 **Reversible?** Yes: the host stood on the same view and events as the grid, and can be ported
 on them later.
+
+**Decided** 2026-11-25, by the architect: asked "Is Veredas 1's Excel host carried into ábaco (a
+controlled Excel driven over COM as a renderer, Windows only)? Taken meanwhile: not carried.", "Not
+carried (Recommended)", (a). What was taken stands, and the "open and calculate in Excel" answer is
+dropped.
 
 ---
 
@@ -1612,6 +1630,13 @@ carried; it is the last phase of the plan, so nothing waits on the answer yet.
 
 **Reversible?** Only before: a publication is not undone by a revert.
 
+**Decided** 2026-11-25, by the architect: asked "Is acerto (Veredas 1's port of an in-house tool
+that aligns one company's plant engineering files) carried into this public repository? Publishing
+is not undone by a revert. Taken meanwhile: nothing of acerto is carried.", "Not carried here
+(Recommended)", (c): acerto stays a package of the private repository, installed into Ábaco through
+the extension point; this repository holds the extension point and a small public example. Decision
+4 of 2026-11-05 gives way in that.
+
 ---
 
 ## Q344 - What is ábaco's parity measured on while Veredas 1's workbooks are not here?
@@ -1636,6 +1661,13 @@ Options:
 **Recommended**: (c). **Taken meanwhile**: (b).
 
 **Reversible?** Yes: a corpus added to the evidence.
+
+**Decided** 2026-11-25, by the architect: asked "What is ábaco's parity with Excel measured on,
+while Veredas 1's five real workbooks (a customer's data, 1.2 million formula cells) are not on this
+machine? Taken meanwhile: the about 250 Excel-saved workbooks among the fork's own tests.", "Both
+(Recommended)", (c): the fork's Excel-saved workbooks verify the clause now, and the five real
+workbooks join the evidence when the architect puts them on this machine, outside any repository,
+only the numbers and the files' hashes recorded.
 
 ---
 
@@ -1677,6 +1709,13 @@ build of Ábaco, while (c) keeps the reader's very code without it. A further op
 
 **Recommended now**: (c) stays, or (e) if core takes it; (a) only if the architect accepts the plant
 stack in Ábaco's workspace builds (its release build, made alone, would not carry it).
+
+**Decided** 2026-11-25, by the architect: asked "How does ábaco read the suite's file stamps without
+pulling core's network stack into its builds? Taken meanwhile: it compiles core's own `schema.rs` by
+path. Core's `net` feature landed, but a workspace build still unifies the stack in.", "Compile
+core's file by path (Recommended)", (c), against a crate of the reader's own (e) and core without
+its default features (a). What was taken stands.
+
 ---
 
 ## Q346 - How does Excel spell PERCENTOF in a file?
@@ -1699,6 +1738,12 @@ its sheet XML shows the spelling, and the workbook can join the fork's tests.
 `forks/ironcalc/base/src/functions/mod.rs` (`to_xlsx_string`).
 
 **Reversible?** Yes: one line, and the base test's list.
+
+**Decided** 2026-11-25, by the architect: asked "How does Excel spell PERCENTOF (Excel 365, 2024) in
+a file? No source ábaco has shows it; a wrong spelling reads as #NAME? in Excel. Taken meanwhile:
+`_xlfn.PERCENTOF`.", "_xlfn.PERCENTOF (Recommended)", (a), against saving a workbook in Excel 365 to
+show it. What was taken stands, a reasoned spelling no file from Excel has shown.
+
 ---
 
 ## Q310 - The test file's syntax
