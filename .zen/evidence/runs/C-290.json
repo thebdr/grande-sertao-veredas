@@ -11,15 +11,15 @@
     "manifest"
   ],
   "exitCode": 0,
-  "outputSha": "9db8668b49ab7ea74c160751754baee1c1f6b64e0750428aa7ffef23e5af1160",
-  "outputTail": "        PASS [   0.221s] (25/37) alforge::manifest the_lock_file_is_read_as_cargo_writes_it\n        PASS [   0.282s] (26/37) alforge::manifest settings_outside_the_history_change_nothing_that_is_read\n        PASS [   0.385s] (27/37) alforge::manifest a_repository_at_an_odd_path_a_root_that_does_not_parse_and_braces_in_the_scratch_path\n        PASS [   0.315s] (28/37) alforge::manifest replace_refs_and_grafts_change_neither_objects_nor_ancestry\n        PASS [   0.422s] (29/37) alforge::manifest a_release_whose_commit_is_absent_hides_no_other_refusal\n        PASS [   0.359s] (30/37) alforge::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.371s] (31/37) alforge::manifest the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them\n        PASS [   0.504s] (32/37) alforge::manifest a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none\n        PASS [   0.621s] (33/37) alforge::manifest a_false_pin_charges_no_true_release_and_hides_no_conflict\n        PASS [   1.182s] (34/37) alforge::manifest build_inputs_that_do_not_read_are_refused_where_a_version_is_pinned_twice\n        PASS [   1.955s] (35/37) alforge::manifest a_version_names_everything_its_build_reads_but_the_toolchain\n        PASS [   3.494s] (36/37) alforge::manifest every_release_of_this_repository_checks_against_its_history\n        PASS [   4.747s] (37/37) alforge::manifest every_road_into_a_build_charges_the_components_it_reaches\n────────────\n     Summary [   4.757s] 37 tests run: 37 passed, 0 skipped",
-  "ranAt": "2026-11-25T05:01:32.519Z",
-  "headCommit": "4f5f104218ddb4f7a3ce824b89377dfbf45730eb",
+  "outputSha": "fe8ac7781f2b6494f9f3eccb2d825fbdcf09a487066eda431f70deb435f3b556",
+  "outputTail": "        PASS [   0.268s] (28/40) alforge::manifest the_folder_is_judged_whole_and_a_shallow_clone_refused\n        PASS [   0.356s] (29/40) alforge::manifest settings_outside_the_history_change_nothing_that_is_read\n        PASS [   0.576s] (30/40) alforge::manifest a_version_or_an_executable_that_differs_is_refused\n        PASS [   0.589s] (31/40) alforge::manifest a_release_whose_commit_is_absent_hides_no_other_refusal\n        PASS [   0.410s] (32/40) alforge::manifest round_nineteen_the_lock_by_requirement_a_package_by_path_through_the_lock_and_a_later_conflict\n        PASS [   0.408s] (33/40) alforge::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.435s] (34/40) alforge::manifest the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them\n        PASS [   0.721s] (35/40) alforge::manifest a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none\n        PASS [   0.831s] (36/40) alforge::manifest a_false_pin_charges_no_true_release_and_hides_no_conflict\n        PASS [   1.267s] (37/40) alforge::manifest build_inputs_that_do_not_read_are_refused_where_a_version_is_pinned_twice\n        PASS [   1.867s] (38/40) alforge::manifest a_version_names_everything_its_build_reads_but_the_toolchain\n        PASS [   4.403s] (39/40) alforge::manifest every_road_into_a_build_charges_the_components_it_reaches\n        PASS [   4.421s] (40/40) alforge::manifest every_release_of_this_repository_checks_against_its_history\n────────────\n     Summary [   4.431s] 40 tests run: 40 passed, 0 skipped",
+  "ranAt": "2026-11-25T06:03:38.640Z",
+  "headCommit": "bfc8110f44217a9810803082c1b9833eac8f18c2",
   "tests": [
     {
       "name": "tools/alforge/tests/manifest.rs",
       "file": "tools/alforge/tests/manifest.rs",
-      "fileSha": "21f14844478abf74fb23838803209bc499807348a4ef30f78966c2c04d08560e"
+      "fileSha": "cdba407b53284fb21403cccb36f6dbeef639cb657c08212cb72dda4b11ea2635"
     }
   ]
 }
