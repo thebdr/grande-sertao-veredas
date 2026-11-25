@@ -12,11 +12,13 @@ use veredas_supervisao::{Host, config};
 const USAGE: &str = "usage: veredas-supervisao <supervisao.toml> [--check]";
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Read as the system hands them, so a path that is no UTF-8 is read as it stands.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let flag = |a: &std::ffi::OsString| a.to_str().is_some_and(|s| s.starts_with("--"));
     let (path, check) = match args.as_slice() {
-        [p] if !p.starts_with("--") => (PathBuf::from(p), false),
-        [p, c] if c == "--check" && !p.starts_with("--") => (PathBuf::from(p), true),
-        [c, p] if c == "--check" && !p.starts_with("--") => (PathBuf::from(p), true),
+        [p] if !flag(p) => (PathBuf::from(p), false),
+        [p, c] if c == "--check" && !flag(p) => (PathBuf::from(p), true),
+        [c, p] if c == "--check" && !flag(p) => (PathBuf::from(p), true),
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(64);

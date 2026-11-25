@@ -632,12 +632,48 @@ fn two_sessions_never_open_one_database_file() {
         lay(&cwd.join("~"), "store = { disk = \"../one.duckdb\" }", &format!("store = {{ disk = \"{}/one.duckdb\" }}", home.display()), "the hall");
         let (code, err) = check(&cwd, &home, "~/supervisao.toml");
         assert!(code == Some(2) && err.contains(&tail("store")), "a path the engine reads from the home folder: {code:?} {err}");
+        // A leading `~` and whatever follows it: `~x/…`, the home folder's own name and `x` after it.
+        lay(&cwd.join("~x"), "store = { disk = \"../one.duckdb\" }", &format!("store = {{ disk = \"{}x/one.duckdb\" }}", home.display()), "the hall");
+        let (code, err) = check(&cwd, &home, "~x/supervisao.toml");
+        assert!(code == Some(2) && err.contains(&tail("store")), "a path the engine reads from the home folder's name: {code:?} {err}");
+        // The forms the engine reads as a file URL (`file:///`, `file://localhost/`), each refused
+        // beside the file it names; the engine's own type before a colon (`duckdb:`, in any case)
+        // dropped, the rest read alike; and a type of another (`file:` with one slash, `sqlite:`), a
+        // database the engine opens through an extension or nowhere, refused by name.
         let real = dir.path().join("real");
         std::fs::create_dir_all(&real).unwrap();
-        let mirror = cwd.join("file:").join(real.strip_prefix("/").unwrap());
-        lay(&mirror, "store = { disk = \"../one.duckdb\" }", &format!("store = {{ disk = \"{}/one.duckdb\" }}", real.display()), "the hall");
-        let (code, err) = check(&cwd, &home, &format!("file:{}/supervisao.toml", real.display()));
-        assert!(code == Some(2) && err.contains(&tail("store")), "a path the engine reads as a file URL: {code:?} {err}");
+        let under = |first: &std::path::Path| first.join(real.strip_prefix("/").unwrap());
+        let pinned = format!("store = {{ disk = \"{}/one.duckdb\" }}", real.display());
+        for (first, given) in [
+            (cwd.join("file:"), format!("file://{}/supervisao.toml", real.display())),
+            (cwd.join("file:").join("localhost"), format!("file://localhost{}/supervisao.toml", real.display())),
+            (cwd.join("duckdb:"), format!("duckdb:{}/supervisao.toml", real.display())),
+            (cwd.join("DuckDB:"), format!("DuckDB:{}/supervisao.toml", real.display())),
+        ] {
+            lay(&under(&first), "store = { disk = \"../one.duckdb\" }", &pinned, "the hall");
+            let (code, err) = check(&cwd, &home, &given);
+            assert!(code == Some(2) && err.contains(&tail("store")), "{given}: the file the engine opens: {code:?} {err}");
+            std::fs::remove_dir_all(&first).unwrap();
+        }
+        for (first, given, kind) in [(cwd.join("file:"), format!("file:{}/supervisao.toml", real.display()), "file"), (cwd.join("sqlite:"), format!("sqlite:{}/supervisao.toml", real.display()), "sqlite")] {
+            lay(&under(&first), "store = { disk = \"../one.duckdb\" }", "store = \"ram\"", "the hall");
+            let (code, err) = check(&cwd, &home, &given);
+            assert!(code == Some(2) && err.contains(&format!("which the database engine reads as a database of type `{kind}` (the part before its first colon), opened through an extension if at all")), "{given}: a database of another type: {code:?} {err}");
+            std::fs::remove_dir_all(&first).unwrap();
+        }
+        // A path that is no UTF-8, read as its bytes: the supervisão file under `~/\xff/`, a store
+        // pinned through a link to the home folder's `\xff`, the file the engine opens for both.
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let odd = std::ffi::OsStr::from_bytes(b"\xff");
+            std::fs::create_dir_all(home.join(odd)).unwrap();
+            std::os::unix::fs::symlink(home.join(odd), real.join("lnk")).unwrap();
+            lay(&cwd.join("~").join(odd), "store = { disk = \"../one.duckdb\" }", &format!("store = {{ disk = \"{}/lnk/one.duckdb\" }}", real.display()), "the hall");
+            let given = std::path::Path::new("~").join(odd).join("supervisao.toml");
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_veredas-supervisao")).arg(&given).arg("--check").current_dir(&cwd).env("HOME", &home).output().unwrap();
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.code() == Some(2) && err.contains(&tail("store")), "a path that is no UTF-8: {:?} {err}", out.status.code());
+        }
     }
     // One file written relative and absolute, the supervisão file read by a path relative to the
     // folder the test runs in: refused.
