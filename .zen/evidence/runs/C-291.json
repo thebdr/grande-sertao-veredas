@@ -15,20 +15,20 @@
     "cut"
   ],
   "exitCode": 0,
-  "outputSha": "56f462ce7003fbccac685725e3998a7db8bf6c954fdf619f5e607e9d3967ecd6",
-  "outputTail": "        SLOW [>180.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>240.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>300.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>360.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>420.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>480.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>540.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>600.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>660.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>720.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>780.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>840.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        PASS [ 844.699s] (34/34) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n────────────\n     Summary [ 844.737s] 34 tests run: 34 passed (1 slow), 0 skipped",
-  "ranAt": "2026-11-25T04:07:18.100Z",
-  "headCommit": "bef56c18bc081c7ad49c34535337d5115c26a86f",
+  "outputSha": "0b520957dfabf45a160c4a0ae71a41da6000431012411fbe788f44dc20b5ae7a",
+  "outputTail": "        SLOW [>240.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>300.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>360.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>420.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>480.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>540.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>600.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>660.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>720.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>780.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>840.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>900.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        PASS [ 903.745s] (36/36) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n────────────\n     Summary [ 903.776s] 36 tests run: 36 passed (1 slow), 0 skipped",
+  "ranAt": "2026-11-25T05:27:11.035Z",
+  "headCommit": "820350720c469b082b704a5c312f4c6d8edfa8bb",
   "tests": [
     {
       "name": "tools/alforge/tests/bundle.rs",
       "file": "tools/alforge/tests/bundle.rs",
-      "fileSha": "6a2835d8e4671f86ec9a304233601ffc6e262c9f2b6d05d39c44465dcba5b8f1"
+      "fileSha": "8db1769d8ba21208027a96fa500d0d53c1d552e563b3f402b4889ec916a5e56a"
     },
     {
       "name": "tools/alforge/tests/cut.rs",
       "file": "tools/alforge/tests/cut.rs",
-      "fileSha": "9a6d3af57ac162c0c8961ad582d829a336149fa2a02d0030b2aa59136a93f72b"
+      "fileSha": "a563c9e248d8c4b32fa44a75b6d51450d71cdc85fa12d7cd673d0ec6b776d438"
     }
   ]
 }
