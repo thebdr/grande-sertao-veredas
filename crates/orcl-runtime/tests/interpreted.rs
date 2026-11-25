@@ -526,3 +526,185 @@ fn a_scan_of_an_interpreted_program_allocates_nothing() {
     assert!(matches!(state, RunState::Faulted { fault: Fault::Program { .. }, .. }), "the scan with a zero divisor faulted: {state:?}");
     assert_eq!(asked, 0, "the heap was asked {asked} times");
 }
+
+// The first refute round's tests (`.zen/evidence/C-155.md`): what the lowered program above does not read, the
+// make's read-backs, a scan of many instructions, the image handed to a scan, the outputs' image refused, times and
+// cycles past 32 bits, and a faulted machine left as it stood.
+
+fn scan_region_slots(now: Duration, period: Duration, cycle: u64) -> Vec<Scalar> {
+    vec![
+        Scalar::Int(Int::U64, now.as_secs().into()),
+        Scalar::Int(Int::U32, now.subsec_nanos().into()),
+        Scalar::Int(Int::U64, period.as_secs().into()),
+        Scalar::Int(Int::U32, period.subsec_nanos().into()),
+        Scalar::Int(Int::U64, cycle.into()),
+    ]
+}
+
+#[test]
+fn the_scan_region_holds_the_scan_s_time_its_period_and_its_cycle_every_scan() {
+    // M01, M02 (and M20): the period's slots are what the task's period is, every scan
+    let mut clock = VirtualClock::new();
+    let mut task = Task::new(config(), interpreted(5)).unwrap();
+    let mut feed = Feed(vec![In { x: 3, y: 2 }; 5]);
+    for k in 0..5u64 {
+        let r = task.step(&mut feed, &mut clock);
+        let (now, period) = (r.scan.now, r.scan.period);
+        assert_eq!(r.state, RunState::Running);
+        assert_eq!(task.program().machine().region(orcl_runtime::interpreted::SCAN).unwrap(), &scan_region_slots(now, period, k)[..], "scan {k}");
+    }
+}
+
+/// Outputs whose image of the default is no value of the outputs' type (a `u16` for the sum).
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+struct BadDefault(Out);
+
+impl Image for BadDefault {
+    fn write(&self, slots: &mut Vec<Scalar>) {
+        if self.0 == Out::default() {
+            slots.extend([Scalar::Int(Int::U16, 0)]);
+            let mut rest = Vec::new();
+            self.0.write(&mut rest);
+            slots.extend_from_slice(&rest[1..]);
+        } else {
+            self.0.write(slots);
+        }
+    }
+    fn read(slots: &[Scalar]) -> Option<Self> {
+        Out::read(slots).map(BadDefault)
+    }
+}
+
+/// Outputs whose default reads back as none.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+struct NoneDefault(Out);
+
+impl Image for NoneDefault {
+    fn write(&self, slots: &mut Vec<Scalar>) {
+        self.0.write(slots);
+    }
+    fn read(slots: &[Scalar]) -> Option<Self> {
+        Out::read(slots).filter(|o| *o != Out::default()).map(NoneDefault)
+    }
+}
+
+#[test]
+fn outputs_whose_default_is_no_value_of_their_type_or_reads_back_as_none_are_refused_when_made() {
+    // M04, M04b (the default's image refused) and M05 (the default read back)
+    let state = [Scalar::Int(Int::U32, 0)];
+    let bad = Interpreted::<In, BadDefault>::new(code(), FunctionId(0), REGIONS, &state, BadDefault(SAFE));
+    assert_eq!(bad.map(|_| ()), Err(MakeError::Outputs), "a default that is no value of the outputs' type");
+    let none = Interpreted::<In, NoneDefault>::new(code(), FunctionId(0), REGIONS, &state, NoneDefault(SAFE));
+    assert_eq!(none.map(|_| ()), Err(MakeError::Outputs), "a default that reads back as none");
+}
+
+/// `fn scan(..)`: a loop of `n` turns, each adding one to the outputs' sum; then return.
+fn looping(n: u32) -> Code {
+    let local = |ty| LocalDecl { ty, name: None };
+    let c = |v: i128| Operand::Const(Const { ty: U32, slots: vec![Scalar::Int(Int::U32, v)] });
+    let f = Function {
+        name: "loop".into(),
+        params: 4,
+        locals: vec![local(UNIT), local(TypeId(9)), local(TypeId(10)), local(TypeId(11)), local(TypeId(12)), local(U32), local(BOOL)],
+        blocks: vec![
+            Block { statements: vec![assign(Place::local(5), Value::Use(c(0)), 1)], terminator: Terminator::Goto(BlockId(1)) },
+            Block {
+                statements: vec![assign(Place::local(6), Value::Binary(BinOp::Lt, copy(Place::local(5)), c(n.into())), 2)],
+                terminator: Terminator::SwitchInt { value: Operand::Move(Place::local(6)), targets: vec![(0, BlockId(3))], otherwise: BlockId(2), at: at(2) },
+            },
+            Block {
+                statements: vec![
+                    assign(Place::local(5), Value::Binary(BinOp::Add, copy(Place::local(5)), c(1)), 3),
+                    assign(deref(4, &[0]), Value::Binary(BinOp::Add, copy(deref(4, &[0])), c(1)), 3),
+                ],
+                terminator: Terminator::Goto(BlockId(1)),
+            },
+            Block { statements: vec![], terminator: Terminator::Return { at: at(4) } },
+        ],
+    };
+    Code { types: types(&[]), functions: vec![f], files: vec!["loop.rs".into()] }
+}
+
+#[test]
+fn a_scan_of_half_a_million_instructions_runs_to_its_return_with_no_budget() {
+    // M07: no instruction budget; a scan of some 500 000 instructions ends at its return
+    let p = Interpreted::<In, Out>::new(looping(100_000), FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE).unwrap();
+    let mut task = Task::new(config(), p).unwrap();
+    let mut clock = VirtualClock::new();
+    let r = task.step(&mut Feed(vec![In::default()]), &mut clock);
+    assert_eq!((r.state, r.outputs.sum), (RunState::Running, 100_000));
+    assert!(!task.program().machine().running());
+}
+
+#[test]
+fn the_output_image_handed_to_a_scan_is_the_one_the_program_reads() {
+    // M03: a scan called on outputs other than those the region holds
+    let mut p = interpreted(0);
+    let mut out = Out { sum: 1_000, ..Out::default() };
+    let scan = Scan { now: Duration::ZERO, period: Duration::from_millis(10), cycle: 0 };
+    TaskProgram::scan(&mut p, &scan, &In { x: 1, y: 1 }, &mut out).unwrap();
+    assert_eq!(out.sum, 1_001);
+}
+
+/// Outputs whose image is wrong for a sum of 13: a `u16` where the program's type has a `u32`.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+struct WrongOut(Out);
+
+impl Image for WrongOut {
+    fn write(&self, slots: &mut Vec<Scalar>) {
+        self.0.write(slots);
+        if self.0.sum == 13 {
+            slots[0] = Scalar::Int(Int::U16, 13);
+        }
+    }
+    fn read(slots: &[Scalar]) -> Option<Self> {
+        Out::read(slots).map(WrongOut)
+    }
+}
+
+#[test]
+fn an_output_image_the_machine_refuses_faults_the_task_as_the_host_s_error() {
+    // M08 (refusal ignored), M10 (named Outputs)
+    let state = [Scalar::Int(Int::U32, 0)];
+    let p = Interpreted::<In, WrongOut>::new(code(), FunctionId(0), REGIONS, &state, WrongOut(SAFE)).unwrap();
+    let mut task = Task::new(config(), p).unwrap();
+    let mut feed = Feed(vec![In { x: 13, y: 1 }, In { x: 1, y: 1 }]);
+    let mut clock = VirtualClock::new();
+    let r = task.step(&mut feed, &mut clock);
+    assert_eq!((r.state, r.outputs.0.sum), (RunState::Running, 13));
+    let r = task.step(&mut feed, &mut clock);
+    let want = RunState::Faulted { at: Duration::from_millis(10), fault: Fault::Program { error: ScanError::Host(HostError::Slots) } };
+    assert_eq!((r.state, *r.outputs), (want, WrongOut(SAFE)));
+}
+
+#[test]
+fn a_time_and_a_cycle_past_32_bits_reach_the_program_exactly() {
+    // M09 (seconds truncated), M17 (cycle truncated)
+    let mut clock = VirtualClock::new();
+    let far = Duration::new(1 << 33, 123_456_789);
+    clock.advance(far);
+    let mut task = Task::new(TaskConfig { name: "acc", period: Duration::from_millis(1) }, interpreted(0)).unwrap();
+    let mut feed = Feed(vec![In { x: 1, y: 1 }; 2]);
+    let r = task.step(&mut feed, &mut clock);
+    assert_eq!((r.outputs.now, r.outputs.cycle), (far, 0));
+    let r = task.step(&mut feed, &mut clock);
+    let cycle = r.scan.cycle;
+    assert!(cycle > u64::from(u32::MAX));
+    assert_eq!((r.outputs.now, r.outputs.cycle), (r.scan.now, cycle));
+}
+
+#[test]
+fn nothing_of_the_program_runs_after_a_fault_that_leaves_the_machine_idle() {
+    // M22: after an Outputs fault the machine is idle, so a run would show in the state region
+    let state = [Scalar::Int(Int::U32, 0)];
+    let p = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(SAFE)).unwrap();
+    let mut task = Task::new(config(), p).unwrap();
+    let mut feed = Feed(vec![In { x: 13, y: 1 }, In { x: 1, y: 1 }, In { x: 1, y: 1 }, In { x: 1, y: 1 }]);
+    let mut clock = VirtualClock::new();
+    for _ in 0..4 {
+        let r = task.step(&mut feed, &mut clock);
+        assert_eq!(*r.outputs, Picky(SAFE));
+    }
+    let m = task.program().machine();
+    assert_eq!((m.region(orcl_runtime::interpreted::STATE).unwrap(), m.steps()), (&[Scalar::Int(Int::U32, 13)][..], 9));
+}
