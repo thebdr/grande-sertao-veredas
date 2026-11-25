@@ -125,6 +125,14 @@ if (-not (Test-Path "$qt\bin\QtWebEngineProcess.exe")) {
     if ($LASTEXITCODE -ne 0) { throw "aqt install-qt exited $LASTEXITCODE" }
 }
 
+# Oficina's window built by any cargo run of the suite (docs/questions.md Q370, ruled: built by
+# default): cxx-qt finds Qt through `QMAKE`, and a test of Oficina's package, which links the
+# window, finds Qt's DLLs and the C++ libraries' (KDDockWidgets) on `PATH`.
+[Environment]::SetEnvironmentVariable("QMAKE", "$qt\bin\qmake.exe", "User")
+$env:QMAKE = "$qt\bin\qmake.exe"
+AddPath "$qt\bin"
+AddPath (Join-Path $env:USERPROFILE ".local\opt\oficina-deps\bin")
+
 # What is installed now, as the run will find it.
 $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property catalog_productDisplayVersion
 Write-Host "Visual Studio Build Tools $vs"

@@ -340,7 +340,10 @@ and a file to read back.
   in the versions this machine used where they apply, is installed by one command run elevated,
   `powershell -ExecutionPolicy Bypass -File spikes\oficina\install-windows-tools.ps1`, each piece
   from its publisher and checked before it runs (in the `win11` guest on 2026-11-24: 49 minutes,
-  Build Tools 17.14.45, Git 2.56.1, uv 0.13.9 running aqtinstall's master at 4c75985):
+  Build Tools 17.14.45, Git 2.56.1, uv 0.13.9 running aqtinstall's master at 4c75985). It also
+  sets, for the user, `QMAKE` and `PATH` with Qt's `bin` and the C++ libraries' `bin`: any cargo
+  build of Oficina's window needs the first (MSVC is found without a developer shell), and any test
+  of its package the second, its window linked in (measured in the guest, 2026-11-25):
   - Visual Studio 2022 Build Tools 17.14 or later, workload "Desktop development with C++" (MSVC
     v143 for x64 and a Windows 11 SDK): Qt's `msvc2022_64` build is made with it.
   - Qt 6.12.0 for MSVC 2022 64-bit in `C:\Qt\6.12.0\msvc2022_64` (`-Qt` names another place),
