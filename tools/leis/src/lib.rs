@@ -373,9 +373,12 @@ impl Suite {
         for p in &paths {
             let (dir, file) = p.rsplit_once('/').unwrap_or(("", p.as_str()));
             // The extension in any case: a `.TOML` is a TOML file to every reader of it. A cargo
-            // manifest and the test runner's own `.config/nextest.toml` are the tools' files,
+            // manifest, the test runner's own `.config/nextest.toml` and the linter's own
+            // `clippy.toml` or `.clippy.toml` (the two names clippy reads, in a crate's folder
+            // or one above it, so at any depth; docs/questions.md Q225) are the tools' files,
             // not the suite's, and carry no stamp.
-            if file.to_ascii_lowercase().ends_with(".toml") && !file.eq_ignore_ascii_case("Cargo.toml") && p != ".config/nextest.toml" {
+            let tools_own = ["Cargo.toml", "clippy.toml", ".clippy.toml"].iter().any(|t| file.eq_ignore_ascii_case(t)) || p == ".config/nextest.toml";
+            if file.to_ascii_lowercase().ends_with(".toml") && !tools_own {
                 stamped.push((p.clone(), read(p)?));
             }
             if p.starts_with("docs/") && p.to_ascii_lowercase().ends_with(".md") {

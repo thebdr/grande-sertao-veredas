@@ -73,6 +73,12 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
             ("tools/leis/tests/data/Cargo.toml", "[package]\nname = \"x\"\n"),
             // The test runner's own file: a tool's, like a manifest, and no stamp asked of it.
             (".config/nextest.toml", "[[profile.default.overrides]]\nfilter = 'test(x)'\nthreads-required = 'num-cpus'\n"),
+            // The linter's own, under both its names, at any depth and in any case: a tool's too.
+            // A file whose name only holds the word is the suite's, and stamped.
+            ("crates/orcl-std/clippy.toml", "disallowed-types = [\"core::cell::Cell\"]\n"),
+            (".clippy.toml", "msrv = \"1.80\"\n"),
+            ("tools/x/CLIPPY.TOML", "msrv = \"1.80\"\n"),
+            ("fixtures/my-clippy.toml", "format = \"veredas-clippy\"\nversion = 1\n"),
         ],
     );
     let s = leis::Suite::read(tree.path()).expect("the tree reads");
@@ -101,6 +107,7 @@ fn l7_the_reader_collects_toml_files_but_manifests_and_the_blocks_of_a_reference
             "docs/upper-schema.MD block 1",
             "fixtures/B.TOML",
             "fixtures/a.toml",
+            "fixtures/my-clippy.toml",
         ]
     );
     let block = |place: &str| s.stamped.iter().find(|(p, _)| p == place).unwrap().1.as_str();
