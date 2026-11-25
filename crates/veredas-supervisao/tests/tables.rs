@@ -212,8 +212,10 @@ thread_local! {
 }
 
 /// Every state each view draws, by the page's own source: the name each `draw` call gives, the
-/// Tables view's before the Series class and the Series view's after it; and every drawing of a
-/// view's main part made by `draw` alone (one `replaceChildren` of it in each class, `draw`'s own).
+/// Tables view's before the Series class and the Series view's after it; every drawing of a
+/// view's main part made by `draw` alone (one `replaceChildren` of it in each class, `draw`'s own);
+/// and each state of a view drawn by one call (a refusal by one, whatever was refused), so a state
+/// read is every call that draws it read.
 fn drawn_states() -> std::collections::BTreeSet<String> {
     let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web/src/tables.ts")).unwrap().replace("\r\n", "\n");
     assert_eq!((src.matches("this.main.replaceChildren(").count(), src.matches("private draw(").count()), (2, 2), "the views draw their main part by `draw` alone");
@@ -223,7 +225,7 @@ fn drawn_states() -> std::collections::BTreeSet<String> {
         for (at, _) in part.match_indices("this.draw(") {
             let rest = part[at + "this.draw(".len()..].trim_start();
             let name = rest.strip_prefix('"').and_then(|r| r.split_once('"')).map(|(n, _)| n).unwrap_or_else(|| panic!("a draw of no named state: {}", &rest[..40.min(rest.len())]));
-            out.insert(format!("{view} {name}"));
+            assert!(out.insert(format!("{view} {name}")), "the {view} view drawing its {name} by more than one call");
         }
     }
     out
@@ -1148,8 +1150,9 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // The listing refused for the latest pick is said where the page was.
     page.eval(r#"(() => { window.__slowSent = false; window.__slowRefuse = true; window.__slow = "/api/tables"; document.querySelector('.list button[data-table="outlets"]').click(); return true; })()"#);
     page.wait_for("window.__slowSent || null", Duration::from_secs(10));
-    let refused = page.wait_for(r#"document.querySelector(".list-main p.error")?.textContent ?? null"#, Duration::from_secs(10));
+    let refused = page.wait_for(r#"document.querySelector(".list-main p.error")?.innerText ?? null"#, Duration::from_secs(10));
     assert_eq!(refused, json!("Error: probe  refusal,\tlate"), "the latest pick's listing refused");
+    every_mark_shown(&mut page, "the latest pick's listing refused");
     // Shown anew, the table's window takes the rows stored since; a page portal refuses is said in
     // its place.
     pick(&mut page, "sorts");

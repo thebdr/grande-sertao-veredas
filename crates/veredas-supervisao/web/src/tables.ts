@@ -68,6 +68,12 @@ export class Tables {
     this.main.replaceChildren(...nodes);
   }
 
+  /// A refusal, of the listing or of a page, said in its own words where the page was, unless a
+  /// later request has been made since (`token`): one drawing of it, whatever was refused.
+  private refused(token: number, e: unknown) {
+    if (token === this.asked) this.draw("error", h("p", { class: "error" }, String(e)));
+  }
+
   async show(picked = false) {
     const token = ++this.asked;
     // The window frozen at the session's now. With no now yet, a pick asks its first page whole (its
@@ -89,7 +95,7 @@ export class Tables {
       else this.draw("prompt", h("p", { class: "muted" }, "Pick a table."));
     } catch (e) {
       // A listing refused for a pick no longer the latest says nothing over the latest's page.
-      if (token === this.asked) this.draw("error", h("p", { class: "error" }, String(e)));
+      this.refused(token, e);
     }
   }
 
@@ -133,7 +139,7 @@ export class Tables {
           h("tbody", {}, ...p.rows.map((r) => h("tr", {}, ...r.map((v) => h("td", { class: "mono" }, cell(v)))))))),
       );
     } catch (e) {
-      if (token === this.asked) this.draw("error", h("p", { class: "error" }, String(e)));
+      this.refused(token, e);
     }
   }
 }
