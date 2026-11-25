@@ -455,17 +455,18 @@ fn the_update_inside_the_machine_is_judged_by_what_its_console_and_the_host_say(
     let old = format!("veredas-1.0.0-{TARGET}");
     let new = format!("veredas-1.1.0-{TARGET}");
     let sum = "c".repeat(64);
-    // The console as the proof's commands leave it: each command's echo, its marker split by
-    // quotes, then what it printed.
+    // The console as the proof's commands leave it (seen in the machine, 2026-11-25): each command's
+    // echo, its marker split by quotes, then what it printed, its first line after bash's
+    // bracketed-paste `ESC[?2004l`.
     let good = format!(
         "veredas login: veredas\nPassword: \nveredas@veredas:~$ echo \"ALFORGE-\"\"UPDATE-EXIT $?\"\n\
-         ALFORGE-PLANT-BEFORE {sum}\nveredas-atualizar: release 1.0.0 -> 1.1.0 (commit ab)\nALFORGE-UPDATE-EXIT 0\n\
-         ALFORGE-CURRENT {new}\nALFORGE-RELEASES current {old} {new} \n\
-         ALFORGE-EXE /opt/veredas/{new}/bin/veredas-maquinar\nALFORGE-EXE /opt/veredas/{new}/bin/veredas-supervisao\n\
-         ALFORGE-CHECK VEREDAS-SUMS-OK 1.1.0\nALFORGE-CHECK VEREDAS-ON-PATH ok\nALFORGE-CHECK VEREDAS-ATUALIZAR ok\n\
+         \u{1b}[?2004lALFORGE-PLANT-BEFORE {sum}\nveredas-atualizar: release 1.0.0 -> 1.1.0 (commit ab)\nALFORGE-UPDATE-EXIT 0\n\
+         \u{1b}[?2004lALFORGE-CURRENT {new}\nALFORGE-RELEASES current {old} {new} \n\
+         \u{1b}[?2004lALFORGE-EXE /opt/veredas/{new}/bin/veredas-maquinar\nALFORGE-EXE /opt/veredas/{new}/bin/veredas-supervisao\n\
+         \u{1b}[?2004lALFORGE-CHECK VEREDAS-SUMS-OK 1.1.0\nALFORGE-CHECK VEREDAS-ON-PATH ok\nALFORGE-CHECK VEREDAS-ATUALIZAR ok\n\
          ALFORGE-PLANT-AFTER {sum}\nveredas-atualizar: not installed, the machine is as it was:\nALFORGE-AGAIN-EXIT 2\n"
     );
-    let reboot = format!("VEREDAS-SUMS-OK 1.1.0\nVEREDAS-BUNDLE {}\nVEREDAS-ON-PATH ok\nVEREDAS-ATUALIZAR ok\n", "e".repeat(64));
+    let reboot = format!("[   9.1] VEREDAS-SUMS-OK 1.1.0\nVEREDAS-BUNDLE {}\nVEREDAS-ON-PATH ok\nVEREDAS-ATUALIZAR ok\n", "e".repeat(64));
     let full = |console: &str, page: u16, again: &str, again_page: u16, after: &str| maquina::UpdateProof {
         console: console.into(),
         plant: served(page),

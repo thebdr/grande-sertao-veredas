@@ -896,9 +896,11 @@ pub struct UpdateProof {
 }
 
 /// The lines the proof's commands print, each marker split by quotes in what is typed so the
-/// console's echo of a command never reads as its output.
+/// console's echo of a command never reads as its output. A marker is found anywhere in its line:
+/// bash's bracketed-paste mode writes `ESC[?2004l` before a command's first line of output.
 fn marked(console: &str, marker: &str) -> Vec<String> {
-    console.lines().filter_map(|l| l.trim_end().strip_prefix(&format!("ALFORGE-{marker} ")).map(str::to_string)).collect()
+    let m = format!("ALFORGE-{marker} ");
+    console.lines().filter_map(|l| l.find(&m).map(|i| l[i + m.len()..].trim_end().to_string())).collect()
 }
 
 /// Boots the disk of `vmdk` copy-on-write with `newer` (a release's bundle archive) on a data disk,
@@ -1031,7 +1033,7 @@ pub fn update_faults(p: &UpdateProof, release: &str, newer: &str, target: &str) 
     out.extend(crate::together::plant_faults(&p.plant));
     // Booted again: the boot's own check on the new release, the plant served from the boot.
     for line in [format!("VEREDAS-SUMS-OK {newer}"), "VEREDAS-ON-PATH ok".to_string(), "VEREDAS-ATUALIZAR ok".to_string()] {
-        if !p.reboot_console.lines().any(|l| l.trim_end() == line) {
+        if !p.reboot_console.lines().any(|l| l.trim_end().ends_with(line.as_str())) {
             out.push(format!("booted again, the machine's check does not say `{line}`"));
         }
     }
