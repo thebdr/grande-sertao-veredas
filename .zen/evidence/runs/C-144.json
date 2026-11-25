@@ -14,10 +14,10 @@
     "ask"
   ],
   "exitCode": 0,
-  "outputSha": "2b9bdbc989833d7a9d06a3b3eddaf2515b3df175731876b9dd996ce520b93160",
-  "outputTail": "\nrunning 5 tests\ntest answers_let_go_past_the_listener_s_bound_are_counted_lost ... ok\ntest an_identify_is_answered_by_what_it_matches_and_only_its_answers_count ... ok\ntest asking_is_refused_where_it_cannot_be_heard_sent_or_bounded ... ok\ntest an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer ... ok\ntest the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_segment ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.63s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running tests/ask.rs (target/debug/build/veredas-aranha/79e8d25a70a9eddf/out/ask-79e8d25a70a9eddf)",
-  "ranAt": "2026-11-24T23:12:14.225Z",
-  "headCommit": "76e5fea74e4c2aad880b26127e2e60dc1965c0e5",
+  "outputSha": "f41596959324c8fb83d09b895e1d8c89efe1b3023cca73cedfb2c7b75b85e157",
+  "outputTail": "\nrunning 5 tests\ntest answers_let_go_past_the_listener_s_bound_are_counted_lost ... ok\ntest an_identify_is_answered_by_what_it_matches_and_only_its_answers_count ... ok\ntest asking_is_refused_where_it_cannot_be_heard_sent_or_bounded ... ok\ntest the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_segment ... ok\ntest an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.80s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running tests/ask.rs (target/debug/build/veredas-aranha/79e8d25a70a9eddf/out/ask-79e8d25a70a9eddf)",
+  "ranAt": "2026-11-25T02:45:53.685Z",
+  "headCommit": "2b604f8c046d3e4644dbe3225ed4de635873585e",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/ask.rs",

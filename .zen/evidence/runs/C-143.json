@@ -1,7 +1,9 @@
 {
   "clause": "C-143",
-  "command": "cargo test -j 8 -p veredas-aranha --test bench_device",
+  "command": "flock /tmp/veredas-suite.lock cargo test -j 8 -p veredas-aranha --test bench_device",
   "commandArgv": [
+    "flock",
+    "/tmp/veredas-suite.lock",
     "cargo",
     "test",
     "-j",
@@ -12,15 +14,15 @@
     "bench_device"
   ],
   "exitCode": 0,
-  "outputSha": "2f59f26d9c2826ffd4a4763800dbac7d768bb8e1bf36d3dc8efeef24e8ce2c43",
-  "outputTail": "\nrunning 1 test\ntest the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s\n     Running tests/bench_device.rs (target/debug/build/veredas-aranha/072447e12d0aca48/out/bench_device-072447e12d0aca48)",
-  "ranAt": "2026-11-24T22:20:22.373Z",
-  "headCommit": "c4e9a4a870d563350eea14c3abe380ce04e20fb3",
+  "outputSha": "d5ccc750d29432a6cf371efefd26229db58e78fdb2e76382264cbe0a790c20e7",
+  "outputTail": "\nrunning 1 test\ntest the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.88s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running tests/bench_device.rs (target/debug/build/veredas-aranha/072447e12d0aca48/out/bench_device-072447e12d0aca48)",
+  "ranAt": "2026-11-25T02:43:45.937Z",
+  "headCommit": "2b604f8c046d3e4644dbe3225ed4de635873585e",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/bench_device.rs",
       "file": "crates/veredas-aranha/tests/bench_device.rs",
-      "fileSha": "d83878096f18935a7496b41acd054c578195e3b26ee06e432e586cfcd8cf7483"
+      "fileSha": "23898a88c26eac3a0b375527937669bc35e410b2b0725de128e887d94ebd68b3"
     }
   ]
 }
