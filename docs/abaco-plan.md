@@ -311,6 +311,11 @@ own to close in a fork change of its own:
   the reference it names (Excel's dynamic range `SUM(A1:INDEX(A:A,n))`). Whether OFFSET,
   INDIRECT, CHOOSE and IF returning a reference beside `:` read as Excel reads them is not yet
   measured.
+- **Two names that fold to one:** the engine folds a name's case both ways (fork change 34: `Kx`
+  with the Kelvin sign is `kx`, `Maß` is `MASS`) and reads, sets and deletes the first of two a
+  file holds. Whether Excel folds a name so is not measured.
+- **A LET's name beyond ASCII:** `LET(É,1,É+1)` does not parse; a use beyond ASCII binds by the
+  fold (`LET(ss,1,ß+1)` is 2).
 
 ## On this machine
 - No Excel, no Office: Excel's acceptance of a written file is owed elsewhere (Rules).
@@ -479,7 +484,11 @@ own to close in a fork change of its own:
   `PartName` are read as XML reads them; an end tag with white space before `>` is refused; the
   worksheet's tail moves its cell watches, scenarios, consolidation, smart tags, custom views and
   publishing (a deleted changing cell, source or published range refused); names compare in
-  Unicode case, as the engine compares them.
+  Unicode case, as the engine compares them. The fifteenth made that one fold, the engine's
+  (fork change 34, a name's case folded both ways), for a defined name and a LET's or LAMBDA's
+  alike (`ÁREA(A1)` is the name `ÁREA`, `Kx` with the Kelvin sign is `kx`), and the first of two a
+  file holds the name the patcher reads, as the engine reads it; a bound name's every use is
+  written with its `_xlpm.` (the same change).
 - **Verification runs on a copy at a short UTF-8 path** (the engine's loader takes no other): under
   the system's temporary folder, the model renamed to the destination's stem before comparing;
   the new file then goes beside the destination under a short name of its own.

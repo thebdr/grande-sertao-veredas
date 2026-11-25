@@ -669,7 +669,7 @@ impl Workbook {
             .model
             .get_defined_name_list()
             .iter()
-            .any(|e| e.name.to_uppercase() == name.to_uppercase() && e.scope == scope);
+            .any(|e| ironcalc_base::expressions::utils::name_key(&e.name) == ironcalc_base::expressions::utils::name_key(name) && e.scope == scope);
         if exists {
             self.model.update_defined_name(name, scope, entry).map_err(engine)?;
         } else {

@@ -2660,15 +2660,142 @@ fn an_operation_under_an_implicit_intersection_is_written_as_the_edit_wrote_it()
 }
 
 #[test]
-fn a_name_the_engine_tells_apart_only_in_upper_case_is_written_beside_the_other() {
-    // the KELVIN SIGN's lower case is `k`, its upper case itself: `Kx` and `kx` are two names to the
-    // engine, which compares them in Unicode's upper case, and so to the patcher
+fn a_name_the_engine_folds_to_one_already_there_is_that_name_set() {
+    // the KELVIN SIGN's lower case is `k`: `Kx` and `kx` are one name to the engine, which folds a
+    // name's case both ways (fork change 34, round 15), and so to the patcher: setting `kx` sets
+    // the file's name, spelled as the file spells it
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("kelvin.xlsx");
     let dst = dir.path().join("out.xlsx");
     plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row>"#, ""))], "<definedName name=\"\u{212A}x\">S!$A$1</definedName>", &[]);
     patch(&src, &dst, &[Edit::SetName { name: "kx".into(), formula: "=S!$A$2".into(), scope: None }], &verified()).unwrap();
     let book = part(&dst, "xl/workbook.xml");
-    assert_eq!(book.matches("<definedName ").count(), 2, "{book}");
-    assert!(book.contains("<definedName name=\"\u{212A}x\">S!$A$1</definedName>") && book.contains("S!$A$2</definedName>"), "{book}");
+    assert_eq!(book.matches("<definedName ").count(), 1, "{book}");
+    assert!(book.contains("<definedName name=\"\u{212A}x\">S!$A$2</definedName>"), "{book}");
+}
+
+// ---- refute round 15 --------------------------------------------------------------------------
+
+#[test]
+fn a_name_a_let_or_a_lambda_binds_is_written_with_its_prefix_in_any_case() {
+    // the engine binds `F(3)` to `F` and `X` to `x` (fork change 33); Excel reads a bound use only
+    // with its `_xlpm.`, which is written for every one of them (change 34)
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("bound.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>3</v></c></row>"#, ""))], "", &[]);
+    let formula = |cell: &str, f: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: f.into(), expect: None };
+    let report = patch(
+        &src,
+        &dst,
+        &[
+            formula("B1", "=LET(F,LAMBDA(y,y*2),F(3))"),
+            formula("C1", "=LET(x,1,X+1)"),
+            formula("D1", "=LAMBDA(G,G(2))(LAMBDA(z,z+1))"),
+            Edit::SetName { name: "Dbl".into(), formula: "=LAMBDA(n,N*2)".into(), scope: None },
+        ],
+        &verified(),
+    )
+    .unwrap();
+    assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{:?}", report.outcomes);
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    for (cell, f, v) in [
+        ("B1", "_xlfn.LET(_xlpm.F,_xlfn.LAMBDA(_xlpm.y,_xlpm.y*2),_xlpm.f(3))", "6"),
+        ("C1", "_xlfn.LET(_xlpm.x,1,_xlpm.X+1)", "2"),
+        ("D1", "_xlfn.LAMBDA(_xlpm.G,_xlpm.g(2))(_xlfn.LAMBDA(_xlpm.z,_xlpm.z+1))", "3"),
+    ] {
+        let e = element(&sheet, cell).unwrap();
+        // Excel 365's one-cell dynamic array, `<f t="array" ref="B1">`, or a plain formula
+        assert!(e.contains(&format!(">{f}</f>")) && e.ends_with(&format!("<v>{v}</v></c>")), "{cell}: {e}");
+    }
+    let book = part(&dst, "xl/workbook.xml");
+    assert!(book.contains("<definedName name=\"Dbl\">_xlfn.LAMBDA(_xlpm.n,_xlpm.N*2)</definedName>"), "{book}");
+    // Excel's own spelling of the same formula, its call in the declaration's case: already
+    // there, the file byte for byte
+    let src = dir.path().join("excel.xlsx");
+    let excel: Vec<(String, String)> = parts(&dst)
+        .into_iter()
+        .map(|(name, bytes)| {
+            let text = String::from_utf8(bytes).unwrap();
+            let text = if name == "xl/worksheets/sheet1.xml" { text.replace(",_xlpm.f(3))", ",_xlpm.F(3))") } else { text };
+            (name, text)
+        })
+        .collect();
+    assert!(excel.iter().any(|(_, t)| t.contains("_xlpm.y*2),_xlpm.F(3))</f>")));
+    let mut z = zip::ZipWriter::new(std::fs::File::create(&src).unwrap());
+    for (name, text) in &excel {
+        z.start_file(name.as_str(), zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(text.as_bytes()).unwrap();
+    }
+    z.finish().unwrap();
+    let dst = dir.path().join("out2.xlsx");
+    let report = patch(&src, &dst, &[formula("B1", "=LET(F,LAMBDA(y,y*2),F(3))")], &verified()).unwrap();
+    assert_eq!(report.outcomes[0].status, Status::AlreadyThere, "{:?}", report.outcomes);
+    assert_eq!(parts(&dst), parts(&src));
+}
+
+#[test]
+fn a_lambda_name_with_a_capital_letter_beyond_ascii_is_called_and_named() {
+    // a Portuguese workbook's `ÁREA`, which the engine reads in any case (`área(A1)` is 9)
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("area.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    let names = "<definedName name=\"\u{c1}REA\">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*_xlpm.x)</definedName>";
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>3</v></c></row>"#, ""))], names, &[]);
+    let report = patch(
+        &src,
+        &dst,
+        &[
+            Edit::Formula { sheet: "S".into(), cell: "B1".into(), formula: "=\u{c1}REA(A1)".into(), expect: None },
+            Edit::SetName { name: "Nove".into(), formula: "=\u{c1}REA(3)".into(), scope: None },
+            Edit::Formula { sheet: "S".into(), cell: "C1".into(), formula: "=Nove".into(), expect: None },
+        ],
+        &verified(),
+    )
+    .unwrap();
+    assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{:?}", report.outcomes);
+    let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+    for cell in ["B1", "C1"] {
+        let e = element(&sheet, cell).unwrap();
+        assert!(e.ends_with("<v>9</v></c>"), "{cell}: {e}");
+    }
+    assert!(part(&dst, "xl/workbook.xml").contains("<definedName name=\"Nove\">"));
+}
+
+#[test]
+fn of_two_names_a_file_holds_that_fold_to_one_the_first_is_read_by_the_patcher_as_by_the_engine() {
+    // `Kx` with the Kelvin sign first, `kx` second: the engine reads `kx` as the first (fork change
+    // 34), and the patcher moves what the engine moves
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("pair.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>kx*2</f><v>4</v></c></row><row r="2"><c r="A2"><v>2</v></c></row>"#;
+    let names = "<definedName name=\"\u{212A}x\">S!$A$2</definedName><definedName name=\"kx\">S!$A$1</definedName>";
+    plain_book(&src, &[("S", worksheet(data, ""))], names, &[]);
+    let dst = dir.path().join("a2.xlsx");
+    patch(&src, &dst, &[value("S", "A2", serde_json::json!(7))], &verified()).unwrap();
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B1"), Some(r#"<c r="B1"><f>kx*2</f><v>14</v></c>"#));
+    let dst = dir.path().join("a1.xlsx");
+    patch(&src, &dst, &[value("S", "A1", serde_json::json!(5))], &verified()).unwrap();
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B1"), Some(r#"<c r="B1"><f>kx*2</f><v>4</v></c>"#));
+    // the critic's file: the first a volatile one, so `kx*2` is random to the engine and left as
+    // the file has it
+    let src = dir.path().join("random.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>kx*2</f><v>2</v></c></row>"#;
+    let names = "<definedName name=\"\u{212A}x\">RAND()</definedName><definedName name=\"kx\">S!$A$1</definedName>";
+    plain_book(&src, &[("S", worksheet(data, ""))], names, &[]);
+    let dst = dir.path().join("random-out.xlsx");
+    patch(&src, &dst, &[value("S", "A1", serde_json::json!(5))], &verified()).unwrap();
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B1"), Some(r#"<c r="B1"><f>kx*2</f><v>2</v></c>"#));
+    // setting the name sets both the file holds; deleting it deletes both
+    let names = "<definedName name=\"\u{212A}x\">S!$A$2</definedName><definedName name=\"kx\">S!$A$1</definedName>";
+    let src = dir.path().join("names.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row>"#, ""))], names, &[]);
+    let dst = dir.path().join("set.xlsx");
+    patch(&src, &dst, &[Edit::SetName { name: "KX".into(), formula: "=S!$A$1".into(), scope: None }], &verified()).unwrap();
+    let book = part(&dst, "xl/workbook.xml");
+    assert_eq!(book.matches("<definedName ").count(), book.matches(">S!$A$1</definedName>").count(), "{book}");
+    let dst = dir.path().join("deleted.xlsx");
+    patch(&src, &dst, &[Edit::DeleteName { name: "kx".into(), scope: None }], &verified()).unwrap();
+    let book = part(&dst, "xl/workbook.xml");
+    assert_eq!(book.matches("<definedName ").count(), 0, "{book}");
 }

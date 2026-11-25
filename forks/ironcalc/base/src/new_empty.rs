@@ -171,10 +171,11 @@ impl<'a> Model<'a> {
                 }
             };
 
-            parsed_defined_names.insert(
-                (local_sheet_index, name.to_lowercase()),
-                parsed_defined_name_formula,
-            );
+            // two names of a file that fold to one: the first is the name, as the parser reads
+            // it (Veredas fork change 34)
+            parsed_defined_names
+                .entry((local_sheet_index, crate::expressions::utils::name_key(&name)))
+                .or_insert(parsed_defined_name_formula);
         }
 
         self.parsed_defined_names = parsed_defined_names;

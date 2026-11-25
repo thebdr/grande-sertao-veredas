@@ -290,7 +290,7 @@ impl<'a> Model<'a> {
                 // Let's see if it is a defined name
                 if let Some(defined_name) = self
                     .parsed_defined_names
-                    .get(&(*scope, name.to_lowercase()))
+                    .get(&(*scope, crate::expressions::utils::name_key(name)))
                 {
                     match defined_name {
                         ParsedDefinedName::CellReference(reference) => {

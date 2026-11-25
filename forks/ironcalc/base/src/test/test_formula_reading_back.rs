@@ -108,14 +108,92 @@ fn a_named_function_and_a_range_read_back_and_names_bind_in_any_case() {
         (8, "=SUM((A1):A3)"),
         (10, "=LET(x,1,X+1)"),
         (11, "=LAMBDA(a,A*2)(4)"),
+        (12, "=LET(ss,1,ß+1)"),
     ] {
         model.set_user_input(0, row, 3, typed.to_string()).unwrap();
     }
     model.evaluate();
     assert_eq!(model.formulas_reading_back_otherwise(), Vec::<(u32, i32, i32)>::new());
-    for (row, value) in [(1, "6"), (2, "6"), (3, "6"), (6, "6"), (7, "6"), (8, "6"), (10, "2"), (11, "8")] {
+    for (row, value) in [(1, "6"), (2, "6"), (3, "6"), (6, "6"), (7, "6"), (8, "6"), (10, "2"), (11, "8"), (12, "2")] {
         assert_eq!(model.get_formatted_cell_value(0, row, 3).unwrap(), value, "row {row}");
     }
     assert_eq!(model.get_cell_formula(0, 6, 3).unwrap().unwrap(), "=SUM(A1:(A2:A3))");
     assert_eq!(model.get_cell_formula(0, 1, 3).unwrap().unwrap(), "=fn(3)");
+}
+
+/// Veredas fork change 34: a bound name is written with `_xlpm.` in any case, as
+/// evaluation binds it, so Excel reads the LET's and the LAMBDA's own names.
+#[test]
+fn a_bound_name_is_exported_with_its_prefix_in_any_case() {
+    use crate::expressions::parser::stringify::to_excel_string;
+    use crate::expressions::types::CellReferenceRC;
+    let mut model = new_empty_model();
+    let cell = CellReferenceRC { sheet: "Sheet1".to_string(), row: 1, column: 1 };
+    for (typed, exported) in [
+        ("LET(F,LAMBDA(y,y*2),F(3))", "_xlfn.LET(_xlpm.F,_xlfn.LAMBDA(_xlpm.y,_xlpm.y*2),_xlpm.f(3))"),
+        ("LET(x,1,X+1)", "_xlfn.LET(_xlpm.x,1,_xlpm.X+1)"),
+        ("LAMBDA(G,G(2))(LAMBDA(z,z+1))", "_xlfn.LAMBDA(_xlpm.G,_xlpm.g(2))(_xlfn.LAMBDA(_xlpm.z,_xlpm.z+1))"),
+        ("LAMBDA(n,N*2)", "_xlfn.LAMBDA(_xlpm.n,_xlpm.N*2)"),
+        // `ß` folds to `ss` the way a defined name does (change 34)
+        ("LET(ss,1,ß+1)", "_xlfn.LET(_xlpm.ss,1,_xlpm.ß+1)"),
+    ] {
+        let node = model.parser.parse(typed, &cell);
+        assert_eq!(to_excel_string(&node, &cell), exported, "{typed}");
+    }
+}
+
+/// Veredas fork change 34: a defined name's identity is its case folded both ways, in the name
+/// table evaluation reads, the parser's and every check: two names evaluation could not tell apart
+/// are one.
+#[test]
+fn a_defined_name_is_one_whatever_case_folds_to_it() {
+    use crate::DefinedNameEntry;
+    let mut model = new_empty_model();
+    model.set_user_input(0, 1, 1, "2".to_string()).unwrap();
+    // a name opening with the Kelvin sign comes from a file (the engine's own API takes an ASCII
+    // letter first): held as a file holds it
+    model.workbook.defined_names.push(crate::types::DefinedName {
+        name: "\u{212A}x".to_string(),
+        formula: "Sheet1!$A$1".to_string(),
+        sheet_id: None,
+        hidden: false,
+        comment: String::new(),
+    });
+    model.reset_parsed_structures();
+    // the Kelvin sign's `K` folds to `k`, `ß` to `ss`: each the name already there
+    assert!(model.new_defined_name(DefinedNameEntry::new("kx", "Sheet1!$A$2")).is_err());
+    model.new_defined_name(DefinedNameEntry::new("Maß", "Sheet1!$A$1")).unwrap();
+    assert!(model.new_defined_name(DefinedNameEntry::new("MASS", "Sheet1!$A$2")).is_err());
+    model.set_user_input(0, 2, 1, "=kx*3".to_string()).unwrap();
+    model.set_user_input(0, 3, 1, "=mass+1".to_string()).unwrap();
+    model.evaluate();
+    assert_eq!(model.get_formatted_cell_value(0, 2, 1).unwrap(), "6");
+    assert_eq!(model.get_formatted_cell_value(0, 3, 1).unwrap(), "3");
+}
+
+/// Veredas fork change 34: of two names a file holds that fold to one, the first is the name the
+/// parser and the evaluator read and the one deleted.
+#[test]
+fn of_two_names_a_file_holds_that_fold_to_one_the_first_is_read_and_deleted() {
+    let mut model = new_empty_model();
+    model.set_user_input(0, 1, 1, "2".to_string()).unwrap();
+    model.set_user_input(0, 2, 1, "7".to_string()).unwrap();
+    for (name, formula) in [("\u{212A}x", "Sheet1!$A$1"), ("kx", "Sheet1!$A$2")] {
+        model.workbook.defined_names.push(crate::types::DefinedName {
+            name: name.to_string(),
+            formula: formula.to_string(),
+            sheet_id: None,
+            hidden: false,
+            comment: String::new(),
+        });
+    }
+    model.reset_parsed_structures();
+    model.set_user_input(0, 3, 1, "=kx*3".to_string()).unwrap();
+    model.evaluate();
+    assert_eq!(model.get_formatted_cell_value(0, 3, 1).unwrap(), "6");
+    model.delete_defined_name("kx", None).unwrap();
+    let left: Vec<&str> = model.workbook.defined_names.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(left, ["kx"]);
+    model.evaluate();
+    assert_eq!(model.get_formatted_cell_value(0, 3, 1).unwrap(), "21");
 }

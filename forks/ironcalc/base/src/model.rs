@@ -1168,7 +1168,7 @@ impl<'a> Model<'a> {
                     // Not bound by LET — look up as a defined-name Lambda.
                     // Prefer sheet-local (current sheet) over global (scope = None),
                     // matching Excel's name resolution order.
-                    let name_lower = name.to_lowercase();
+                    let name_lower = crate::expressions::utils::name_key(name);
                     let found = self
                         .parsed_defined_names
                         .get(&(Some(cell.sheet), name_lower.clone()))
@@ -3386,10 +3386,10 @@ impl<'a> Model<'a> {
         name: &str,
         scope: Option<u32>,
     ) -> Result<Option<ParsedDefinedName>, String> {
-        let name_upper = name.to_uppercase();
+        let name_upper = crate::expressions::utils::name_key(name);
 
         for (key, df) in &self.parsed_defined_names {
-            if key.1.to_uppercase() == name_upper && key.0 == scope {
+            if key.1 == name_upper && key.0 == scope {
                 return Ok(Some(df.clone()));
             }
         }
@@ -3403,7 +3403,7 @@ impl<'a> Model<'a> {
         name: &str,
         scope: Option<u32>,
     ) -> Result<&DefinedName, String> {
-        let name_upper = name.to_uppercase();
+        let name_upper = crate::expressions::utils::name_key(name);
         let sheet_id = match scope {
             Some(index) => Some(self.workbook.worksheet(index)?.sheet_id),
             None => None,
@@ -3411,7 +3411,7 @@ impl<'a> Model<'a> {
         self.workbook
             .defined_names
             .iter()
-            .find(|df| df.name.to_uppercase() == name_upper && df.sheet_id == sheet_id)
+            .find(|df| crate::expressions::utils::name_key(&df.name) == name_upper && df.sheet_id == sheet_id)
             .ok_or_else(|| "Defined name not found".to_string())
     }
 
@@ -4131,7 +4131,7 @@ impl<'a> Model<'a> {
         if !is_valid_identifier(name) {
             return Err("Name: Invalid defined name".to_string());
         }
-        let name_upper = name.to_uppercase();
+        let name_upper = crate::expressions::utils::name_key(name);
         let defined_names = &self.workbook.defined_names;
         let sheet_id = match scope {
             Some(index) => match self.workbook.worksheet(index) {
@@ -4142,7 +4142,7 @@ impl<'a> Model<'a> {
         };
         // if the defined name already exist return error
         for df in defined_names {
-            if df.name.to_uppercase() == name_upper && df.sheet_id == sheet_id {
+            if crate::expressions::utils::name_key(&df.name) == name_upper && df.sheet_id == sheet_id {
                 return Err("Name: Defined name already exists".to_string());
             }
         }
@@ -4190,7 +4190,7 @@ impl<'a> Model<'a> {
 
     /// Delete defined name of name and scope
     pub fn delete_defined_name(&mut self, name: &str, scope: Option<u32>) -> Result<(), String> {
-        let name_upper = name.to_uppercase();
+        let name_upper = crate::expressions::utils::name_key(name);
         let defined_names = &self.workbook.defined_names;
         let sheet_id = match scope {
             Some(index) => Some(self.workbook.worksheet(index)?.sheet_id),
@@ -4198,8 +4198,10 @@ impl<'a> Model<'a> {
         };
         let mut index = None;
         for (i, df) in defined_names.iter().enumerate() {
-            if df.name.to_uppercase() == name_upper && df.sheet_id == sheet_id {
+            // the first of two that fold to one, the one a formula reads (Veredas fork change 34)
+            if crate::expressions::utils::name_key(&df.name) == name_upper && df.sheet_id == sheet_id {
                 index = Some(i);
+                break;
             }
         }
         if let Some(i) = index {
@@ -4228,12 +4230,12 @@ impl<'a> Model<'a> {
             return Err("Name: Invalid defined name".to_string());
         };
         validate_defined_name_comment(new_comment)?;
-        let name_upper = name.to_uppercase();
-        let new_name_upper = new_name.to_uppercase();
+        let name_upper = crate::expressions::utils::name_key(name);
+        let new_name_upper = crate::expressions::utils::name_key(new_name);
 
         if name_upper != new_name_upper || scope != new_scope {
             for key in self.parsed_defined_names.keys() {
-                if key.1.to_uppercase() == new_name_upper && key.0 == new_scope {
+                if key.1 == new_name_upper && key.0 == new_scope {
                     return Err("Name: Defined name already exists".to_string());
                 }
             }
@@ -4261,8 +4263,10 @@ impl<'a> Model<'a> {
 
         let mut index = None;
         for (i, df) in defined_names.iter().enumerate() {
-            if df.name.to_uppercase() == name_upper && df.sheet_id == sheet_id {
+            // the first of two that fold to one, the one a formula reads (Veredas fork change 34)
+            if crate::expressions::utils::name_key(&df.name) == name_upper && df.sheet_id == sheet_id {
                 index = Some(i);
+                break;
             }
         }
         // Defined-name formulas are stored internally in English.

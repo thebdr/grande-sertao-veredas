@@ -14,8 +14,9 @@ use crate::{
 /// pair's value expression — the inner LET will assign its own id for subsequent uses.
 pub(super) fn assign_variable_ids(node: &mut Node, target: &str, id: u32) {
     // a name is the same in any case, as Excel reads LET's and LAMBDA's (`LET(x,1,X+1)`; Veredas
-    // fork change 33)
-    let same = |name: &str| name.to_lowercase() == target.to_lowercase();
+    // fork change 33), by the one fold every name is compared by (change 34)
+    let key = crate::expressions::utils::name_key(target);
+    let same = |name: &str| crate::expressions::utils::name_key(name) == key;
     match node {
         Node::NamedVariableKind { name, id: var_id } if same(name) && var_id.is_none() => {
             *var_id = Some(id);

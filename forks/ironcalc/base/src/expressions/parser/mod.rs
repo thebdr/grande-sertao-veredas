@@ -484,12 +484,12 @@ impl<'a> Parser<'a> {
     //  * Some(None): If there is a global defined name
     fn get_defined_name(&self, name: &str, sheet: u32) -> Option<(Option<u32>, String)> {
         for (df_name, df_scope, df_formula) in &self.defined_names {
-            if name.to_lowercase() == df_name.to_lowercase() && df_scope == &Some(sheet) {
+            if crate::expressions::utils::name_key(name) == crate::expressions::utils::name_key(df_name) && df_scope == &Some(sheet) {
                 return Some((*df_scope, df_formula.to_owned()));
             }
         }
         for (df_name, df_scope, df_formula) in &self.defined_names {
-            if name.to_lowercase() == df_name.to_lowercase() && df_scope.is_none() {
+            if crate::expressions::utils::name_key(name) == crate::expressions::utils::name_key(df_name) && df_scope.is_none() {
                 return Some((None, df_formula.to_owned()));
             }
         }

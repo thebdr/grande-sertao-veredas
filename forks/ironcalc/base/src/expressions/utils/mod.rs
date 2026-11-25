@@ -252,6 +252,13 @@ pub fn is_valid_a1_identifier(name: &str) -> bool {
     true
 }
 
+/// A defined name's identity: its case folded both ways, so two names one evaluation could not
+/// tell apart are one everywhere (`Kx` with the Kelvin sign and `kx`, `Maß` and `MASS`; Veredas
+/// fork change 34).
+pub fn name_key(name: &str) -> String {
+    name.to_uppercase().to_lowercase()
+}
+
 pub fn is_valid_identifier(name: &str) -> bool {
     // You cannot use the uppercase and lowercase characters "C", "c", "R", or "r" as a defined name
     let upper = name.to_uppercase();

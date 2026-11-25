@@ -6,6 +6,7 @@ use crate::constants::{LAST_COLUMN, LAST_ROW};
 use crate::expressions::parser::move_formula::to_string_array_node;
 use crate::expressions::parser::static_analysis::remove_redundant_implicit_intersection;
 use crate::expressions::token::OpUnary;
+use crate::expressions::utils::name_key;
 use crate::functions::Function;
 use crate::language::{get_language, Language};
 use crate::locale::{get_locale, Locale};
@@ -134,18 +135,18 @@ fn excel_string(node: &Node, context: &CellReferenceRC, is_array_formula: bool) 
 /// Internally IronCalc keeps the bare names, so before exporting we walk the
 /// tree tracking which names are bound by an enclosing LAMBDA/LET and rename
 /// those occurrences. Unbound names (e.g. a defined name that only resolves at
-/// evaluation time) are left alone. Matching is case-sensitive, mirroring
-/// evaluation (see `assign_variable_ids`).
+/// evaluation time) are left alone. Matching ignores case by the fold evaluation
+/// binds by (see `assign_variable_ids`; Veredas fork changes 33 and 34).
 fn prefix_bound_variables(node: &mut Node, bound: &mut Vec<String>) {
     match node {
         Node::NamedVariableKind { name, .. } => {
-            if bound.iter().any(|n| n == name) {
+            if bound.iter().any(|n| name_key(n) == name_key(name)) {
                 *name = format!("_xlpm.{name}");
             }
         }
         // A bound lambda used as a function: `LET(f,LAMBDA(a,a*a),f(2))`
         Node::NamedFunctionKind { name, args, .. } => {
-            if bound.iter().any(|n| n == name) {
+            if bound.iter().any(|n| name_key(n) == name_key(name)) {
                 *name = format!("_xlpm.{name}");
             }
             for arg in args {
@@ -1585,7 +1586,7 @@ pub(crate) fn rename_defined_name_in_node(
         Node::DefinedNameKind {
             name: n, scope: s, ..
         } => {
-            if name.to_lowercase() == n.to_lowercase() && *s == scope {
+            if name_key(name) == name_key(n) && *s == scope {
                 *n = new_name.to_string();
             }
         }

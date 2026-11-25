@@ -1136,7 +1136,10 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
             ));
         }
         if let Some(j) =
-            ewb.defined_names[..i].iter().position(|e| e.sheet_id == d.sheet_id && e.name.to_uppercase() == d.name.to_uppercase())
+            ewb.defined_names[..i].iter().position(|e| {
+                e.sheet_id == d.sheet_id
+                    && ironcalc_base::expressions::utils::name_key(&e.name) == ironcalc_base::expressions::utils::name_key(&d.name)
+            })
         {
             return Err(format!("{WORKBOOK}: `defined_names.{i}` `{}` is stated in its scope already, as `defined_names.{j}`", d.name));
         }

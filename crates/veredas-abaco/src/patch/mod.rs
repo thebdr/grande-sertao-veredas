@@ -59,6 +59,7 @@ use std::path::{Path, PathBuf};
 use ironcalc_base::expressions::parser::stringify::to_excel_string;
 use ironcalc_base::expressions::parser::{new_parser_english, Node};
 use ironcalc_base::expressions::types::CellReferenceRC;
+use ironcalc_base::expressions::utils::name_key;
 use ironcalc_base::types::Cell;
 use serde::{Deserialize, Serialize};
 
@@ -461,13 +462,32 @@ fn resolve(names: &[Name], token: &Token, sheet: Option<&str>) -> Option<usize> 
     if matches!(token.next, Some('!' | '[')) {
         return None;
     }
-    let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+    // a name by the engine's fold (`Kx` with the Kelvin sign is `kx`), the first of two the file
+    // holds, as the engine reads it; a sheet by its own
+    let key = name_key(token.text);
+    let same_sheet = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
     let scope = token.sheet.as_deref().or(sheet);
     scope
         .and_then(|sc| {
-            names.iter().position(|n| same(&n.name, token.text) && n.scope.as_deref().is_some_and(|ns| same(ns, sc)))
+            names.iter().position(|n| name_key(&n.name) == key && n.scope.as_deref().is_some_and(|ns| same_sheet(ns, sc)))
         })
-        .or_else(|| names.iter().position(|n| same(&n.name, token.text) && n.scope.is_none()))
+        .or_else(|| names.iter().position(|n| name_key(&n.name) == key && n.scope.is_none()))
+}
+
+/// Deletes every name of `scope` the engine reads as `name` (a file may hold two that fold to one,
+/// `Kx` with the Kelvin sign and `kx`; the engine reads the first and deletes one at a time).
+fn delete_every_name(wb: &mut Workbook, name: &str, scope: Option<&str>) -> Result<(), String> {
+    let key = name_key(name);
+    let lower = scope.map(str::to_lowercase);
+    let count = wb
+        .names()
+        .iter()
+        .filter(|n| name_key(&n.name) == key && n.scope.as_deref().map(str::to_lowercase) == lower)
+        .count();
+    for _ in 0..count {
+        wb.delete_name(name, scope).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Which defined names (by their place in `names`) call a volatile function, directly or through
@@ -960,7 +980,9 @@ fn unknown_call(node: &Node, bound: &mut Vec<String>, names: &[String]) -> Optio
     match node {
         Node::NamedFunctionKind { name, args, .. } => {
             let bare = name.trim_start_matches("_xlfn.").trim_start_matches("_xlpm.");
-            let known = bound.iter().any(|b| b.eq_ignore_ascii_case(bare)) || names.iter().any(|n| n.eq_ignore_ascii_case(bare));
+            // the engine's fold, for a bound name as for a defined one (`ÁREA` is `área`)
+            let key = name_key(bare);
+            let known = bound.iter().any(|b| name_key(b) == key) || names.iter().any(|n| name_key(n) == key);
             if !known {
                 return Some(bare.to_uppercase());
             }
@@ -1556,17 +1578,16 @@ pub fn patch(
                 // the engine stores user spelling; give it that
                 let user = strip_file_prefixes(body);
                 let exists = wb.names().iter().any(|n| {
-                    n.name.to_uppercase() == name.to_uppercase()
+                    name_key(&n.name) == name_key(name)
                         && n.scope.as_deref().map(str::to_lowercase)
                             == scope.as_deref().map(str::to_lowercase)
                 });
                 if exists {
-                    wb.delete_name(name, scope.as_deref())
-                        .map_err(|e| fail(e.to_string()))?;
+                    delete_every_name(&mut wb, name, scope.as_deref()).map_err(fail)?;
                 }
                 wb.set_name(name, &user, scope.as_deref())
                     .map_err(|e| fail(e.to_string()))?;
-                let key = (name.to_uppercase(), scope.as_ref().map(|s| s.to_lowercase()));
+                let key = (name_key(name), scope.as_ref().map(|s| s.to_lowercase()));
                 deleted_names.retain(|k| *k != key);
                 set_names.push(key);
                 names_touched = true;
@@ -1574,7 +1595,9 @@ pub fn patch(
             Edit::DeleteName { name, scope } => {
                 wb.delete_name(name, scope.as_deref())
                     .map_err(|e| fail(e.to_string()))?;
-                let key = (name.to_uppercase(), scope.as_ref().map(|s| s.to_lowercase()));
+                // the file's other names the engine reads as this one go with it
+                delete_every_name(&mut wb, name, scope.as_deref()).map_err(fail)?;
+                let key = (name_key(name), scope.as_ref().map(|s| s.to_lowercase()));
                 set_names.retain(|k| *k != key);
                 deleted_names.push(key);
                 names_touched = true;
@@ -2716,10 +2739,10 @@ fn rewrite_defined_names(
                 .is_some_and(|e| !e.is_worksheet());
             // still in the model? (a deleted name goes; a built-in one the engine may not hold,
             // `_xlnm._FilterDatabase`, stays unless an edit deleted it)
-            let key = (name.to_uppercase(), scope.as_ref().map(|s| s.to_lowercase()));
+            let key = (name_key(&name), scope.as_ref().map(|s| s.to_lowercase()));
             let in_model = (on_a_chart_sheet
                 || model_names.iter().any(|n| {
-                n.name.to_uppercase() == name.to_uppercase()
+                name_key(&n.name) == name_key(&name)
                     && n.scope.as_deref().map(str::to_lowercase)
                         == scope.as_deref().map(str::to_lowercase)
             }) || name.starts_with("_xlnm."))
@@ -2728,7 +2751,7 @@ fn rewrite_defined_names(
                 continue;
             }
             seen.push((
-                name.to_uppercase(),
+                name_key(&name),
                 scope.as_ref().map(|s| s.to_lowercase()),
             ));
             let element = &inner[a..b];
@@ -2747,12 +2770,12 @@ fn rewrite_defined_names(
             }
             // a name the edits set: its new formula, from the model
             let key = (
-                name.to_uppercase(),
+                name_key(&name),
                 scope.as_ref().map(|s| s.to_lowercase()),
             );
             if set_names.contains(&key)
                 && let Some(m) = model_names.iter().find(|n| {
-                    n.name.to_uppercase() == name.to_uppercase()
+                    name_key(&n.name) == name_key(&name)
                         && n.scope.as_deref().map(str::to_lowercase) == key.1
                 }) {
                     let user = strip_file_prefixes(&text);
@@ -2781,7 +2804,7 @@ fn rewrite_defined_names(
     // names only the model has: added by the edits
     for n in &model_names {
         let key = (
-            n.name.to_uppercase(),
+            name_key(&n.name),
             n.scope.as_ref().map(|s| s.to_lowercase()),
         );
         if seen.contains(&key) {
