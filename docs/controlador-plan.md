@@ -512,5 +512,3 @@ Where each item stands on 2026-11-25:
   naming the repository's owner.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan gives way to the
   prior art's LET. **Q230** a program whose functions call themselves.
-- Ruled and waiting on another member: Q225's `clippy.toml`, once law L7 and its clause (C-046,
-  portal's) treat it as a tool's file.

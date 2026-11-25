@@ -125,7 +125,7 @@ view need a second front end that reads the source (Q44, the assistant's reading
   the fieldbus belong to the host that runs a program (controlador on Linux; maquinar on the bench). So the same
   crates build and test on every machine, and a test on simulated time is the same scan as a target's.
 - **The library is `no_std`, with no `unsafe` and no panic path**, under the denied lints and the `clippy.toml` of
-  `language/README.md` (the file itself waits for law L7 to exempt it, as Q225 ruled). The engine and the
+  `language/README.md` (law L7 treats the file as a tool's, Q225). The engine and the
   interpreter are ordinary Rust held to the suite's rules: typed errors, no `unwrap` or `expect` outside tests.
 - **Every failure inside a scan is a typed outcome**, never the end of the process (O11, as amended).
 - **Fixture first.** A program's plant in a test is a simulated process image, then maquinar's bench.
@@ -138,12 +138,11 @@ view need a second front end that reads the source (Q44, the assistant's reading
 Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crates/orcl-std`, `crates/orcl-runtime`,
 `demos/conveyor`, `docs/orcl/`. Veredas 1 called them demo stage; they had 17 tests and a doctest.
 - **`orcl-std`** comes whole: its five modules, their tests, its `compile_fail` doctest for O14 and its lints.
-  Changed: the version, `0.1.0` there, starts at `2.0.0-alpha.1` (law L3). Left out for now: its `clippy.toml`, the
-  list of types O13 forbids. Law L7 refuses a TOML file without the suite's stamp and clippy refuses any key it does
-  not know, so the file cannot sit in this repository until L7 treats it as a tool's file, as it treats
-  `.config/nextest.toml`, which the architect ruled it will (Q225, 2026-11-25; the law and its clause, C-046, are
-  portal's to change). Meanwhile O13 is kept by convention in the repository's own crates; a program crate in a
-  project, outside the repository, still carries the file.
+  Changed: the version, `0.1.0` there, starts at `2.0.0-alpha.1` (law L3). Its `clippy.toml`, the list of types
+  O13 forbids, came once law L7 treated it as a tool's file, as it treats `.config/nextest.toml` (Q225, ruled on
+  2026-11-25; portal changed the law and its clause, C-046). Clippy reads one such file per crate, so the conveyor,
+  a module of `orcl-runtime`'s tests whose engine is not a program (its virtual clock holds a `Cell`), keeps O13 by
+  convention.
 - **`orcl-runtime`** comes as the engine of a scan. Kept: the process image, absolute deadlines, skipped cycles,
   safe outputs once faulted, the statistics. Changed: the clock is handed in, so the same engine runs on virtual
   time; a scan is stepped by its host rather than looped for a fixed duration; the watchdog follows the plan's

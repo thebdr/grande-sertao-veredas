@@ -17,9 +17,9 @@
 //!   the same outputs, whether on a softPLC, in a unit test with simulated time, or in a translated PLC program;
 //! - **no interior mutability** - no `Cell` and no atomics, so a `&T` is read-only and a `static` is a constant.
 //!   a program crate's `clippy.toml` lists the types, and `clippy::disallowed_types` below denies them. This
-//!   crate carries no `clippy.toml` in Veredas 2 yet: law L7 refuses a TOML file without the suite's stamp, and
-//!   clippy refuses any key it does not know. The architect ruled on 2026-11-25 that L7 treats the file as a
-//!   tool's (`docs/questions.md` Q225); until the law says so, the rule is kept by convention here;
+//!   crate carries the file as Veredas 1 had it, and every program crate carries the same; law L7 treats it as a
+//!   tool's file, without the suite's stamp, since clippy refuses any key it does not know (`docs/questions.md`
+//!   Q225);
 //! - **function blocks are not copied** - a timer, an edge or a counter is state with an identity. It is neither
 //!   `Copy` nor `Clone`, so scanning a copy by mistake does not compile:
 //!

@@ -1,0 +1,22 @@
+# ORCL ownership rule O13 (docs/language/ownership.md): no interior mutability, so a `&T` is read-only and a
+# `static` is a constant. `clippy::disallowed_types` is denied in the crate root. Every ORCL program crate
+# carries this same file.
+disallowed-types = [
+    { path = "core::cell::Cell", reason = "ORCL O13: no interior mutability" },
+    { path = "core::cell::RefCell", reason = "ORCL O13: no interior mutability" },
+    { path = "core::cell::OnceCell", reason = "ORCL O13: no interior mutability" },
+    { path = "core::cell::LazyCell", reason = "ORCL O13: no interior mutability" },
+    { path = "core::cell::UnsafeCell", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicBool", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicU8", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicU16", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicU32", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicU64", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicUsize", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicI8", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicI16", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicI32", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicI64", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicIsize", reason = "ORCL O13: no interior mutability" },
+    { path = "core::sync::atomic::AtomicPtr", reason = "ORCL O13: no interior mutability" },
+]

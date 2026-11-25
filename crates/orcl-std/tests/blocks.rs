@@ -7,6 +7,7 @@
 //! the grid, a preset time of zero, a one-scan trigger, a negative preset, `set_bit` past the width, and the crate
 //! root compared line by line.
 use orcl_std::{Bits, Ctu, Duration, FTrig, Program, RTrig, Scan, Tof, Ton, Tp, ms};
+use std::path::Path;
 
 fn at(t: u64) -> Scan {
     Scan {
@@ -1730,4 +1731,146 @@ fn an_on_delay_dropped_mid_delay_is_off_with_nothing_elapsed_until_its_next_rise
     assert_eq!(ton(70, false), (false, false, ms(0)), "and so while its input stays off");
     assert_eq!(ton(80, true), (false, false, ms(0)), "a new rise");
     assert_eq!(ton(180, true), (true, true, ms(100)), "pt after it");
+}
+
+// The twenty-sixth refute round's six survivors, all contrived (each needs a guard no natural mistake has), killed
+// here as the round left them for the next change to this file: one assertion each, one test apiece.
+
+fn tp26(p: &mut Tp, t: u64, input: bool, pt: u64) -> (bool, bool, Duration) {
+    (p.scan(&at(t), input, ms(pt)), p.q(), p.et())
+}
+
+#[test]
+fn an_ended_pulse_held_stepped_back_before_its_edge_then_forward_within_pt_stays_off() {
+    let mut p = Tp::default();
+    assert_eq!(tp26(&mut p, 10, true, 100), (true, true, ms(0)));
+    assert_eq!(tp26(&mut p, 110, true, 100), (false, false, ms(100)));
+    assert_eq!(tp26(&mut p, 0, true, 100), (false, false, ms(100)), "back before its edge");
+    assert_eq!(tp26(&mut p, 50, true, 100), (false, false, ms(100)), "forward again, within pt of its edge: over still");
+}
+
+#[test]
+fn a_zero_pt_on_a_scan_before_its_edge_ends_the_pulse_for_good() {
+    let mut p = Tp::default();
+    assert_eq!(tp26(&mut p, 100, true, 100), (true, true, ms(0)));
+    assert_eq!(tp26(&mut p, 50, true, 0), (false, false, ms(0)), "before its edge at a zero pt: over");
+    assert_eq!(tp26(&mut p, 120, true, 100), (false, false, ms(100)), "pt restored, its input held: over still");
+}
+
+#[test]
+fn a_second_scan_at_the_instant_a_pulse_ended_with_a_raised_pt_stays_off() {
+    let mut p = Tp::default();
+    assert_eq!(tp26(&mut p, 0, true, 100), (true, true, ms(0)));
+    assert_eq!(tp26(&mut p, 100, true, 100), (false, false, ms(100)));
+    assert_eq!(tp26(&mut p, 100, true, 200), (false, false, ms(200)), "a second scan at that instant, pt raised");
+}
+
+#[test]
+fn a_pulse_released_on_its_end_scan_past_pt_resets_then_and_a_raised_pt_brings_nothing() {
+    let scan = |t: u64| Scan { now: ms(t), period: ms(30), cycle: t / 30 };
+    let mut p = Tp::default();
+    for t in [0, 30, 60, 90] {
+        assert!(p.scan(&scan(t), true, ms(100)), "on at {t} ms");
+    }
+    assert_eq!((p.scan(&scan(120), false, ms(100)), p.q(), p.et()), (false, false, ms(0)), "released on the end scan, past pt");
+    assert_eq!((p.scan(&scan(150), false, ms(200)), p.q(), p.et()), (false, false, ms(0)), "pt raised, its input off: nothing");
+}
+
+#[test]
+fn an_edge_exactly_at_a_pulse_s_end_reads_off_in_q_too() {
+    let mut p = Tp::default();
+    p.scan(&at(0), true, ms(100));
+    p.scan(&at(50), false, ms(100));
+    assert_eq!(tp26(&mut p, 100, true, 100), (false, false, ms(100)), "an edge on the end scan: over, q() too");
+    assert_eq!(tp26(&mut p, 110, true, 200), (false, false, ms(200)), "held, pt raised: over still");
+}
+
+#[test]
+fn an_ended_pulse_held_for_over_an_hour_with_a_raised_pt_stays_off() {
+    let mut p = Tp::default();
+    p.scan(&at(0), true, ms(100));
+    assert_eq!(tp26(&mut p, 100, true, 100), (false, false, ms(100)));
+    assert_eq!(tp26(&mut p, 3_700_000, true, 4_000_000), (false, false, ms(4_000_000)), "held an hour, pt past it");
+}
+
+// Q225, ruled on 2026-11-25 (a): law L7 treats a `clippy.toml` as a tool's file, so the crate carries the list of
+// types ORCL's O13 forbids as Veredas 1 had it, and every program crate carries the same file.
+
+/// The types O13 forbids (`docs/orcl/language/README.md`): the cells and the atomics, as clippy names them.
+const O13: [&str; 17] = [
+    "core::cell::Cell",
+    "core::cell::RefCell",
+    "core::cell::OnceCell",
+    "core::cell::LazyCell",
+    "core::cell::UnsafeCell",
+    "core::sync::atomic::AtomicBool",
+    "core::sync::atomic::AtomicU8",
+    "core::sync::atomic::AtomicU16",
+    "core::sync::atomic::AtomicU32",
+    "core::sync::atomic::AtomicU64",
+    "core::sync::atomic::AtomicUsize",
+    "core::sync::atomic::AtomicI8",
+    "core::sync::atomic::AtomicI16",
+    "core::sync::atomic::AtomicI32",
+    "core::sync::atomic::AtomicI64",
+    "core::sync::atomic::AtomicIsize",
+    "core::sync::atomic::AtomicPtr",
+];
+
+#[test]
+fn the_crate_s_clippy_toml_is_veredas_1_s_list_of_the_types_o13_forbids() {
+    // the file whole, as Veredas 1's `crates/orcl-std/clippy.toml` stood: three comment lines, then one entry per type
+    let mut want = vec![
+        "# ORCL ownership rule O13 (docs/language/ownership.md): no interior mutability, so a `&T` is read-only and a".to_string(),
+        "# `static` is a constant. `clippy::disallowed_types` is denied in the crate root. Every ORCL program crate".to_string(),
+        "# carries this same file.".to_string(),
+        "disallowed-types = [".to_string(),
+    ];
+    want.extend(O13.iter().map(|path| format!("    {{ path = \"{path}\", reason = \"ORCL O13: no interior mutability\" }},")));
+    want.push("]".to_string());
+    let file: Vec<&str> = include_str!("../clippy.toml").lines().collect();
+    assert_eq!(file, want);
+}
+
+#[test]
+#[ignore = "runs clippy, which the suite's GitHub run does not install: C-150's command runs it"]
+fn clippy_refuses_each_type_o13_forbids_in_a_copy_of_the_crate_under_its_clippy_toml() {
+    // A copy of the crate as it stands (its sources, its root's lints, its `clippy.toml` beside its manifest), on its
+    // own beside the workspace, with one module more naming each type O13 forbids: clippy refuses every one.
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let copy = Path::new(env!("CARGO_TARGET_TMPDIR")).join("o13");
+    if copy.exists() {
+        std::fs::remove_dir_all(&copy).unwrap();
+    }
+    std::fs::create_dir_all(copy.join("src")).unwrap();
+    for (name, text) in SOURCES {
+        std::fs::write(copy.join("src").join(name), text).unwrap();
+    }
+    std::fs::write(copy.join("src/lib.rs"), format!("{}\nmod o13_probe;\n", include_str!("../src/lib.rs"))).unwrap();
+    let params: String = O13
+        .iter()
+        .map(|path| {
+            let generic = if path.ends_with("Cell") || path.ends_with("AtomicPtr") { "<u8>" } else { "" };
+            format!("    _: Option<&{path}{generic}>,\n")
+        })
+        .collect();
+    std::fs::write(copy.join("src/o13_probe.rs"), format!("pub fn probe(\n{params}) {{\n}}\n")).unwrap();
+    std::fs::copy(crate_dir.join("clippy.toml"), copy.join("clippy.toml")).unwrap();
+    let manifest = format!("[package]\nname = \"orcl-std\"\nversion = \"{}\"\nedition = \"2024\"\n\n[workspace]\n", env!("CARGO_PKG_VERSION"));
+    std::fs::write(copy.join("Cargo.toml"), manifest).unwrap();
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["clippy", "--offline", "--quiet", "--lib", "--message-format", "short"])
+        .current_dir(&copy)
+        .env("CARGO_TARGET_DIR", copy.join("target"))
+        .env_remove("CLIPPY_CONF_DIR")
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "clippy passed the copy: {said}");
+    for path in O13 {
+        let line = format!("error: use of a disallowed type `{path}`");
+        assert_eq!(said.matches(&line).count(), 1, "{path} refused once, as an error: {said}");
+    }
+    assert_eq!(said.matches("error: use of a disallowed type").count(), O13.len(), "and nothing else so: {said}");
+    assert!(said.lines().filter(|l| l.contains(": error: ")).all(|l| l.contains("use of a disallowed type")), "no other error: {said}");
 }
