@@ -11,15 +11,15 @@
     "--lib"
   ],
   "exitCode": 0,
-  "outputSha": "25455294220d244704560dcc8380d7325a8df77a3dbbcacd96b41ba3e81feb12",
-  "outputTail": "test a_start_is_refused_by_name_before_anything_spawns ... ok\ntest a_failed_worker_still_reads_as_failed_after_the_stop ... ok\ntest the_master_switch_is_off_by_default_and_arms_every_write_path_at_once ... ok\ntest the_three_protocols_run_into_one_store_alike ... ok\ntest health_reads_waiting_then_live_then_idle_on_the_arrival_clock ... ok\ntest a_stop_stores_every_row_the_workers_sent_and_publishes_the_end ... ok\ntest a_reader_holding_the_store_never_holds_the_pump ... ok\ntest the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.61s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.94s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/21e6d446780d1fcb/out/veredas_portal-21e6d446780d1fcb)\n     Running tests/session.rs (target/debug/build/veredas-portal/eb6447a9db01fa75/out/session-eb6447a9db01fa75)",
-  "ranAt": "2026-11-22T20:09:48.879Z",
-  "headCommit": "fa270c6291c65d15926caff6a433efc1ce48020a",
+  "outputSha": "1a9755c2537054177fe60d784b6f02bca09deb129b4fcb69c164d8ce0f2ce656",
+  "outputTail": "test a_start_is_refused_by_name_before_anything_spawns ... ok\ntest a_failed_worker_still_reads_as_failed_after_the_stop ... ok\ntest the_master_switch_is_off_by_default_and_arms_every_write_path_at_once ... ok\ntest the_three_protocols_run_into_one_store_alike ... ok\ntest health_reads_waiting_then_live_then_idle_on_the_arrival_clock ... ok\ntest a_stop_stores_every_row_the_workers_sent_and_publishes_the_end ... ok\ntest a_log_says_when_its_start_s_history_is_in_the_store ... ok\ntest a_reader_holding_the_store_never_holds_the_pump ... ok\ntest the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.24s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/29d94b54f60a86bb/out/veredas_portal-29d94b54f60a86bb)\n     Running tests/session.rs (target/debug/build/veredas-portal/6f24c4a0f46800e8/out/session-6f24c4a0f46800e8)",
+  "ranAt": "2026-11-25T01:27:48.447Z",
+  "headCommit": "08980d583a6b6e21ae8c22e8288c430859237e10",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/session.rs",
       "file": "crates/veredas-portal/tests/session.rs",
-      "fileSha": "0a4a0e79ddb47e2d9e3a7f10d34b67c6167851f84782b15c88c54048943c5658"
+      "fileSha": "c530ed46a9f04febdf2fcae340318ece985571d7ca5696c83d82b717a7c97fcc"
     },
     {
       "name": "crates/veredas-portal/src/store/connections_test.rs",
