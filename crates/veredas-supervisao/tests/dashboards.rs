@@ -971,12 +971,15 @@ const STATE_PAINT: &str = r##"((STATES) => {
   const html = (e) => !(e instanceof SVGElement);
   const box = (e) => html(e) || (e instanceof SVGSVGElement && !e.ownerSVGElement);
   const shape = (e) => e instanceof SVGElement && DRAWS.has(e.tagName.toLowerCase());
+  const multicol = (c) => c.columnCount !== "auto" || c.columnWidth !== "auto";
   const side = (c, s) => parseFloat(c.getPropertyValue(`border-${s}-width`)) > 0 && !["none", "hidden"].includes(c.getPropertyValue(`border-${s}-style`));
   const PAINTS = {
     "color": (e) => html(e) && ownText(e),
     "-webkit-text-fill-color": (e) => html(e) && ownText(e),
     "-webkit-text-stroke-color": (e, c) => html(e) && ownText(e) && parseFloat(c.getPropertyValue("-webkit-text-stroke-width")) > 0,
-    "text-decoration-color": (e, c) => ownText(e) && c.textDecorationLine !== "none",
+    // A decoration is drawn under every text inside the element that writes it, its own or its
+    // descendants'.
+    "text-decoration-color": (e, c) => c.textDecorationLine !== "none" && (e.textContent ?? "").trim() !== "",
     "text-emphasis-color": (e, c) => ownText(e) && c.getPropertyValue("text-emphasis-style") !== "none",
     "text-shadow": (e) => ownText(e),
     "background-color": box,
@@ -986,16 +989,20 @@ const STATE_PAINT: &str = r##"((STATES) => {
     "border-right-color": (e, c) => box(e) && side(c, "right"),
     "border-bottom-color": (e, c) => box(e) && side(c, "bottom"),
     "border-left-color": (e, c) => box(e) && side(c, "left"),
-    "outline-color": (e, c) => box(e) && c.outlineStyle !== "none" && parseFloat(c.outlineWidth) > 0,
-    "column-rule-color": (e, c) => box(e) && c.columnRuleStyle !== "none" && parseFloat(c.columnRuleWidth) > 0,
-    "row-rule-color": (e, c) => box(e) && c.getPropertyValue("row-rule-style") !== "none" && parseFloat(c.getPropertyValue("row-rule-width")) > 0,
-    "fill": shape,
-    "stroke": shape,
+    // An outline on whatever the browser renders, an SVG shape's among them.
+    "outline-color": (e, c) => (html(e) || e instanceof SVGGraphicsElement) && c.outlineStyle !== "none" && parseFloat(c.outlineWidth) > 0,
+    // A column's rule on a box of columns, a row's on one that lays out rows (a grid, a flex, columns).
+    "column-rule-color": (e, c) => box(e) && multicol(c) && c.columnRuleStyle !== "none" && parseFloat(c.columnRuleWidth) > 0,
+    "row-rule-color": (e, c) => box(e) && (multicol(c) || ["grid", "inline-grid", "flex", "inline-flex"].includes(c.display)) && c.getPropertyValue("row-rule-style") !== "none" && parseFloat(c.getPropertyValue("row-rule-width")) > 0,
+    // A shape's fill and stroke where they paint: some opacity, and a stroke some width.
+    "fill": (e, c) => shape(e) && parseFloat(c.fillOpacity) > 0,
+    "stroke": (e, c) => shape(e) && parseFloat(c.strokeOpacity) > 0 && parseFloat(c.strokeWidth) > 0,
     "filter": () => true,
     "backdrop-filter": box,
     "caret-color": (e) => e.isContentEditable || e.matches("input, textarea"),
     "accent-color": (e) => e.matches("input, progress, meter"),
-    "scrollbar-color": box,
+    // A scrollbar's colours on a box that shows one (scrolled always, or as needed and overflowing).
+    "scrollbar-color": (e, c) => box(e) && (c.overflowX === "scroll" || c.overflowY === "scroll" || (c.overflowX === "auto" && e.scrollWidth > e.clientWidth) || (c.overflowY === "auto" && e.scrollHeight > e.clientHeight)),
   };
   const INERT = new Set(["stop-color", "flood-color", "lighting-color", "-webkit-tap-highlight-color", "border-block-start-color", "border-block-end-color", "border-inline-start-color", "border-inline-end-color"]);
   const root = getComputedStyle(document.documentElement);
