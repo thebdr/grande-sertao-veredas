@@ -2469,7 +2469,9 @@ pinned to one version with `enhanced-determinism` on.
 **Decided** 2026-11-25, by the architect: asked "Which physics engine does the bench's `fisica`
 (cartons on belts, parts in chutes, sensors reached) stand on? Taken meanwhile: Rapier, pinned, with
 its determinism feature.", "Rapier (Recommended)", (a), against Avian, Parry with `fisica`'s own
-kinematics and no dependency. What was taken stands.
+kinematics and no dependency. What was taken stands. Since C-114's fourth refute round
+(2026-11-25) the bench uses Rapier's double-precision build of the same version, `rapier3d-f64`
+(in single precision a slow belt far from the origin carried nothing): the same engine.
 
 ---
 

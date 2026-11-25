@@ -291,7 +291,8 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   needs no privilege and no setting on the host; a real network card is the commissioning case,
   not the suite's.
 - **`fisica`, as designed before its code** (2026-11-22). The bodies of a plant's scene and their
-  motion, headless, at a fixed step, on Rapier (`docs/questions.md` Q160, taken meanwhile), which
+  motion, headless, at a fixed step, on Rapier (`docs/questions.md` Q160, decided 2026-11-25; its
+  double-precision build since C-114's fourth round), which
   only `fisica`'s own module names. A scene is a file of its own, `veredas-cena` version 1, read by
   the bench file's `[[fisica]]` part, so that Oficina's view (review entry 31, option a) draws what
   the bench moves from the same file. Metres, kilograms, seconds; z up, x along a line; a pose is
