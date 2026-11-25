@@ -1,0 +1,34 @@
+{
+  "clause": "C-293",
+  "command": "cargo nextest run -p alforge --features maquina --test atualizar --test maquina",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "-p",
+    "alforge",
+    "--features",
+    "maquina",
+    "--test",
+    "atualizar",
+    "--test",
+    "maquina"
+  ],
+  "exitCode": 0,
+  "outputSha": "9aed52570f9bcee66645977b700fbc67803b9844c2b7d904bfef306cf883cf41",
+  "outputTail": "        SLOW [>1200.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1260.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1320.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1380.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1440.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1500.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1560.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1620.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1680.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1740.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1800.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1860.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        PASS [1907.852s] (13/13) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n────────────\n     Summary [1907.869s] 13 tests run: 13 passed (1 slow), 0 skipped",
+  "ranAt": "2026-11-25T05:11:35.221Z",
+  "headCommit": "0dbdbfe8a38e8fe6eac399625021132b745d4bb6",
+  "tests": [
+    {
+      "name": "tools/alforge/tests/atualizar.rs",
+      "file": "tools/alforge/tests/atualizar.rs",
+      "fileSha": "42379a8fbc4fab9877abb15536424019226900ec5e46feeecaeab44cbae2a0cd"
+    },
+    {
+      "name": "tools/alforge/tests/maquina.rs",
+      "file": "tools/alforge/tests/maquina.rs",
+      "fileSha": "2582b9af29a6f79b86c8385b4537b9ad8f484300fddae6ae76928062a9f036dc"
+    }
+  ]
+}
