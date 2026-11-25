@@ -93,10 +93,12 @@ const CARRIED = ["stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stro
 /// it closes and the way out at each of its ends: a path's subpaths (its curves and arcs followed,
 /// closed by a `Z` alone, the ways out its own tangents), a polyline's points, a polygon's (closed),
 /// a line's two ends, a rect's four corners; a circle, an ellipse or a rounded rect followed by the
-/// browser (`getPointAtLength`, `n` points, one closed run).
-type Outline = { pts: Pt[]; closed: boolean; outs: [Pt, Pt] | null };
+/// browser (`getPointAtLength`, `n` points, one closed run). Each point says whether it is a corner
+/// (where two segments meet, joined as the stroke's join says) or a point inside a curve (the browser
+/// strokes a curve smoothly through it).
+type Outline = { pts: Pt[]; corner: boolean[]; closed: boolean; outs: [Pt, Pt] | null };
 function outline(g: SVGGeometryElement, n: number): Outline[] {
-  const plain = (pts: Pt[], closed: boolean): Outline => ({ pts, closed, outs: null });
+  const plain = (pts: Pt[], closed: boolean, corner = true): Outline => ({ pts, corner: pts.map(() => corner), closed, outs: null });
   if (g instanceof SVGLineElement) return [plain([{ x: g.x1.baseVal.value, y: g.y1.baseVal.value }, { x: g.x2.baseVal.value, y: g.y2.baseVal.value }], false)];
   if (g instanceof SVGPolylineElement || g instanceof SVGPolygonElement) {
     const pts: Pt[] = [];
@@ -116,37 +118,57 @@ function outline(g: SVGGeometryElement, n: number): Outline[] {
       const off = (pts: Pt[], e: Pt) => pts.find((p) => p.x !== e.x || p.y !== e.y);
       const [a, z] = [s.pts[0], s.pts[s.pts.length - 1]];
       const b = off(s.pts, a), y = off([...s.pts].reverse(), z);
-      return { pts: s.drawn, closed: s.closed, outs: b && y ? [{ x: a.x - b.x, y: a.y - b.y }, { x: z.x - y.x, y: z.y - y.y }] : null };
+      return { pts: s.drawn, corner: s.corner, closed: s.closed, outs: b && y ? [{ x: a.x - b.x, y: a.y - b.y }, { x: z.x - y.x, y: z.y - y.y }] : null };
     });
   }
   const len = g.getTotalLength();
   const pts: Pt[] = [];
   for (let i = 0; i < n; i++) pts.push(g.getPointAtLength((len * i) / n));
-  return [plain(pts, true)];
+  return [plain(pts, true, false)];
 }
 
 /// What a shape paints, as points in the frame `m` carries it to: its outline (`outline`), each edge
 /// spread by half the stroke's width `w` across its own way (none for a body, `w` 0), each corner
 /// joined as the browser joins it (`join`: a mitre's tip where its length over the width stays
-/// within `limit`, else a bevel; a bevel; a round), and an open run's ends grown by its cap (a
-/// square's half width out of the run, a round's all round).
-function painted(g: SVGGeometryElement, m: DOMMatrix, w: number, cap: string, join: string, limit: number): Pt[] {
+/// within `limit`, else a bevel; a bevel; a round), a point inside a curve joined round (so a cusp,
+/// where the curve turns back on itself, is a disc of half the width all round, as the browser's
+/// stroker paints it whatever the join), an open run's ends grown by its cap (a square's half width out of the run, a
+/// round's all round), and a run of no length a dot where its cap is round or square (a square one
+/// along the axes). A stroke that does not scale (`fixed`: `vector-effect: non-scaling-stroke`,
+/// Inkscape's hairline) is spread in the frame `m` carries it to, `fixed` its half width there.
+function painted(g: SVGGeometryElement, m: DOMMatrix, w: number, cap: string, join: string, limit: number, fixed: number | null = null): Pt[] {
   const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
   const n = Math.min(4096, Math.max(64, Math.ceil((g.getTotalLength() * scale) / 0.25)));
-  const h = w / 2;
+  const h = fixed ?? w / 2;
   const out: Pt[] = [];
-  const put = (x: number, y: number) => {
-    const q = new DOMPoint(x, y).matrixTransform(m);
-    out.push({ x: q.x, y: q.y });
-  };
+  const to = (x: number, y: number) => new DOMPoint(x, y).matrixTransform(m);
+  const put = fixed === null ? (x: number, y: number) => { const q = to(x, y); out.push({ x: q.x, y: q.y }); } : (x: number, y: number) => out.push({ x, y });
   const unit = (d: Pt) => { const l = Math.hypot(d.x, d.y); return l ? { x: d.x / l, y: d.y / l } : null; };
-  for (const run of outline(g, n)) {
+  for (const shape of outline(g, n)) {
+    // A stroke that does not scale: its outline carried to the frame first, its ways out with it.
+    const run = fixed === null ? shape : {
+      ...shape,
+      pts: shape.pts.map((p) => { const q = to(p.x, p.y); return { x: q.x, y: q.y }; }),
+      outs: shape.outs && (shape.outs.map((o) => ({ x: m.a * o.x + m.c * o.y, y: m.b * o.x + m.d * o.y })) as [Pt, Pt]),
+    };
     // Its points, each once (a point written twice, a curve's handle on its node), a closed run's
-    // start not again at its end.
-    const pts = run.pts.filter((p, k) => k === 0 || p.x !== run.pts[k - 1].x || p.y !== run.pts[k - 1].y);
-    if (run.closed && pts.length > 1 && pts[0].x === pts[pts.length - 1].x && pts[0].y === pts[pts.length - 1].y) pts.pop();
+    // start not again at its end; a point a corner where any of its copies is.
+    const pts: Pt[] = [], corner: boolean[] = [];
+    run.pts.forEach((p, k) => {
+      const last = pts[pts.length - 1];
+      if (last && last.x === p.x && last.y === p.y) corner[corner.length - 1] ||= run.corner[k];
+      else { pts.push(p); corner.push(run.corner[k]); }
+    });
+    if (run.closed && pts.length > 1 && pts[0].x === pts[pts.length - 1].x && pts[0].y === pts[pts.length - 1].y) { pts.pop(); corner[0] ||= corner.pop()!; }
     for (const p of pts) put(p.x, p.y);
-    if (!h || pts.length < 2) continue;
+    if (!h) continue;
+    if (pts.length === 1) {
+      // A run of no length: a dot, round or square (along the axes), where the cap is one.
+      const e = pts[0];
+      if (cap === "round") for (let k = 0; k < 32; k++) put(e.x + h * Math.cos((k * Math.PI) / 16), e.y + h * Math.sin((k * Math.PI) / 16));
+      else if (cap === "square") for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) put(e.x + sx * h, e.y + sy * h);
+      continue;
+    }
     const edges = run.closed ? pts.length : pts.length - 1;
     const dirs: Pt[] = [];
     for (let k = 0; k < edges; k++) {
@@ -158,20 +180,24 @@ function painted(g: SVGGeometryElement, m: DOMMatrix, w: number, cap: string, jo
         put(p.x + u.y * h, p.y - u.x * h);
       }
     }
-    // Each corner where one edge meets the next, joined on its outer side.
+    // Each corner where one edge meets the next, joined on its outer side; a point inside a curve
+    // joined round (a cusp, the curve turning back, so a disc all round: the join's half on its outer
+    // side, the edges' spread the other).
     for (let k = run.closed ? 0 : 1; k < pts.length - (run.closed ? 0 : 1); k++) {
       const d1 = dirs[(k - 1 + edges) % edges], d2 = dirs[k % edges], v = pts[k];
       const cross = d1.x * d2.y - d1.y * d2.x, dot = d1.x * d2.x + d1.y * d2.y;
       if (Math.abs(cross) < 1e-9 && dot > 0) continue;
+      const joined = corner[k] ? join : "round";
       const s = cross > 0 ? -1 : 1;
       const [n1, n2] = [{ x: -d1.y * s, y: d1.x * s }, { x: -d2.y * s, y: d2.x * s }];
-      if (join === "round") {
+      if (joined === "round") {
         const [a1, a2] = [Math.atan2(n1.y, n1.x), Math.atan2(n2.y, n2.x)];
         let da = a2 - a1;
         while (da > Math.PI) da -= 2 * Math.PI;
         while (da < -Math.PI) da += 2 * Math.PI;
-        for (let q = 1; q < 16; q++) put(v.x + h * Math.cos(a1 + (da * q) / 16), v.y + h * Math.sin(a1 + (da * q) / 16));
-      } else if (join !== "bevel") {
+        const steps = Math.max(1, Math.ceil(Math.abs(da) / (Math.PI / 16)));
+        for (let q = 1; q < steps; q++) put(v.x + h * Math.cos(a1 + (da * q) / steps), v.y + h * Math.sin(a1 + (da * q) / steps));
+      } else if (joined !== "bevel") {
         // A mitre: its length over the width is one over the sine of half the angle between the
         // edges; past the limit the browser bevels.
         const half = Math.acos(Math.max(-1, Math.min(1, -dot))) / 2;
@@ -254,31 +280,33 @@ function arcPoints(x1: number, y1: number, rx: number, ry: number, phi: number, 
 /// A subpath: the points that make it (every end and control point, absolute; an arc's the points
 /// it draws), the points it draws (each curve and arc followed at 32 points), and whether a `Z`
 /// closes it.
-type Sub = { pts: Pt[]; drawn: Pt[]; closed: boolean };
+type Sub = { pts: Pt[]; drawn: Pt[]; corner: boolean[]; closed: boolean };
 
 /// A path's subpaths, from its data; null where its data cannot be read. A subpath is closed by a `Z` alone, whatever its ends; after one, the next
 /// command starts a new subpath at the closed one's start. A smooth curve's first control (`S`, `T`)
-/// is the one before it mirrored, as the browser draws it.
+/// is the one before it mirrored, as the browser draws it. A move with nothing drawn after it is no
+/// subpath (the browser strokes none); each point drawn says whether it ends a segment (a corner) or
+/// lies inside a curve or an arc.
 function subpaths(d: string): Sub[] | null {
   const toks = d.match(/[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) ?? [];
   const out: Sub[] = [];
-  let cur: Pt[] = [], drawn: Pt[] = [];
+  let cur: Pt[] = [], drawn: Pt[] = [], corner: boolean[] = [];
   let x = 0, y = 0, sx = 0, sy = 0, cmd = "", i = 0, after = false;
   let c2: Pt | null = null, qc: Pt | null = null;
   const num = () => Number(toks[i++]);
   const begin = () => {
-    if (after && !cur.length) { cur.push({ x: sx, y: sy }); drawn.push({ x: sx, y: sy }); }
+    if (after && !cur.length) { cur.push({ x: sx, y: sy }); drawn.push({ x: sx, y: sy }); corner.push(true); }
     after = false;
   };
-  const put = (px: number, py: number) => { begin(); x = px; y = py; cur.push({ x, y }); drawn.push({ x, y }); };
+  const put = (px: number, py: number) => { begin(); x = px; y = py; cur.push({ x, y }); drawn.push({ x, y }); corner.push(true); };
   const bend = (pts: Pt[]) => {
     begin();
     const all = [{ x, y }, ...pts];
-    for (let k = 1; k <= 32; k++) drawn.push(bezier(all, k / 32));
+    for (let k = 1; k <= 32; k++) { drawn.push(bezier(all, k / 32)); corner.push(k === 32); }
     cur.push(...pts);
     ({ x, y } = pts[pts.length - 1]);
   };
-  const end = (closed: boolean) => { if (cur.length) out.push({ pts: cur, drawn, closed }); cur = []; drawn = []; };
+  const end = (closed: boolean) => { if (drawn.length > 1) out.push({ pts: cur, drawn, corner, closed }); cur = []; drawn = []; corner = []; };
   while (i < toks.length) {
     if (/[A-Za-z]/.test(toks[i])) cmd = toks[i++];
     else if (!cmd) return null;
@@ -332,6 +360,7 @@ function subpaths(d: string): Sub[] | null {
         const arc = arcPoints(x, y, p[0], p[1], (p[2] * Math.PI) / 180, p[3] !== 0, p[4] !== 0, ox + p[5], oy + p[6], 32);
         cur.push(...arc);
         drawn.push(...arc);
+        corner.push(...arc.map((_, k) => k === arc.length - 1));
         ({ x, y } = { x: ox + p[5], y: oy + p[6] });
         c2 = qc = null;
         break;
@@ -521,7 +550,12 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       if (!gc) continue;
       const c = getComputedStyle(g);
       const line = g.classList.contains("sv-line");
-      for (const p of painted(g, o.multiply(gc), line ? parseFloat(c.strokeWidth) || 0 : 0, line ? c.strokeLinecap : "butt", c.strokeLinejoin, parseFloat(c.strokeMiterlimit) || 4)) {
+      const w = line ? parseFloat(c.strokeWidth) || 0 : 0;
+      // A stroke that does not scale is as wide on the screen as written: its half width in the
+      // overlay's frame.
+      const px = overlay.getScreenCTM();
+      const fixed = line && c.vectorEffect === "non-scaling-stroke" && px ? w / 2 / (Math.sqrt(Math.abs(px.a * px.d - px.b * px.c)) || 1) : null;
+      for (const p of painted(g, o.multiply(gc), w, line ? c.strokeLinecap : "butt", c.strokeLinejoin, parseFloat(c.strokeMiterlimit) || 4, fixed)) {
         lo = Math.min(lo, p.y);
         hi = Math.max(hi, p.y);
       }

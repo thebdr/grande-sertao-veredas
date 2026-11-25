@@ -2069,6 +2069,18 @@ const LINES_SVG: &str = r##"  <line id="ln-normal" x1="15" y1="240" x2="15" y2="
   <path id="la-ss-rel" d="m 80 760 c 0 10 10 10 10 10 s 0 10 10 10 s 0 10 10 10" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/>
   <path id="la-round" d="M 150 790 L 170 770 L 190 790" fill="none" stroke="#3a3a40" stroke-width="8" stroke-linejoin="round"/>
   <path id="la-tangent" d="M 230 765 C 230 766 262 792 262 765" fill="none" stroke="#3a3a40" stroke-width="12" stroke-linecap="square"/>
+  <path id="la-capround" d="M 410 30 L 440 60 L 470 30 M 440 5" fill="none" stroke="#3a3a40" stroke-width="8" stroke-linecap="round"/>
+  <path id="la-arcsmall" d="M 490 70 A 4 4 0 0 1 570 70" fill="none" stroke="#3a3a40" stroke-width="6"/>
+  <path id="la-arcrot" d="M 450 130 A 40 16 30 1 1 530 130" fill="none" stroke="#3a3a40" stroke-width="8"/>
+  <path id="la-cusp3" d="M 410 280 C 490 200 410 200 490 280" fill="none" stroke="#3a3a40" stroke-width="12"/>
+  <path id="la-cusp3b" d="M 500 280 C 580 200 500 200 580 280" fill="none" stroke="#3a3a40" stroke-width="12" stroke-linejoin="bevel"/>
+  <path id="la-cusp3z" d="M 410 370 C 490 290 410 290 490 370 Z" fill="none" stroke="#3a3a40" stroke-width="12"/>
+  <path id="la-tip" d="M 500 370 C 572 290 508 290 580 370" fill="none" stroke="#3a3a40" stroke-width="12"/>
+  <path id="la-tipb" d="M 410 460 C 482 380 418 380 490 460" fill="none" stroke="#3a3a40" stroke-width="12" stroke-linejoin="bevel"/>
+  <path id="la-dot" d="M 540 440 a 20 20 0 1 0 0.01 0 Z M 540 405 l 0 0" fill="none" stroke="#3a3a40" stroke-width="12" stroke-linecap="round"/>
+  <path id="la-dotz" d="M 450 530 a 20 20 0 1 0 0.01 0 Z M 450 495 z" fill="none" stroke="#3a3a40" stroke-width="12" stroke-linecap="round"/>
+  <path id="la-dotsq" d="M 450 610 a 20 20 0 1 0 0.01 0 Z M 450 575 l 0 0" fill="none" stroke="#3a3a40" stroke-width="12" stroke-linecap="square"/>
+  <g transform="translate(500 500) scale(3)"><circle id="la-hair" cx="10" cy="20" r="10" fill="none" stroke="#3a3a40" stroke-width="1.4" style="vector-effect:non-scaling-stroke"/></g>
 </svg>"##;
 
 /// Each shape drawn as a line and bound to show its state: its id, its state, the width it was drawn
@@ -2105,7 +2117,7 @@ const BODY_CASES: [(&str, (f64, f64)); 3] = [("nf-zero", (205.0, 320.0)), ("nf-b
 /// on its lines below its level, on them above it, and inside what they close (off every line), in
 /// its own coordinates.
 #[allow(clippy::type_complexity)]
-const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 27] = [
+const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 39] = [
     ("la-ring", 0.35, "normal", 6.0, &[(40.0, 386.0)], &[(40.0, 354.0), (24.0, 370.0)], &[(40.0, 370.0), (40.0, 380.0)]),
     ("la-bent", 0.35, "normal", 8.0, &[(100.0, 390.0), (80.0, 385.0), (122.5, 390.0)], &[(80.0, 360.0)], &[(95.0, 380.0)]),
     ("la-hollow", 1.0, "normal", 4.0, &[(160.0, 350.0), (140.0, 370.0), (180.0, 370.0), (160.0, 390.0)], &[], &[(160.0, 370.0)]),
@@ -2143,6 +2155,18 @@ const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64,
     ("la-ss-rel", 1.0, "normal", 6.0, &[], &[], &[]),
     ("la-round", 1.0, "normal", 8.0, &[], &[], &[]),
     ("la-tangent", 1.0, "normal", 12.0, &[], &[], &[]),
+    ("la-capround", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-arcsmall", 1.0, "normal", 6.0, &[], &[], &[]),
+    ("la-arcrot", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-cusp3", 1.0, "normal", 12.0, &[], &[], &[]),
+    ("la-cusp3b", 1.0, "normal", 12.0, &[], &[], &[]),
+    ("la-cusp3z", 1.0, "normal", 12.0, &[], &[], &[]),
+    ("la-tip", 1.0, "normal", 12.0, &[], &[], &[]),
+    ("la-tipb", 1.0, "normal", 12.0, &[], &[], &[]),
+    ("la-dot", 1.0, "normal", 12.0, &[], &[], &[]),
+    ("la-dotz", 1.0, "normal", 12.0, &[], &[], &[]),
+    ("la-dotsq", 1.0, "normal", 12.0, &[], &[], &[]),
+    ("la-hair", 1.0, "normal", 1.4, &[], &[], &[]),
 ];
 
 /// The state's colours on a line, read from the page's own tokens as the browser computes a stroke:
@@ -2355,7 +2379,7 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
     let bench = plant(&dir.path().join("bench"));
     let mut ex = live_example(&bench, false);
     assert!(ex.svg.contains("viewBox=\"0 0 400 220\"") && ex.svg.ends_with("</svg>\n"));
-    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 800\"").replace("</svg>\n", LINES_SVG) + "\n";
+    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 600 800\"").replace("</svg>\n", LINES_SVG) + "\n";
     // Each object in its state: a rule over `fill2` (85) naming it, normal with none, stale on the
     // sorter's rate (its log empty: no value yet).
     let value_in = |state: &str| match state {
