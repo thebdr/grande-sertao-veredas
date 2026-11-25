@@ -1,4 +1,4 @@
-//! The cache outside the repository (`~/.cache/veredas/entrega/`, or `ENTREGA_CACHE`): the base
+//! The cache outside the repository (`~/.cache/veredas/alforge/`, or `ALFORGE_CACHE`): the base
 //! image, downloaded once and checked against its pinned SHA-512 on every use, and the builder
 //! machine's disk, built once per toolchain. Large files are never committed (the plan's rule).
 
@@ -12,11 +12,11 @@ use crate::vm::{self, VmError};
 
 /// The cache folder, made if absent.
 pub fn dir() -> Result<PathBuf, std::io::Error> {
-    let d = match std::env::var_os("ENTREGA_CACHE") {
+    let d = match std::env::var_os("ALFORGE_CACHE") {
         Some(d) => PathBuf::from(d),
         None => {
             let home = std::env::var_os("HOME").ok_or_else(|| std::io::Error::other("HOME is not set"))?;
-            PathBuf::from(home).join(".cache/veredas/entrega")
+            PathBuf::from(home).join(".cache/veredas/alforge")
         }
     };
     std::fs::create_dir_all(&d)?;
@@ -72,7 +72,7 @@ pub fn base_image_in(cache: &Path, r: &Recipe) -> Result<PathBuf, VmError> {
     let path = cache.join(r.base_name());
     if !path.exists() {
         let part = path.with_extension("part");
-        eprintln!("entrega: downloading {} once into {}", r.base.url, path.display());
+        eprintln!("alforge: downloading {} once into {}", r.base.url, path.display());
         vm::run("curl", &["-sSfL", "--retry", "3", "-o", &part.display().to_string(), &r.base.url], None)?;
         std::fs::rename(&part, &path)?;
     }

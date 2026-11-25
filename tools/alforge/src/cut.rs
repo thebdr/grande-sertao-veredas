@@ -1,4 +1,4 @@
-//! The cut (docs/entrega-plan.md, "How a release is cut"): from HEAD of a clean tree, the whole
+//! The cut (docs/alforge-plan.md, "How a release is cut"): from HEAD of a clean tree, the whole
 //! suite run, the executables built in the builder machine, the bundle assembled and packed, then
 //! extracted again, its sums checked and its bench and supervisão run together on its plant; only
 //! then is the manifest written, and checked against the repository like any other.
@@ -61,7 +61,7 @@ fn refused(what: impl Into<String>) -> CutError {
 /// The manifest's text for a cut, keys in the reference's order.
 pub fn manifest_text(release: &semver::Version, commit: &str, target: &str, toolchain: &str, components: &[(String, String, Vec<String>)], suite: &str) -> String {
     let mut t = format!(
-        "# A suite release (docs/entrega-plan.md), written by `entrega cut`.\nformat = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"{target}\"\ntoolchain = \"{toolchain}\"\n"
+        "# A suite release (docs/alforge-plan.md), written by `alforge cut`.\nformat = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"{target}\"\ntoolchain = \"{toolchain}\"\n"
     );
     for (name, version, bins) in components {
         t.push_str(&format!("\n[[component]]\nname = \"{name}\"\nversion = \"{version}\"\n"));
@@ -234,9 +234,12 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
             return Err(refused(format!("{} exists: release {} is cut already", f.display(), o.release)));
         }
     }
-    let recipe_text = git::show(root, &commit, "tools/entrega/maquina/maquina.toml")
+    let folder = crate::folder_at(root, &commit)
         .map_err(|e| refused(e.to_string()))?
-        .ok_or_else(|| refused(format!("commit {commit} holds no tools/entrega/maquina/maquina.toml")))?;
+        .ok_or_else(|| refused(format!("commit {commit} holds no tools/alforge/maquina/maquina.toml")))?;
+    let recipe_text = git::show(root, &commit, &format!("{folder}/maquina/maquina.toml"))
+        .map_err(|e| refused(e.to_string()))?
+        .ok_or_else(|| refused(format!("commit {commit} holds no {folder}/maquina/maquina.toml")))?;
     let recipe = Recipe::load(&recipe_text)?;
     let mut refusals = Vec::new();
     let held = manifest::components_at(root, &commit, &mut refusals)?;
@@ -285,7 +288,7 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
         return Err(refused(format!("release {} would not check:\n{}", o.release, against.join("\n"))));
     }
     if o.run_suite {
-        eprintln!("entrega: the whole suite at {commit}, behind the machine's lock");
+        eprintln!("alforge: the whole suite at {commit}, behind the machine's lock");
         // Its temporary files on disk, outside any repository: /tmp is a tmpfs of the machine's
         // memory, and the laws' tests need a folder no git repository holds.
         // Built first, so the machine's lock is held for the tests alone (CLAUDE.md).
@@ -310,11 +313,11 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     let bins: Vec<String> = held.values().flat_map(|h| h.bins.iter().cloned()).collect();
     std::fs::create_dir_all(&o.work)?;
     let built = builder::build(&recipe, root, &commit, &toolchain, &packages, &bins, &o.work)?;
-    eprintln!("entrega: built under {} on {}", built.toolchain, built.libc);
+    eprintln!("alforge: built under {} on {}", built.toolchain, built.libc);
     let name = format!("veredas-{}-{target}", o.release);
     let names: Vec<String> = held.keys().cloned().collect();
     let (packed, extracted) = after_build(&recipe, root, &commit, &rustc, &built, &name, &bins, &names, &text, &o.work)?;
-    eprintln!("entrega: running the bundle's bench and supervisão together");
+    eprintln!("alforge: running the bundle's bench and supervisão together");
     let report = together::run(&extracted, &o.work.join("together"))?;
     let faults = together::faults(&report);
     if !faults.is_empty() {

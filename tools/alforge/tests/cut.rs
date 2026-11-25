@@ -7,11 +7,11 @@
 
 use std::path::{Path, PathBuf};
 
-use entrega::bundle;
-use entrega::cut::{self, Options};
-use entrega::machine::Recipe;
-use entrega::manifest;
-use entrega::together;
+use alforge::bundle;
+use alforge::cut::{self, Options};
+use alforge::machine::Recipe;
+use alforge::manifest;
+use alforge::together;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
@@ -22,10 +22,10 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     let root = repo_root();
     let out = tempfile::tempdir().unwrap();
     let release = "0.0.0-trial.291";
-    let work = root.join("target/entrega").join(release);
+    let work = root.join("target/alforge").join(release);
     let options = Options { release: semver::Version::parse(release).unwrap(), out: out.path().to_path_buf(), work: work.clone(), run_suite: false };
     // HEAD as the cut finds it: what it cuts, whatever is committed while it runs.
-    let head = entrega::git::text(&root, &["rev-parse", "HEAD"]).unwrap().unwrap().trim().to_string();
+    let head = alforge::git::text(&root, &["rev-parse", "HEAD"]).unwrap().unwrap().trim().to_string();
     let c = match cut::cut(&root, &options) {
         Ok(c) => c,
         Err(e) => panic!("the trial cut was refused: {e}"),
@@ -75,7 +75,7 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     let manifest_text = std::fs::read_to_string(&c.manifest_path).unwrap();
     assert_eq!(std::fs::read_to_string(c.extracted.join("release.toml")).unwrap(), manifest_text);
     assert_eq!(bundle::verify_sums(&c.extracted).unwrap(), Vec::<String>::new());
-    let plant_at_head = entrega::git::show(&root, &head, "tools/entrega/planta/loop/binding.toml").unwrap().unwrap();
+    let plant_at_head = alforge::git::show(&root, &head, "tools/alforge/planta/loop/binding.toml").unwrap().unwrap();
     assert_eq!(std::fs::read_to_string(c.extracted.join("planta/loop/binding.toml")).unwrap(), plant_at_head);
     // Copies of a bundle go under target/ (on disk): /tmp is a tmpfs of the machine's memory.
     let tampered = work.join("tampered");
@@ -88,7 +88,7 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
 
     // Every executable built in the builder asks no more of the libraries than the guest offers;
     // the ones that link the database engine's C++ ask for the C++ library at all.
-    let recipe = Recipe::load_file(&root.join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let recipe = Recipe::load_file(&root.join("tools/alforge/maquina/maquina.toml")).unwrap();
     for b in &bins {
         let out = std::process::Command::new("objdump").arg("-p").arg(c.extracted.join(b)).output().unwrap();
         let needs = bundle::needs(&String::from_utf8_lossy(&out.stdout));
@@ -106,7 +106,7 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     let names: Vec<String> = held.keys().cloned().collect();
     let plain_bins: Vec<String> = bins.iter().map(|b| b.trim_start_matches("bin/").to_string()).collect();
     let repacked = bundle::assemble(&recipe, &root, &head, name, &c.extracted.join("bin"), &plain_bins, &names, &manifest_text, &again).unwrap();
-    assert_eq!(entrega::cache::sha256(&repacked).unwrap(), entrega::cache::sha256(&c.bundle).unwrap());
+    assert_eq!(alforge::cache::sha256(&repacked).unwrap(), alforge::cache::sha256(&c.bundle).unwrap());
 
     // What the run saw: the page, every object live, both sources live, the parcels moving along
     // the loop, the offered write refused by portal's switch, both executables ending with 0.

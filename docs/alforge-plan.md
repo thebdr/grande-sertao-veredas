@@ -1,4 +1,4 @@
-# entrega: the plan
+# alforge: the plan
 
 What Veredas 2 ships: the suite release and the tester machine. `docs/veredas-plan.md` ("How
 releases work") wins on intent; `.zen/contract.md` (P-011, P-022, then the `C-xxx` clauses from
@@ -6,18 +6,20 @@ C-290 they become) wins on status. This file says what a release is made of and 
 what the tester machine holds and how it is built and proven, what was found of this machine's
 means, and the questions the architect has not ruled (`docs/questions.md`, from Q430).
 
-**Entrega** (delivery) is no component. It adds no `veredas-*` crate and edits no component's
-crate; its code is a tool, `tools/entrega` (repository tooling, like `tools/leis`: exempt from the
-component laws, free to depend on any member, L5). Its name is the architect's to confirm (Q430).
+**Alforge** (a saddlebag: what the rider carries; the architect's name, Q430) is no component. It
+adds no `veredas-*` crate and edits no component's crate; its code is a tool, `tools/alforge`, the
+crate `alforge` (repository tooling, like `tools/leis`: exempt from the component laws, free to
+depend on any member, L5). Until 2026-11-25 it was `entrega`, in `tools/entrega`: a release cut
+before then (2.0.0-alpha.1) holds its recipe, guide and plant there, and the tool reads them there.
 
 ## The role nobody covers
-**Entrega turns the repository into what a person runs without building it: a suite release, a
+**Alforge turns the repository into what a person runs without building it: a suite release, a
 manifest that pins a tested set of component versions with the executables built from them, and
 the tester machine, a virtual machine holding that release with a plant already running.**
 
 Every component builds and tests itself; none says which versions of the others it was run with,
 none ships an executable to someone without Rust, and none owns the plant a tester or a designer
-looks at on the first day. Without entrega a tester builds the suite from a commit and writes a
+looks at on the first day. Without alforge a tester builds the suite from a commit and writes a
 bench, a project and a binding before seeing anything.
 
 ## Part one: the suite release
@@ -36,7 +38,7 @@ bench, a project and a binding before seeing anything.
   plans and `docs/design/`), `release.toml` (the manifest) and `SHA256SUMS` over every file.
 - **The tester machine**, part two: built from a bundle, never from a tree.
 
-The worked example, the first manifest's shape (`tools/entrega/tests/manifest.rs` loads this block
+The worked example, the first manifest's shape (`tools/alforge/tests/manifest.rs` loads this block
 and checks every statement of the keys below against what it read):
 
 ```toml
@@ -85,7 +87,7 @@ Keys (each required unless a default is given):
 - `[tested]`: `suite`, the command whose green run at the commit made the set tested; `together`,
   what the cut ran from the bundle itself. Statements of what was run, written by the cut.
 
-### How a release is cut (the recipe, `entrega cut <release>`)
+### How a release is cut (the recipe, `alforge cut <release>`)
 1. **HEAD of a clean tree**, cut from a fresh `origin/main`: the cut refuses a tree that differs
    from HEAD (an untracked file included) and a release whose manifest exists. It plans the
    manifest first and checks it against the repository and every release already cut, so a
@@ -103,7 +105,7 @@ Keys (each required unless a default is given):
    an edit made while it ran refuses the cut.
 2. The components, their versions and their executables read from the commit as C-290 reads
    them (its tree out of git, asked of `cargo metadata`); the recipe's data
-   (`tools/entrega/maquina/maquina.toml`) from git too.
+   (`tools/alforge/maquina/maquina.toml`) from git too.
 3. **Built on the oldest system the release targets**, a builder machine of the tester machine's
    own distribution (Debian 13, glibc 2.41) under QEMU with KVM, four processors and 6 GB, its
    build four jobs, holding the machine's lock for the database engine's compilation: the
@@ -133,7 +135,7 @@ Keys (each required unless a default is given):
    disarmed); then closes both stdins and sees both exit 0.
 6. **The manifest** written into `releases/` only then, naming the commit and what was run, and
    checked like any other (C-290); the person cutting commits it and pushes. The bundle stays under
-   `target/entrega/<release>/`. A git tag `suite-<release>` on the commit is Q432's.
+   `target/alforge/<release>/`. A git tag `suite-<release>` on the commit is Q432's.
 
 A MAJOR bump of `veredas-core` ripples (the plan): every dependent's next version is cut only once
 it has been rebuilt and retested against it, which the cut sees as the suite green at the commit.
@@ -159,7 +161,7 @@ Neither needs Rust, Node, git or a network beyond the machine.
   three outlets, two parcels and an infeed) fed by a bench file of its own: the controller's OPC UA
   server with the parcels' places ramping along the loop, the outlets filling, the speed drawn, and
   a log emitter writing the sorter's lines the project's capture rule reads
-  (`tools/entrega/planta/`, copied into the user's home, where the tester edits it). Two services
+  (`tools/alforge/planta/`, copied into the user's home, where the tester edits it). Two services
   start at boot as the user, `veredas-bancada` (the bench) and `veredas-supervisao` (supervisão
   serving the plant), and restart on failure; their output is in the journal. Each executable
   runs until its stdin closes, so a service holds it open with a pipe and its stop ends it
@@ -174,7 +176,7 @@ Neither needs Rust, Node, git or a network beyond the machine.
 - **A desktop**, Xfce (Q434) under LightDM, logged in automatically, its panel set up beforehand
   so no first-start dialog asks, the browser opened on the plant at login, a terminal, a text
   editor for the plant's files, and on the desktop the docs (`/opt/veredas/current/docs`), the
-  plant and a short guide (`tools/entrega/maquina/guide.md`).
+  plant and a short guide (`tools/alforge/maquina/guide.md`).
 - **A network that takes any card**: NetworkManager, the build's card-bound configuration removed,
   so VMware's card (its own address, NAT or bridged) comes up by DHCP.
 - **The guest tools**: `open-vm-tools` and its desktop part, so VMware sizes the screen, shares
@@ -183,11 +185,11 @@ Neither needs Rust, Node, git or a network beyond the machine.
   as a host, where it switches to software drawing), then each component as it reaches a release.
 - **A user**, `veredas` (Q438), the only account that logs in; no SSH server.
 
-### How the image is built (the recipe, `entrega maquina <release>`)
+### How the image is built (the recipe, `alforge maquina <release>`)
 Everything below runs as the user, without sudo, without VMware, packer or docker (what this
 machine was found able to do is the next section). The recipe's choices that are the architect's
 (the distribution, the desktop, the user, the virtual hardware) are data in one stamped file,
-`tools/entrega/maquina/maquina.toml` (`veredas-machine`, version 1), never code, so a ruling is an
+`tools/alforge/maquina/maquina.toml` (`veredas-machine`, version 1), never code, so a ruling is an
 edit of that file. A machine is built only from a cut that ran to its end: the release's manifest
 written where the cut writes it (`releases/` for a real cut, the trial's folder beside its bundle)
 and the bundle's own `release.toml` byte for byte (a real cut's decides over a trial's of the same
@@ -195,7 +197,7 @@ release left beside the bundle); a bundle a refused cut left behind is refused.
 1. **The base**: the distribution's official cloud image (Debian 13, Q433), at a dated build
    named by URL in `maquina.toml` with its SHA-512 copied from the build's own list (served
    over HTTPS, not signed: the pin in the repository is what the recipe trusts),
-   downloaded once into a cache outside the repository (`~/.cache/veredas/entrega/`) and checked
+   downloaded once into a cache outside the repository (`~/.cache/veredas/alforge/`) and checked
    on every use; a mismatch is refused. The image is never committed.
 2. **The disk**: a copy-on-write overlay of the base, grown to the size `maquina.toml` gives.
 3. **Provisioning, unattended**: the overlay booted under QEMU with KVM, headless, the serial
@@ -215,7 +217,7 @@ release left beside the bundle); a bundle a refused cut left behind is refused.
    BIOS firmware, 2 processors and 4 GB by default), the VMDK and a `.mf` of their SHA-256 sums,
    tarred in that order (ustar, owned by root) into `veredas-<release>.ova`.
 
-### How a build is proven (`entrega prova <release>`, and the machine's test)
+### How a build is proven (`alforge prova <release>`, and the machine's test)
 - **The shipped disk boots on VMware's devices**: the VMDK taken out of the OVA, never the
   overlay, is booted under QEMU with KVM on VMware's own disk and network devices (QEMU emulates
   `pvscsi` and `vmxnet3`), copy-on-write so the proof changes nothing shipped. QEMU's
@@ -237,7 +239,7 @@ release left beside the bundle); a bundle a refused cut left behind is refused.
 - **The desktop draws the page**: screen dumps over QEMU's monitor until supervisão's own canvas
   colour (read from the release's page) covers 15 % of the screen; a desktop without the page, its
   wallpaper and panel, holds none of it, however many colours it has.
-- **The OVA is what VMware reads**: `entrega prova` checks the OVA's members, descriptor and sums
+- **The OVA is what VMware reads**: `alforge prova` checks the OVA's members, descriptor and sums
   before it boots the disk, as the machine's test does, with the recipe and supervisão's page canvas
   at the release's own commit, so an older release is proven by its own; every raw header is walked,
   three plain ustar files in order, so a pax or GNU extension header is refused.
@@ -291,7 +293,7 @@ Verified by running each, not assumed:
 
 ### The architect's trial (what P-022 waits on)
 The OVA is `/home/thebdr/veredas-entrega/veredas-2.0.0-alpha.1.ova` (1.09 GB, never committed),
-its SHA-256 beside it in `veredas-2.0.0-alpha.1.ova.sha256`; the same machine `entrega prova`
+its SHA-256 beside it in `veredas-2.0.0-alpha.1.ova.sha256`; the same machine `alforge prova`
 passed on 2026-11-23.
 1. **Check the copy**: `sha256sum -c veredas-2.0.0-alpha.1.ova.sha256` (Linux), or on Windows
    `certutil -hashfile veredas-2.0.0-alpha.1.ova SHA256` against the file's first word.
@@ -330,16 +332,16 @@ passed on 2026-11-23.
 
 ### What a cut and a machine cost in disk, and what is kept
 Measured on release 2.0.0-alpha.1 (2026-11-22):
-- **Kept across cuts, in the cache** (`~/.cache/veredas/entrega/`, outside the repository): the base
+- **Kept across cuts, in the cache** (`~/.cache/veredas/alforge/`, outside the repository): the base
   image (435 MB, once) and the builder machine's disk (1.6 GB, once per toolchain).
-- **During a cut**, under `target/entrega/<release>/`: the commit's tree and its vendored
+- **During a cut**, under `target/alforge/<release>/`: the commit's tree and its vendored
   dependencies (about 0.7 GB, and their tar stream as much), the builder's copy-on-write disk while
   it builds and the output disk (sparse); all removed once the executables are out.
 - **Kept after a cut**: the bundle (48 MB), its extracted check (161 MB) and the executables as
   built (160 MB), the run's copy of the plant (small).
 - **During a machine's build**: its copy-on-write disk (about 2.8 GB) and the VMDK, removed once
   the OVA is packed; **kept**: the OVA alone (1.09 GB). The proof's copy of the disk taken out of
-  the OVA (1.09 GB) is removed after `entrega prova` reports. The proven OVA the architect tries
+  the OVA (1.09 GB) is removed after `alforge prova` reports. The proven OVA the architect tries
   is copied, with its SHA-256, to `/home/thebdr/veredas-entrega/` (1.09 GB), which no reset of a
   build folder touches.
 - A superseded or failed cut's folder is removed whole; a trial's, by its test when it passes.
@@ -361,7 +363,7 @@ Measured on release 2.0.0-alpha.1 (2026-11-22):
   is reachable from the machine's own network only, which VMware's default (NAT) limits to the
   host; Q29's gaps (a request's `Host` and `Origin` unread) hold here as everywhere.
 - **Each claim a clause, proven by a test that builds or boots the real thing**, under
-  `tools/entrega/tests/`, one file per capability: no mock of QEMU, of the guest or of the bundle.
+  `tools/alforge/tests/`, one file per capability: no mock of QEMU, of the guest or of the bundle.
 - **Typed errors** in the tool, no `unwrap`/`expect` on an I/O path; tests may unwrap.
 
 ## Clauses ahead
@@ -403,16 +405,16 @@ Recorded as the work meets them.
   that won it: a unit that speaks on the console at boot is ordered before
   `serial-getty@ttyS0.service`.
 - **`/tmp` is a tmpfs of the machine's memory, shared by every session**, and its quota for the
-  user ran out at 20 GB ("Disk quota exceeded"). Disks, bundles and OVAs go under `target/entrega/`
+  user ran out at 20 GB ("Disk quota exceeded"). Disks, bundles and OVAs go under `target/alforge/`
   or the cache, never in `/tmp`. A `TMPDIR` moved elsewhere must lie outside every git repository:
   under the worktree's `target/`, a law's test of "a tree without git is refused" found the
   worktree's repository around its tree and failed the cut's suite. The cut's suite takes
-  `~/.cache/veredas/entrega/tmp`.
+  `~/.cache/veredas/alforge/tmp`.
 - **Debian's image has no `strings`** (binutils is not installed): what the guest is asked is
   answered with its own tools, or read on the host.
 - **A clone never builds into the worktree's `target/`.** Cargo names a member's artifacts by its
   path inside the workspace, so a mutant built in a clone with `CARGO_TARGET_DIR` set to the
   worktree's folder leaves its library and executable there under the worktree's own names, and
   the worktree's next run tests the mutant (2026-11-23: two of `tests/bundle.rs` red on correct
-  code until `cargo clean -p entrega`). A clone or a critic gets a target folder of its own, seeded
+  code until `cargo clean -p alforge`). A clone or a critic gets a target folder of its own, seeded
   from `~/.cache/veredas/target-seed`.

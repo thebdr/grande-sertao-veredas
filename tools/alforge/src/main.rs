@@ -1,31 +1,31 @@
-//! `entrega check`: read every suite release manifest of the repository the current folder is in
+//! `alforge check`: read every suite release manifest of the repository the current folder is in
 //! (`releases/*.toml`, the folder judged whole: a manifest is never judged apart from the others)
 //! and check each against the repository's history and against each other, printing one line per
 //! manifest.
 //!
-//! `entrega cut <release> [--trial] [--out <dir>]`: cut a suite release from HEAD of the
-//! repository the current folder is in (docs/entrega-plan.md, "How a release is cut"): the whole
+//! `alforge cut <release> [--trial] [--out <dir>]`: cut a suite release from HEAD of the
+//! repository the current folder is in (docs/alforge-plan.md, "How a release is cut"): the whole
 //! suite run first (a trial cut skips it and its manifest says so), the executables built in the
-//! builder machine, the bundle packed under `target/entrega/<release>/` and run together, then the
+//! builder machine, the bundle packed under `target/alforge/<release>/` and run together, then the
 //! manifest written into `releases/` (or `--out`).
 //!
-//! `entrega maquina <release>`: build the tester machine of a release already cut, from its bundle
-//! under `target/entrega/<release>/`, into `veredas-<release>.ova` beside it
-//! (docs/entrega-plan.md, "How the image is built").
+//! `alforge maquina <release>`: build the tester machine of a release already cut, from its bundle
+//! under `target/alforge/<release>/`, into `veredas-<release>.ova` beside it
+//! (docs/alforge-plan.md, "How the image is built").
 //!
-//! `entrega prova <release>`: prove the tester machine built for a release: its OVA's disk booted
+//! `alforge prova <release>`: prove the tester machine built for a release: its OVA's disk booted
 //! copy-on-write under QEMU on VMware's disk and network devices, the release's sums checked at
 //! boot, the plant read from the host, the desktop drawn, the disk unchanged
-//! (docs/entrega-plan.md, "How a build is proven").
+//! (docs/alforge-plan.md, "How a build is proven").
 //!
 //! Exit codes: 0 when every manifest checks, the release is cut, the machine built or proven; 2 when one is refused, the
 //! reasons on stderr; 1 on a usage error.
 
 use std::path::PathBuf;
 
-use entrega::{git, manifest};
+use alforge::{git, manifest};
 
-const USAGE: &str = "usage: entrega check\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>\n       entrega prova <release>";
+const USAGE: &str = "usage: alforge check\n       alforge cut <release> [--trial] [--out <dir>]\n       alforge maquina <release>\n       alforge prova <release>";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -68,7 +68,7 @@ fn maquina(release: &str) -> i32 {
             return 2;
         }
     };
-    match entrega::maquina::from_release(&root, release, "x86_64-unknown-linux-gnu") {
+    match alforge::maquina::from_release(&root, release, "x86_64-unknown-linux-gnu") {
         Ok(p) => {
             println!("tester machine of release {release}");
             println!("  ova  {}", p.ova.display());
@@ -89,7 +89,7 @@ fn prova(release: &str) -> i32 {
             return 2;
         }
     };
-    match entrega::maquina::prove_release(&root, release, "x86_64-unknown-linux-gnu") {
+    match alforge::maquina::prove_release(&root, release, "x86_64-unknown-linux-gnu") {
         Ok((proof, faults)) => {
             let names = |s: &serde_json::Value| -> String {
                 s["objects"].as_array().into_iter().flatten().map(|o| format!("{}={}", o["id"].as_str().unwrap_or("?"), o["value"])).collect::<Vec<_>>().join(" ")
@@ -154,14 +154,14 @@ fn cut(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let options = entrega::cut::Options {
+    let options = alforge::cut::Options {
         // A trial's manifest goes beside its bundle, never into releases/.
-        out: out.unwrap_or_else(|| if trial { root.join("target/entrega").join(release.to_string()) } else { root.join("releases") }),
-        work: root.join("target/entrega").join(release.to_string()),
+        out: out.unwrap_or_else(|| if trial { root.join("target/alforge").join(release.to_string()) } else { root.join("releases") }),
+        work: root.join("target/alforge").join(release.to_string()),
         release,
         run_suite: !trial,
     };
-    match entrega::cut::cut(&root, &options) {
+    match alforge::cut::cut(&root, &options) {
         Ok(c) => {
             println!("release {} cut from {}", c.manifest.release, c.manifest.commit);
             println!("  manifest {}", c.manifest_path.display());

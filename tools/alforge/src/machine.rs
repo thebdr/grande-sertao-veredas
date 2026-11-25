@@ -1,5 +1,5 @@
 //! The tester machine's recipe data: `veredas-machine`, version 1
-//! (`tools/entrega/maquina/maquina.toml`). The base image and the libraries it offers, the builder
+//! (`tools/alforge/maquina/maquina.toml`). The base image and the libraries it offers, the builder
 //! machine and the tester machine; every choice the architect rules is a key here, not code.
 
 use std::path::{Path, PathBuf};

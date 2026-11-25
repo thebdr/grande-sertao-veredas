@@ -1,4 +1,4 @@
-//! A virtual machine under QEMU with KVM, run as the user (docs/entrega-plan.md, "What this machine
+//! A virtual machine under QEMU with KVM, run as the user (docs/alforge-plan.md, "What this machine
 //! can build"): a system disk, a NoCloud seed, data disks holding tar streams, the serial console
 //! written to a file, ports forwarded from the host's loopback. The traps it answers: the system
 //! disk always boots first (`bootindex=0`), and every wait has a bound.
@@ -278,7 +278,7 @@ pub fn wait_for_memory(bytes: u64, within: Duration) -> Result<(), VmError> {
                 stderr: format!("the host has {} MB available, a machine waits for {} MB", now >> 20, bytes >> 20),
             });
         }
-        eprintln!("entrega: {} MB available, waiting for {} MB before a machine starts", now >> 20, bytes >> 20);
+        eprintln!("alforge: {} MB available, waiting for {} MB before a machine starts", now >> 20, bytes >> 20);
         std::thread::sleep(Duration::from_secs(30));
     }
 }
@@ -286,7 +286,7 @@ pub fn wait_for_memory(bytes: u64, within: Duration) -> Result<(), VmError> {
 /// Holds the machine's lock for compiling the database engine (`/tmp/veredas-engine.lock`, the
 /// one `flock` takes): one build of the engine at a time on the host, a builder machine's included.
 pub fn engine_lock() -> Result<std::fs::File, VmError> {
-    eprintln!("entrega: waiting for the engine's lock ({ENGINE_LOCK})");
+    eprintln!("alforge: waiting for the engine's lock ({ENGINE_LOCK})");
     lock(Path::new(ENGINE_LOCK))
 }
 

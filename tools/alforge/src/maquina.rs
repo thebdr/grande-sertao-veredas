@@ -1,4 +1,4 @@
-//! The tester machine (docs/entrega-plan.md, part two): a release's bundle provisioned unattended
+//! The tester machine (docs/alforge-plan.md, part two): a release's bundle provisioned unattended
 //! into the distribution's cloud image under QEMU, the disk flattened into a stream-optimized VMDK,
 //! an OVF descriptor for VMware's virtual hardware and a manifest of sums, tarred into an OVA. The
 //! proof boots the disk taken out of the OVA on QEMU's models of VMware's devices.
@@ -26,12 +26,12 @@ pub fn provision_script(r: &Recipe, bundle_dir: &str, release: &str) -> String {
     format!(
         r#"set -eu
 export DEBIAN_FRONTEND=noninteractive
-echo "ENTREGA-STEP packages"
+echo "ALFORGE-STEP packages"
 apt-get update
 apt-get install -y {packages}
 if [ -n "{remove}" ]; then apt-get purge -y {remove}; fi
 apt-get -y autoremove --purge
-echo "ENTREGA-STEP user"
+echo "ALFORGE-STEP user"
 id debian >/dev/null 2>&1 && userdel -r debian || true
 useradd -m -s /bin/bash -G sudo {u}
 for g in netdev systemd-journal; do if getent group $g >/dev/null; then usermod -aG $g {u}; fi; done
@@ -39,14 +39,14 @@ echo '{u}:{password}' | chpasswd
 echo veredas > /etc/hostname
 sed -i 's/^127.0.1.1.*/127.0.1.1 veredas/' /etc/hosts
 grep -q '^127.0.1.1' /etc/hosts || echo '127.0.1.1 veredas' >> /etc/hosts
-echo "ENTREGA-STEP release"
+echo "ALFORGE-STEP release"
 mkdir -p /opt/veredas
-tar -xzf /entrega/bundle.tar.gz -C /opt/veredas
+tar -xzf /alforge/bundle.tar.gz -C /opt/veredas
 ln -sfn /opt/veredas/{bundle_dir} /opt/veredas/current
 for b in /opt/veredas/current/bin/*; do ln -sf "$b" /usr/local/bin/; done
 cp -r /opt/veredas/current/planta /home/{u}/planta
-cp /entrega/guide.md /home/{u}/README-veredas.md
-echo "ENTREGA-STEP services"
+cp /alforge/guide.md /home/{u}/README-veredas.md
+echo "ALFORGE-STEP services"
 cat > /etc/systemd/system/veredas-bancada.service <<'UNIT'
 [Unit]
 Description=Veredas: the bench playing the plant (veredas-maquinar)
@@ -106,7 +106,7 @@ cat > /etc/systemd/system/veredas-verifica.service <<'UNIT'
 [Unit]
 Description=Veredas: the release's files checked against its SHA256SUMS
 # Done before a login starts on the serial console: agetty hangs the line up when it starts, and a
-# line written to the console meanwhile is lost (docs/entrega-plan.md, "Traps").
+# line written to the console meanwhile is lost (docs/alforge-plan.md, "Traps").
 Before=serial-getty@ttyS0.service getty@tty1.service
 
 [Service]
@@ -118,7 +118,7 @@ StandardOutput=journal+console
 WantedBy=multi-user.target
 UNIT
 systemctl enable veredas-bancada.service veredas-supervisao.service veredas-verifica.service
-echo "ENTREGA-STEP desktop"
+echo "ALFORGE-STEP desktop"
 mkdir -p /etc/lightdm/lightdm.conf.d
 printf '[Seat:*]\nautologin-user={u}\nautologin-session=xfce\n' > /etc/lightdm/lightdm.conf.d/50-veredas.conf
 systemctl set-default graphical.target
@@ -135,23 +135,23 @@ ln -sfn /opt/veredas/current/docs $H/Desktop/docs
 ln -sfn $H/planta $H/Desktop/planta
 ln -sfn $H/README-veredas.md $H/Desktop/README-veredas.md
 chown -R {u}:{u} $H
-echo "ENTREGA-STEP network"
+echo "ALFORGE-STEP network"
 rm -f /etc/netplan/*.yaml
 systemctl disable systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service || true
 systemctl enable NetworkManager.service
-echo "ENTREGA-STEP cleanup"
+echo "ALFORGE-STEP cleanup"
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 touch /etc/cloud/cloud-init.disabled
 rm -f /var/log/cloud-init.log /var/log/cloud-init-output.log
 truncate -s 0 /etc/machine-id
 rm -f /var/lib/dbus/machine-id
-rm -rf /entrega
+rm -rf /alforge
 journalctl --rotate || true
 journalctl --vacuum-time=1s || true
 sync
 fstrim -av || true
-echo ENTREGA-PROVISION-OK
+echo ALFORGE-PROVISION-OK
 "#,
         password = m.password,
     )
@@ -276,20 +276,20 @@ pub fn build(r: &Recipe, bundle: &Path, bundle_dir: &str, release: &str, guide: 
     let disk = work.join("maquina.qcow2");
     vm::overlay(&base, &disk, r.machine.disk_gb)?;
     // The provisioning logs to a file whose tail is echoed to the console after (agetty hangs up
-    // ttyS0 when it starts; docs/entrega-plan.md, "Traps"); the log stays in the image.
-    let user_data = "#cloud-config\nusers: []\nruncmd:\n  - [ sh, -c, 'mkdir -p /entrega && tar -xf /dev/disk/by-id/virtio-entrega-in -C /entrega && sh /entrega/provision.sh > /var/log/veredas-provision.log 2>&1; rc=$?; tail -n 60 /var/log/veredas-provision.log > /dev/ttyS0; echo \"ENTREGA-PROVISION-EXIT $rc\" > /dev/ttyS0' ]\npower_state:\n  mode: poweroff\n  delay: now\n  timeout: 120\n";
+    // ttyS0 when it starts; docs/alforge-plan.md, "Traps"); the log stays in the image.
+    let user_data = "#cloud-config\nusers: []\nruncmd:\n  - [ sh, -c, 'mkdir -p /alforge && tar -xf /dev/disk/by-id/virtio-alforge-in -C /alforge && sh /alforge/provision.sh > /var/log/veredas-provision.log 2>&1; rc=$?; tail -n 60 /var/log/veredas-provision.log > /dev/ttyS0; echo \"ALFORGE-PROVISION-EXIT $rc\" > /dev/ttyS0' ]\npower_state:\n  mode: poweroff\n  delay: now\n  timeout: 120\n";
     let nonce = cache::sha256_text(&format!("{release}{:?}", std::time::SystemTime::now()));
     let seed = work.join("maquina-seed.iso");
-    vm::seed(&work.join("maquina-seed"), &seed, user_data, &format!("entrega-maquina-{}", &nonce[..16]))?;
+    vm::seed(&work.join("maquina-seed"), &seed, user_data, &format!("alforge-maquina-{}", &nonce[..16]))?;
     let console = work.join("maquina-console.log");
-    eprintln!("entrega: provisioning the tester machine; its console is {}", console.display());
+    eprintln!("alforge: provisioning the tester machine; its console is {}", console.display());
     let mut m = Vm::start(&Spec {
         disk: disk.clone(),
         hardware: Hardware::Virtio,
         cpus: r.machine.cpus.max(4),
         memory_mb: r.machine.memory_mb,
         seed: Some(seed),
-        data: vec![DataDisk { file: in_tar.clone(), serial: "entrega-in".into(), writable: false }],
+        data: vec![DataDisk { file: in_tar.clone(), serial: "alforge-in".into(), writable: false }],
         forwards: vec![],
         snapshot: false,
         mac: None,
@@ -306,7 +306,7 @@ pub fn build(r: &Recipe, bundle: &Path, bundle_dir: &str, release: &str, guide: 
     let vmdk_name = format!("{name}-disk1.vmdk");
     let vmdk = work.join(&vmdk_name);
     let _ = std::fs::remove_file(&vmdk);
-    eprintln!("entrega: flattening the disk into a stream-optimized VMDK");
+    eprintln!("alforge: flattening the disk into a stream-optimized VMDK");
     vm::run(
         "qemu-img",
         &[
@@ -381,7 +381,7 @@ pub fn boot(r: &Recipe, vmdk: &Path, port: u16, qmp: Option<u16>, console: &Path
 }
 
 /// Builds the tester machine of a release already cut: its bundle under
-/// `target/entrega/<release>/`, the recipe and the guide read at the commit its manifest names.
+/// `target/alforge/<release>/`, the recipe and the guide read at the commit its manifest names.
 /// Whether release `release`'s cut ran to its end: its manifest written where a cut writes it
 /// (`releases/<release>.toml` for a real cut, `<work>/<release>.toml` for a trial; a real cut's
 /// decides over a trial's of the same release left beside the bundle, which the real cut's work
@@ -389,15 +389,15 @@ pub fn boot(r: &Recipe, vmdk: &Path, port: u16, qmp: Option<u16>, console: &Path
 /// run together failed) leaves a bundle and no manifest; a machine is never built from such a
 /// bundle.
 /// Why the provisioning's console (its log's tail, then its exit) does not show it finished: no
-/// `ENTREGA-PROVISION-OK`, another exit than 0, or the root's free space not trimmed (`fstrim`'s
+/// `ALFORGE-PROVISION-OK`, another exit than 0, or the root's free space not trimmed (`fstrim`'s
 /// line for `/`). Empty when it does.
 pub fn provision_faults(console: &str) -> Vec<String> {
     let mut out = Vec::new();
-    if !console.contains("ENTREGA-PROVISION-OK") {
-        out.push("no ENTREGA-PROVISION-OK".to_string());
+    if !console.contains("ALFORGE-PROVISION-OK") {
+        out.push("no ALFORGE-PROVISION-OK".to_string());
     }
-    if !console.contains("ENTREGA-PROVISION-EXIT 0") {
-        out.push("no ENTREGA-PROVISION-EXIT 0".to_string());
+    if !console.contains("ALFORGE-PROVISION-EXIT 0") {
+        out.push("no ALFORGE-PROVISION-EXIT 0".to_string());
     }
     if !console.lines().any(|l| l.contains("/: ") && l.contains(" trimmed on ")) {
         out.push("the root's free space was not trimmed (no `/: ... trimmed on` line)".to_string());
@@ -425,7 +425,7 @@ pub fn cut_finished(root: &Path, release: &str, work: &Path, bundle_manifest: &s
 }
 
 pub fn from_release(root: &Path, release: &str, target: &str) -> Result<Paths, VmError> {
-    let work = root.join("target/entrega").join(release);
+    let work = root.join("target/alforge").join(release);
     let bundle_dir = format!("veredas-{release}-{target}");
     let bundle = work.join(format!("{bundle_dir}.tar.gz"));
     if !bundle.exists() {
@@ -439,8 +439,11 @@ pub fn from_release(root: &Path, release: &str, target: &str) -> Result<Paths, V
             .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
             .ok_or_else(|| VmError::Failed { program: "the tester machine".into(), status: "refused".into(), stderr: format!("commit {} holds no {path}", m.commit) })
     };
-    let recipe = Recipe::load(&at("tools/entrega/maquina/maquina.toml")?).map_err(|e| VmError::Failed { program: "the recipe".into(), status: "refused".into(), stderr: e.to_string() })?;
-    let guide = at("tools/entrega/maquina/guide.md")?;
+    let folder = crate::folder_at(root, &m.commit)
+        .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
+        .unwrap_or(crate::FOLDERS[0]);
+    let recipe = Recipe::load(&at(&format!("{folder}/maquina/maquina.toml"))?).map_err(|e| VmError::Failed { program: "the recipe".into(), status: "refused".into(), stderr: e.to_string() })?;
+    let guide = at(&format!("{folder}/maquina/guide.md"))?;
     build(&recipe, &bundle, &bundle_dir, release, &guide, &work.join("maquina"))
 }
 
@@ -704,7 +707,7 @@ pub struct Proof {
     pub bundle: String,
 }
 
-/// The proof of a tester machine (docs/entrega-plan.md, "How a build is proven"): the OVA opened
+/// The proof of a tester machine (docs/alforge-plan.md, "How a build is proven"): the OVA opened
 /// into `work` and read as VMware reads it; its disk booted copy-on-write on VMware's devices with a
 /// card address the provisioning never saw; the boot's check of the release's sums and of its cards
 /// waited for on the console; the plant read from the host; the screen dumped until the page, in its
@@ -794,20 +797,20 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
     out
 }
 
-/// Proves the tester machine already built for a release (`entrega maquina`), the recipe read at
+/// Proves the tester machine already built for a release (`alforge maquina`), the recipe read at
 /// the commit its manifest names; the proof and its faults.
 pub fn prove_release(root: &Path, release: &str, target: &str) -> Result<(Proof, Vec<String>), VmError> {
     let s = proof_setup(root, release, target)?;
-    let proof = prove(&s.recipe, &s.ova, release, s.canvas, &s.bundle, &root.join("target/entrega").join(release).join("prova"))?;
+    let proof = prove(&s.recipe, &s.ova, release, s.canvas, &s.bundle, &root.join("target/alforge").join(release).join("prova"))?;
     let faults = proof_faults(&proof, release);
     Ok((proof, faults))
 }
 
-/// What `entrega prova <release>` proves with ([`proof_setup`]).
+/// What `alforge prova <release>` proves with ([`proof_setup`]).
 pub struct Setup {
     /// The recipe at the release's commit.
     pub recipe: Recipe,
-    /// The release's OVA, where `entrega maquina` builds it.
+    /// The release's OVA, where `alforge maquina` builds it.
     pub ova: PathBuf,
     /// Supervisão's page canvas at the release's commit.
     pub canvas: (u8, u8, u8),
@@ -815,12 +818,12 @@ pub struct Setup {
     pub bundle: String,
 }
 
-/// What `entrega prova <release>` proves with: the release's OVA where `entrega maquina` builds it,
+/// What `alforge prova <release>` proves with: the release's OVA where `alforge maquina` builds it,
 /// a cut of the release that ran to its end ([`cut_finished`]) and the digest of its bundle's sums,
 /// and the recipe and supervisão's page canvas at the commit the release's manifest names (never
 /// HEAD's, never the working tree's), so an older release is proven by its own.
 pub fn proof_setup(root: &Path, release: &str, target: &str) -> Result<Setup, VmError> {
-    let work = root.join("target/entrega").join(release);
+    let work = root.join("target/alforge").join(release);
     let bundle_dir = format!("veredas-{release}-{target}");
     let bundle = work.join(format!("{bundle_dir}.tar.gz"));
     let ova = work.join("maquina").join(format!("veredas-{release}.ova"));
@@ -831,7 +834,10 @@ pub fn proof_setup(root: &Path, release: &str, target: &str) -> Result<Setup, Vm
     cut_finished(root, release, &work, &text)?;
     let sums = vm::run("tar", &["-xzf", &bundle.display().to_string(), "-O", &format!("{bundle_dir}/SHA256SUMS")], None)?;
     let m = crate::manifest::load(&text).map_err(|e| VmError::Failed { program: "the bundle's manifest".into(), status: "refused".into(), stderr: e.to_string() })?;
-    let recipe_text = crate::git::show(root, &m.commit, "tools/entrega/maquina/maquina.toml")
+    let folder = crate::folder_at(root, &m.commit)
+        .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
+        .unwrap_or(crate::FOLDERS[0]);
+    let recipe_text = crate::git::show(root, &m.commit, &format!("{folder}/maquina/maquina.toml"))
         .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
         .ok_or_else(|| VmError::Failed { program: "the proof".into(), status: "refused".into(), stderr: format!("commit {} holds no recipe", m.commit) })?;
     let recipe = Recipe::load(&recipe_text).map_err(|e| VmError::Failed { program: "the recipe".into(), status: "refused".into(), stderr: e.to_string() })?;

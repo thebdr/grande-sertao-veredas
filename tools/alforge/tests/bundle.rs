@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use entrega::builder;
-use entrega::bundle;
-use entrega::cut::{self, CutError, Options};
-use entrega::machine::{Recipe, RecipeError};
-use entrega::manifest;
-use entrega::together::{self, Answer, Report};
-use entrega::vm::{self, VmError};
+use alforge::builder;
+use alforge::bundle;
+use alforge::cut::{self, CutError, Options};
+use alforge::machine::{Recipe, RecipeError};
+use alforge::manifest;
+use alforge::together::{self, Answer, Report};
+use alforge::vm::{self, VmError};
 use serde_json::{Value, json};
 
 fn repo_root() -> PathBuf {
@@ -24,7 +24,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn recipe() -> Recipe {
-    Recipe::load_file(&repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap()
+    Recipe::load_file(&repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap()
 }
 
 /// What `objdump -p` prints of a dynamic executable's version references (abridged from portal's,
@@ -103,7 +103,7 @@ fn the_manifest_a_cut_writes_reads_back_as_written() {
 
 #[test]
 fn the_recipe_is_read_through_cores_header_and_refused_by_key() {
-    let text = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let text = std::fs::read_to_string(repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     let r = Recipe::load(&text).unwrap();
     assert_eq!(r.base_name(), "debian-13-generic-amd64-20261116-2664.qcow2");
     assert_eq!((r.builder.cpus, r.builder.memory_mb), (4, 6144), "one machine at a time takes at most 4 cores and 6 GB here");
@@ -138,7 +138,7 @@ fn the_cut_refuses_a_tree_that_differs_from_head_and_a_release_already_cut() {
     let options = |release: &str| Options {
         release: semver::Version::parse(release).unwrap(),
         out: out.path().to_path_buf(),
-        work: c.path().join("target/entrega").join(release),
+        work: c.path().join("target/alforge").join(release),
         run_suite: false,
     };
     std::fs::write(out.path().join("2.0.0.toml"), "").unwrap();
@@ -183,7 +183,7 @@ fn a_bundle_packs_to_the_same_bytes_whatever_the_modes_its_files_were_made_with(
 
 #[test]
 fn the_recipes_library_limits_are_versions_of_dotted_digits() {
-    let text = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let text = std::fs::read_to_string(repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     for (from, to, key, value) in [
         ("glibc = \"2.41\"", "glibc = \"v2.41\"", "base.glibc", "v2.41"),
         ("glibcxx = \"3.4.33\"", "glibcxx = \"3.4.\"", "base.glibcxx", "3.4."),
@@ -204,7 +204,7 @@ fn the_cut_refuses_an_untracked_file_and_a_release_already_in_releases() {
     let options = |release: &str| Options {
         release: semver::Version::parse(release).unwrap(),
         out: out.path().to_path_buf(),
-        work: c.path().join("target/entrega").join(release),
+        work: c.path().join("target/alforge").join(release),
         run_suite: false,
     };
     match cut::cut(c.path(), &options("2.0.0-alpha.1")) {
@@ -228,7 +228,7 @@ impl Repo {
         let out = Command::new("git")
             .arg("-C")
             .arg(self.dir.path())
-            .args(["-c", "user.name=entrega", "-c", "user.email=entrega@example.invalid", "-c", "commit.gpgsign=false"])
+            .args(["-c", "user.name=alforge", "-c", "user.email=alforge@example.invalid", "-c", "commit.gpgsign=false"])
             .args(args)
             .output()
             .unwrap();
@@ -255,7 +255,7 @@ fn the_cut_refuses_a_version_another_release_pinned_at_other_code_before_buildin
     r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\"]\n");
     r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
     r.write("crates/veredas-core/src/lib.rs", "\n");
-    r.write("tools/entrega/maquina/maquina.toml", &recipe_with("cpus = 4", "cpus = 4"));
+    r.write("tools/alforge/maquina/maquina.toml", &recipe_with("cpus = 4", "cpus = 4"));
     let c1 = r.commit("core 2.0.0");
     let components = vec![("veredas-core".to_string(), "2.0.0".to_string(), vec![])];
     let first = semver::Version::parse("2.0.0").unwrap();
@@ -273,7 +273,7 @@ fn the_cut_refuses_a_version_another_release_pinned_at_other_code_before_buildin
         "release 2.0.1 would not check:\nveredas-core 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree\n"
     );
     assert_eq!(log, Vec::<String>::new(), "refused before the suite");
-    assert!(!r.dir.path().join("target/entrega/2.0.1").exists(), "refused before anything was run or built");
+    assert!(!r.dir.path().join("target/alforge/2.0.1").exists(), "refused before anything was run or built");
     assert!(!r.dir.path().join("releases/2.0.1.toml").exists());
 }
 
@@ -313,7 +313,7 @@ fn a_trials_manifest_never_goes_into_releases() {
     let options = Options {
         release: semver::Version::parse("9.9.9-trial.1").unwrap(),
         out: c.path().join("releases"),
-        work: c.path().join("target/entrega/9.9.9-trial.1"),
+        work: c.path().join("target/alforge/9.9.9-trial.1"),
         run_suite: false,
     };
     match cut::cut(c.path(), &options) {
@@ -435,7 +435,7 @@ fn round_five_the_orcl_plan_a_mode_change_ignored_folders_and_the_packers_enviro
     std::fs::write(cl.path().join("ide/proj.user"), "x\n").unwrap();
     assert_eq!(cut::differs_from(cl.path(), &commit).unwrap(), None);
     // tar and gzip run without the variables that change what they write.
-    let tar = entrega::vm::clean_command("tar");
+    let tar = alforge::vm::clean_command("tar");
     let removed: Vec<String> = tar.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_string_lossy().into_owned()).collect();
     assert_eq!(removed, ["GZIP", "GZIP_OPT", "TAR_OPTIONS"]);
     // A variable that is not UTF-8 is passed on as it is, never a panic.
@@ -576,7 +576,7 @@ fn the_run_together_is_refused_for_every_way_the_plant_is_not_running_each_named
     assert_eq!(together::faults(&silent).len(), 16, "{:#?}", together::faults(&silent));
 }
 
-/// A real cut (`entrega cut 2.0.1`) of the repository `r`, its cache `cache`, seen through
+/// A real cut (`alforge cut 2.0.1`) of the repository `r`, its cache `cache`, seen through
 /// stand-ins for `cargo nextest` and `flock` first on its `PATH` (every other cargo command goes to
 /// the real one): the stand-in's build exits `build_exit`, its suite runs `run`. The caller's shell
 /// holds `NEXTEST_PROFILE`, `CARGO_TARGET_DIR` and a `RUSTUP_TOOLCHAIN` naming no toolchain, which
@@ -598,12 +598,12 @@ fn cut_with_suite(r: &Repo, cache: &Path, build_exit: u8, run: &str, args: &[&st
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let path = std::env::join_paths(std::iter::once(stub.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap()))).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_entrega"))
+    let out = Command::new(env!("CARGO_BIN_EXE_alforge"))
         .args(["cut", "2.0.1"])
         .args(args)
         .current_dir(r.dir.path())
         .env("PATH", path)
-        .env("ENTREGA_CACHE", cache)
+        .env("ALFORGE_CACHE", cache)
         .env("NEXTEST_PROFILE", "no-browser")
         .env("CARGO_TARGET_DIR", stub.path().join("elsewhere"))
         .env("RUSTUP_TOOLCHAIN", "no-such-toolchain")
@@ -623,14 +623,14 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
     r.write("crates/veredas-core/src/lib.rs", "\n");
     // The recipe's base at an address nothing answers: a cut whose suite passes stops at the
     // builder's first download, so nothing is built here.
-    let recipe = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let recipe = std::fs::read_to_string(repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     assert_eq!(recipe.lines().filter(|l| l.starts_with("url = ")).count(), 1);
-    let base = "https://127.0.0.1:9/entrega-stub.qcow2";
+    let base = "https://127.0.0.1:9/alforge-stub.qcow2";
     let recipe: String = recipe.lines().map(|l| if l.starts_with("url = ") { format!("url = \"{base}\"\n") } else { format!("{l}\n") }).collect();
-    r.write("tools/entrega/maquina/maquina.toml", &recipe);
+    r.write("tools/alforge/maquina/maquina.toml", &recipe);
     let commit = r.commit("core 2.0.0");
     let cache = tempfile::tempdir().unwrap();
-    let work = r.dir.path().join("target/entrega/2.0.1");
+    let work = r.dir.path().join("target/alforge/2.0.1");
     let manifest = r.dir.path().join("releases/2.0.1.toml");
     // The suite the manifest names is the one run: built first, then run behind the machine's lock,
     // the default profile both times, none of the shell's steering, its temporary files in the cache.
@@ -639,7 +639,7 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
     let locked = format!("flock /tmp/veredas-suite.lock {} --profile default", cut::SUITE);
     let ran = format!("{} --profile default{env}", cut::SUITE);
     let stderr = |o: &std::process::Output| String::from_utf8_lossy(&o.stderr).into_owned();
-    let start = |at: &str| format!("entrega: the whole suite at {at}, behind the machine's lock\n");
+    let start = |at: &str| format!("alforge: the whole suite at {at}, behind the machine's lock\n");
 
     // A suite that does not build: refused, the lock never taken, nothing built, no manifest.
     let (out, log) = cut_with_suite(&r, cache.path(), 1, "exit 0", &[]);
@@ -682,7 +682,7 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
     assert_eq!(out.status.code(), Some(2));
     let text = stderr(&out);
     assert!(text.starts_with(&start(&moved)), "{text}");
-    assert!(text.contains(&format!("entrega: downloading {base} once into {}\n", cache.path().join("entrega-stub.qcow2").display())), "{text}");
+    assert!(text.contains(&format!("alforge: downloading {base} once into {}\n", cache.path().join("alforge-stub.qcow2").display())), "{text}");
     assert!(work.exists() && !manifest.exists());
 }
 
@@ -792,9 +792,9 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         "set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
          cd /build/src\nmkdir -p /build/out/bin\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
          cargo build --release --locked --offline --jobs 4 -p veredas-maquinar -p veredas-portal --bins\nmissing=\n\
-         if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; else echo \"ENTREGA-MISSING veredas-bancada\"; missing=1; fi\n\
-         if [ -f target/release/veredas-portal ]; then cp target/release/veredas-portal /build/out/bin/; else echo \"ENTREGA-MISSING veredas-portal\"; missing=1; fi\n\
-         [ -z \"$missing\" ]\necho ENTREGA-BUILD-OK\n"
+         if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; else echo \"ALFORGE-MISSING veredas-bancada\"; missing=1; fi\n\
+         if [ -f target/release/veredas-portal ]; then cp target/release/veredas-portal /build/out/bin/; else echo \"ALFORGE-MISSING veredas-portal\"; missing=1; fi\n\
+         [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n"
     );
     // The script run here as the builder runs it (its `/build` a folder of the test's, stand-ins
     // for `cargo` and `rustc` first on its PATH), once with every bin built and once with one not.
@@ -826,14 +826,14 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         let mut shipped: Vec<String> = std::fs::read_dir(root.join("out/bin")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         shipped.sort();
         assert_eq!(shipped, built);
-        let console = format!("ENTREGA-BUILD-EXIT {}", status.code().unwrap());
+        let console = format!("ALFORGE-BUILD-EXIT {}", status.code().unwrap());
         let judged = builder::outcome(&log, &console, true, &log_path);
         if built.len() == 2 {
-            assert!(status.success() && log.ends_with("ENTREGA-BUILD-OK\n"), "{log}");
+            assert!(status.success() && log.ends_with("ALFORGE-BUILD-OK\n"), "{log}");
             assert!(judged.is_ok(), "{judged:?}");
         } else {
             assert_eq!(status.code(), Some(1), "{log}");
-            assert_eq!(log, "ENTREGA-MISSING veredas-portal\n");
+            assert_eq!(log, "ALFORGE-MISSING veredas-portal\n");
             match judged {
                 Err(VmError::Failed { program, status, stderr }) => assert_eq!(
                     (program.as_str(), status.as_str(), stderr.as_str()),
@@ -849,10 +849,10 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
     }
     // A build that did not finish: no OK in its log, another exit on the console, its disk unread.
     let log_path = Path::new("/build/out/build.log");
-    for (log, console, unpacked) in [("cargo: error\n", "ENTREGA-BUILD-EXIT 0", true), ("ENTREGA-BUILD-OK\n", "ENTREGA-BUILD-EXIT 101", true), ("ENTREGA-BUILD-OK\n", "ENTREGA-BUILD-EXIT 0", false)] {
+    for (log, console, unpacked) in [("cargo: error\n", "ALFORGE-BUILD-EXIT 0", true), ("ALFORGE-BUILD-OK\n", "ALFORGE-BUILD-EXIT 101", true), ("ALFORGE-BUILD-OK\n", "ALFORGE-BUILD-EXIT 0", false)] {
         match builder::outcome(log, console, unpacked, log_path) {
             Err(VmError::Failed { program, status, .. }) => {
-                assert_eq!((program.as_str(), status.as_str()), ("the build in the builder machine", "no ENTREGA-BUILD-OK (its log: /build/out/build.log)"))
+                assert_eq!((program.as_str(), status.as_str()), ("the build in the builder machine", "no ALFORGE-BUILD-OK (its log: /build/out/build.log)"))
             }
             other => panic!("not refused: {other:?}"),
         }
@@ -880,7 +880,7 @@ fn a_machine_starts_with_12_gb_available_and_the_engines_lock_is_the_one_flock_t
     let f = d.path().join("engine.lock");
     let free = || Command::new("flock").arg("-n").arg(&f).arg("true").status().unwrap().success();
     let held = vm::lock(&f).unwrap();
-    assert!(!free(), "flock took the lock while entrega held it");
+    assert!(!free(), "flock took the lock while alforge held it");
     drop(held);
     assert!(free(), "the lock outlived its holder");
 }
@@ -895,7 +895,7 @@ fn repo_for_cut(workspace: &str, recipe: Option<&str>) -> (Repo, String) {
     r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
     r.write("crates/veredas-core/src/lib.rs", "\n");
     if let Some(text) = recipe {
-        r.write("tools/entrega/maquina/maquina.toml", text);
+        r.write("tools/alforge/maquina/maquina.toml", text);
     }
     let commit = r.commit("core 2.0.0");
     (r, commit)
@@ -904,10 +904,10 @@ fn repo_for_cut(workspace: &str, recipe: Option<&str>) -> (Repo, String) {
 /// The repository's recipe with its base at an address nothing answers (a cut that got as far as
 /// its build would stop at the first download) and `from` replaced by `to`.
 fn recipe_with(from: &str, to: &str) -> String {
-    let text = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let text = std::fs::read_to_string(repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     assert_eq!(text.matches(from).count(), 1, "{from}");
     text.lines()
-        .map(|l| if l.starts_with("url = ") { "url = \"https://127.0.0.1:9/entrega-stub.qcow2\"\n".to_string() } else { format!("{l}\n") })
+        .map(|l| if l.starts_with("url = ") { "url = \"https://127.0.0.1:9/alforge-stub.qcow2\"\n".to_string() } else { format!("{l}\n") })
         .collect::<String>()
         .replace(from, to)
 }
@@ -916,7 +916,7 @@ fn recipe_with(from: &str, to: &str) -> String {
 /// anything (its work folder, a manifest where it writes).
 fn trial_cut(root: &Path) -> (Result<cut::Cut, CutError>, bool) {
     let out = tempfile::tempdir().unwrap();
-    let work = root.join("target/entrega/9.9.9");
+    let work = root.join("target/alforge/9.9.9");
     let o = Options { release: semver::Version::parse("9.9.9").unwrap(), out: out.path().to_path_buf(), work: work.clone(), run_suite: false };
     let got = cut::cut(root, &o);
     let left = work.exists() || out.path().join("9.9.9.toml").exists();
@@ -934,7 +934,7 @@ fn every_refusal_before_the_build_stops_the_cut_with_nothing_built() {
     // The commit holds no recipe.
     let (r, c) = repo_for_cut(workspace, None);
     let (got, left) = trial_cut(r.dir.path());
-    assert_eq!(message(got), format!("commit {c} holds no tools/entrega/maquina/maquina.toml"));
+    assert_eq!(message(got), format!("commit {c} holds no tools/alforge/maquina/maquina.toml"));
     assert!(!left);
 
     // The commit's recipe refused by core's header reader, by a misspelled key and by a value.
@@ -1053,7 +1053,7 @@ fn an_executable_name_two_components_build_is_refused_before_anything_runs() {
             r.write(&format!("crates/{c}/src/{b}.rs"), "fn main() {}\n");
         }
     }
-    r.write("tools/entrega/maquina/maquina.toml", &recipe_with("cpus = 4", "cpus = 4"));
+    r.write("tools/alforge/maquina/maquina.toml", &recipe_with("cpus = 4", "cpus = 4"));
     r.commit("two executables named alike");
     let (got, left) = trial_cut(r.dir.path());
     match got {
@@ -1069,14 +1069,14 @@ fn an_executable_name_two_components_build_is_refused_before_anything_runs() {
 
 #[test]
 fn a_trials_manifest_goes_beside_its_bundle() {
-    // `entrega cut <release> --trial` with no `--out`: where its manifest goes is where the cut
-    // looks for one already there, the release's own work folder (and where `entrega maquina`
+    // `alforge cut <release> --trial` with no `--out`: where its manifest goes is where the cut
+    // looks for one already there, the release's own work folder (and where `alforge maquina`
     // looks for it).
     let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
-    let beside = r.dir.path().join("target/entrega/9.9.9/9.9.9.toml");
+    let beside = r.dir.path().join("target/alforge/9.9.9/9.9.9.toml");
     std::fs::create_dir_all(beside.parent().unwrap()).unwrap();
     std::fs::write(&beside, "").unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).args(["cut", "9.9.9", "--trial"]).current_dir(r.dir.path()).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alforge")).args(["cut", "9.9.9", "--trial"]).current_dir(r.dir.path()).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(String::from_utf8_lossy(&out.stderr), format!("{} exists: release 9.9.9 is cut already\n", beside.display()));
 }
@@ -1092,7 +1092,7 @@ fn a_release_already_cut_where_the_cut_writes_takes_part_in_its_check() {
     r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\"]\n");
     r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
     r.write("crates/veredas-core/src/lib.rs", "\n");
-    r.write("tools/entrega/maquina/maquina.toml", &recipe_with("cpus = 4", "cpus = 4"));
+    r.write("tools/alforge/maquina/maquina.toml", &recipe_with("cpus = 4", "cpus = 4"));
     let c1 = r.commit("core 2.0.0");
     let out = tempfile::tempdir().unwrap();
     let components = vec![("veredas-core".to_string(), "2.0.0".to_string(), vec![])];
@@ -1108,7 +1108,7 @@ fn a_release_already_cut_where_the_cut_writes_takes_part_in_its_check() {
         "release 2.0.1 would not check:\nveredas-core 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree\n"
     );
     assert_eq!(log, Vec::<String>::new(), "refused before the suite");
-    assert!(!r.dir.path().join("target/entrega/2.0.1").exists() && !out.path().join("2.0.1.toml").exists());
+    assert!(!r.dir.path().join("target/alforge/2.0.1").exists() && !out.path().join("2.0.1.toml").exists());
 }
 
 /// The name of the test below, which runs its own binary again for it.
@@ -1118,7 +1118,7 @@ const PACK_UNDER_THE_SHELL: &str = "a_bundle_packs_to_the_same_bytes_whatever_th
 fn a_bundle_packs_to_the_same_bytes_whatever_the_shells_tar_and_gzip_variables_say() {
     // The child: this test run again with the shell's `TAR_OPTIONS`, `GZIP` and `GZIP_OPT` set; it
     // packs the folder it is given and leaves.
-    if let Some(dir) = std::env::var_os("ENTREGA_PACK_UNDER_THE_SHELL") {
+    if let Some(dir) = std::env::var_os("ALFORGE_PACK_UNDER_THE_SHELL") {
         let dir = PathBuf::from(dir);
         bundle::pack(&dir, "veredas-z", "1795300000", &dir.join("child.tar.gz")).unwrap();
         return;
@@ -1133,7 +1133,7 @@ fn a_bundle_packs_to_the_same_bytes_whatever_the_shells_tar_and_gzip_variables_s
     let shell = [("TAR_OPTIONS", "--format=posix"), ("GZIP", "-1"), ("GZIP_OPT", "-1")];
     let out = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", PACK_UNDER_THE_SHELL])
-        .env("ENTREGA_PACK_UNDER_THE_SHELL", work.path())
+        .env("ALFORGE_PACK_UNDER_THE_SHELL", work.path())
         .envs(shell)
         .output()
         .unwrap();

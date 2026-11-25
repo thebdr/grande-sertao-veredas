@@ -1,12 +1,12 @@
 [package]
-name = "entrega"
+name = "alforge"
 # A tool versions as it likes (law L3 holds components only); what it cuts carries the versions.
 version = "0.1.0"
 edition.workspace = true
 publish = false
-description = "What Veredas 2 ships: the suite release's manifest and its cut, and the tester machine (docs/entrega-plan.md)"
+description = "What Veredas 2 ships: the suite release's manifest and its cut, and the tester machine (docs/alforge-plan.md)"
 
-# Repository tooling, not a component (docs/entrega-plan.md; questions Q430): exempt from the
+# Repository tooling, not a component (docs/alforge-plan.md; questions Q430): exempt from the
 # component laws, free to depend on any member (L5). It reads the suite's files through core's one
 # header reader and runs the suite's executables as processes, never as libraries.
 

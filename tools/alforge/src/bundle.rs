@@ -1,4 +1,4 @@
-//! The bundle (docs/entrega-plan.md, "What a release is made of"): `bin/` (the executables built in
+//! The bundle (docs/alforge-plan.md, "What a release is made of"): `bin/` (the executables built in
 //! the builder), `planta/` (the tester machine's plant), the suite's README and `docs/` (its plan,
 //! every file reference, the shipped components' plans, the design references), `release.toml`
 //! (the manifest) and `SHA256SUMS` over every other file; packed as
@@ -172,11 +172,14 @@ pub fn assemble(
         return Err(VmError::Failed { program: "the executables' check".into(), status: "refused".into(), stderr: refusals.join("\n") });
     }
     // The docs and the plant as git stores them at the commit, no attribute or filter applied.
+    let folder = crate::folder_at(root, commit)
+        .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
+        .ok_or_else(|| VmError::Io(std::io::Error::other(format!("commit {commit} holds no tools/alforge/maquina/maquina.toml"))))?;
     let mut paths = doc_paths(root, commit, components)?;
-    paths.push("tools/entrega/planta".into());
+    paths.push(format!("{folder}/planta"));
     let p: Vec<&str> = paths.iter().map(String::as_str).collect();
     crate::git::export_tree(root, commit, &p, &dir).map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?;
-    std::fs::rename(dir.join("tools/entrega/planta"), dir.join("planta"))?;
+    std::fs::rename(dir.join(folder).join("planta"), dir.join("planta"))?;
     std::fs::remove_dir_all(dir.join("tools"))?;
     std::fs::write(dir.join("release.toml"), manifest_text)?;
     write_sums(&dir)?;

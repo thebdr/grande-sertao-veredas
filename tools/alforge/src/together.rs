@@ -1,4 +1,4 @@
-//! The cut's run of the bundle (docs/entrega-plan.md, "How a release is cut", step 5): from an
+//! The cut's run of the bundle (docs/alforge-plan.md, "How a release is cut", step 5): from an
 //! extracted bundle, the bench started on `planta/bench.toml`, then supervisão on
 //! `planta/supervisao.toml`, which starts the plant's portal session in its own process; the plant
 //! read over HTTP as a browser reads it; both stopped by closing their stdin. The plant is copied

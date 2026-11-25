@@ -1,4 +1,4 @@
-//! The suite release's manifest: `veredas-release`, version 1 (docs/entrega-plan.md, "What a
+//! The suite release's manifest: `veredas-release`, version 1 (docs/alforge-plan.md, "What a
 //! release is made of"). A release names the commit it was cut from and pins every component at
 //! the version its own manifest states there, with the executables it ships; the manifest is read
 //! through core's one header reader, a misspelled key refused, and checked against the
@@ -236,7 +236,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         refusals.push(format!("the scratch folder's parent {} holds a glob character cargo would read as a pattern", parent.display()));
         return Ok(held);
     }
-    let scratch_dir = tempfile::Builder::new().prefix("entrega-tree-").tempdir_in(&parent)?;
+    let scratch_dir = tempfile::Builder::new().prefix("alforge-tree-").tempdir_in(&parent)?;
     let scratch = scratch_dir.path().to_path_buf();
     let result = (|| -> Result<Option<String>, CheckError> {
         // The tree as git stores it, no attribute or filter applied (git::export_tree).

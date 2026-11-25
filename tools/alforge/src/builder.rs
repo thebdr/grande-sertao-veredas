@@ -1,4 +1,4 @@
-//! The builder machine (docs/entrega-plan.md, "How a release is cut", step 3): the release's
+//! The builder machine (docs/alforge-plan.md, "How a release is cut", step 3): the release's
 //! executables built on the oldest system the release targets, the tester machine's own
 //! distribution, so they start there and on every newer system. The commit's tree and its
 //! dependencies' sources go in on one disk as a tar stream, the build runs offline, the
@@ -23,16 +23,16 @@ pub fn image(r: &Recipe, toolchain: &str, work: &Path) -> Result<PathBuf, VmErro
     if path.exists() {
         return Ok(path);
     }
-    eprintln!("entrega: building the builder machine for rustc {toolchain} (once)");
+    eprintln!("alforge: building the builder machine for rustc {toolchain} (once)");
     std::fs::create_dir_all(work)?;
     let part = path.with_extension("part.qcow2");
     vm::overlay(&base, &part, r.builder.disk_gb)?;
     let packages: String = r.builder.packages.iter().map(|p| format!("  - {p}\n")).collect();
     let user_data = format!(
-        "#cloud-config\npackage_update: true\npackages:\n{packages}runcmd:\n  - [ sh, -c, 'set -e; export RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo; curl -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh; sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal --default-toolchain {toolchain} > /dev/ttyS0 2>&1; /opt/cargo/bin/rustc --version > /dev/ttyS0; /opt/cargo/bin/cargo --version > /dev/ttyS0; echo ENTREGA-BUILDER-OK > /dev/ttyS0' ]\npower_state:\n  mode: poweroff\n  delay: now\n  timeout: 120\n"
+        "#cloud-config\npackage_update: true\npackages:\n{packages}runcmd:\n  - [ sh, -c, 'set -e; export RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo; curl -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh; sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal --default-toolchain {toolchain} > /dev/ttyS0 2>&1; /opt/cargo/bin/rustc --version > /dev/ttyS0; /opt/cargo/bin/cargo --version > /dev/ttyS0; echo ALFORGE-BUILDER-OK > /dev/ttyS0' ]\npower_state:\n  mode: poweroff\n  delay: now\n  timeout: 120\n"
     );
     let seed = work.join("builder-seed.iso");
-    vm::seed(&work.join("builder-seed"), &seed, &user_data, &format!("entrega-builder-{}", &key[..16]))?;
+    vm::seed(&work.join("builder-seed"), &seed, &user_data, &format!("alforge-builder-{}", &key[..16]))?;
     let console = work.join("builder-console.log");
     let mut m = Vm::start(&Spec {
         disk: part.clone(),
@@ -49,10 +49,10 @@ pub fn image(r: &Recipe, toolchain: &str, work: &Path) -> Result<PathBuf, VmErro
     })?;
     m.wait_off(Duration::from_secs(45 * 60))?;
     let text = vm::read_console(&console);
-    if !text.contains("ENTREGA-BUILDER-OK") || !text.contains(&format!("rustc {toolchain}")) {
+    if !text.contains("ALFORGE-BUILDER-OK") || !text.contains(&format!("rustc {toolchain}")) {
         return Err(VmError::Failed {
             program: "the builder's provisioning".into(),
-            status: "no ENTREGA-BUILDER-OK".into(),
+            status: "no ALFORGE-BUILDER-OK".into(),
             stderr: vm::tail(&text, 40),
         });
     }
@@ -70,23 +70,23 @@ pub fn script(r: &Recipe, packages: &[String], bins: &[String]) -> String {
     let pkgs: String = packages.iter().map(|p| format!(" -p {p}")).collect();
     let copies: String = bins
         .iter()
-        .map(|b| format!("if [ -f target/release/{b} ]; then cp target/release/{b} /build/out/bin/; else echo \"ENTREGA-MISSING {b}\"; missing=1; fi\n"))
+        .map(|b| format!("if [ -f target/release/{b} ]; then cp target/release/{b} /build/out/bin/; else echo \"ALFORGE-MISSING {b}\"; missing=1; fi\n"))
         .collect();
     format!(
         "set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
          cd /build/src\nmkdir -p /build/out/bin\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
          cargo build --release --locked --offline --jobs {cpus}{pkgs} --bins\nmissing=\n{copies}\
-         [ -z \"$missing\" ]\necho ENTREGA-BUILD-OK\n",
+         [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n",
         cpus = r.builder.cpus
     )
 }
 
 /// What a build's [`script`] log (brought back on the output disk, at `log_path`) and the builder's
 /// console say: every bin cargo did not build refused by name; a build that did not finish (no
-/// `ENTREGA-BUILD-OK` in its log, no `ENTREGA-BUILD-EXIT 0` on the console, or the output disk
+/// `ALFORGE-BUILD-OK` in its log, no `ALFORGE-BUILD-EXIT 0` on the console, or the output disk
 /// unread) refused with the log's tail, or the console's when there is no log.
 pub fn outcome(log: &str, console: &str, unpacked: bool, log_path: &Path) -> Result<(), VmError> {
-    let missing: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("ENTREGA-MISSING ")).collect();
+    let missing: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("ALFORGE-MISSING ")).collect();
     if !missing.is_empty() {
         return Err(VmError::Failed {
             program: "the build in the builder machine".into(),
@@ -94,10 +94,10 @@ pub fn outcome(log: &str, console: &str, unpacked: bool, log_path: &Path) -> Res
             stderr: missing.iter().map(|b| format!("cargo built no `{b}` with the default features (a required feature they do not turn on): the release would not ship it")).collect::<Vec<_>>().join("\n"),
         });
     }
-    if !unpacked || !log.contains("ENTREGA-BUILD-OK") || !console.contains("ENTREGA-BUILD-EXIT 0") {
+    if !unpacked || !log.contains("ALFORGE-BUILD-OK") || !console.contains("ALFORGE-BUILD-EXIT 0") {
         return Err(VmError::Failed {
             program: "the build in the builder machine".into(),
-            status: format!("no ENTREGA-BUILD-OK (its log: {})", log_path.display()),
+            status: format!("no ALFORGE-BUILD-OK (its log: {})", log_path.display()),
             stderr: if log.is_empty() { vm::tail(console, 60) } else { vm::tail(log, 60) },
         });
     }
@@ -125,7 +125,7 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, packages: &
     std::fs::create_dir_all(input.join("src"))?;
     // The commit's tree as git stores it, no attribute or filter applied.
     crate::git::export_tree(root, commit, &[], &input.join("src")).map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?;
-    eprintln!("entrega: vendoring the dependencies Cargo.lock pins");
+    eprintln!("alforge: vendoring the dependencies Cargo.lock pins");
     let config = vm::run("cargo", &["vendor", "--locked", "--versioned-dirs", "../vendor"], Some(&input.join("src")))?;
     std::fs::create_dir_all(input.join("src/.cargo"))?;
     std::fs::write(input.join("src/.cargo/config.toml"), config)?;
@@ -140,15 +140,15 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, packages: &
     vm::overlay(&builder, &disk, r.builder.disk_gb)?;
     // The build logs to a file, which goes back on the output disk whatever the outcome, and its
     // tail is echoed to the console afterwards: agetty hangs up ttyS0 when it starts, so a
-    // descriptor opened on it before then writes nothing (docs/entrega-plan.md, "Traps").
-    let user_data = "#cloud-config\nruncmd:\n  - [ sh, -c, 'mkdir -p /build/out && tar -xf /dev/disk/by-id/virtio-entrega-in -C /build && sh /build/build.sh > /build/out/build.log 2>&1; rc=$?; tail -n 40 /build/out/build.log > /dev/ttyS0; tar -cf /dev/disk/by-id/virtio-entrega-out -C /build/out . && sync; echo \"ENTREGA-BUILD-EXIT $rc\" > /dev/ttyS0' ]\npower_state:\n  mode: poweroff\n  delay: now\n  timeout: 120\n";
+    // descriptor opened on it before then writes nothing (docs/alforge-plan.md, "Traps").
+    let user_data = "#cloud-config\nruncmd:\n  - [ sh, -c, 'mkdir -p /build/out && tar -xf /dev/disk/by-id/virtio-alforge-in -C /build && sh /build/build.sh > /build/out/build.log 2>&1; rc=$?; tail -n 40 /build/out/build.log > /dev/ttyS0; tar -cf /dev/disk/by-id/virtio-alforge-out -C /build/out . && sync; echo \"ALFORGE-BUILD-EXIT $rc\" > /dev/ttyS0' ]\npower_state:\n  mode: poweroff\n  delay: now\n  timeout: 120\n";
     let nonce = cache::sha256_text(&format!("{commit}{:?}", std::time::SystemTime::now()));
     let seed = work.join("build-seed.iso");
-    vm::seed(&work.join("build-seed"), &seed, user_data, &format!("entrega-build-{}", &nonce[..16]))?;
+    vm::seed(&work.join("build-seed"), &seed, user_data, &format!("alforge-build-{}", &nonce[..16]))?;
     let console = work.join("build-console.log");
     // The build compiles the database engine: one such build at a time on the host.
     let _engine = vm::engine_lock()?;
-    eprintln!("entrega: building in the builder machine ({} processors); its console is {}", r.builder.cpus, console.display());
+    eprintln!("alforge: building in the builder machine ({} processors); its console is {}", r.builder.cpus, console.display());
     let mut m = Vm::start(&Spec {
         disk: disk.clone(),
         hardware: Hardware::Virtio,
@@ -156,8 +156,8 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, packages: &
         memory_mb: r.builder.memory_mb,
         seed: Some(seed),
         data: vec![
-            DataDisk { file: in_tar.clone(), serial: "entrega-in".into(), writable: false },
-            DataDisk { file: out_raw.clone(), serial: "entrega-out".into(), writable: true },
+            DataDisk { file: in_tar.clone(), serial: "alforge-in".into(), writable: false },
+            DataDisk { file: out_raw.clone(), serial: "alforge-out".into(), writable: true },
         ],
         forwards: vec![],
         snapshot: false,

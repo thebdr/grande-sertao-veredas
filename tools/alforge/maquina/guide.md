@@ -1,7 +1,7 @@
 # The Veredas tester machine
 
 This machine holds one suite release of Veredas 2, built from the repository by its recipe
-(`docs/entrega-plan.md` in the release's docs). Nothing here needs building.
+(`docs/alforge-plan.md` in the release's docs). Nothing here needs building.
 
 ## What runs from the first boot
 - **The bench** (`veredas-bancada.service`): `veredas-maquinar` playing the plant in

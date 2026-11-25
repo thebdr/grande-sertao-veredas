@@ -1,4 +1,4 @@
-# The tester machine's plant, played by the bench (docs/entrega-plan.md, "What it holds"): the
+# The tester machine's plant, played by the bench (docs/alforge-plan.md, "What it holds"): the
 # controller of the loop in docs/binding-schema.md on OPC UA, its parcels moving along the loop and
 # its outlets filling, and the sorter's log. Invented, named for its shape.
 format = "veredas-bench"

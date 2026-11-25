@@ -6,9 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use entrega::machine::Recipe;
-use entrega::maquina::{self, Proof};
-use entrega::together::{Answer, Report};
+use alforge::machine::Recipe;
+use alforge::maquina::{self, Proof};
+use alforge::together::{Answer, Report};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
@@ -32,7 +32,7 @@ fn ppm(w: usize, h: usize, page: usize, canvas: (u8, u8, u8)) -> Vec<u8> {
 
 #[test]
 fn the_page_is_found_by_its_own_canvas_colour() {
-    let head = entrega::git::text(&repo_root(), &["rev-parse", "HEAD"]).unwrap().unwrap().trim().to_string();
+    let head = alforge::git::text(&repo_root(), &["rev-parse", "HEAD"]).unwrap().unwrap().trim().to_string();
     let canvas = maquina::page_canvas(&repo_root(), &head).unwrap();
     assert_eq!(canvas, (0x14, 0x14, 0x16), "supervisão's `--canvas`");
     let drawn = ppm(400, 200, 200, canvas);
@@ -131,7 +131,7 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     ] {
         assert_eq!(maquina::proof_faults(&proof(&good.replace(said, instead), 0.3, "a"), "2.0.0"), vec![fault.to_string()], "{said}");
     }
-    // The OVA's own faults are the proof's: `entrega prova` fails on an OVA VMware would refuse.
+    // The OVA's own faults are the proof's: `alforge prova` fails on an OVA VMware would refuse.
     let mut bad_ova = proof(&good, 0.3, "a");
     bad_ova.ova = vec!["the descriptor's processors are not one item of 2".to_string()];
     assert_eq!(maquina::proof_faults(&bad_ova, "2.0.0"), vec!["the descriptor's processors are not one item of 2".to_string()]);
@@ -139,10 +139,10 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
 
 #[test]
 fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_before_any_login() {
-    let ok = "ENTREGA-STEP cleanup\n/boot/efi: 114.8 MiB (120395776 bytes) trimmed on /dev/vda15\n/: 12.9 GiB (13857087488 bytes) trimmed on /dev/vda1\nENTREGA-PROVISION-OK\nENTREGA-PROVISION-EXIT 0\n";
+    let ok = "ALFORGE-STEP cleanup\n/boot/efi: 114.8 MiB (120395776 bytes) trimmed on /dev/vda15\n/: 12.9 GiB (13857087488 bytes) trimmed on /dev/vda1\nALFORGE-PROVISION-OK\nALFORGE-PROVISION-EXIT 0\n";
     assert_eq!(maquina::provision_faults(ok), Vec::<String>::new());
-    assert_eq!(maquina::provision_faults(&ok.replace("ENTREGA-PROVISION-EXIT 0", "ENTREGA-PROVISION-EXIT 1")), ["no ENTREGA-PROVISION-EXIT 0"]);
-    assert_eq!(maquina::provision_faults(&ok.replace("ENTREGA-PROVISION-OK\n", "")), ["no ENTREGA-PROVISION-OK"]);
+    assert_eq!(maquina::provision_faults(&ok.replace("ALFORGE-PROVISION-EXIT 0", "ALFORGE-PROVISION-EXIT 1")), ["no ALFORGE-PROVISION-EXIT 0"]);
+    assert_eq!(maquina::provision_faults(&ok.replace("ALFORGE-PROVISION-OK\n", "")), ["no ALFORGE-PROVISION-OK"]);
     assert_eq!(
         maquina::provision_faults(&ok.replace("/: 12.9 GiB (13857087488 bytes) trimmed on /dev/vda1\n", "")),
         ["the root's free space was not trimmed (no `/: ... trimmed on` line)"]
@@ -150,7 +150,7 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
     // The script the machine is provisioned by: the SSH server purged, the executables linked onto
     // the PATH, cloud-init off, the identity blanked, the space trimmed, and the boot's check said
     // before a login starts on the serial console (whose agetty hangs the line up).
-    let r = Recipe::load_file(&repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let r = Recipe::load_file(&repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     assert_eq!(r.machine.remove, ["openssh-server"]);
     let s = maquina::provision_script(&r, "veredas-9.9.9-x86_64-unknown-linux-gnu", "9.9.9");
     for line in [
@@ -180,7 +180,7 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
     assert!(unit.lines().any(|l| l == "Before=serial-getty@ttyS0.service getty@tty1.service"), "{unit}");
     assert!(unit.lines().any(|l| l == "StandardOutput=journal+console"), "{unit}");
     // A recipe that leaves out what it removes is refused: removal is stated, never assumed.
-    let text = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let text = std::fs::read_to_string(repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     let without: String = text.lines().filter(|l| !l.starts_with("remove = ")).map(|l| format!("{l}\n")).collect();
     assert_eq!(text.lines().count(), without.lines().count() + 1);
     match Recipe::load(&without) {
@@ -191,13 +191,13 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
 
 #[test]
 fn the_base_image_is_refused_unless_it_matches_its_pinned_digest() {
-    let r = Recipe::load_file(&repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let r = Recipe::load_file(&repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     let cache = tempfile::tempdir().unwrap();
     let image = cache.path().join(r.base_name());
     std::fs::write(&image, "not the distribution's image\n").unwrap();
-    let got = entrega::cache::sha512(&image).unwrap();
-    match entrega::cache::base_image_in(cache.path(), &r) {
-        Err(entrega::vm::VmError::Failed { program, status, stderr }) => {
+    let got = alforge::cache::sha512(&image).unwrap();
+    match alforge::cache::base_image_in(cache.path(), &r) {
+        Err(alforge::vm::VmError::Failed { program, status, stderr }) => {
             assert_eq!((program.as_str(), status.as_str()), ("the base image's check", "refused"));
             assert_eq!(stderr, format!("{} has SHA-512 {got}, the recipe pins {}", image.display(), r.base.sha512));
         }
@@ -207,7 +207,7 @@ fn the_base_image_is_refused_unless_it_matches_its_pinned_digest() {
 
 #[test]
 fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
-    let r = Recipe::load_file(&repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let r = Recipe::load_file(&repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     let work = tempfile::tempdir().unwrap();
     let name = "veredas-9.9.9";
     let vmdk_name = format!("{name}-disk1.vmdk");
@@ -218,14 +218,14 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
         let dir = work.path().join(label);
         std::fs::create_dir_all(&dir).unwrap();
         let disk = dir.join(&vmdk_name);
-        entrega::vm::run("qemu-img", &["create", "-q", "-f", "vmdk", "-o", &format!("subformat={subformat}"), &disk.display().to_string(), &format!("{gb}G")], None).unwrap();
+        alforge::vm::run("qemu-img", &["create", "-q", "-f", "vmdk", "-o", &format!("subformat={subformat}"), &disk.display().to_string(), &format!("{gb}G")], None).unwrap();
         let size = std::fs::metadata(&disk).unwrap().len();
         let ovf = edit(maquina::ovf(&r, name, &vmdk_name, size, capacity, "9.9.9"));
         std::fs::write(dir.join(format!("{name}.ovf")), &ovf).unwrap();
         let mf = format!(
             "SHA256({name}.ovf)= {}\nSHA256({vmdk_name})= {}\n",
-            entrega::cache::sha256(&dir.join(format!("{name}.ovf"))).unwrap(),
-            entrega::cache::sha256(&disk).unwrap()
+            alforge::cache::sha256(&dir.join(format!("{name}.ovf"))).unwrap(),
+            alforge::cache::sha256(&disk).unwrap()
         );
         std::fs::write(dir.join(format!("{name}.mf")), &mf).unwrap();
         let ova = work.path().join(format!("{label}.ova"));
@@ -233,10 +233,10 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
         let (o, d) = (ova.display().to_string(), dir.display().to_string());
         let mut args = vec!["--format=ustar", "--owner=0", "--group=0", "--numeric-owner", "--mode=a+r,u+w,go-w,a-x,ug-s", "-cf", &o, "-C", &d];
         args.extend(names.iter().map(String::as_str));
-        entrega::vm::run("tar", &args, None).unwrap();
+        alforge::vm::run("tar", &args, None).unwrap();
         let opened = work.path().join(format!("{label}-opened"));
         std::fs::create_dir_all(&opened).unwrap();
-        entrega::vm::run("tar", &["-xf", &o, "-C", &opened.display().to_string()], None).unwrap();
+        alforge::vm::run("tar", &["-xf", &o, "-C", &opened.display().to_string()], None).unwrap();
         (ova, opened)
     };
     let same = |s: String| s;
@@ -255,7 +255,7 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
         let mut args: Vec<&str> = flags.to_vec();
         args.extend(["-cf", o.as_str(), "-C", d.as_str()]);
         args.extend(names.iter().map(String::as_str));
-        entrega::vm::run("tar", &args, None).unwrap();
+        alforge::vm::run("tar", &args, None).unwrap();
         ova
     };
     for (label, flags, listed) in [
@@ -326,8 +326,8 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
     // header first.
     std::fs::write(members.join(format!("{name}.mf")), format!(
         "SHA256({name}.ovf)= {}\nSHA256({vmdk_name})= {}\n",
-        entrega::cache::sha256(&members.join(format!("{name}.ovf"))).unwrap(),
-        entrega::cache::sha256(&members.join(&vmdk_name)).unwrap()
+        alforge::cache::sha256(&members.join(format!("{name}.ovf"))).unwrap(),
+        alforge::cache::sha256(&members.join(&vmdk_name)).unwrap()
     )).unwrap();
     let pax = repack("pax", &["--format=posix", "--owner=0", "--group=0", "--numeric-owner", "--mode=a+r,u+w,go-w,a-x,ug-s"]);
     let f = maquina::ova_faults(&r, &pax, "9.9.9", &members).unwrap();
@@ -339,7 +339,7 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
     let (o, d) = (gnu.display().to_string(), opened.display().to_string());
     let mut args = vec!["--format=gnu", "--owner=0", "--group=0", "--numeric-owner", "--mode=a+r,u+w,go-w,a-x,ug-s", "-cf", &o, "-C", &d];
     args.extend(names.iter().map(String::as_str));
-    entrega::vm::run("tar", &args, None).unwrap();
+    alforge::vm::run("tar", &args, None).unwrap();
     assert_eq!(maquina::ova_faults(&r, &gnu, "9.9.9", &opened).unwrap(), [r#"the OVA is no POSIX ustar archive: its first header's magic is "ustar  \0""#]);
     let f = faults("disordered", "streamOptimized", r.machine.disk_gb, &same, ["-disk1.vmdk", ".ovf", ".mf"]);
     assert!(f.len() == 2 && f[0].starts_with("the OVA's members are") && f[1].starts_with("the OVA's raw headers are"), "{f:?}");
@@ -400,35 +400,35 @@ fn a_machine_is_built_only_from_a_cut_that_ran_to_its_end() {
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path();
     let git = |args: &[&str]| {
-        let out = Command::new("git").arg("-C").arg(root).args(["-c", "user.name=entrega", "-c", "user.email=entrega@example.invalid", "-c", "commit.gpgsign=false"]).args(args).output().unwrap();
+        let out = Command::new("git").arg("-C").arg(root).args(["-c", "user.name=alforge", "-c", "user.email=alforge@example.invalid", "-c", "commit.gpgsign=false"]).args(args).output().unwrap();
         assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).unwrap().trim().to_string()
     };
     git(&["init", "-q", "-b", "main"]);
     std::fs::write(root.join(".gitignore"), "/target/\n").unwrap();
-    std::fs::create_dir_all(root.join("tools/entrega/maquina")).unwrap();
-    std::fs::copy(repo_root().join("tools/entrega/maquina/maquina.toml"), root.join("tools/entrega/maquina/maquina.toml")).unwrap();
+    std::fs::create_dir_all(root.join("tools/alforge/maquina")).unwrap();
+    std::fs::copy(repo_root().join("tools/alforge/maquina/maquina.toml"), root.join("tools/alforge/maquina/maquina.toml")).unwrap();
     git(&["add", "-A"]);
     git(&["commit", "-q", "-m", "the recipe, no guide"]);
     let commit = git(&["rev-parse", "HEAD"]);
     let release = "0.0.0-trial.9";
     let target = "x86_64-unknown-linux-gnu";
-    let work = root.join("target/entrega").join(release);
+    let work = root.join("target/alforge").join(release);
     let name = format!("veredas-{release}-{target}");
-    let text = entrega::cut::manifest_text(
+    let text = alforge::cut::manifest_text(
         &semver::Version::parse(release).unwrap(),
         &commit,
         target,
         "rustc 1.100.0 (0ef1bc386 2026-11-09)",
         &[("veredas-core".to_string(), "2.0.0".to_string(), vec![])],
-        entrega::cut::NOT_RUN,
+        alforge::cut::NOT_RUN,
     );
     std::fs::create_dir_all(work.join(&name)).unwrap();
     std::fs::write(work.join(&name).join("release.toml"), &text).unwrap();
-    entrega::bundle::pack(&work, &name, "1", &work.join(format!("{name}.tar.gz"))).unwrap();
+    alforge::bundle::pack(&work, &name, "1", &work.join(format!("{name}.tar.gz"))).unwrap();
     std::fs::remove_dir_all(work.join(&name)).unwrap();
-    let refusal = |r: Result<maquina::Paths, entrega::vm::VmError>| match r {
-        Err(entrega::vm::VmError::Failed { program, status, stderr }) => {
+    let refusal = |r: Result<maquina::Paths, alforge::vm::VmError>| match r {
+        Err(alforge::vm::VmError::Failed { program, status, stderr }) => {
             assert_eq!((program.as_str(), status.as_str()), ("the tester machine", "refused"));
             stderr
         }
@@ -450,25 +450,25 @@ fn a_machine_is_built_only_from_a_cut_that_ran_to_its_end() {
     // A manifest there that is not the bundle's own, beside a trial's or a real cut's.
     for at in [&trial, &real] {
         std::fs::create_dir_all(at.parent().unwrap()).unwrap();
-        std::fs::write(at, text.replace(entrega::cut::NOT_RUN, "cargo nextest run --workspace")).unwrap();
+        std::fs::write(at, text.replace(alforge::cut::NOT_RUN, "cargo nextest run --workspace")).unwrap();
         assert_eq!(refusal(maquina::from_release(root, release, target)), format!("{} is not the bundle's own release.toml: the bundle is not that cut's", at.display()));
         std::fs::remove_file(at).unwrap();
     }
     // The cut's own manifest, a trial's or a real cut's: the machine goes on to the recipe and guide
     // at the commit the manifest names (no guide there), whatever the working tree holds (a recipe
     // that would not read).
-    std::fs::write(root.join("tools/entrega/maquina/maquina.toml"), "format = \"veredas-machine\"\nversion = 9\n").unwrap();
+    std::fs::write(root.join("tools/alforge/maquina/maquina.toml"), "format = \"veredas-machine\"\nversion = 9\n").unwrap();
     for at in [&trial, &real] {
         std::fs::write(at, &text).unwrap();
-        assert_eq!(refusal(maquina::from_release(root, release, target)), format!("commit {commit} holds no tools/entrega/maquina/guide.md"));
+        assert_eq!(refusal(maquina::from_release(root, release, target)), format!("commit {commit} holds no tools/alforge/maquina/guide.md"));
         std::fs::remove_file(at).unwrap();
     }
     // A real cut of the release after a trial of it: the trial's manifest left beside the bundle is
     // superseded, the real cut's decides, whichever the bundle is.
     std::fs::write(&real, &text).unwrap();
-    std::fs::write(&trial, text.replace(entrega::cut::NOT_RUN, "an older trial")).unwrap();
-    assert_eq!(refusal(maquina::from_release(root, release, target)), format!("commit {commit} holds no tools/entrega/maquina/guide.md"));
-    std::fs::write(&real, text.replace(entrega::cut::NOT_RUN, "cargo nextest run --workspace")).unwrap();
+    std::fs::write(&trial, text.replace(alforge::cut::NOT_RUN, "an older trial")).unwrap();
+    assert_eq!(refusal(maquina::from_release(root, release, target)), format!("commit {commit} holds no tools/alforge/maquina/guide.md"));
+    std::fs::write(&real, text.replace(alforge::cut::NOT_RUN, "cargo nextest run --workspace")).unwrap();
     std::fs::write(&trial, &text).unwrap();
     assert_eq!(refusal(maquina::from_release(root, release, target)), format!("{} is not the bundle's own release.toml: the bundle is not that cut's", real.display()));
     assert!(!work.join("maquina").exists(), "no machine was started");
@@ -477,66 +477,68 @@ fn a_machine_is_built_only_from_a_cut_that_ran_to_its_end() {
 #[test]
 fn a_release_is_proven_by_its_own_recipe_and_page_at_its_commit() {
     use std::process::Command;
-    // A throwaway repository: the release's commit holds a recipe of 3072 MB and a page canvas of
-    // #102030; a later commit, HEAD, holds 2048 MB and #405060; the working tree holds 1024 MB and
-    // #708090. The proof's setup reads the release's own.
+    // A throwaway repository: the release's commit holds a recipe of 3072 MB, in the member's folder
+    // under its former name (`tools/entrega`, as release 2.0.0-alpha.1's does), and a page canvas of
+    // #102030; a later commit, HEAD, renames the folder `tools/alforge` and holds 2048 MB and
+    // #405060; the working tree holds 1024 MB and #708090. The proof's setup reads the release's own.
     let repo = tempfile::tempdir().unwrap();
     let root = repo.path();
     let git = |args: &[&str]| {
-        let out = Command::new("git").arg("-C").arg(root).args(["-c", "user.name=entrega", "-c", "user.email=entrega@example.invalid", "-c", "commit.gpgsign=false"]).args(args).output().unwrap();
+        let out = Command::new("git").arg("-C").arg(root).args(["-c", "user.name=alforge", "-c", "user.email=alforge@example.invalid", "-c", "commit.gpgsign=false"]).args(args).output().unwrap();
         assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).unwrap().trim().to_string()
     };
-    let recipe = std::fs::read_to_string(repo_root().join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let recipe = std::fs::read_to_string(repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     let machine_memory = |mb: u32| {
         let at = recipe.find("[machine]").unwrap();
         let (head, tail) = recipe.split_at(at);
         let line = tail.lines().find(|l| l.starts_with("memory_mb = ")).unwrap();
         format!("{head}{}", tail.replacen(line, &format!("memory_mb = {mb}"), 1))
     };
-    let state = |mb: u32, canvas: &str| {
-        std::fs::create_dir_all(root.join("tools/entrega/maquina")).unwrap();
-        std::fs::write(root.join("tools/entrega/maquina/maquina.toml"), machine_memory(mb)).unwrap();
+    let state = |folder: &str, mb: u32, canvas: &str| {
+        std::fs::create_dir_all(root.join(folder).join("maquina")).unwrap();
+        std::fs::write(root.join(folder).join("maquina/maquina.toml"), machine_memory(mb)).unwrap();
         std::fs::create_dir_all(root.join("crates/veredas-supervisao/web/dist/assets")).unwrap();
         std::fs::write(root.join("crates/veredas-supervisao/web/dist/assets/app.css"), format!(":root{{--canvas: #{canvas};--ink:#eeeeee}}\n")).unwrap();
     };
     git(&["init", "-q", "-b", "main"]);
     std::fs::write(root.join(".gitignore"), "/target/\n").unwrap();
-    state(3072, "102030");
+    state("tools/entrega", 3072, "102030");
     git(&["add", "-A"]);
     git(&["commit", "-q", "-m", "the release's commit"]);
     let commit = git(&["rev-parse", "HEAD"]);
-    state(2048, "405060");
-    git(&["commit", "-q", "-am", "a later commit"]);
-    state(1024, "708090");
+    git(&["mv", "tools/entrega", "tools/alforge"]);
+    state("tools/alforge", 2048, "405060");
+    git(&["commit", "-q", "-am", "a later commit: the member renamed"]);
+    state("tools/alforge", 1024, "708090");
     let release = "0.0.0-trial.7";
     let target = "x86_64-unknown-linux-gnu";
-    let work = root.join("target/entrega").join(release);
+    let work = root.join("target/alforge").join(release);
     let name = format!("veredas-{release}-{target}");
     std::fs::create_dir_all(work.join(&name)).unwrap();
-    let text = entrega::cut::manifest_text(
+    let text = alforge::cut::manifest_text(
         &semver::Version::parse(release).unwrap(),
         &commit,
         target,
         "rustc 1.100.0 (0ef1bc386 2026-11-09)",
         &[("veredas-core".to_string(), "2.0.0".to_string(), vec![])],
-        entrega::cut::NOT_RUN,
+        alforge::cut::NOT_RUN,
     );
     std::fs::write(work.join(&name).join("release.toml"), &text).unwrap();
-    entrega::bundle::write_sums(&work.join(&name)).unwrap();
-    let sums = entrega::cache::sha256(&work.join(&name).join("SHA256SUMS")).unwrap();
-    entrega::bundle::pack(&work, &name, "1", &work.join(format!("{name}.tar.gz"))).unwrap();
-    // No OVA yet: refused, naming where `entrega maquina` builds it.
+    alforge::bundle::write_sums(&work.join(&name)).unwrap();
+    let sums = alforge::cache::sha256(&work.join(&name).join("SHA256SUMS")).unwrap();
+    alforge::bundle::pack(&work, &name, "1", &work.join(format!("{name}.tar.gz"))).unwrap();
+    // No OVA yet: refused, naming where `alforge maquina` builds it.
     let ova = work.join("maquina").join(format!("veredas-{release}.ova"));
     match maquina::proof_setup(root, release, target) {
-        Err(entrega::vm::VmError::Failed { stderr, .. }) => assert_eq!(stderr, format!("{} is not there: build the machine first", ova.display())),
+        Err(alforge::vm::VmError::Failed { stderr, .. }) => assert_eq!(stderr, format!("{} is not there: build the machine first", ova.display())),
         other => panic!("not refused: {:?}", other.map(|s| (s.recipe.machine.memory_mb, s.ova, s.canvas))),
     }
     std::fs::create_dir_all(ova.parent().unwrap()).unwrap();
     std::fs::write(&ova, "").unwrap();
     // A machine of a cut that did not run to its end (no manifest where a cut writes it): refused.
     match maquina::proof_setup(root, release, target) {
-        Err(entrega::vm::VmError::Failed { stderr, .. }) => assert!(stderr.starts_with(&format!("release {release} was not cut to its end")), "{stderr}"),
+        Err(alforge::vm::VmError::Failed { stderr, .. }) => assert!(stderr.starts_with(&format!("release {release} was not cut to its end")), "{stderr}"),
         other => panic!("not refused: {:?}", other.map(|s| s.bundle)),
     }
     std::fs::write(work.join(format!("{release}.toml")), &text).unwrap();

@@ -1,6 +1,6 @@
-# The tester machine's recipe data (docs/entrega-plan.md, "How the image is built"): the
+# The tester machine's recipe data (docs/alforge-plan.md, "How the image is built"): the
 # architect's choices are here, never in code, so a ruling is an edit of this file. Read by
-# `entrega` (tools/entrega/src/machine.rs); the options taken meanwhile are named by their question.
+# `alforge` (tools/alforge/src/machine.rs); the options taken meanwhile are named by their question.
 format = "veredas-machine"
 version = 1
 
@@ -40,7 +40,7 @@ packages = [
   "chromium", "open-vm-tools", "open-vm-tools-desktop", "network-manager", "network-manager-gnome",
   "fonts-dejavu", "sudo",
 ]
-# Removed from the base: no SSH server on the machine (docs/entrega-plan.md, "What it holds").
+# Removed from the base: no SSH server on the machine (docs/alforge-plan.md, "What it holds").
 remove = ["openssh-server"]
 # The port supervisão serves the plant on inside the machine (Q439).
 supervisao_port = 8902

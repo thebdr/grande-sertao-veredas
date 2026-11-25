@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use entrega::manifest::{self, Manifest};
+use alforge::manifest::{self, Manifest};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -16,7 +16,7 @@ fn repo_root() -> PathBuf {
 
 /// The first `toml` block of the plan: the worked example.
 fn example() -> String {
-    let plan = std::fs::read_to_string(repo_root().join("docs/entrega-plan.md")).unwrap();
+    let plan = std::fs::read_to_string(repo_root().join("docs/alforge-plan.md")).unwrap();
     let start = plan.find("```toml\n").expect("the plan holds a toml block") + "```toml\n".len();
     let end = start + plan[start..].find("```").unwrap();
     plan[start..end].to_string()
@@ -156,7 +156,7 @@ impl Repo {
         let out = Command::new("git")
             .arg("-C")
             .arg(self.path())
-            .args(["-c", "user.name=entrega", "-c", "user.email=entrega@example.invalid", "-c", "commit.gpgsign=false"])
+            .args(["-c", "user.name=alforge", "-c", "user.email=alforge@example.invalid", "-c", "commit.gpgsign=false"])
             .args(args)
             .output()
             .unwrap();
@@ -331,7 +331,7 @@ fn the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_the
     assert_eq!(refusals.len(), 1);
     assert!(refusals[0].starts_with(&format!("commit {c2}: cargo cannot read its workspace: error")), "{refusals:?}");
     assert!(refusals[0].contains("invalid type: integer `3`, expected a string"), "cargo's reason: {refusals:?}");
-    assert!(!refusals[0].contains("entrega-tree-"), "no scratch path in the reason: {refusals:?}");
+    assert!(!refusals[0].contains("alforge-tree-"), "no scratch path in the reason: {refusals:?}");
     // A member the commit does not hold: cargo's cause, not only its first line.
     std::fs::remove_dir_all(r.path().join("crates/veredas-velho")).unwrap();
     let c3 = r.commit("a member gone");
@@ -371,7 +371,7 @@ fn settings_outside_the_history_change_nothing_that_is_read() {
     let out = tempfile::tempdir().unwrap();
     std::fs::set_permissions(r.path().join("crates/veredas-maquinar/src/main.rs"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let c2 = r.commit("an executable file");
-    let n = entrega::git::export_tree(r.path(), &c2, &["crates/veredas-maquinar"], out.path()).unwrap();
+    let n = alforge::git::export_tree(r.path(), &c2, &["crates/veredas-maquinar"], out.path()).unwrap();
     assert_eq!(n, 3);
     let m = out.path().join("crates/veredas-maquinar");
     assert_eq!(std::fs::read_to_string(m.join("Cargo.toml")).unwrap(), "[package]\nname = \"veredas-maquinar\"\nversion = \"2.1.0\"\nedition = \"2024\"\n");
@@ -519,7 +519,7 @@ fn nothing_outside_the_commits_tree_is_read_or_written() {
     r.write("src/lib.rs", "\n");
     let c = r.commit("a package at the root");
     let parent = tempfile::tempdir().unwrap();
-    std::fs::write(parent.path().join("Cargo.toml"), "[workspace]\nmembers = [\"entrega-tree-*/tree\", \"crates/*\"]\n").unwrap();
+    std::fs::write(parent.path().join("Cargo.toml"), "[workspace]\nmembers = [\"alforge-tree-*/tree\", \"crates/*\"]\n").unwrap();
     let mut refusals = Vec::new();
     assert!(manifest::components_at_in(r.path(), &c, parent.path(), &mut refusals).unwrap().is_empty());
     assert_eq!(refusals, vec![format!("commit {c}: its Cargo.toml is no workspace (`[workspace]`): cargo would look for one above the tree")]);
@@ -565,7 +565,7 @@ fn a_release_whose_commit_is_absent_hides_no_other_refusal() {
         r.write(&format!("releases/{rel}.toml"), &matching(rel, c));
     }
     r.commit("three releases");
-    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path()).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alforge")).arg("check").current_dir(r.path()).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     let err = String::from_utf8(out.stderr).unwrap();
     assert!(err.contains(&format!("commit {absent} is not in the repository")), "{err}");
@@ -606,7 +606,7 @@ fn a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none() {
     let mut refusals = Vec::new();
     assert!(manifest::components_at(r.path(), &c3, &mut refusals).unwrap().is_empty());
     assert_eq!(refusals, vec![format!("commit {c3}: its Cargo.toml is not UTF-8")]);
-    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path()).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alforge")).arg("check").current_dir(r.path()).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     let releases = r.path().canonicalize().unwrap().join("releases");
     assert_eq!(
@@ -622,7 +622,7 @@ fn a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none() {
         r.write(&format!("releases/{rel}.toml"), &matching(rel, c));
     }
     r.commit("the unreadable release first");
-    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path()).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alforge")).arg("check").current_dir(r.path()).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         String::from_utf8(out.stderr).unwrap(),
@@ -661,7 +661,7 @@ fn a_relative_cache_holding_a_glob_character_is_judged_where_it_lies() {
     let inside = place.join("repo");
     let clone = Command::new("git").args(["clone", "-q"]).arg(r.path()).arg(&inside).output().unwrap();
     assert!(clone.status.success());
-    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").env("ENTREGA_CACHE", "relcache").current_dir(&inside).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alforge")).arg("check").env("ALFORGE_CACHE", "relcache").current_dir(&inside).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     let err = String::from_utf8(out.stderr).unwrap();
     let parent = inside.join("relcache/tmp");
@@ -677,9 +677,9 @@ fn the_folder_is_judged_whole_and_a_shallow_clone_refused() {
     r.write("docs/a.md", "a\n");
     r.commit("later");
     // `check` takes no file: a manifest is never judged apart from its folder.
-    let named = Command::new(env!("CARGO_BIN_EXE_entrega")).args(["check", "releases/2.0.0.toml"]).current_dir(r.path()).output().unwrap();
+    let named = Command::new(env!("CARGO_BIN_EXE_alforge")).args(["check", "releases/2.0.0.toml"]).current_dir(r.path()).output().unwrap();
     assert_eq!(named.status.code(), Some(1));
-    let whole = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path()).output().unwrap();
+    let whole = Command::new(env!("CARGO_BIN_EXE_alforge")).arg("check").current_dir(r.path()).output().unwrap();
     assert_eq!(whole.status.code(), Some(0), "{}", String::from_utf8_lossy(&whole.stderr));
     // A shallow clone holding the release's commit: refused by name, never "not an ancestor".
     let shallow = tempfile::tempdir().unwrap();
@@ -705,7 +705,7 @@ fn a_repository_at_an_odd_path_a_root_that_does_not_parse_and_braces_in_the_scra
     let odd = holder.path().join("b ");
     let clone = Command::new("git").args(["clone", "-q"]).arg(r.path()).arg(&odd).output().unwrap();
     assert!(clone.status.success());
-    let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(&odd).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alforge")).arg("check").current_dir(&odd).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         String::from_utf8(out.stderr).unwrap(),
@@ -763,8 +763,8 @@ fn a_submodule_a_sha256_repository_and_a_parent_that_is_not_utf8_are_refused_by_
     let c = r.commit("the suite");
     let fake = "0123456789abcdef0123456789abcdef01234567";
     r.git(&["branch", fake, &c]);
-    assert!(entrega::git::is_commit_id(r.path(), &c).unwrap());
-    assert!(!entrega::git::is_commit_id(r.path(), fake).unwrap());
+    assert!(alforge::git::is_commit_id(r.path(), &c).unwrap());
+    assert!(!alforge::git::is_commit_id(r.path(), fake).unwrap());
     assert_eq!(checked(&r, &matching("2.0.0", &c)), Vec::<String>::new());
     // SHA-1 reads a 40-hex string as an id first: the branch is never taken for it.
     assert_eq!(checked(&r, &matching("2.0.0", fake)), vec![format!("commit {fake} is not in the repository")]);
@@ -782,7 +782,7 @@ fn a_submodule_a_sha256_repository_and_a_parent_that_is_not_utf8_are_refused_by_
 #[test]
 fn a_false_pin_charges_no_true_release_and_hides_no_conflict() {
     let run = |r: &Repo| {
-        let out = Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path()).output().unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_alforge")).arg("check").current_dir(r.path()).output().unwrap();
         (out.status.code(), String::from_utf8(out.stderr).unwrap())
     };
     // Case a: portal absent at the first release's commit, which lists it all the same.
@@ -903,7 +903,7 @@ fn the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused() {
     let c = r.commit("the suite");
     r.write("releases/2.0.0.toml", &matching("2.0.0", &c));
     r.commit("release 2.0.0");
-    let run = || Command::new(env!("CARGO_BIN_EXE_entrega")).arg("check").current_dir(r.path().join("crates")).output().unwrap();
+    let run = || Command::new(env!("CARGO_BIN_EXE_alforge")).arg("check").current_dir(r.path().join("crates")).output().unwrap();
     let out = run();
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(
@@ -930,9 +930,9 @@ fn the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused() {
             releases.join("2.0.0.toml").display()
         )
     );
-    let usage = Command::new(env!("CARGO_BIN_EXE_entrega")).output().unwrap();
+    let usage = Command::new(env!("CARGO_BIN_EXE_alforge")).output().unwrap();
     assert_eq!(usage.status.code(), Some(1));
-    assert_eq!(String::from_utf8(usage.stderr).unwrap(), "usage: entrega check\n       entrega cut <release> [--trial] [--out <dir>]\n       entrega maquina <release>\n       entrega prova <release>\n");
+    assert_eq!(String::from_utf8(usage.stderr).unwrap(), "usage: alforge check\n       alforge cut <release> [--trial] [--out <dir>]\n       alforge maquina <release>\n       alforge prova <release>\n");
 }
 
 #[test]

@@ -9,9 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
-use entrega::cut::{self, Options};
-use entrega::machine::Recipe;
-use entrega::{cache, maquina, together, vm};
+use alforge::cut::{self, Options};
+use alforge::machine::Recipe;
+use alforge::{cache, maquina, together, vm};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
@@ -21,15 +21,15 @@ fn repo_root() -> PathBuf {
 fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices() {
     let root = repo_root();
     let release = "0.0.0-trial.292";
-    let work = root.join("target/entrega").join(release);
-    // Where `entrega cut --trial` writes a trial's manifest: the machine is built only from a cut
+    let work = root.join("target/alforge").join(release);
+    // Where `alforge cut --trial` writes a trial's manifest: the machine is built only from a cut
     // that ran to its end.
     let cut = cut::cut(&root, &Options { release: semver::Version::parse(release).unwrap(), out: work.clone(), work: work.clone(), run_suite: false })
         .unwrap_or_else(|e| panic!("the trial cut was refused: {e}"));
     assert_eq!(together::faults(&cut.report), Vec::<String>::new());
     let target = "x86_64-unknown-linux-gnu";
     let paths = maquina::from_release(&root, release, target).unwrap_or_else(|e| panic!("the machine was not built: {e}"));
-    let recipe = Recipe::load_file(&root.join("tools/entrega/maquina/maquina.toml")).unwrap();
+    let recipe = Recipe::load_file(&root.join("tools/alforge/maquina/maquina.toml")).unwrap();
 
     // The OVA as VMware reads it: the descriptor first, the manifest second, the disk last.
     let name = format!("veredas-{release}");
@@ -77,7 +77,7 @@ fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vm
 
     // The shipped disk booted on VMware's devices, a card address the provisioning never saw: the
     // release's sums checked at boot, the plant read from the host, the desktop drawn.
-    // As `entrega prova` sets it up: the cut's bundle's digest, the recipe and canvas at its commit.
+    // As `alforge prova` sets it up: the cut's bundle's digest, the recipe and canvas at its commit.
     let setup = maquina::proof_setup(&root, release, target).unwrap();
     assert_eq!(setup.bundle, cache::sha256(&cut.extracted.join("SHA256SUMS")).unwrap());
     let proof = maquina::prove(&setup.recipe, &setup.ova, release, setup.canvas, &setup.bundle, &work.join("prova")).unwrap();

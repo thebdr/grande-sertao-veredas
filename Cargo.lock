@@ -72,6 +72,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alforge"
+version = "0.1.0"
+dependencies = [
+ "roxmltree",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml",
+ "veredas-core",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1493,21 +1508,6 @@ name = "entities"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5320ae4c3782150d900b79807611a59a99fc9a1d61d686faafc24b93fc8d7ca"
-
-[[package]]
-name = "entrega"
-version = "0.1.0"
-dependencies = [
- "roxmltree",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.21",
- "toml",
- "veredas-core",
-]
 
 [[package]]
 name = "equivalent"
