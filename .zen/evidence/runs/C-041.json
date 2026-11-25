@@ -11,15 +11,15 @@
     "store"
   ],
   "exitCode": 0,
-  "outputSha": "97c3df93538cf0ab3b856eeed1a775b5002a68ce2d5fe79d62514a730e605e01",
-  "outputTail": "test quotes_escapes_and_line_endings_are_read_as_the_file_writes_them ... ok\ntest the_decimal_comma_on_the_padded_path ... ok\ntest views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest newest_first_pages_neither_repeat_nor_skip_rows_that_share_a_time ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\ntest the_weighing_counts_numbers_alone_its_limits_and_the_dialect_a_view_names ... ok\ntest a_dialect_fits_the_header_as_it_fits_the_rows ... ok\ntest pages_see_each_row_once_across_sources_and_on_a_view_without_a_sequence ... ok\ntest a_file_growing_while_it_is_weighed_never_panics ... ok\n\ntest result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.76s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/ce241a6fc55ea21b/out/veredas_portal-ce241a6fc55ea21b)\n     Running tests/store.rs (target/debug/build/veredas-portal/d71510d6cccf627b/out/store-d71510d6cccf627b)",
-  "ranAt": "2026-11-24T23:39:34.618Z",
-  "headCommit": "028a6ac3fe4f7fd1c30e367ce4a3741761cdc715",
+  "outputSha": "fb95fd0fdc7f82fbb00a12f3ef6437a988f62fb27b0ec44bf8234cdbd9101095",
+  "outputTail": "test a_headerless_file_of_decimal_commas_cut_short_reads_on_its_own_delimiter ... ok\ntest the_csv_sniffer_recovers_a_file_the_engine_collapsed_to_one_column_and_leaves_a_single_column_alone ... ok\ntest every_way_a_linked_csv_reads_with_its_first_rows ... ok\ntest views_join_across_sources_apply_in_any_order_and_a_broken_one_names_itself ... ok\ntest newest_first_pages_neither_repeat_nor_skip_rows_that_share_a_time ... ok\ntest the_weighing_counts_numbers_alone_its_limits_and_the_dialect_a_view_names ... ok\ntest a_dialect_fits_the_header_as_it_fits_the_rows ... ok\ntest pages_see_each_row_once_across_sources_and_on_a_view_without_a_sequence ... ok\ntest a_file_growing_while_it_is_weighed_never_panics ... ok\n\ntest result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.88s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/29d94b54f60a86bb/out/veredas_portal-29d94b54f60a86bb)\n     Running tests/store.rs (target/debug/build/veredas-portal/d91aa0b584ca2818/out/store-d91aa0b584ca2818)",
+  "ranAt": "2026-11-25T01:45:25.743Z",
+  "headCommit": "fca8ca7b906b7f0524730f0b52d4223de7f21368",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store.rs",
       "file": "crates/veredas-portal/tests/store.rs",
-      "fileSha": "c9375372cd15ff49db67b013ae95b65b0ace0196812546fd4caca9556fc8d208"
+      "fileSha": "a5d9847a5708a63598380d16ed30c4234955bef37aa9819a6ccd51fe53d3b011"
     }
   ]
 }
