@@ -758,6 +758,12 @@ fn refused_instruction(line: &str) -> Option<String> {
 }
 
 fn built() -> Built {
+    // One build at a time across the test processes, held while its outputs are read: base's build
+    // script reruns on every build (its `rerun-if-changed=.git/HEAD` names no file from base's
+    // folder), and another test's build rewrote the output this one read (found empty, the suite
+    // red at f407829b).
+    let lock = std::fs::File::create(root().join("target").join("abaco-built.lock")).unwrap();
+    lock.lock().unwrap();
     let json = cargo(&["build", "-p", "veredas-abaco", "--lib", "--message-format=json"]);
     let messages: Vec<serde_json::Value> = json.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).collect();
     let shipped = |id: &serde_json::Value| SHIPPED.iter().any(|(name, _)| id.as_str().is_some_and(|i| package_of(i) == *name));
@@ -808,6 +814,7 @@ fn built() -> Built {
             (package_of(m["package_id"].as_str().unwrap()), paths, env)
         })
         .collect();
+    drop(lock);
     Built { libraries, scripts, executed, paths_and_env }
 }
 
