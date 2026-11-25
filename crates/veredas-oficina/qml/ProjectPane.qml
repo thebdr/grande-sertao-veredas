@@ -11,7 +11,7 @@ Rectangle {
     // A file picked in the tree, to open in the editor.
     signal openFile(string path)
 
-    // How many folders the model has read from the disk since the project opened.
+    // How many folders the model has read from the disk since the window opened.
     readonly property int reads: projectTree.reads
 
     ProjectTree {

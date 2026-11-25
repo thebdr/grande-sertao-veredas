@@ -157,15 +157,32 @@ fn a_folder_is_read_when_it_opens_and_again_only_when_refreshed() {
     let markup = row_named(&shell, MARKUP);
     assert_eq!(shell.property(&format!("{markup}/name"), "text"), MARKUP);
     assert_eq!(shell.property(&format!("{markup}/name"), "textFormat"), "PlainText");
-    // Written after alpha was read: not drawn, and nothing read, until Refresh.
+    // Written after alpha was read: not drawn, and nothing read, until Refresh, the project pane's
+    // dock closed and opened again meanwhile.
     write(r, "alpha/zz.toml", &stamped("veredas-catalog", 1));
     std::thread::sleep(Duration::from_millis(300));
+    shell.invoke("oficina/area", "closeDock", &[common::X::Str("project".into())]);
+    shell.invoke("oficina/area", "openDock", &[common::X::Str("project".into())]);
+    let until = Instant::now() + Duration::from_secs(10);
+    while !shell.visible("oficina/projectPane") {
+        assert!(Instant::now() < until, "the pane not shown again");
+        std::thread::sleep(Duration::from_millis(50));
+    }
     wait_rows(&shell, &opened);
     assert_eq!(reads(&shell), 2, "nothing read again before Refresh");
     shell.click("oficina/refreshProject");
     let refreshed = rows_with(&opened, 6, &["zz.toml | veredas-catalog 1 · Core"]);
     wait_rows(&shell, &refreshed);
-    assert_eq!(reads(&shell), 4, "Refresh read the two open folders, the root and alpha");
+    assert_eq!(reads(&shell), 4, "Refresh read the root and alpha again");
+    // alpha closed: Refresh still reads it (what the model holds of it stays current for when it
+    // opens again), and leaves it closed.
+    shell.click(&row_named(&shell, "alpha"));
+    let closed = root.clone();
+    wait_rows(&shell, &closed);
+    shell.click("oficina/refreshProject");
+    std::thread::sleep(Duration::from_millis(300));
+    wait_rows(&shell, &closed);
+    assert_eq!(reads(&shell), 6, "Refresh read every folder read so far, alpha closed among them");
 }
 
 #[test]
@@ -227,24 +244,43 @@ fn a_refresh_keeps_the_open_folders_and_the_selection() {
     assert!(others.iter().all(|c| c == "false"), "one current row: {others:?}");
 }
 
-/// Nothing refreshes the tree but the Refresh button: the window's QML calls `refreshOpen` once,
-/// from the button, and the bridge never calls it itself. A reading, against accidents (a timer or a
-/// watcher refreshing on its own would show here; the counted reads above show a refresh only
-/// within each test's span).
+/// Nothing reads the disk again but the Refresh button: in the window's QML the tree is opened
+/// once, from the command line's argument, and refreshed once, from the button, the one other
+/// `open(` being a dock's, and no timer; in the bridge a folder is read only where the view
+/// fetches it and where Refresh reads it, a project opened in one place, and Refresh's two
+/// functions never called but as the button calls them. A reading, against accidents (a timer, a
+/// watcher or a reload on its own would show here; the counted reads above show one only within
+/// each test's span).
 #[test]
-fn only_the_refresh_button_refreshes() {
+fn only_the_refresh_button_reads_again() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
     let mut calls = Vec::new();
     for qml in ["qml/Main.qml", "qml/ProjectPane.qml"] {
         let text = fs::read_to_string(dir.join(qml)).expect("the QML");
-        for line in text.lines().filter(|l| l.contains("refreshOpen")) {
-            calls.push(format!("{qml}: {}", line.trim()));
+        for line in text.lines().map(str::trim).filter(|l| !l.starts_with("//")) {
+            let opens = line.match_indices("open(").any(|(i, _)| !word(line[..i].chars().next_back()));
+            if opens || line.contains("refreshOpen") {
+                calls.push(format!("{qml}: {line}"));
+            }
         }
         assert!(!text.contains("Timer"), "{qml} holds a timer");
     }
-    assert_eq!(calls, ["qml/ProjectPane.qml: onClicked: projectTree.refreshOpen()"]);
+    assert_eq!(calls, ["qml/Main.qml: dockNamed(name).open();", "qml/ProjectPane.qml: open(args[i]);", "qml/ProjectPane.qml: onClicked: projectTree.refreshOpen()"]);
     let bridge = fs::read_to_string(dir.join("src/shell/tree.rs")).expect("the bridge");
-    assert_eq!(bridge.matches("refresh_open(").count(), 2, "declared and defined, never called");
+    for (call, count, what) in [
+        ("read_folder(", 2, "where the view fetches a folder and where Refresh reads it"),
+        ("refresh_folder(", 2, "defined, and called by Refresh alone"),
+        ("refresh_open(", 2, "declared and defined, never called"),
+        ("Tree::open(", 1, "one place opens a project"),
+        (".expand(", 0, "nothing reads through the model's own reader"),
+        (".refresh(", 0, "nothing refreshes through the model's own refresh"),
+    ] {
+        assert_eq!(bridge.matches(call).count(), count, "{call}: {what}");
+    }
+    let refresh_open = bridge.find("fn refresh_open(mut self").expect("Refresh's function");
+    let call = bridge.find("self.as_mut().refresh_folder(").expect("its call");
+    assert!(call > refresh_open && !bridge[refresh_open..call].contains("\n    fn "), "refresh_folder called inside refresh_open");
 }
 
 /// A timing of the product: judged on a release build (`cargo test --release`), alone on the

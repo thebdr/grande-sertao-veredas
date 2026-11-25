@@ -2,7 +2,7 @@
 //! `QAbstractItemModel` written in Rust, read lazily through `canFetchMore` and `fetchMore`, and
 //! re-read step by step so a view keeps its open folders and its selection.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::pin::Pin;
 
@@ -111,8 +111,11 @@ pub struct ProjectTreeRust {
     tree: RefCell<Option<Tree>>,
     root_path: QString,
     error: QString,
-    /// The model's count of folders read from the disk ([`Tree::reads`]), for a view or a test.
+    /// The count of folders read from the disk since the window opened, across every project the
+    /// pane opened ([`Tree::reads`] of each), for a view or a test.
     reads: i32,
+    /// The reads of the projects opened before the one shown.
+    earlier_reads: Cell<u64>,
 }
 
 /// What a node is, as the delegate words it.
@@ -138,7 +141,8 @@ fn describe(entry: &Entry) -> (&'static str, &'static str, String) {
 impl qobject::ProjectTree {
     /// The model's count of folder reads, published after anything that may read.
     fn show_reads(mut self: Pin<&mut Self>) {
-        let reads = self.tree.borrow().as_ref().map_or(0, |t| i32::try_from(t.reads()).unwrap_or(i32::MAX));
+        let total = self.earlier_reads.get() + self.tree.borrow().as_ref().map_or(0, Tree::reads);
+        let reads = i32::try_from(total).unwrap_or(i32::MAX);
         self.as_mut().set_reads(reads);
     }
 
@@ -259,6 +263,9 @@ impl qobject::ProjectTree {
     }
 
     fn open(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        // The project shown before keeps its reads in the count.
+        let before = self.tree.borrow().as_ref().map_or(0, Tree::reads);
+        self.earlier_reads.set(self.earlier_reads.get() + before);
         let opened = Tree::open(Path::new(&path.to_string()));
         // SAFETY: the model's whole content changes between the two calls.
         unsafe { self.as_mut().begin_reset_model() };
