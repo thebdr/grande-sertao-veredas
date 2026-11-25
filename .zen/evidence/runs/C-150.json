@@ -7,15 +7,15 @@
     "cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); seen = lambda keep: sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if keep(p, t)); want = [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")]; sys.exit(seen(lambda p, t: t[\"name\"] in (\"orcl_std\", \"orcl-std\", \"blocks\")) != want or seen(lambda p, t: p[\"name\"] == \"orcl-std\") != want)' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true cargo nextest run -p orcl-std --release --test blocks --run-ignored only --no-tests fail -E 'test(=the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link)' && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
   ],
   "exitCode": 0,
-  "outputSha": "74db8a3c2329663bb610f9b17dbdd9106ce963d929bf4295a449e30916d66418",
-  "outputTail": "all doctests ran in 0.29s; merged doctests compilation took 0.24s\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running unittests src/lib.rs (target/debug/build/orcl-std/6f4af301044bd167/out/orcl_std-6f4af301044bd167)\n     Running tests/blocks.rs (target/debug/build/orcl-std/04ccbbb91e41921e/out/blocks-04ccbbb91e41921e)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n   Doc-tests orcl_std\n    Finished `release` profile [optimized] target(s) in 0.11s\n────────────\n Nextest run ID 509d8e8d-f11e-4a67-aa92-2f29ad5fec76 with nextest profile: default\n    Starting 1 test across 1 binary (72 tests skipped)\n        PASS [   0.921s] (1/1) orcl-std::blocks the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link\n────────────\n     Summary [   0.922s] 1 test run: 1 passed, 72 skipped\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s",
-  "ranAt": "2026-11-23T09:25:01.899Z",
-  "headCommit": "fdaa6532e5ebeea59a7f5c901747c3a1906daab3",
+  "outputSha": "54d5132b1fbaf89c5ed64e55dc469b5d7803480206dc0a7b1363b0e90f2fde5b",
+  "outputTail": "────────────\n Nextest run ID 9ebf8b80-d712-4000-a408-3635322ec6e6 with nextest profile: default\n    Starting 1 test across 1 binary (74 tests skipped)\n        PASS [   0.991s] (1/1) orcl-std::blocks the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link\n────────────\n     Summary [   0.992s] 1 test run: 1 passed, 74 skipped\n    Checking serde_core v1.0.229\n    Checking zmij v1.0.23\n    Checking itoa v1.0.18\n    Checking memchr v2.8.3\n    Checking orcl-std v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/orcl-std)\n    Checking serde_json v1.0.154\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.43s\n   Compiling orcl-std v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/orcl-std)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.36s",
+  "ranAt": "2026-11-25T00:48:27.427Z",
+  "headCommit": "56a8335d2d71de2316fda234543c8c072a99362a",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
       "file": "crates/orcl-std/src/timers.rs",
-      "fileSha": "3f140333687c059a5e34d5725b6cd5016a7615ba95bde77f09ca27fc88be9390"
+      "fileSha": "573f436db552a045d61aa3f4899fd3543750bd8332be9416b199c0a81efeea51"
     },
     {
       "name": "crates/orcl-std/src/edges.rs",
@@ -30,12 +30,12 @@
     {
       "name": "crates/orcl-std/src/bits.rs",
       "file": "crates/orcl-std/src/bits.rs",
-      "fileSha": "bbc0b5a236ec90c920a9809c709f3876f2d3f7043915fe2e6a183596d7386fee"
+      "fileSha": "3d7ce29c85f5e89eae5d9f2d071798437cbe8d1d99e8e5aa7655650afea96f04"
     },
     {
       "name": "crates/orcl-std/src/lib.rs",
       "file": "crates/orcl-std/src/lib.rs",
-      "fileSha": "f691451de674ffa474857fe241c063522abd32f1d90a980c14637967f54c6774"
+      "fileSha": "563086ba6fea93b899b6c34ae27f7c2140e791a9f132731ba845a515e9f3afe3"
     },
     {
       "name": "crates/orcl-std/src/scan.rs",
@@ -50,7 +50,7 @@
     {
       "name": "crates/orcl-std/tests/blocks.rs",
       "file": "crates/orcl-std/tests/blocks.rs",
-      "fileSha": "5157d40c10fd2d7b00980f99e5acc2c27526115e3980fb57b864f2035d8685d2"
+      "fileSha": "704a7708c2ea0b7345b4fef34800e2792b5c911cb8b9cfd2291774f6e41e3775"
     }
   ]
 }
