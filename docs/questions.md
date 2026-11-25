@@ -786,6 +786,85 @@ that every state has a mark and a word; entry 33 is P-014's ground.
 plans carry the decisions as the architect made them, and each plan's "Open" names the entries that
 touch it. An entry becomes a rule only by the architect's word.
 
+**Ruled in part** 2026-11-25, by the architect, entry by entry (the entries are
+`docs/briefing/review.md`'s; 17 to 21 were ruled with Q100 the same day, the fork of entry 27 with
+Q102, the file names of entry 25 with Q224):
+
+- Entry 15. Asked "A swap to a version with a different IO mapping leaves the old output channel
+  without a writer, and rollback has no stated path. Which of the review's three options hold? (The
+  review's pick: all three.)", all three chosen: "(a) Orphaned outputs go safe", "(b) A moved signal
+  is one line", "(c) Rollback is a download".
+
+- Entry 16. Asked "A single cycle runs one scan and halts, so every output written in that scan is
+  energised for milliseconds (contactors, valves, brakes); and switching a dry run off in RUN makes
+  outputs jump to mid-sequence values. Which options hold? (The review's pick: both.)", both chosen:
+  "(a) Single cycle guarded" (on a real target only in a dry run, or with outputs held between
+  cycles after a confirmation), "(b) Dry run ends through STOP".
+
+- Entry 22. Asked "Q19 has supervisão's host start the portal sessions; if Oficina also starts
+  portal for the same project, two sessions poll one PLC and write two stores, and the database lets
+  only one process write a file. Who owns the sessions, and how does Oficina run SQL over a store?",
+  the architect's own answer, none of the options: "if oficina and supervisao run on the same host
+  they share one portal instance". Who starts that instance, and how SQL reaches a store, are put
+  next.
+
+- Entry 23. Asked "Vendor description files (GSDML, ESI, EDS) are copied into the project and read
+  directly (your choice). They are not TOML, they are the vendors' copyright, and they are XML from
+  outside. What are they in a project?", "(a) Inputs, read never written (Recommended)": the TOML
+  rule's one named exception, parsed with document type definitions and entities switched off, the
+  test fixtures descriptions written here; their readers live in core (Q45's C5, the same day).
+
+**Ruled in part** 2026-11-25, by the architect, four more answers:
+
+- Entry 22, who starts. Asked "Following your answer (\"if oficina and supervisao run on the same
+  host they share one portal instance\"): who starts that shared portal instance for a project?",
+  "Whichever comes first": the first of Oficina and supervisão to need the project starts the
+  instance, the other finds it running and joins, and it stops when the last one leaves. Q19
+  (supervisão starts the sessions) is amended by it for a host that runs both.
+
+- Entry 22, SQL. Asked "SQL over a store: the database lets one process write a file. How does
+  Oficina run SQL over the store of a running session?", "(c) A read-only route in portal
+  (Recommended)".
+
+- Entry 24. Asked "You chose colour, size, position and visibility as expressions, but supervisão's
+  rule is that every state has a mark and a word, and an expression that turns an object red
+  bypasses both. What may a colour expression do?", "(b) A class or a declared scale (Recommended)":
+  a colour expression resolves to a state class, which brings its mark and word, or to a declared
+  scale with a legend; the syntax palette's green for strings moves with the number colour.
+
+- Entry 26. Asked "PROFINET first (your choice): only discovery exists, the specification sits
+  behind the membership, and no open controller exists to compare with. What holds?", "(a)+(b)
+  Modbus proves, real device (Recommended)": Modbus TCP is the bus on which the runtime is first
+  proven while the membership runs, PROFINET stays the first fieldbus written, and from its first
+  clause the PROFINET work has a real device in the loop and captures of a real controller's traffic
+  as fixtures.
+
+**Ruled in part** 2026-11-25, by the architect, four more entries:
+
+- Entry 27. Asked "The bench's EtherCAT device must emulate in software what a real device does in a
+  chip (functional, never exact in time), and the young EtherNet/IP crates become ours to keep.
+  Which options hold? (The review's pick: (a) and (b).)", chosen: "(a) A partial emulator, said so"
+  and "(b) Real terminals in the loop"; not chosen: "(c) EtherNet/IP later".
+
+- Entry 28. Asked "Monaco is an editor only; it has no client for a language server and none for a
+  debugger, and Ábaco's Python debugger needs the same interface. Which options hold? (The review's
+  pick: (a), decided now so ábaco does not write a second one.)", chosen: "(a) One pair of clients,
+  shared", written once on Oficina's side and shared by ORCL and Python; not chosen: a first
+  debugger without inline values, and a native editor as fallback.
+
+- Entry 29. Asked "Every clause's test drives the real interface (your choice), but Spix cannot see
+  inside the embedded web page (Monaco, supervisão's tabs), and floating panes cannot be exercised
+  headless. Which options hold? (The review's pick: (a) and (c).)", chosen: "(a) A gate in the
+  spike" and "(b) Two tiers" (logic proven on the Rust model, each surface proven by driving it);
+  not chosen: "(c) Multi-monitor docking outside", so docking across monitors is not declared
+  outside the suite.
+
+- Entry 30. Asked "Oficina's first release is about fifteen surfaces, and forms are built \"from a
+  schema\" that nothing can generate today. Which options hold? (The review's pick: both.)", both
+  chosen: "(a) Forms from core's types" and "(b) Surfaces in an order" (shell, tree, form and text,
+  target over SSH, session control and health, log trailing and supervisão's tabs first, the rest in
+  point releases).
+
 ## Q32 - What disqualifies an edit from a live takeover?
 
 **Raised** 2026-11-15, by the architect, ruling on the review's entry 5.
