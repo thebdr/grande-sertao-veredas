@@ -157,11 +157,18 @@ workspace unifies features across members, so there a member asking for core wit
 features gets the plant-facing layers too when another member keeps them (ábaco's Q345, measured
 after C-073 landed). That is cargo's doing, and C-073's promise is stated for the crate built alone.
 
+**`src/schema.rs` is compiled by ábaco too, by `#[path]`** (Q345, ruled 2026-11-25, its (c)): ábaco
+reads its `.abaco` stamps with core's own file, not through core as a dependency. So the file keeps
+its path and its name, stands alone on serde, toml and thiserror, and uses no other module of
+core. Moving it, splitting it, or giving it a `use crate::..` breaks ábaco's build; such a change
+goes through the orchestrator to ábaco first.
+
 ## Module map
 ```
 veredas_core
   types       SourceId, SeriesRef, Value, SeriesType, Sample, Quality, now_unix_ms
   source      SourceHandle, stop_flag, SourceError
+  schema      stamp, check, Stamp, HeaderError: the one header reader (C-045)
   rng         Pcg32
   telegram    Endian; schema, framing, channel, capture, compose, catalog
   opc         spec, value, map, browse, worker, error; demo (feature "demo-server")
@@ -203,13 +210,14 @@ status P-018.
 - **The controller's state text has one writer and one reader, here**, with the table of reason
   numbers and words, so every screen, log and test shows the same characters
   (`docs/controlador-plan.md`, "The state"). Built 2026-11-22 (C-070, `docs/state-text.md`): the
-  reader accepts exactly what the writer writes; the readings it took are Q100's.
+  reader accepts exactly what the writer writes; the eight readings it took are Q100's, accepted
+  as taken (2026-11-25), the review's entries 17 to 21 ruled with them.
 - **The functions that drive hardware live in core**: the four fieldbus masters (PROFINET IO
   controller, EtherCAT master, EtherNet/IP scanner, Modbus TCP client), safe in controlador on
   Linux and callable by other crates for testing only (2026-11-14). The Modbus/TCP client was
   built first (2026-11-22, C-071, `fieldbus::modbus`), on the tokio-modbus crate's framing with
   every answer checked here, and met against the bench's Modbus server from the test-only tool
-  `tools/mestres` (Q101's option taken). The review set this against
+  `tools/mestres` (Q101, ruled 2026-11-25 with Q34). The review set this against
   Q9 and laws L4 and L5, and the architect kept it: "Core, rules amended" (2026-11-15).
 - **What is amended:** core's telegram framing still holds no frame layout of its own, and a
   device spoken over a TCP telegram channel is still configuration. A standard fieldbus's frames
@@ -219,8 +227,10 @@ status P-018.
   network libraries become core's dependencies.
 - **The OPC UA server code moves from maquinar into core**, since controlador's embedded portal
   serves OPC UA. Maquinar agreed to the cut on 2026-11-22; the design is "The OPC UA server", below.
-- Open: where the masters' tests against the bench live, law L4 standing (Q34); where the readers
-  of GSDML, ESI and EDS files live (Q45); the review's entries 23 and 26 (Q31).
+- Ruled 2026-11-25: the masters' tests against the bench live in `tools/mestres`, a test-only
+  crate of repo tooling that depends on core and maquinar, law L4 standing (Q101 and Q34).
+- Open: where the readers of GSDML, ESI and EDS files live (Q45); the review's entries 23 and 26
+  (Q31).
 
 ## The fieldbus masters: how each is built (P-018)
 In the briefing's order for core (`docs/controlador-plan.md`, "Networks and devices"); each is a
@@ -239,7 +249,7 @@ tests switch them on through the self dev-dependency.
   `ethernetip-core` and `ethernetip-connections` 0.1.1 (Apache-2.0), which the bench's adapter
   test already used and which hold the encapsulation, the Common Packet Format, the Connection
   Manager's requests and the Class 1 framing; rseip 0.3.1 has no implicit I/O. Core takes their
-  codecs, pinned exactly, and writes the scanner itself (Q102): their own scanner opens with no
+  codecs, pinned exactly, and writes the scanner itself (Q102, ruled 2026-11-25): their own scanner opens with no
   bound in time, leaves the 16-bit sequence count out of a connection's sizes, names the Sockaddr
   Info items the other way round (see "Traps"), and watches no silence. Met against maquinar's
   EtherNet/IP adapter (C-111) from `tools/mestres`. The first input is awaited the standard's

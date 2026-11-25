@@ -81,10 +81,11 @@ The standard health value (NE 107; OPC UA's DeviceHealth) is derived: `FAULT` gi
 gives maintenance required (4); a clean `RUN` gives normal (0). The numbers are OPC UA's
 `DeviceHealthEnumeration`.
 
-## Readings taken, not ruled
+## Readings the plan left open, ruled
 
-The plan left these open; each is taken as written here, marked `DECISION PENDING` in the code
-and listed in `docs/questions.md` Q100, beside the review's entries 17 to 21 (Q31), none ruled.
+The plan left these open. Each was taken as written here, and the architect accepted all eight
+as taken on 2026-11-25 (`docs/questions.md` Q100), ruling the review's entries 17 to 21 on this
+text with them.
 
 - The unknown state's word is `UNKNOWN`, and it has no health.
 - The debug conditions are `breakpoint`, `force`, `shadow`, `dry`, `sim` and `no_realtime`; what

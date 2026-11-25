@@ -19,8 +19,8 @@
 //! Values are TOML values (an integer in decimal, `true` or `false`, a string in double quotes
 //! with TOML's escapes), each written one way only.
 //!
-//! Where the controller's plan leaves a reading open, the reading taken here is marked
-//! `DECISION PENDING` and listed in `docs/questions.md` Q100.
+//! Where the controller's plan left a reading open, the reading taken here is the architect's
+//! ruling (`docs/questions.md` Q100, 2026-11-25: all eight readings accepted as taken).
 
 use std::fmt;
 use std::str::FromStr;
@@ -64,7 +64,7 @@ impl StateWord {
 
     pub fn word(self) -> &'static str {
         match self {
-            // DECISION PENDING (Q100): the plan numbers the unknown state 0 and gives it no word.
+            // Ruled (Q100): the plan numbers the unknown state 0 and gives it no word.
             StateWord::Unknown => "UNKNOWN",
             StateWord::Stop => "STOP",
             StateWord::Startup => "STARTUP",
@@ -435,15 +435,15 @@ pub struct Conditions {
     pub devices_missing: u32,
     /// `overruns(count)`: scans that overran their period.
     pub overruns: u32,
-    /// `retain(reset)`: retained variables reset. DECISION PENDING (Q100): a count is a reading.
+    /// `retain(reset)`: retained variables reset, a count (ruled, Q100).
     pub retain_reset: u32,
 }
 
 impl Conditions {
     /// What someone did to the controller (breakpoints, forcing, a shadow test) or the mode it
     /// runs in (dry, simulated, without real time): the conditions that make a running
-    /// controller's health a function check. DECISION PENDING (Q100): the plan never lists
-    /// which conditions are debug conditions; this reading takes these six.
+    /// controller's health a function check. The plan never listed which conditions are debug
+    /// conditions; these six are the ruled reading (Q100).
     pub fn debug(&self) -> bool {
         self.breakpoints_set > 0
             || self.force.any()
@@ -607,7 +607,7 @@ impl ControllerState {
 
     /// FAULT gives failure; STOP, STARTUP, HOLD and any debug condition give function check; a
     /// maintenance request gives maintenance required; a clean RUN gives normal. An unknown
-    /// state has no health. DECISION PENDING (Q100): the plan gives the unknown state none.
+    /// state has no health, as ruled (Q100).
     pub fn health(&self) -> Option<Health> {
         match self.state.word() {
             StateWord::Unknown => None,
@@ -697,8 +697,8 @@ impl ControllerState {
         }
         let c = &self.conditions;
         let count = |n: u32| Arg::Int(i64::from(n));
-        // DECISION PENDING (Q100, point 4): written beside a breakpoint reason too, the two told
-        // apart by their arguments.
+        // Ruled (Q100, point 4): written beside a breakpoint reason too, the two told apart by
+        // their arguments.
         if c.breakpoints_set > 0 {
             terms.push(Term::new(
                 "breakpoint",
@@ -743,7 +743,7 @@ impl ControllerState {
             terms.push(Term::new("retain", vec![("reset", count(c.retain_reset))]));
         }
         let mut requests = self.maintenance.clone();
-        // DECISION PENDING (Q100, point 6): by number, one not urgent before an urgent one.
+        // Ruled (Q100, point 6): by number, one not urgent before an urgent one.
         requests.sort();
         for m in requests {
             terms.push(Term::new(
@@ -1329,7 +1329,7 @@ fn classify(word: StateWord, term: &Term) -> Result<(Kind, Place), StateTextErro
             at: term.at,
         });
     }
-    // DECISION PENDING (Q100, point 7): no version, and a term not in the table is refused.
+    // Ruled (Q100, point 7): no version, and a term not in the table is refused.
     Err(StateTextError::UnknownTerm {
         term: term.name.clone(),
         at: term.at,
