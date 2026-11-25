@@ -74,6 +74,8 @@ struct Locked {
     source: Option<String>,
     checksum: Option<String>,
     dependencies: Vec<String>,
+    /// What a `[replace]` puts in its place (`name version`, a package by path).
+    replace: Option<String>,
 }
 
 impl Locked {
@@ -119,7 +121,7 @@ impl Workspace<'_> {
                 return Err("its Cargo.lock holds a package without a name or a version".to_string());
             };
             let dependencies = p.get("dependencies").and_then(|d| d.as_array()).into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string)).collect();
-            out.push(Locked { name, version, source: s("source"), checksum: s("checksum"), dependencies });
+            out.push(Locked { name, version, source: s("source"), checksum: s("checksum"), dependencies, replace: s("replace") });
         }
         Ok(Some(out))
     }
@@ -127,6 +129,15 @@ impl Workspace<'_> {
     /// The build inputs of the member `name`, or why they cannot be read.
     pub fn inputs(&self, name: &str) -> Result<Inputs, String> {
         let lock = self.lock()?;
+        // A cargo configuration's `paths` builds folders in place of the packages the lock pins,
+        // by a rule no lock entry records.
+        for f in [".cargo/config.toml", ".cargo/config"] {
+            if let Ok(text) = std::fs::read_to_string(self.tree.join(f))
+                && toml::from_str::<toml::Table>(&text).map_or(true, |t| t.contains_key("paths"))
+            {
+                return Err(format!("its {f} overrides packages by `paths` (or does not read), which a release does not follow"));
+            }
+        }
         let mut named = BTreeMap::new();
         // The workspace's manifest whole, any byte of it charging every component (docs/questions.md
         // Q442: what cargo reads of it for this component alone is recommended).
@@ -203,6 +214,12 @@ impl Workspace<'_> {
             for d in &l.dependencies {
                 queue.push(resolve(lock, d)?);
             }
+            // A `[replace]` builds another package in its place: the one without a source.
+            if let Some(r) = &l.replace {
+                let (n, v) = r.split_once(' ').unwrap_or((r.as_str(), ""));
+                let at = lock.iter().position(|x| x.name == n && x.version == v && x.source.is_none()).ok_or_else(|| format!("its Cargo.lock replaces {} {} by `{r}`, which it does not pin", l.name, l.version))?;
+                queue.push(at);
+            }
         }
         Ok(Inputs(named))
     }
@@ -242,7 +259,9 @@ impl Workspace<'_> {
                 if !folders.iter().any(|f| path.starts_with(f.as_str())) {
                     out.insert(path.clone());
                 }
-                if path.ends_with(".rs") && self.tree.join(&path).is_file() && scanned.insert(path.clone()) {
+                // Read in turn, whatever its name ends with (`include!("x.in")` is Rust too); a
+                // text that is not Rust names nothing or one more input, never one less.
+                if self.tree.join(&path).is_file() && scanned.insert(path.clone()) {
                     files.push(path);
                 }
             }
@@ -271,10 +290,12 @@ fn resolve(lock: &[Locked], d: &str) -> Result<usize, String> {
     }
 }
 
-/// Every `.rs` file under `dir` of the tree (paths from the root, in name order), but under the
-/// folder's own `tests/`, `benches/` and `examples/`.
+/// Every `.rs` file under `dir` of the tree (paths from the root, in name order), its tests',
+/// benches' and examples' included (a shipped target may start there; docs/questions.md Q445 asks
+/// whether what tests alone read should charge).
 fn walk(tree: &Path, dir: &str, out: &mut Vec<String>) -> std::io::Result<()> {
     fn inner(tree: &Path, rel: &str, top: bool, out: &mut Vec<String>) -> std::io::Result<()> {
+        let _ = top;
         let mut entries: Vec<_> = std::fs::read_dir(tree.join(rel))?.collect::<Result<_, _>>()?;
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
@@ -282,9 +303,7 @@ fn walk(tree: &Path, dir: &str, out: &mut Vec<String>) -> std::io::Result<()> {
             let path = format!("{rel}/{name}");
             let kind = e.file_type()?;
             if kind.is_dir() {
-                if !(top && matches!(name.as_str(), "tests" | "benches" | "examples")) {
-                    inner(tree, &path, false, out)?;
-                }
+                inner(tree, &path, false, out)?;
             } else if kind.is_file() && name.ends_with(".rs") {
                 out.push(path);
             }
@@ -299,6 +318,76 @@ fn walk(tree: &Path, dir: &str, out: &mut Vec<String>) -> std::io::Result<()> {
 /// one literal (a raw one included). Read as text, comments too: a path a comment names is one more
 /// input, never one less.
 pub fn literals(text: &str) -> Vec<String> {
+    // Tokens may stand apart by spaces or comments (`# [path = /* c */ "x"]`): read over the text
+    // as written and over a copy with its comments blanked, every path either names kept.
+    let mut out = literals_in(text);
+    for l in literals_in(&uncommented(text)) {
+        if !out.contains(&l) {
+            out.push(l);
+        }
+    }
+    out
+}
+
+/// `text` with every comment (`//…`, `/*…*/`, nested) replaced by spaces, strings kept whole.
+fn uncommented(text: &str) -> String {
+    let b: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            '"' => {
+                out.push('"');
+                i += 1;
+                while i < b.len() && b[i] != '"' {
+                    if b[i] == '\\' && i + 1 < b.len() {
+                        out.push(b[i]);
+                        i += 1;
+                    }
+                    out.push(b[i]);
+                    i += 1;
+                }
+                if i < b.len() {
+                    out.push('"');
+                    i += 1;
+                }
+            }
+            '/' if b.get(i + 1) == Some(&'/') => {
+                while i < b.len() && b[i] != '\n' {
+                    out.push(' ');
+                    i += 1;
+                }
+            }
+            '/' if b.get(i + 1) == Some(&'*') => {
+                let mut depth = 0;
+                while i < b.len() {
+                    if b[i] == '/' && b.get(i + 1) == Some(&'*') {
+                        depth += 1;
+                        out.push_str("  ");
+                        i += 2;
+                    } else if b[i] == '*' && b.get(i + 1) == Some(&'/') {
+                        depth -= 1;
+                        out.push_str("  ");
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        out.push(if b[i] == '\n' { '\n' } else { ' ' });
+                        i += 1;
+                    }
+                }
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn literals_in(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     // `#[cfg_attr(<predicate>, path = "…")]`: each `path =` the attribute's parentheses hold.
     let mut rest = text;
@@ -339,19 +428,31 @@ pub fn literals(text: &str) -> Vec<String> {
             }
         }
     }
-    // `#[path = "…"]`, spaces inside the brackets allowed.
+    // `#[path = "…"]`, spaces between its tokens allowed.
     let mut rest = text;
-    while let Some(at) = rest.find("#[") {
-        rest = &rest[at + 2..];
-        if let Some(lit) = rest.trim_start().strip_prefix("path").and_then(|s| s.trim_start().strip_prefix('=')).and_then(|s| literal(s.trim_start())) {
+    while let Some(at) = rest.find('#') {
+        rest = &rest[at + 1..];
+        if let Some(lit) = rest
+            .trim_start()
+            .strip_prefix('[')
+            .and_then(|s| s.trim_start().strip_prefix("path"))
+            .and_then(|s| s.trim_start().strip_prefix('='))
+            .and_then(|s| literal(s.trim_start()))
+        {
             out.push(lit);
         }
     }
-    for (token, sep) in [("include_str!", '('), ("include_bytes!", '('), ("include!", '(')] {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    for (token, sep) in [("include_str", '('), ("include_bytes", '('), ("include", '(')] {
         let mut rest = text;
         while let Some(at) = rest.find(token) {
+            let before = text[..text.len() - rest.len() + at].chars().next_back();
             rest = &rest[at + token.len()..];
-            let after = rest.trim_start();
+            if before.is_some_and(ident) || rest.starts_with(ident) {
+                continue;
+            }
+            let Some(after) = rest.trim_start().strip_prefix('!') else { continue };
+            let after = after.trim_start();
             let Some(after) = after.strip_prefix(sep).or_else(|| if sep == '(' { after.strip_prefix(['[', '{']) } else { None }) else { continue };
             if let Some(lit) = literal(after.trim_start()) {
                 out.push(lit);
