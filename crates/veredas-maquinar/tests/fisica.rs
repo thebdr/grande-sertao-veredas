@@ -35,6 +35,25 @@ fn steps(w: &mut World, n: u64) {
 }
 
 /// Steps until `done`, keeping each step's pose of `name`; at most `max` steps.
+/// Records each step's start as its hook sees it (the steps taken so far, the instant), the world in
+/// hand: where the runner judges a step late.
+fn step_starts(h: &fisica::FisicaHandle) -> std::sync::Arc<std::sync::Mutex<Vec<(u64, Instant)>>> {
+    let starts = std::sync::Arc::new(std::sync::Mutex::new(Vec::with_capacity(4096)));
+    let st = std::sync::Arc::clone(&starts);
+    h.add_hook(Box::new(move |w: &mut World| st.lock().unwrap().push((w.steps(), Instant::now()))));
+    starts
+}
+
+/// Of the steps from the `from`-th on, how many began more than one step after their time: surely
+/// (their lateness read against the earliest start, at most the real one) and perhaps (within a
+/// quarter of a step of it). The machine's load decides how many; the runner must count them.
+fn begun_late(starts: &[(u64, Instant)], step: Duration, from: u64) -> (usize, usize) {
+    let base = starts.iter().map(|(n, t)| *t - step * (*n as u32 + 1)).min().unwrap();
+    let lateness = |(n, t): &(u64, Instant)| t.saturating_duration_since(base + step * (*n as u32 + 1));
+    let window: Vec<Duration> = starts.iter().filter(|(n, _)| *n >= from).map(lateness).collect();
+    (window.iter().filter(|l| **l > step).count(), window.iter().filter(|l| **l > step - step / 4).count())
+}
+
 fn run_until(w: &mut World, name: &str, max: u64, mut done: impl FnMut(&mut World, &[SensorEvent]) -> bool) -> (Vec<[f64; 3]>, Vec<SensorEvent>) {
     let mut poses = vec![at(w, name)];
     for _ in 0..max {
@@ -411,12 +430,13 @@ fn every_refusal_is_named_by_its_place() {
 fn the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene() {
     let scene = fisica::load(&reference()).unwrap();
     let mut h = fisica::start(&scene).unwrap();
+    let starts = step_starts(&h);
     // One step per 4 ms of real time, a late step taken at once, never skipped: measured between
     // two readings while it runs, so the world's making and the thread's start count for nothing.
     std::thread::sleep(Duration::from_millis(100));
-    let (first, begun) = (h.steps(), Instant::now());
+    let (first, begun, late0) = (h.steps(), Instant::now(), h.status().late);
     std::thread::sleep(Duration::from_millis(1000));
-    let (steps, elapsed) = (h.steps() - first, begun.elapsed());
+    let (steps, elapsed, late) = (h.steps() - first, begun.elapsed(), h.status().late - late0);
     let due = (elapsed.as_millis() / 4) as u64;
     assert!(steps + 3 >= due && steps <= due + 2, "{steps} steps in {elapsed:?}");
     // Read under one lock: a step between two reads would part them.
@@ -424,9 +444,11 @@ fn the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene() {
     assert_eq!(time, Duration::from_millis(4 * taken));
     let s = h.status();
     assert_eq!((s.bodies, s.sensors), (1, 2));
-    // A calm second: a step is late only past one step behind its time (refute round 2: every
-    // step counted late passed before).
-    assert!(s.late <= 5, "{} of {} steps counted late in a calm second", s.late, s.steps);
+    // A step counted late only past one step behind its time (refute round 2: every step counted
+    // late passed before), judged against the steps that began so in this second, whatever the
+    // machine's load made of it (the orchestrator's whole-suite run: 6 counted, a bound of 5).
+    let (surely, perhaps) = begun_late(&starts.lock().unwrap(), Duration::from_millis(4), first);
+    assert!(late as usize + 3 >= surely && late as usize <= perhaps + 3, "{late} of {steps} steps counted late, {surely} to {perhaps} began late");
     // The handle reads and moves the scene as the world does.
     let c = h.body("carton-1").unwrap();
     assert!((c.velocity[0] - 0.5).abs() < 0.01, "{c:?}");
@@ -1612,6 +1634,7 @@ mod round_4 {
         for step_ms in [10u64, 20] {
             let s = scene(&format!("step_ms = {step_ms}\n[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 1000.0]\n"));
             let h = fisica::start(&s).unwrap();
+            let starts = super::step_starts(&h);
             std::thread::sleep(Duration::from_millis(100));
             let (first, begun, late0) = (h.steps(), Instant::now(), h.status().late);
             std::thread::sleep(Duration::from_millis(1000));
@@ -1619,7 +1642,9 @@ mod round_4 {
             let late = h.status().late - late0;
             drop(h);
             let due = (elapsed.as_millis() / u128::from(step_ms)) as u64;
-            if !(n + 3 >= due && n <= due + 2) || late > 5 {
+            // The steps counted late are those that began more than one step after their time.
+            let (surely, perhaps) = super::begun_late(&starts.lock().unwrap(), Duration::from_millis(step_ms), first);
+            if !(n + 3 >= due && n <= due + 2) || (late as usize) + 3 < surely || late as usize > perhaps + 3 {
                 off.push((step_ms, n, due, late));
             }
         }
