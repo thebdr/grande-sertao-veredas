@@ -898,9 +898,9 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
     let probe = probe_dashboard(&dash);
     let v = drawn_as(&mut page, "Probe", "dashboards/0", Some(&probe));
     let kinds: Vec<&str> = v["drawn"].as_array().unwrap().iter().map(|p| p["kind"].as_str().unwrap()).collect();
-    // The probe's panels by state, its 30 cases, and the dashboard's own panels again with every
+    // The probe's panels by state (each with its twin of one point), its 30 cases, and the dashboard's own panels again with every
     // string spaced (and a normal tile, a normal level's row, a refused panel).
-    assert_eq!(kinds.len(), every_state().len() + 30 + dash["panels"].as_array().unwrap().len() + 3, "{kinds:?}");
+    assert_eq!(kinds.len(), every_state().len() * 2 + 30 + dash["panels"].as_array().unwrap().len() + 3, "{kinds:?}");
     // Every place a dashboard writes a state's class, each state painted otherwise than every other
     // there, none in the accent's family or its band of hue but the neutral series (Q22).
     let painted = page.eval(&format!("{STATE_PAINT}({})", serde_json::to_string(&every_state()).unwrap()));
@@ -941,7 +941,8 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
 /// Every place under the dashboards a state's class is written (`st-<state>`, `st-<part>-<state>`),
 /// read from the document as it stands, by its parent and its class's family: an object's outermost
 /// element carrying one (its parts' state classes swapped with it, so it stands in one state whole),
-/// a probe per state put beside the first found there, read by what paints it and every part inside
+/// every one of them read as the page drew it in its own state, and a probe per state put beside the
+/// one of them with the most parts (a badge, a dot), read by what paints it and every part inside
 /// it (an SVG shape's fill and stroke; an HTML box's background, shadow and border, and its text's
 /// colour where it holds one: a tile's badge, figure, sub-line and sparkline, a cell's text); every state painted
 /// otherwise than every other, and none in the accent's four colours (by red, green and blue) or any
@@ -989,10 +990,25 @@ const STATE_PAINT: &str = r##"((STATES) => {
     while (up && !up.matches(".dashboards") && !stateful(up)) up = up.parentElement;
     if (up && !up.matches(".dashboards")) continue;
     const where = `${el.parentElement?.getAttribute("class") ?? el.parentElement?.tagName} > ${family(el.getAttribute("class"))}`;
-    if (!places.has(where)) places.set(where, el);
+    places.set(where, [...(places.get(where) ?? []), el]);
   }
   const out = [];
-  for (const [where, el] of places) {
+  // The accent on every part each place's objects draw, each as the page drew it in its own state (a
+  // part the page draws only in some states, or only for some data, among them: a tile's badge, a
+  // one-point sparkline's dot).
+  const accentIn = (p, s, where) => {
+    for (const e of parts(p)) {
+      if (s === "normal" && e.closest(".st-line-normal") && p.contains(e.closest(".st-line-normal"))) continue;
+      if (e.matches(".inbar-fill")) continue;
+      for (const [q, v] of paint(e)) for (const tok of v.match(TOKENS) || []) if (ofAccent(tok)) out.push(`${where} in ${s}: its ${e.tagName.toLowerCase()}.${e.getAttribute("class") ?? ""}'s ${q} ${tok}, of the accent`);
+    }
+  };
+  const ownState = (el) => (el.getAttribute("class") || "").split(/\s+/).map((c) => c.match(STATE)?.[2]).find((s) => s) ?? null;
+  for (const [where, els] of places) for (const el of els) accentIn(el, ownState(el), `${where} as drawn`);
+  // Each place's probe the object of it with the most parts the page drew (a badge, a dot), every
+  // state painted on it in turn.
+  for (const [where, els] of places) {
+    const el = els.reduce((a, b) => (parts(b).length > parts(a).length ? b : a));
     const seen = new Map();
     for (const s of STATES) {
       const p = el.cloneNode(true);
@@ -1001,11 +1017,7 @@ const STATE_PAINT: &str = r##"((STATES) => {
       const v = sig(p);
       // The neutral series are the accent's (Q22): a normal sparkline's line, a table's inline bar,
       // whose fill shows a value's share in every state, its cell's text the state.
-      for (const e of parts(p)) {
-        if (s === "normal" && e.closest(".st-line-normal") && p.contains(e.closest(".st-line-normal"))) continue;
-        if (e.matches(".inbar-fill")) continue;
-        for (const [q, v] of paint(e)) for (const tok of v.match(TOKENS) || []) if (ofAccent(tok)) out.push(`${where} in ${s}: its ${e.tagName.toLowerCase()}.${e.getAttribute("class") ?? ""}'s ${q} ${tok}, of the accent`);
-      }
+      accentIn(p, s, where);
       p.remove();
       if (seen.has(v)) out.push(`${where} in ${s} painted as in ${seen.get(v)}: ${v.slice(0, 160)}`);
       else seen.set(v, s);
@@ -1420,7 +1432,11 @@ fn probe_dashboard(d: &Value) -> Value {
         t["data"]["text"] = json!(format!("  {s}\t1\n+ "));
         spaced(&mut t["title"]);
         spaced(&mut t["data"]);
+        // And its twin of one point, its sparkline a dot, drawn in every state.
+        let mut dot = t.clone();
+        dot["data"]["spark"] = json!([t["data"]["spark"][0].clone()]);
         panels.push(t);
+        panels.push(dot);
     }
     let mut one = p(0);
     one["data"]["spark"] = json!([one["data"]["spark"][0].clone()]);
@@ -2669,8 +2685,22 @@ fn every_rule_type_row_and_key_a_panel_meets_reads_as_the_reference_says() {
             assert_eq!(c["text"], json!(clock(c["value"].as_i64().unwrap(), read_as(t))), "{t}: {row}");
         }
     }
-    let panicked = d["panels"][22]["error"].as_str().unwrap();
-    assert!(panicked.starts_with("the panel could not be computed: "), "{panicked}");
+    // Q130 (ruled 2026-11-25, "Read it as microseconds"): portal is to read a time of day in
+    // nanoseconds as a TIME, its last three digits dropped. Until its change lands the panel says it
+    // could not be computed (its text held to that prefix alone); after it, the panel reads each
+    // time of day as the store's clock reads a TIME. Either is taken for the push between.
+    // DECISION PENDING: the error's branch goes once portal's cast is on main.
+    match d["panels"][22]["error"].as_str() {
+        Some(panicked) => assert!(panicked.starts_with("the panel could not be computed: "), "{panicked}"),
+        None => {
+            let nanos = panel(&d, 22);
+            assert!(!nanos["rows"].as_array().unwrap().is_empty(), "{nanos}");
+            for row in nanos["rows"].as_array().unwrap() {
+                let at = &row.as_array().unwrap()[1];
+                assert_eq!(at["text"], json!(clock(at["value"].as_i64().unwrap(), "%H:%M:%S")), "a time of day in nanoseconds read as a TIME: {row}");
+            }
+        }
+    }
     // The store answers again after it: the dashboard read once more, the same.
     let again = get_d();
     assert_eq!((again["panels"][21].clone(), again["panels"][22]["error"].clone()), (d["panels"][21].clone(), d["panels"][22]["error"].clone()));
