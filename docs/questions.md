@@ -3809,3 +3809,36 @@ built until it is ruled, and a target serves a Windows laptop already.
 
 **Reversible?** Yes: a Windows wire is one more implementation of the wire seam (C-139); nothing
 above it changes, whichever of (a) or (b) comes.
+
+---
+
+## Q190 - A database path the engine reads otherwise than as a local file: read it as the engine does, or refuse it?
+
+**Raised** 2026-11-25, by the supervisão session, from C-048's refute rounds 22 to 25. The host
+refuses two sessions that would open one database file (C-048), so it must know which file the
+engine opens for each path. DuckDB rewrites a path before the drive reads it, in more ways each
+round has found: a leading `~` (the home folder), a `file:` URL in three forms, a type before the
+first colon (`duckdb:` its own, `sqlite:` and any other an extension's), another file system before
+`://` (`s3://`, `http://`, `hf://`, `az://` and more, opened through httpfs or azure or not at
+all), a second expansion inside its local file system, and a write-ahead log (`<file>.wal`) beside
+every database. Such a path reaches the engine only when the supervisão file itself is given by a
+relative path whose first part is a folder named so (`~`, `duckdb:`, `s3:`), which no project
+writes on purpose. Options:
+
+- (a) **Read it as the engine does**, as rounds 23 and 24 built: the reader copies DuckDB 1.5.4's
+  rules by hand, each round finding the next, and an engine upgrade can change them unseen.
+- (b) **Refuse it by name**: a path whose first part holds a colon (a one-letter drive on Windows
+  apart) or begins with `~` is refused at the check, "a path the engine may read otherwise than as
+  a file here"; the reader then places plain paths alone, and only the write-ahead log is the
+  engine's own rule left to follow.
+- (c) **Hand the question to portal**: portal opens the database and could say which file it opened
+  (its guard against a database already standing, C-041, checks the path as written today).
+
+The assistant recommends (b): it fails closed, needs no copy of the engine's rules, survives an
+upgrade, and costs nothing a project does on purpose; (c) is right in the long run but is portal's.
+
+**Taken meanwhile**: (b), with the write-ahead log compared beside each database. C-048 states it,
+`config.rs` marks it `DECISION PENDING`.
+
+**Reversible?** Yes: the refusal is one function (`config::engine_reads_otherwise`); reading the
+forms as the engine does again would put round 24's `as_the_engine_reads` back in its place.
