@@ -1529,7 +1529,12 @@ fn the_lock_file_is_read_as_cargo_writes_it() {
     let keys = |n: &str| -> Vec<String> { held[n].inputs.as_ref().unwrap_or_else(|e| panic!("{n}: {e}")).0.keys().filter(|k| k.starts_with("Cargo.lock") || k.starts_with("forks")).cloned().collect() };
     assert_eq!(keys("veredas-a"), [format!("Cargo.lock: gitdep 0.1.0 ({a}#{ca})")]);
     assert_eq!(keys("veredas-b"), [format!("Cargo.lock: gitdep 0.1.0 ({b}#{cb})")]);
-    assert_eq!(keys("veredas-d"), ["Cargo.lock: serde_json 1.0.154", "forks/itoa/", "forks/itoa/Cargo.toml"], "the fork is a workspace of its own: its manifest is its workspace's");
+    // The fork it uses by path is also `serde_json`'s, by the patch: behind a crate of the registry,
+    // where cargo may compile it a second time and its dep-info does not follow it. Refused.
+    assert_eq!(
+        held["veredas-d"].inputs,
+        Err("its Cargo.lock reaches a package by path through a crate of the registry or git (itoa 1.0.18 through serde_json 1.0.154): cargo's dep-info does not follow it there, so its build's reads would go unjudged".to_string())
+    );
     // Cargo takes `[replace]` and `[patch]` apart: the git replacement in a workspace of its own,
     // then one the lock does not pin, refused by its reason.
     let q = Repo::new();
@@ -1612,7 +1617,7 @@ fn round_nineteen_the_lock_by_requirement_a_package_by_path_through_the_lock_and
     let lock = |old_ryu: &str| {
         format!(
             "version = 4\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\n\n[[package]]\nname = \"ryu\"\nversion = \"0.2.8\"\nsource = \"{reg}\"\nchecksum = \"{old_ryu}\"\n\n\
-             [[package]]\nname = \"ryu\"\nversion = \"1.0.20\"\nsource = \"{reg}\"\nchecksum = \"6666\"\n\n[[package]]\nname = \"serde_json\"\nversion = \"1.0.140\"\nsource = \"{reg}\"\nchecksum = \"5555\"\ndependencies = [\n \"itoa\",\n]\n\n\
+             [[package]]\nname = \"ryu\"\nversion = \"1.0.20\"\nsource = \"{reg}\"\nchecksum = \"6666\"\n\n[[package]]\nname = \"serde_json\"\nversion = \"1.0.140\"\nsource = \"{reg}\"\nchecksum = \"5555\"\n\n\
              [[package]]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\ndependencies = [\n \"itoa\",\n \"ryu 0.2.8\",\n \"ryu 1.0.20\",\n \"serde_json\",\n]\n"
         )
     };
@@ -1816,7 +1821,7 @@ fn round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_pa
     assert_eq!(packages.names.iter().collect::<Vec<_>>(), ["baz", "foo", "itoa", "veredas-a"], "the locked crate among them, never the test-only `qux`");
     assert_eq!(
         held["veredas-c"].inputs,
-        Err("its Cargo.lock reaches a package by path only through a crate of the registry or git (itoa 1.0.18 through serde_json 1.0.140, foo 1.0.0 through bar 1.0.0): cargo's dep-info does not follow it there, so its build's reads would go unjudged".to_string()),
+        Err("its Cargo.lock reaches a package by path through a crate of the registry or git (itoa 1.0.18 through serde_json 1.0.140, foo 1.0.0 through bar 1.0.0): cargo's dep-info does not follow it there, so its build's reads would go unjudged".to_string()),
         "each named"
     );
     let pin = |release: &str, commit: &str| -> (PathBuf, Manifest) {

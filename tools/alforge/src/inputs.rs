@@ -233,8 +233,8 @@ impl Workspace<'_> {
                 };
                 // Behind a crate of the registry or git (a `[patch]` of a crate that one uses), cargo's
                 // dep-info does not follow it: what its build reads beyond what its sources name (a
-                // build script's reads, an include by `concat!`) would be judged by no one, unless a
-                // package by path uses it too. Judged once the walk is done.
+                // build script's reads, an include by `concat!`) would be judged by no one. Refused
+                // once the walk is done, each one named.
                 if let Some(via) = through {
                     behind.entry(known.dir.as_str()).or_insert((format!("{} {}", l.name, l.version), via));
                     continue;
@@ -261,10 +261,12 @@ impl Workspace<'_> {
                 queue.push((at.ok_or_else(|| format!("its Cargo.lock replaces {} {} by `{r}`, which it does not pin", l.name, l.version))?, through.clone()));
             }
         }
-        let unfollowed: Vec<String> = behind.iter().filter(|(dir, _)| !seen.contains(*dir)).map(|(_, (what, via))| format!("{what} through {via}")).collect();
+        // Even one a package by path also uses: behind a proc-macro or a build-dependency of the
+        // registry, cargo resolves it apart and compiles it a second time, in no dep-info judged.
+        let unfollowed: Vec<String> = behind.values().map(|(what, via)| format!("{what} through {via}")).collect();
         if !unfollowed.is_empty() {
             return Err(format!(
-                "its Cargo.lock reaches a package by path only through a crate of the registry or git ({}): cargo's dep-info does not follow it there, so its build's reads would go unjudged",
+                "its Cargo.lock reaches a package by path through a crate of the registry or git ({}): cargo's dep-info does not follow it there, so its build's reads would go unjudged",
                 unfollowed.join(", ")
             ));
         }

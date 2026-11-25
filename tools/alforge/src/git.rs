@@ -122,11 +122,12 @@ pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) ->
         if path.chars().any(char::is_control) {
             return Err(ExportError::Refused(format!("the path {path:?} holds a control character: a release's tree names its files without one")));
         }
-        // Cargo's reading of rustc's dep-info misreads two more: a name ending in `\` joins the
-        // path after it, and a whitespace other than a space (U+00A0 among them) splits a name.
-        if path.contains('\\') || path.chars().any(|c| c.is_whitespace() && c != ' ') {
+        // Cargo's reading of rustc's dep-info misreads more: a name ending in `\` or in a space
+        // joins the path after it, and a whitespace other than a space (U+00A0 among them) splits
+        // a name.
+        if path.contains('\\') || path.ends_with(' ') || path.chars().any(|c| c.is_whitespace() && c != ' ') {
             return Err(ExportError::Refused(format!(
-                "the path {path:?} holds a backslash or a whitespace other than a space: cargo's dep-info would misread it, and a release's tree names its files without one"
+                "the path {path:?} holds a backslash or a whitespace other than a space, or ends in a space: cargo's dep-info would misread it, and a release's tree names its files without one"
             )));
         }
         // A build's inputs name a lock file's entry `Cargo.lock: <name> <version>`: no file of the

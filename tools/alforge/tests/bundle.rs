@@ -974,9 +974,17 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         ("src/a/x\u{205f}y", true),
         ("src/a/x\u{3000}y", true),
         ("src/crates/veredas-core/src/a\\", true),
+        ("src/crates/veredas-core/src/data ", true),
         ("src/target/release/build/x/0123456789abcdef/out/gen x.rs", false),
         ("src/a/ação€¡.rs", false),
-    ] {
+    ]
+    .into_iter()
+    .map(|(m, f)| (m.to_string(), f))
+    // Every C1 control and every whitespace of Unicode's but the space, one by one.
+    .chain(('\u{80}'..='\u{9f}').chain(['\u{a0}', '\u{1680}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}']).chain('\u{2000}'..='\u{200a}').map(|c| (format!("src/u/x{c}y"), true)))
+    .chain(['\u{a1}', '\u{200b}', '\u{2030}', '\u{3001}', '\u{1681}'].into_iter().map(|c| (format!("src/u/x{c}y"), false)))
+    {
+        let made = made.as_str();
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("build");
         let file = root.join(made);
@@ -994,7 +1002,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
             (
                 "the build in the builder machine",
                 "refused",
-                "a name under /build holds a control character, a backslash or a whitespace other than a space after the build: cargo's dep-info would misread it and hide reads after it"
+                "a name under /build holds a control character, a backslash or a whitespace other than a space, or ends in a space, after the build: cargo's dep-info would misread it and hide reads after it"
             )
         ),
         other => panic!("not refused: {other:?}"),
@@ -1656,9 +1664,13 @@ fn round_eighteen_names_cargos_dep_info_misreads_are_refused_and_its_words_read_
     // one holding a whitespace other than a space (cargo splits a word at U+00A0), and one named as
     // a build input names a lock file's entry: each commit refused by that path.
     for (name, why) in [
-        ("crates/veredas-core/src/a\\", "holds a backslash or a whitespace other than a space: cargo's dep-info would misread it, and a release's tree names its files without one"),
-        ("crates/veredas-core/src/z\u{a0}/x.rs", "holds a backslash or a whitespace other than a space: cargo's dep-info would misread it, and a release's tree names its files without one"),
+        ("crates/veredas-core/src/a\\", "holds a backslash or a whitespace other than a space, or ends in a space: cargo's dep-info would misread it, and a release's tree names its files without one"),
+        ("crates/veredas-core/src/z\u{a0}/x.rs", "holds a backslash or a whitespace other than a space, or ends in a space: cargo's dep-info would misread it, and a release's tree names its files without one"),
         ("Cargo.lock: foo 1.0.0", "is named as a build input names a lock file's entry"),
+        // A name ending in a space joins the next path too (rustc writes `data\  next`); a
+        // backslash inside a name, and every whitespace of Unicode's but the space, each refused.
+        ("crates/veredas-core/src/data ", "holds a backslash or a whitespace other than a space, or ends in a space: cargo's dep-info would misread it, and a release's tree names its files without one"),
+        ("crates/veredas-core/src/a\\b.rs", "holds a backslash or a whitespace other than a space, or ends in a space: cargo's dep-info would misread it, and a release's tree names its files without one"),
     ] {
         let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", None);
         r.write(name, "\n");
@@ -1666,6 +1678,19 @@ fn round_eighteen_names_cargos_dep_info_misreads_are_refused_and_its_words_read_
         let mut refusals = Vec::new();
         alforge::manifest::components_at(r.dir.path(), &c, &mut refusals).unwrap();
         assert_eq!(refusals, [format!("commit {c}: the path {name:?} {why}")], "{name:?}");
+    }
+    let unicode_spaces: Vec<char> = ['\u{85}', '\u{a0}', '\u{1680}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}'].into_iter().chain('\u{2000}'..='\u{200a}').collect();
+    assert!(unicode_spaces.iter().all(|c| c.is_whitespace()));
+    for c in &unicode_spaces {
+        let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", None);
+        let name = format!("crates/veredas-core/src/x{c}y.rs");
+        r.write(&name, "\n");
+        let commit = r.commit("a Unicode whitespace");
+        let mut refusals = Vec::new();
+        alforge::manifest::components_at(r.dir.path(), &commit, &mut refusals).unwrap();
+        assert_eq!(refusals.len(), 1, "{c:?}: {refusals:?}");
+        // U+0085 is a control character too, refused as one.
+        assert!(refusals[0].contains("or ends in a space: cargo's dep-info would misread it") || (*c == '\u{85}' && refusals[0].contains("holds a control character")), "{c:?}: {refusals:?}");
     }
     let inputs = alforge::inputs::Inputs(
         [("crates/veredas-core/", "1"), ("Cargo.lock: foo 1.0.0", "2"), ("Cargo.toml", "3")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
@@ -1684,5 +1709,10 @@ fn round_eighteen_names_cargos_dep_info_misreads_are_refused_and_its_words_read_
     assert_eq!(
         judged("/build/src/target/release/x: /build/src/target/release/build/x-y-0123456789abcdef/out/a.rs /build/src/target/release/build/x-0123456789abcdef/out/b.rs\n"),
         ["target/release/build/x-y-0123456789abcdef/out/a.rs"]
+    );
+    // A hash of sixteen hexadecimal digits, as cargo writes it, in either layout.
+    assert_eq!(
+        judged("/build/src/target/release/x: /build/src/target/release/build/x/0123456789abcdeg/out/c.rs /build/src/target/release/build/x-0123456789abcdeg/out/d.rs\n"),
+        ["target/release/build/x-0123456789abcdeg/out/d.rs", "target/release/build/x/0123456789abcdeg/out/c.rs"]
     );
 }
