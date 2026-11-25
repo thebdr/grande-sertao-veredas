@@ -331,11 +331,14 @@ Recorded as the port meets them.
   failure keeps the configured start for the open that succeeds, and the length and creation time
   recorded at the look tell the same file (read from where it stood) from a replacement (read whole).
   Round 8 found the start applied to the replacement, losing its first lines.
-- **A family's held active is a file's held active** (C-096, round 3). The family started at its
-  end reopened its held active at its end on every retry, losing what was written while it was
-  held; it now keeps the first look's length and identity as the file does. And a fixed active
-  that the sweep's open finds gone may have been renamed into a retiree after the listing: a
-  rename is atomic, so a listing taken after that open shows it, and only then is the history read.
+- **A family's held active is a file's held active** (C-098, from C-096's rounds 3 to 6). The
+  family started at its end reopened its held active at its end on every retry, losing what was
+  written while it was held; it keeps the first look's length and identity as the file does, and
+  knows the held file by its identity, since a fixed name never changes. A held open of the fixed
+  path sweeps what retired since its listing, as the adopt does.
+- **A fixed active the sweep's open finds gone may have been renamed after the listing** (C-096,
+  round 3): a rename is atomic, so a listing taken after that open shows it, and only then is
+  the history read.
 - **A test build right after clippy may not find an rlib.** Clippy leaves check-mode artifacts beside the
   build ones; a test build (nextest above all) started right after it failed four times with "crate
   `libduckdb_sys` required to be available in rlib format" and compiler internal errors, and a plain

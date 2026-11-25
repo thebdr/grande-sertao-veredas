@@ -109,3 +109,72 @@ fn a_stop_during_the_planned_active_s_read_never_says_the_history_read() {
     std::fs::set_permissions(&planned, std::fs::Permissions::from_mode(0o644)).unwrap();
     BEFORE_OPEN.lock().unwrap().retain(|(at, _)| *at != planned);
 }
+
+/// A fixed name's held active renamed into a retiree, another file made at the fixed path, between
+/// the round's listing and the held open (the hook holds that window): the open lands on the new
+/// file, and the held one's lines since the look are read first, awaited while it is held, then
+/// the new file's, in order, nothing of the history; the new file rotating while the sweep awaits
+/// is read once, by its cursor, and the next active after it (C-098).
+#[cfg(unix)]
+#[test]
+fn a_held_fixed_active_renamed_before_its_open_is_read_first() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::AtomicBool;
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("done_1.log"), 0..10);
+    let fixed = dir.path().join("current.log");
+    write(&fixed, 10..20);
+    std::fs::set_permissions(&fixed, std::fs::Permissions::from_mode(0o200)).unwrap();
+    let armed = Arc::new(AtomicBool::new(false));
+    let (from, to, again, arm) = (fixed.clone(), dir.path().join("done_2.log"), fixed.clone(), Arc::clone(&armed));
+    BEFORE_OPEN.lock().unwrap().push((
+        fixed.clone(),
+        Box::new(move || {
+            if arm.swap(false, Ordering::SeqCst) {
+                std::fs::rename(&from, &to).unwrap();
+                write(&again, 50..60);
+            }
+        }),
+    ));
+    let spec = FamilySpec::new(dir.path(), r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let source = FamilyTailSource::new("fixed", "fixed", spec, FamilyTailConfig { start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() });
+    let (tx, rx) = channel();
+    let handle = Box::new(source).start(tx).unwrap();
+    // The held active takes 30 lines after the look; the next round's open is held open.
+    {
+        use std::io::Write;
+        let body: String = (20..50u32).map(|i| format!("2026-07-19 {:02}:{:02}:{:02} temp={i} state=run\n", 1 + i / 3600, (i / 60) % 60, i % 60)).collect();
+        std::fs::OpenOptions::new().append(true).open(&fixed).unwrap().write_all(body.as_bytes()).unwrap();
+    }
+    armed.store(true, Ordering::SeqCst);
+    let started = Instant::now();
+    while armed.load(Ordering::SeqCst) {
+        assert!(started.elapsed() < Duration::from_secs(10), "the held open never came");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(rx.try_iter().count(), 0, "nothing read while the held file is held");
+    // While the sweep awaits it, the file the open landed on rotates in turn: the sweep ends at it
+    // (the cursor reads it, once), and the next active follows.
+    std::fs::rename(&fixed, dir.path().join("done_3.log")).unwrap();
+    write(&fixed, 60..65);
+    std::thread::sleep(Duration::from_millis(500));
+    std::fs::set_permissions(dir.path().join("done_2.log"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    let mut temps: Vec<u32> = Vec::new();
+    let started = Instant::now();
+    while temps.len() < 45 && started.elapsed() < Duration::from_secs(10) {
+        for e in rx.try_iter() {
+            let t = e.line.split("temp=").nth(1).and_then(|r| r.split(' ').next()).and_then(|t| t.parse().ok()).unwrap();
+            temps.push(t);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    for e in rx.try_iter() {
+        temps.push(e.line.split("temp=").nth(1).and_then(|r| r.split(' ').next()).and_then(|t| t.parse().ok()).unwrap());
+    }
+    assert_eq!(temps, (20..65).collect::<Vec<u32>>(), "the held file's 30 lines, the new file's 10, the next's 5, each once");
+    handle.request_stop();
+    handle.join().unwrap();
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| *at != fixed);
+}

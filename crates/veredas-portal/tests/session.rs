@@ -894,7 +894,8 @@ fn a_history_said_read_holds_every_ended_line() {
 /// awaited till then, the generation between whole and the new active whole, held in turn; a
 /// fixed name's held active retired with no active after it for a while alike; the newer active,
 /// held in turn, retiring before it opens, read whole once it does; and a generation between held
-/// past every patience, awaited and read whole.
+/// past every patience, awaited and read whole; a fixed name rotating again while a held
+/// generation is awaited, that generation read too (C-098).
 #[cfg(unix)]
 #[test]
 fn a_held_active_started_at_its_end_is_read_from_where_it_stood() {
@@ -924,6 +925,12 @@ fn a_held_active_started_at_its_end_is_read_from_where_it_stood() {
     write_history(&fixed.join("done_1.log"), 0..10);
     write_history(&fixed.join("current.log"), 10..20);
     mode(&fixed.join("current.log"), 0o200);
+    // A fixed name rotating twice while a generation retired after its held active is awaited.
+    let rotating = dir.path().join("rotating");
+    std::fs::create_dir_all(&rotating).unwrap();
+    write_history(&rotating.join("done_1.log"), 0..10);
+    write_history(&rotating.join("current.log"), 10..20);
+    mode(&rotating.join("current.log"), 0o200);
     // The newer active held in turn, retiring before it opens; a younger generation held.
     let newer = dir.path().join("newer");
     let younger = dir.path().join("younger");
@@ -939,6 +946,7 @@ fn a_held_active_started_at_its_end_is_read_from_where_it_stood() {
         ("fixed", family("fixed", &fixed, r"done_(?P<idx>\d+)\.log", ActiveConfig::Fixed("current.log".into()))),
         ("newer", family("newer", &newer, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest)),
         ("younger", family("younger", &younger, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest)),
+        ("rotating", family("rotating", &rotating, r"done_(?P<idx>\d+)\.log", ActiveConfig::Fixed("current.log".into()))),
     ] {
         let mut cfg = SessionConfig::new(id);
         cfg.logs.push(log);
@@ -998,6 +1006,25 @@ fn a_held_active_started_at_its_end_is_read_from_where_it_stood() {
                 assert_eq!(rows(&live, "readings"), 50, "the newer active awaited");
                 mode(&newer.join("plant_3.log"), 0o644);
                 60
+            }
+            "rotating" => {
+                let r = |name: &str| rotating.join(name);
+                append(&r("current.log"), 20..50);
+                std::fs::rename(r("current.log"), r("done_2.log")).unwrap();
+                std::thread::sleep(Duration::from_millis(500));
+                write_history(&r("current.log"), 50..60);
+                std::fs::rename(r("current.log"), r("done_3.log")).unwrap();
+                mode(&r("done_3.log"), 0o200);
+                write_history(&r("current.log"), 60..65);
+                mode(&r("done_2.log"), 0o644);
+                assert!(wait(Duration::from_secs(10), || rows(&live, "readings") == 30), "{} rows", rows(&live, "readings"));
+                std::thread::sleep(Duration::from_millis(1500));
+                assert_eq!(rows(&live, "readings"), 30, "the held generation awaited");
+                // While it is awaited the active rotates again: that generation is read too.
+                std::fs::rename(r("current.log"), r("done_4.log")).unwrap();
+                write_history(&r("current.log"), 65..70);
+                mode(&r("done_3.log"), 0o644);
+                50
             }
             _ => {
                 append(&younger.join("plant_1.log"), 10..40);

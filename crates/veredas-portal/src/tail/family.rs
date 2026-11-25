@@ -222,9 +222,64 @@ fn read_retired(
     Ok(true)
 }
 
+/// After a held active's branch opened the fixed path, before the active's first line: whatever
+/// retired since the round's listing is older than it and read first, in order (as `fixed_adopt`
+/// sweeps, invariant 2), the held file among it (`identity`) from where it stood (`len`), the
+/// others whole, each awaited while it is there and not readable; the sweep ends at the cursor's
+/// own file renamed into a retiree (invariant 3), which the cursor reads. False on a stop.
+#[allow(clippy::too_many_arguments)]
+fn sweep_after_held_open(
+    spec: &FamilySpec,
+    known: &mut HashSet<String>,
+    len: u64,
+    identity: Option<&crate::tail::cursor::Identity>,
+    own: &Handle,
+    cfg: &FamilyTailConfig,
+    stop: &AtomicBool,
+    wake_rx: &Receiver<()>,
+    emit: &mut dyn FnMut(String),
+) -> Result<bool, SourceError> {
+    loop {
+        let Some(files) = retry_resolve(spec, stop) else {
+            return Ok(!stop.load(Ordering::Relaxed));
+        };
+        let mut fresh: Vec<FamilyFile> = files.into_iter().filter(|f| !f.is_active && !known.contains(&f.file_name)).collect();
+        if fresh.is_empty() {
+            return Ok(true);
+        }
+        fresh.sort_by(|a, b| rank(a).cmp(&rank(b)));
+        for f in &fresh {
+            if stop.load(Ordering::Relaxed) {
+                return Ok(false);
+            }
+            if Handle::from_path(&f.path).ok().is_some_and(|h| h == *own) {
+                known.insert(f.file_name.clone());
+                return Ok(true);
+            }
+            let held = identity.is_some_and(|id| crate::tail::cursor::identity_at(&f.path).as_ref() == Some(id));
+            let (from, id) = if held { (len, identity) } else { (0, None) };
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    return Ok(false);
+                }
+                match TailedFile::open_held(&f.path, from, id) {
+                    Ok(mut c) => {
+                        c.drain_stable(cfg.drain_grace, stop, emit)?;
+                        c.flush_pending(emit);
+                        break;
+                    }
+                    Err(e) if crate::tail::single::is_not_found(&e) => break,
+                    Err(_) => wait_tick(wake_rx, cfg.poll_interval),
+                }
+            }
+            known.insert(f.file_name.clone());
+        }
+    }
+}
+
 /// A test's hooks, each run before the backfill opens its path (the fixed sweep's open of its
-/// fixed path, a replay's open of a member): what a rotation or a stop between a listing and an
-/// open does there (C-096's third and fourth refute rounds).
+/// fixed path, a replay's open of a member) or a held active's branch opens the active: what a
+/// rotation or a stop between a listing and an open does there (C-096, C-098).
 #[cfg(test)]
 pub(crate) static BEFORE_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
 
@@ -804,6 +859,8 @@ fn run_family(
                     // appears now is newer than the (past) start point, so read it whole.
                     FamilyStart::ActiveBegin | FamilyStart::Backfill(_) => FileStart::Begin,
                 };
+                #[cfg(test)]
+                before_open(&active.path);
                 let opened = match held.take() {
                     Some((name, len, identity)) => match &retired {
                         Some(f) => {
@@ -840,6 +897,13 @@ fn run_family(
                 match opened {
                     Ok(c) => {
                         known = member_names(&files);
+                        // A held active's open of the fixed path (C-098): what retired between the
+                        // round's listing and this open is read before the active's first line.
+                        if let (Some((_, len, identity)), ActiveMode::Fixed(_)) = (&held, spec.active_mode())
+                            && !sweep_after_held_open(&spec, &mut known, *len, identity.as_ref(), c.identity(), &cfg, &stop, &wake_rx, &mut emit)?
+                        {
+                            return Ok(());
+                        }
                         break (c, active.key, active.file_name.clone());
                     }
                     Err(e) => {
