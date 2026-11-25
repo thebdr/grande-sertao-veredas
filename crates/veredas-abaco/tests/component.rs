@@ -982,9 +982,31 @@ fn no_source_reaches_outside_its_crate_by_a_path_or_an_include_on_any_platform()
         }
     }
     assert_eq!(seen_schema, 1, "core's header reader, compiled by path once");
+    // the round at c0de423e: core's header reader names no file at all, under any `cfg` (no
+    // `#[path]`, no include, no out-of-line module), so nothing beyond it is compiled into Ábaco
+    // on any platform
+    let schema = std::fs::read_to_string(root().join("crates/veredas-core/src/schema.rs")).unwrap();
+    assert_eq!(paths_and_includes(&schema), Vec::new(), "core's header reader names a file by a path or an include");
+    assert_eq!(out_of_line_modules(&without_comments(&schema)), Vec::<String>::new(), "core's header reader loads a module from a file");
     let links = git(&["ls-files", "-s", "--", "crates/veredas-abaco", "forks/ironcalc"]);
     let links: Vec<&str> = links.lines().filter(|l| l.starts_with("120000 ")).collect();
     assert!(links.is_empty(), "links among the sources: {links:?}");
+}
+
+/// The modules `code` (comments blanked) loads from a file of their own: `mod x;`, any visibility
+/// or attribute before it, a raw identifier read as its name.
+fn out_of_line_modules(code: &str) -> Vec<String> {
+    let words = identifiers(code);
+    let mut out = Vec::new();
+    for pair in words.windows(2) {
+        let ((first, first_end), (name, name_end)) = (&pair[0], &pair[1]);
+        // what stands between `mod` and the name: white space, a raw identifier's `r#`
+        let between = code[*first_end..name_end - name.len()].trim();
+        if first == "mod" && (between.is_empty() || between == "r#") && code[*name_end..].trim_start().starts_with(';') {
+            out.push(name.clone());
+        }
+    }
+    out
 }
 
 /// What a source names a file for: a module's code (`#[path]`, `include!`) or data
@@ -1278,6 +1300,11 @@ fn paths_and_includes_rest(code: &str, mut out: Vec<(Named, Option<String>)>) ->
 
 #[test]
 fn paths_and_includes_are_read_from_the_tokens_wherever_they_stand() {
+    // the round at c0de423e: a module of core's header reader under another platform's `cfg`
+    let probe = "#[cfg(windows)]\n#[path = \"wire_probe.rs\"]\nmod wire;";
+    assert_eq!(paths_and_includes(probe).len(), 1);
+    assert_eq!(out_of_line_modules(&without_comments(probe)), ["wire"]);
+    assert_eq!(out_of_line_modules(&without_comments("pub(crate) mod x ;\nmod r#y;\nmod inline { fn f() {} }\nlet module = 1; // mod z;")), ["x", "y"]);
     let text = r##"
         #[cfg_attr(
             windows,
@@ -1703,6 +1730,16 @@ fn socket_route_in(text: &str, build_script: bool) -> Option<String> {
             if matches!(w.as_str(), "module" | "raw_module") && rest.starts_with('=') {
                 return Some(format!("a JavaScript module bound by `{w}`"));
             }
+            // the round at c0de423e: a `key = "…"` string a derive reads as code (serde's
+            // `getter`, `with`, `serialize_with`, `default` and their kin call the path they name):
+            // every such string but a `doc`'s and the reviewed `inline_js` text is read as code
+            if !matches!(w.as_str(), "doc" | "inline_js")
+                && let Some(value) = rest.strip_prefix('=').map(str::trim_start)
+                && let Some((_, text)) = string_at(value, 0)
+                && let Some(route) = socket_route_in(&text, build_script)
+            {
+                return Some(format!("an attribute's `{w}` string, which a derive reads as code: {route}"));
+            }
             // the one `wasm_bindgen` attribute is the reviewed inline text's
             if w == "wasm_bindgen" {
                 let names: Vec<String> = identifiers(inner).into_iter().map(|(w, _)| w).collect();
@@ -1821,6 +1858,10 @@ fn every_route_the_critics_found_is_a_socket_route() {
         ("a child process", "fn f() { let _ = std::process::Command::new(\"bash\").args([\"-c\", \"exec 3<>/dev/tcp/plant/4840\"]).status(); }"),
         // the round at 3df0bd89: an `r` after a string's closing quote is its suffix
         ("a suffix before a string", "const _: &str = stringify!(\"x\"r\"\\\" /* \");\nunsafe extern \"C\" { fn socket(d: i32) -> i32; }\n// */"),
+        // the round at c0de423e: a path a derive calls, written in an attribute's string
+        ("serde's getter", "#[derive(serde::Serialize)] #[serde(remote = \"String\")] struct Run { #[serde(getter = \"js_sys::eval\", serialize_with = \"nothing\")] done: Result<JsValue, JsValue> }"),
+        ("serde's with", "#[derive(serde::Serialize)] struct H(#[serde(with = \"libc :: connect\")] String);"),
+        ("serde's default", "#[derive(serde::Deserialize)] struct D { #[serde(default = \"plant::Command::new\")] x: u8 }"),
         // the round at 36bd57e3: a dependency's macro writing the block, a system crate's path
         ("windows_link's link!", "windows_link::link!(\"c\" \"C\" fn rexec(ahost: *mut *mut c_char, inport: i32) -> i32);"),
         ("a spaced link! call", "link ! (\"c\" \"C\" fn rcmd() -> i32);"),
@@ -1833,6 +1874,8 @@ fn every_route_the_critics_found_is_a_socket_route() {
     // in a comment (the socket words are read in comments too, the identifiers in code alone)
     assert_eq!(socket_route("fn f(r#if: bool, include: bool) -> bool { r#if && include } // the net value"), None);
     assert_eq!(socket_route("use js_sys::Date; fn r() -> f64 { js_sys::Math::random() } extern \"C\" { fn ic_tz_all() -> js_sys::Array; }"), None);
+    // the attribute strings the three packages hold read as code that reaches nothing
+    assert_eq!(socket_route("#[serde(skip_serializing_if = \"Option::is_none\", default = \"default_as_false\", rename_all = \"snake_case\", tag = \"type\", with = \"cell_map\")] #[cfg(all(target_arch = \"wasm32\", target_os = \"unknown\", feature = \"mock_time\"))] struct S;"), None);
     // a build script runs `git` and no other program; a library none; `std::process::id()` is no child
     let git = "use std::process::Command;\nfn main() { let _ = Command::new(\"git\").args([\"describe\"]).output(); }";
     assert_eq!(socket_route_in(git, true), None);
@@ -2071,50 +2114,208 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
 }
 
 /// Where the record's one `Local changes` heading line ends (its line's end, the newline excluded),
-/// the heading found as GFM reads one, not by its bytes: an ATX heading (up to three spaces, one to
-/// six `#`, a space or a tab, its text trimmed and its closing `#`s passed over) or a setext one (a
-/// line its `===` or `---` underlines), in any level. The record holds exactly one, an ATX heading
-/// of level 2: `##  Local changes` with two spaces is that heading, and a second one, of any level
-/// or spelling, is refused, so no decoy heading lower down is read as the section (the round at
-/// 36bd57e3).
+/// every heading found as GFM reads one, by the blocks [`change_rows`] reads: an ATX heading (up to
+/// three columns of spaces and tabs, one to six `#`, a space or a tab, its closing `#`s passed
+/// over) or a setext one (the paragraph its `===` or `---` underlines), in a quote or a list item
+/// too, none in a fence, an HTML block (a comment among them) or indented code; its text read as
+/// GitHub shows it, entities decoded and inline markup dropped ([`heading_words`]). The record
+/// holds exactly one heading that reads `Local changes`, an ATX heading of level 2 outside every
+/// container, spelled plainly: `##  Local changes` with two spaces is that heading; a second, or one
+/// that reads so through markup (`## Local&#32;changes`, `## *Local changes*`), is refused, so no
+/// decoy heading is read as the section or hides one (the rounds at 36bd57e3 and c0de423e).
 fn local_changes_heading(record: &str) -> Result<usize, String> {
-    let lines: Vec<(usize, &str)> = record.split_inclusive('\n').scan(0, |at, l| {
-        let start = *at;
-        *at += l.len();
-        Some((start, l.trim_end_matches(['\n', '\r'])))
-    }).collect();
-    let mut found = Vec::new();
-    for (k, (start, l)) in lines.iter().enumerate() {
-        if column_of(l) > 3 {
+    let lines: Vec<(usize, &str)> = record
+        .split_inclusive('\n')
+        .scan(0, |at, l| {
+            let start = *at;
+            *at += l.len();
+            Some((start, l.trim_end_matches(['\n', '\r'])))
+        })
+        .collect();
+    // each heading that reads `Local changes`: whether it is the section's own, and its line's end
+    let mut found: Vec<(bool, usize)> = Vec::new();
+    let mut paragraph: Vec<String> = Vec::new();
+    let underline = |l: &str| {
+        let u = l.trim_matches([' ', '\t']);
+        column_of(l) <= 3 && !u.is_empty() && (u.chars().all(|c| c == '=') || u.chars().all(|c| c == '-'))
+    };
+    let mut k = 0;
+    while k < lines.len() {
+        let (start, raw) = lines[k];
+        let end = start + raw.len();
+        // a setext heading's underline, the paragraph above it its text
+        if !paragraph.is_empty() && (underline(raw) || underline(without_containers(raw).0)) {
+            if heading_words(&paragraph.join(" ")) == "local changes" {
+                found.push((false, end));
+            }
+            paragraph.clear();
+            k += 1;
             continue;
         }
-        let t = l.trim_start();
+        match block_start(raw) {
+            Some(Block::Blank) => {
+                paragraph.clear();
+                k += 1;
+                continue;
+            }
+            // a fence or an HTML block holds no heading, to its end
+            Some(Block::Fence(ch, n)) => {
+                k += 1;
+                while k < lines.len() && !closes_fence(lines[k].1, ch, n) {
+                    k += 1;
+                }
+                k += 1;
+                paragraph.clear();
+                continue;
+            }
+            Some(Block::Html(kind)) if kind != 7 || paragraph.is_empty() => {
+                while k < lines.len() && !html_block_ends(kind, lines[k].1) {
+                    k += 1;
+                }
+                k += 1;
+                paragraph.clear();
+                continue;
+            }
+            // indented code, but for a paragraph's continuation
+            Some(Block::IndentedCode) if paragraph.is_empty() => {
+                k += 1;
+                continue;
+            }
+            _ => {}
+        }
+        let (inner, contained) = without_containers(raw);
+        let t = inner.trim_start_matches([' ', '\t']);
         let hashes = t.chars().take_while(|c| *c == '#').count();
         let rest = &t[hashes..];
-        if (1..=6).contains(&hashes) && (rest.is_empty() || rest.starts_with([' ', '\t'])) {
+        if column_of(inner) <= 3 && (1..=6).contains(&hashes) && (rest.is_empty() || rest.starts_with([' ', '\t'])) {
             // a closing sequence of `#`s, after a space or a tab, is none of the text
-            let text = rest.trim();
+            let text = rest.trim_matches([' ', '\t']);
             let closed = text.trim_end_matches('#');
-            let text = if closed.is_empty() || closed.ends_with([' ', '\t']) { closed.trim() } else { text };
-            if text == "Local changes" {
-                found.push((hashes, start + l.len()));
+            let text = if closed.is_empty() || closed.ends_with([' ', '\t']) { closed.trim_matches([' ', '\t']) } else { text };
+            if heading_words(text) == "local changes" {
+                found.push((!contained && hashes == 2 && text == "Local changes", end));
             }
-            continue;
+            paragraph.clear();
+        } else if matches!(block_start(inner), Some(Block::ThematicBreak) | Some(Block::Blank)) {
+            paragraph.clear();
+        } else {
+            paragraph.push(t.to_string());
         }
-        let underlined = lines.get(k + 1).is_some_and(|(_, u)| {
-            let u = u.trim();
-            column_of(lines[k + 1].1) <= 3 && !u.is_empty() && (u.chars().all(|c| c == '=') || u.chars().all(|c| c == '-'))
-        });
-        if underlined && t.trim() == "Local changes" {
-            found.push((0, start + l.len()));
-        }
+        k += 1;
     }
     match found.as_slice() {
-        [(2, end)] => Ok(*end),
+        [(true, end)] => Ok(*end),
         [] => Err("the record has no `Local changes` heading".into()),
-        [_] => Err("the record's `Local changes` heading is not an ATX heading of level 2".into()),
+        [_] => Err("the record's `Local changes` heading is not a plain ATX heading of level 2 outside every container".into()),
         _ => Err(format!("the record has {} `Local changes` headings, one the section", found.len())),
     }
+}
+
+/// A line without the markers of the quotes and list items that hold it (`> `, `- `, `1. `), and
+/// whether it had any.
+fn without_containers(line: &str) -> (&str, bool) {
+    let mut l = line;
+    let mut contained = false;
+    loop {
+        if column_of(l) > 3 {
+            return (l, contained);
+        }
+        let t = l.trim_start_matches([' ', '\t']);
+        if let Some(rest) = t.strip_prefix('>') {
+            l = rest.strip_prefix([' ', '\t']).unwrap_or(rest);
+            contained = true;
+            continue;
+        }
+        let digits = t.chars().take_while(char::is_ascii_digit).count();
+        let marker = if t.starts_with(['-', '+', '*']) {
+            1
+        } else if (1..=9).contains(&digits) && t[digits..].starts_with(['.', ')']) {
+            digits + 1
+        } else {
+            0
+        };
+        if marker > 0 && (t.len() == marker || t[marker..].starts_with([' ', '\t'])) {
+            l = t[marker..].trim_start_matches([' ', '\t']);
+            contained = true;
+            continue;
+        }
+        return (l, contained);
+    }
+}
+
+/// A heading's text as GitHub shows it, for comparing: HTML comments and tags dropped, a link's
+/// target dropped and its brackets, backslash escapes and entities read (`&#32;`, `&#x20;`, `&nbsp;`
+/// and their kin), emphasis and code markers dropped, white space of every kind one space, in
+/// lower case.
+fn heading_words(text: &str) -> String {
+    let mut s = text.to_string();
+    // comments, then tags
+    while let Some(a) = s.find("<!--") {
+        let b = s[a..].find("-->").map(|b| a + b + 3).unwrap_or(s.len());
+        s.replace_range(a..b, "");
+    }
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    // a link's target after its text
+    let mut s = String::new();
+    let mut rest = out.as_str();
+    while let Some(at) = rest.find("](") {
+        s.push_str(&rest[..at]);
+        rest = rest[at + 2..].find(')').map(|e| &rest[at + 2 + e + 1..]).unwrap_or("");
+    }
+    s.push_str(rest);
+    let mut words = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' && chars.get(i + 1).is_some_and(|n| n.is_ascii_punctuation()) {
+            words.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+        if c == '&' {
+            let end = chars[i..].iter().take(34).position(|c| *c == ';');
+            if let Some(end) = end {
+                let name: String = chars[i + 1..i + end].iter().collect();
+                let decoded = if let Some(hex) = name.strip_prefix("#x").or_else(|| name.strip_prefix("#X")) {
+                    u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+                } else if let Some(dec) = name.strip_prefix('#') {
+                    dec.parse::<u32>().ok().and_then(char::from_u32)
+                } else {
+                    match name.as_str() {
+                        "nbsp" | "ensp" | "emsp" | "thinsp" | "numsp" | "puncsp" | "hairsp" | "MediumSpace" | "ThinSpace" | "NoBreak" => Some(' '),
+                        "amp" => Some('&'),
+                        "lt" => Some('<'),
+                        "gt" => Some('>'),
+                        "quot" => Some('"'),
+                        "apos" => Some('\''),
+                        "shy" | "zwnj" | "zwj" | "ZeroWidthSpace" => Some('\u{200B}'),
+                        _ => None,
+                    }
+                };
+                if let Some(d) = decoded {
+                    words.push(d);
+                    i += end + 1;
+                    continue;
+                }
+            }
+        }
+        if !matches!(c, '*' | '_' | '`' | '~' | '[' | ']') {
+            words.push(c);
+        }
+        i += 1;
+    }
+    let words: String = words.chars().filter(|c| !matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{00AD}' | '\u{2060}' | '\u{FEFF}')).collect();
+    words.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
 /// The rows of every table of the record's `## Local changes` section (to the next heading of level 1
@@ -2498,6 +2699,20 @@ fn the_record_s_rows_are_read_as_markdown_reads_a_table() {
         assert_eq!(change_rows(&record), ["7"], "{one:?}");
     }
     assert!(local_changes_heading("## Local changes\nLocal changes\n---\n").is_err());
+    // the round at c0de423e: headings GFM reads as `Local changes` through markup or inside a
+    // container, each beside the plain one, refused; lines GFM reads as none of a heading, passed over
+    let plain = "\n\n## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n";
+    for decoy in ["## Local&#32;changes", "## Local&#x20;changes", "## Local&nbsp;changes", "## Local changes<!-- -->", "## *Local changes*", "## `Local` changes", "## [Local changes](#x)", "Local\nchanges\n---", "> ## Local changes", "- ## Local changes", "1. ## Local changes", "## Local\u{a0}changes", "# Local changes"] {
+        let record = format!("{decoy}\n| # | Change |\n|---|---|\n| 36 | no commit names it |{plain}");
+        assert!(local_changes_heading(&record).is_err(), "{decoy:?}");
+    }
+    for hidden in ["<!--\n## Local changes\n-->", "<div>\n## Local changes\n</div>", "\u{a0}## Local changes", "\u{3000}## Local changes", "```\n## Local changes\n```", "    ## Local changes"] {
+        let record = format!("{hidden}{plain}");
+        assert_eq!(change_rows(&record), ["1"], "{hidden:?}");
+    }
+    // the critic's tree: the real heading led by a no-break space, an entity one above it
+    let record = "## Local&#32;changes\n| # | Change |\n|---|---|\n| 36 | a |\n\n\u{a0}## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n";
+    assert!(local_changes_heading(record).is_err());
     assert!(local_changes_heading("Local changes\n---\n| 1 | a |\n").is_err());
     assert!(local_changes_heading("### Local changes\n").is_err());
     assert!(local_changes_heading("## Local changesx\n").is_err());
