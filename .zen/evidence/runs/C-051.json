@@ -10,15 +10,15 @@
     "layout"
   ],
   "exitCode": 0,
-  "outputSha": "697fafd58dcd534698a8318a6426ae04c5f5c0cee84a8d3bb1b06f2171afe6f9",
-  "outputTail": "\nrunning 5 tests\ntest the_page_draws_a_drawing_saved_as_inkscape_saves_it ... ok\ntest a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_the_page_adds ... ok\ntest a_shape_drawn_with_no_fill_shows_its_state_on_its_line ... ok\ntest the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan ... ok\ntest the_page_draws_the_layout_from_the_feed ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 36.44s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running tests/layout.rs (target/debug/build/veredas-supervisao/58060d28a2ba3bee/out/layout-58060d28a2ba3bee)",
-  "ranAt": "2026-11-25T01:00:26.585Z",
-  "headCommit": "23537b9d7788a516e04bfc1fe146c94d0e2b2d28",
+  "outputSha": "3c0635379115f1fd4726551e81e034d03769b1654227c59d8524354955c9a107",
+  "outputTail": "\nrunning 5 tests\ntest the_page_draws_a_drawing_saved_as_inkscape_saves_it ... ok\ntest a_level_with_no_area_fills_over_its_stroke_and_the_drawing_reaches_nothing_the_page_adds ... ok\ntest a_shape_drawn_with_no_fill_shows_its_state_on_its_line ... ok\ntest the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan ... ok\ntest the_page_draws_the_layout_from_the_feed ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.08s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s\n     Running tests/layout.rs (target/debug/build/veredas-supervisao/58060d28a2ba3bee/out/layout-58060d28a2ba3bee)",
+  "ranAt": "2026-11-25T03:38:50.918Z",
+  "headCommit": "c24ef4bb8caa03a805e326dabef73cc7d247f83a",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/layout.rs",
       "file": "crates/veredas-supervisao/tests/layout.rs",
-      "fileSha": "f9bce9048b565f4411858e77c54f36d18f5bfb96251737ed3c656c13a7b8162e"
+      "fileSha": "314314349a15571e6390599868769ef4ac60393807a55b77f3d954f8f6853677"
     }
   ]
 }
