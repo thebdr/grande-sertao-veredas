@@ -1,0 +1,13 @@
+{
+  "clause": "C-145",
+  "verdict": "refuted",
+  "ranAt": "2026-11-25T04:47:14.917Z",
+  "headCommit": "35c900a6ada7fdb04f87f5a0626bbb6e3ac02c8d",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/topology.rs",
+      "file": "crates/veredas-aranha/tests/topology.rs",
+      "symbolSha": "e584b3cdca566c505a5a1b3bc32e58c561b1aa377777113c3007e039c2058855"
+    }
+  ]
+}

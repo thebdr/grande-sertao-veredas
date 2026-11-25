@@ -162,21 +162,35 @@ pub fn build(fusion: &Fusion, interfaces: &[Interface], neighbours: &[Neighbour]
     }
     let mut ifaces: BTreeMap<String, Option<Mac>> = interfaces.iter().map(|i| (i.name.clone(), i.mac)).collect();
     for d in fusion.devices.values() {
-        for p in d.ports.values() {
-            for iface in &p.heard_on {
-                ifaces.entry(iface.clone()).or_insert(None);
-            }
+        for iface in d.heard_on.iter().chain(d.ports.values().flat_map(|p| p.heard_on.iter())) {
+            ifaces.entry(iface.clone()).or_insert(None);
         }
     }
     for (name, mac) in &ifaces {
         t.nodes.push(Node { id: interface_id(name), kind: NodeKind::Interface, label: name.clone(), mac: *mac, ports: Vec::new(), rings: Vec::new() });
     }
 
-    // Heard: one port on an interface is its cable; several, a mirror or a hub.
+    // Heard: one port on an interface is its cable; several, a mirror or a hub. A port heard on
+    // several interfaces is no one's cable (LLDP stops at the far end of one): a hub or a mirror
+    // joins them.
+    let mut ifaces_of: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for (iface, senders) in &heard {
+        for key in senders.keys() {
+            ifaces_of.entry(key.clone()).or_default().insert(iface.clone());
+        }
+    }
+    for ((node, port), on) in &ifaces_of {
+        if on.len() > 1 {
+            let on: Vec<&str> = on.iter().map(String::as_str).collect();
+            t.notes.push(format!("{node} {port} is heard on {} interfaces ({}): a hub or a mirror joins them, no cable is drawn to it", on.len(), on.join(", ")));
+        }
+    }
     for (iface, senders) in &heard {
         if senders.len() == 1 {
             let ((node, port), frames) = senders.iter().next().map(|(k, f)| (k.clone(), *f)).unwrap_or_default();
-            push(&mut t.links, End { node: interface_id(iface), port: String::new() }, End { node, port }, Confidence::Heard, frames);
+            if ifaces_of.get(&(node.clone(), port.clone())).is_some_and(|on| on.len() == 1) {
+                push(&mut t.links, End { node: interface_id(iface), port: String::new() }, End { node, port }, Confidence::Heard, frames);
+            }
         } else {
             let list: Vec<String> = senders.keys().map(|(n, p)| format!("{n} {p}")).collect();
             t.notes.push(format!("{iface} hears LLDP from {} ports ({}): a mirror port or a hub, no cable is drawn from it", senders.len(), list.join(", ")));
@@ -195,13 +209,21 @@ pub fn build(fusion: &Fusion, interfaces: &[Interface], neighbours: &[Neighbour]
     let mut ordered: Vec<&Neighbour> = neighbours.iter().collect();
     ordered.sort_by(|x, y| (x.device, &x.port, &x.chassis, &x.peer_port, x.peer_mac).cmp(&(y.device, &y.port, &y.chassis, &y.peer_port, y.peer_mac)));
     for n in ordered {
+        // A word said by no read is none; one from a device nothing heard has no end to draw from.
+        if n.witnesses == 0 {
+            continue;
+        }
+        if !fusion.devices.contains_key(&n.device) {
+            t.notes.push(format!("{} {} reports a neighbour, but nothing heard that device: not drawn", device_id(n.device), short(&n.port)));
+            continue;
+        }
         let local = End { node: device_id(n.device), port: short(&n.port) };
         let by_mac = n.peer_mac.filter(|m| m.0 != [0; 6]).and_then(|m| if fusion.devices.contains_key(&m) { Some(m) } else { fusion.port_owner(m) });
         let key = format!("local:{}", n.chassis);
         let by_chassis = claims.get(&key).filter(|c| c.len() == 1).and_then(|c| c.iter().next().copied());
         let remote = match (by_mac, by_chassis) {
-            (Some(m), other) => {
-                if other.is_some_and(|c| c != m) {
+            (Some(m), _) => {
+                if claims.get(&key).is_some_and(|c| c.iter().any(|d| *d != m)) {
                     t.notes.push(format!("{} {} names chassis {:?}, which another device announces, from the port MAC of {}: the MAC is taken", device_id(n.device), local.port, n.chassis, device_id(m)));
                 }
                 device_id(m)
