@@ -903,6 +903,27 @@ and not confirmed:
 
 **Taken meanwhile**: nothing is built; the proposal is the assistant's pick.
 
+**Decided** 2026-11-25, by the architect, point by point:
+
+- The manifest. Asked "A download's integrity (you required \"a hash or crc so no corrupted program
+  may run\"): is it a manifest listing every part of the download with its SHA-256 and length, the
+  SHA-256 of the manifest being the download's identity?", "SHA-256 manifest (Recommended)", against
+  a CRC per part.
+
+- Storing. Asked "Does the controller store it to a temporary file, read it back from the drive,
+  verify it, and only then rename it into place and answer with the identity it computed?", "Yes,
+  read back first (Recommended)", against verifying the bytes as received.
+
+- A failed check. Asked "The stored program is verified again before every load (a swap, a restart,
+  a power-on; the power-on recheck is already ruled). When the check fails and the two copies cannot
+  mend each other, what happens?", "FAULT, no substitute (Recommended)": the FAULT reason 506
+  `load`, never an automatic substitute; against the previous version running by itself.
+
+- Naming. Asked "Do the swap, start and rollback commands name the download's identity, so that a
+  command can only ever act on the version its sender meant?", "Yes (Recommended)".
+
+A signature over the same manifest stays with the security round (Q43).
+
 ## Q37 - How is every request that alters the controller made robust?
 
 **Raised** 2026-11-16, by the architect: "every bit of data that alters the controller shall be
@@ -943,6 +964,61 @@ Its limits and loose ends:
 
 **Taken meanwhile**: nothing is built; the proposal is the assistant's pick.
 
+**Ruled in part** 2026-11-25, by the architect, point by point, the first four of the proposal:
+
+- The digest. Asked "Every request that alters the controller (a variable write, a breakpoint, a
+  state change, a download): does each carry a SHA-256 of its content, as HTTP's Content-Digest (RFC
+  9530), which the controller checks before acting?", "Yes, a digest each (Recommended)", against
+  downloads only.
+
+- Order and repeats. Asked "Does each altering request carry a session and a strictly increasing
+  number, a repeat being answered with the first outcome and not run again, and a gap or an old
+  number refused?", "Yes, session and number (Recommended)".
+
+- Addressing. Asked "Does each altering request name the controller's identity, the download's
+  identity, and for a state change the state it expects to leave, so that a request reaching the
+  wrong controller, the wrong program or the wrong state is refused?", "All three named
+  (Recommended)".
+
+- Freshness. Asked "Must each altering request echo the controller's own last clock value, so that
+  an old request held back somewhere and delivered late is refused?", "Yes, echo the clock
+  (Recommended)".
+
+**Ruled in part** 2026-11-25, by the architect, four more points:
+
+- A lost answer. Asked "When no answer comes back to an altering request, does Oficina show the
+  outcome as \"unknown\" and ask the controller for it by the request's number, never assuming it
+  failed or succeeded?", "Unknown, asked by number (Recommended)", against treating it as failed.
+
+- Applying. Asked "Is each altering change applied whole, at one point of the scan, never half in
+  one scan and half in the next?", "Yes, whole, at one point (Recommended)".
+
+- The answer. Asked "Is the answer to an altering request read back from the controller itself (the
+  value now in memory, the new state text, the full breakpoint list), not an echo of what was
+  asked?", "Yes, read back (Recommended)", against a bare acknowledgement.
+
+- The scope. Asked "Your sentence \"every bit of data that alters the controller shall be robust\"
+  was read as the Oficina link. Does it also bind peers' writes, where secured OPC UA already signs
+  and numbers its messages and Modbus/TCP has nothing beyond TCP's checksum?", "The Oficina link
+  only", against binding peers where the protocol can and against refusing a protocol that cannot
+  protect a write.
+
+**Ruled in part** 2026-11-25, by the architect, the last two points put; with them every point of
+the proposal is ruled:
+
+- The gates. Asked "Oficina's commands reach the controller through its embedded portal, and
+  controlador checks the commissioning switch behind it. Which gate must a command pass: portal's
+  own write switch, the commissioning switch, or both?", "Both switches": a command passes portal's
+  master write switch and then the controller's commissioning switch; against the commissioning
+  switch alone and portal's switch alone.
+
+- A write's answer. Asked "Since a write from outside is saved at once, held to the shortest gap,
+  does the answer tell its sender how far the write got (applied, then saved), so a panel shows a
+  setpoint as kept only when it is?", "Yes, both stages told (Recommended)".
+
+Left for the security round (Q43, P-014): a keyed check on altering requests, the refusal of an
+unexpected `Host` and the random session value.
+
 ## Q38 - What must survive: which data is inside, and the border cases
 
 **Raised** 2026-11-16, in the robustness round (`docs/robustness.md`, "What must survive").
@@ -969,6 +1045,36 @@ Border cases, each with the assistant's reading:
 - the clock, for a program with time-of-day blocks.
 
 **Taken meanwhile**: the readings above, as readings.
+
+**Ruled in part** 2026-11-25, by the architect:
+
+- The list. Asked "What must survive (your rule: \"every piece of data that is necessary for
+  computing the logic flawlessly in RUN mode\"): the assistant read as INSIDE the running program,
+  the hardware configuration and IO mapping, retained variables, the settings a scan depends on, the
+  interpreter, the operating system and what boots them, and the integrity data; as OUTSIDE forces,
+  breakpoints, a shadow test, the commissioning switch, earlier downloads, fault records, the state
+  history, the store, the logs. Is that the list?", "Yes, as listed (Recommended)", with its rider:
+  what is outside may be lost but must never harm what is inside.
+
+- The source. Asked "A border case: the source of the running program. RUN does not need it, but
+  \"the code is open\" holds for the next engineer only if it can be read from the machine. Is the
+  source inside what must survive?", "Inside (Recommended)".
+
+**Ruled in part** 2026-11-25, by the architect, the last three border cases; with them every point
+of this entry is ruled:
+
+- Peers' data. Asked "What peers need to talk to the controller (the Modbus and OPC UA settings and
+  the certificates). Are they inside what must survive when the project uses them?", "Inside when
+  used (Recommended)".
+
+- A dry run. Asked "A dry run. It is already ruled to survive a power cycle. Does it get the
+  protection meant for decades (two copies, hashes, the scheduled check)?", "Survives, unprotected
+  (Recommended)".
+
+- The clock. Asked "For a program with time-of-day blocks, is the clock (the date, once confirmed)
+  inside what must survive, so that the hardware description of such a target must name a clock chip
+  that keeps time?", "Inside for such programs", against leaving it outside, confirmed again after
+  each start.
 
 ## Q39 - Time over decades: the details the rulings left
 
@@ -1007,6 +1113,13 @@ Not ruled, each with the assistant's reading or proposal:
   drift shows before the warning.
 
 **Taken meanwhile**: the readings above, as readings; no reason number is assigned.
+
+**Ruled in part** 2026-11-25, by the architect:
+
+- 64-bit only. Asked "64-bit only (ruled for the processor): does it cover the operating system too,
+  the build refusing a 32-bit target? A 32-bit system on a 64-bit processor brings the 32-bit time
+  value back. Out would be the 32-bit ARM boards (BeagleBone Black, i.MX 6, STM32MP1, early
+  Raspberry Pi).", "Yes, the system too (Recommended)".
 
 ## Q40 - The retained save: the details the rulings left
 
