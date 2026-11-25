@@ -738,6 +738,70 @@ fn every_feature_gate_is_where_it_belongs() {
             }
         }
     }
+    // The tokens a gate is made of, read in the code alone (comments and literals blanked): the
+    // identifier `feature` only as a gate's `feature = ..`, so no macro carries it as a token to
+    // a cfg it builds; `doc` only right after `#[` or `#![`; and no cfg of the build profile
+    // (`debug_assertions`, `overflow_checks`, a cfg on `panic`), so a release build's forms are
+    // the development build's.
+    let mut stray: Vec<String> = Vec::new();
+    let mut files = vec![src.clone()];
+    while let Some(path) = files.pop() {
+        if path.is_dir() {
+            files.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let rel = path
+            .strip_prefix(&src)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let code: Vec<char> = code_only(&std::fs::read_to_string(&path).unwrap())
+            .replace("r#", "")
+            .chars()
+            .collect();
+        let mut k = 0;
+        while k < code.len() {
+            let word_char = |c: char| c.is_alphanumeric() || c == '_';
+            if !word_char(code[k]) || (k > 0 && word_char(code[k - 1])) {
+                k += 1;
+                continue;
+            }
+            let start = k;
+            while k < code.len() && word_char(code[k]) {
+                k += 1;
+            }
+            let word: String = code[start..k].iter().collect();
+            let after = code[k..].iter().find(|c| !c.is_whitespace()).copied();
+            let before: String = code[..start]
+                .iter()
+                .rev()
+                .filter(|c| !c.is_whitespace())
+                .take(2)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            let wrong = match word.as_str() {
+                "feature" => after != Some('='),
+                "doc" => !before.ends_with("#[") && !before.ends_with("!["),
+                "debug_assertions" | "overflow_checks" => true,
+                "panic" => after == Some('='),
+                _ => false,
+            };
+            if wrong {
+                let line = code[..start].iter().filter(|c| **c == '\n').count() + 1;
+                stray.push(format!("{rel}:{line}: `{word}`"));
+            }
+        }
+    }
+    assert_eq!(
+        stray,
+        Vec::<String>::new(),
+        "a gate's token where no gate is"
+    );
     let want: BTreeSet<String> = [
         "fieldbus/mod.rs: #[cfg(feature=\"enip\")] -> pub mod enip",
         "fieldbus/mod.rs: #[cfg(feature=\"modbus\")] -> pub mod modbus",
