@@ -63,3 +63,18 @@ fn no_source_allows_back_what_the_root_denies_and_every_source_is_read() {
         }
     }
 }
+
+#[test]
+fn the_interpreter_depends_on_nothing_but_for_its_tests() {
+    // cargo's own report of the crate's normal and build dependencies, on every target and with every feature
+    let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["tree", "-p", "orcl-interp", "-e", "normal,build", "--depth", "1", "--prefix", "none", "--all-features"])
+        .args(["--target", "all", "--offline", "--manifest-path", manifest])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let listed = String::from_utf8(out.stdout).unwrap();
+    let crates: Vec<&str> = listed.lines().filter_map(|line| line.split_whitespace().next()).collect();
+    assert_eq!(crates, ["orcl-interp"], "the interpreter alone, with nothing under it");
+}

@@ -19,7 +19,7 @@ So the interpreter runs any function the file names as an entry, `Program::scan`
 ## The program file
 One binary file, little-endian, its own codec and no dependency (a format the suite reads for decades should not
 lean on a crate's encoding):
-- **A header**: the magic `ORCLB`, the file format's version (from 1), the language's version
+- **A header**: the magic `ORCLB\0`, the file format's version (from 1), the language's version
   (`orcl_std::LANGUAGE`), the nightly that lowered it, and the source revision the sender gives. A loader refuses a
   file whose format or language version it does not run, naming both; it never guesses, as portal does with a
   TOML file (law L7).
@@ -30,7 +30,9 @@ lean on a crate's encoding):
 - **The functions**: each a body as MIR has it at opt-level 0 (`front-end.md`): its parameters, its locals (with the
   source's name where the source gave one), basic blocks of statements, and one terminator a block.
 - **The entries**: the functions a host may call, each by its source path (`Conveyor::scan`), with the program's
-  inputs, outputs and state types and the functions that build their default and safe values.
+  inputs, outputs and state types and the functions that build their default and safe values. Format 1 holds no
+  table of them: a host finds an entry by its function's name, its parameters' types being the function's own; a
+  table, if the front end needs one, comes with a new format version (C-154).
 - **The source map**: for every instruction its source location, so a fault 502 `program(at)` and a breakpoint
   name a file, a line and a column.
 
