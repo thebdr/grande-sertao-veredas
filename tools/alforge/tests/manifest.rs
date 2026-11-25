@@ -1109,11 +1109,6 @@ fn a_version_names_everything_its_build_reads_but_the_toolchain() {
             }),
             vec![charged("veredas-core", "2.0.0", "Cargo.toml"), charged("veredas-maquinar", "2.1.0", "Cargo.toml"), charged("veredas-portal", "2.0.0-alpha.3", "Cargo.toml")],
         ),
-        (
-            "a cargo configuration at the root",
-            Box::new(|r: &Repo| r.write(".cargo/config.toml", "[build]\nrustflags = [\"-C\", \"target-cpu=native\"]\n")),
-            vec![charged("veredas-core", "2.0.0", ".cargo/config.toml"), charged("veredas-maquinar", "2.1.0", ".cargo/config.toml"), charged("veredas-portal", "2.0.0-alpha.3", ".cargo/config.toml")],
-        ),
     ];
     for (what, edit, want) in cases {
         let c = changed(&r, &c1, what, edit);
@@ -1450,15 +1445,14 @@ fn every_road_into_a_build_charges_the_components_it_reaches() {
     let c = r.commit("a replace to a folder");
     let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
     assert_eq!(held["veredas-portal"].inputs, Err("its Cargo.lock's serde_json 1.0.140 has no source and is no member a release builds from its folder".to_string()));
-    // A root cargo configuration overriding packages by `paths`: refused for every component.
+    // A root cargo configuration overriding packages by `paths`: the commit refused.
     r.write("Cargo.toml", &t);
     r.write("Cargo.lock", &lock);
     r.write(".cargo/config.toml", "paths = [\"forks/serde_json\"]\n");
     let c = r.commit("a paths override");
-    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
-    for h in held.values() {
-        assert_eq!(h.inputs, Err("its .cargo/config.toml overrides packages by `paths` (or does not read), which a release does not follow".to_string()), "{}", h.name);
-    }
+    let mut refusals = Vec::new();
+    assert!(manifest::components_at(r.path(), &c, &mut refusals).unwrap().is_empty());
+    assert_eq!(refusals, [format!("commit {c}: its .cargo/config.toml is a cargo configuration in the tree, which a release's build does not follow: what one sets reaches past what a version names")]);
 }
 
 #[test]
@@ -1560,31 +1554,121 @@ fn the_lock_file_is_read_as_cargo_writes_it() {
     // A cargo configuration without its extension overriding by `paths`: refused by its reason.
     r.write(".cargo/config", "paths = [\"forks/itoa\"]\n");
     let c3 = r.commit("a paths override without its extension");
-    let held = manifest::components_at(r.path(), &c3, &mut Vec::new()).unwrap();
-    assert_eq!(held["veredas-a"].inputs, Err("its .cargo/config overrides packages by `paths` (or does not read), which a release does not follow".to_string()));
+    let mut refusals = Vec::new();
+    assert!(manifest::components_at(r.path(), &c3, &mut refusals).unwrap().is_empty());
+    assert_eq!(refusals, [format!("commit {c3}: its .cargo/config is a cargo configuration in the tree, which a release's build does not follow: what one sets reaches past what a version names")]);
 }
 
 #[test]
-fn a_root_cargo_configuration_naming_programs_or_code_is_refused() {
-    // Sources, patches, a compiler or a wrapper, a linker: what a configuration would bring into a
-    // build from outside what a version names.
-    for (config, set) in [
-        ("[source.crates-io]\nreplace-with = \"tree\"\n[source.tree]\ndirectory = \"third_party\"\n", "source"),
-        ("[build]\nrustc-wrapper = \"tools/wrap.sh\"\n", "build.rustc-wrapper"),
-        ("[target.x86_64-unknown-linux-gnu]\nlinker = \"tools/ld.sh\"\n", "target.x86_64-unknown-linux-gnu.linker"),
-        ("[patch.crates-io]\nserde = { path = \"forks/serde\" }\n", "patch"),
+fn a_root_cargo_configuration_is_refused_whatever_it_sets() {
+    // Sources, a wrapper, a linker, patches, an `include` of another file, a linker named by a flag,
+    // flags alone: a configuration in the tree reaches past what a version names, and is refused
+    // whole (with or without its extension).
+    for (file, config) in [
+        (".cargo/config.toml", "[source.crates-io]\nreplace-with = \"tree\"\n[source.tree]\ndirectory = \"third_party\"\n"),
+        (".cargo/config.toml", "[build]\nrustc-wrapper = \"tools/wrap.sh\"\n"),
+        (".cargo/config.toml", "[target.x86_64-unknown-linux-gnu]\nlinker = \"tools/ld.sh\"\n"),
+        (".cargo/config.toml", "include = [\"../tools/more.toml\"]\n"),
+        (".cargo/config.toml", "[build]\nrustflags = [\"-C\", \"linker=tools/enlace.sh\"]\n"),
+        (".cargo/config.toml", "[build]\nrustflags = [\"-Cdebuginfo=0\"]\n"),
+        (".cargo/config", "[build]\nrustc = \"tools/rustc.sh\"\n"),
+        (".cargo/config", "[host]\nlinker = \"tools/ld.sh\"\n"),
     ] {
         let r = wider();
-        r.write(".cargo/config.toml", config);
-        let c = r.commit(set);
-        let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
-        assert_eq!(held["veredas-core"].inputs, Err(format!("its .cargo/config.toml sets {set}: programs or code a version does not name, which a release does not follow")), "{set}");
+        r.write(file, config);
+        let c = r.commit(config);
+        let mut refusals = Vec::new();
+        assert!(manifest::components_at(r.path(), &c, &mut refusals).unwrap().is_empty(), "{config}");
+        assert_eq!(refusals, [format!("commit {c}: its {file} is a cargo configuration in the tree, which a release's build does not follow: what one sets reaches past what a version names")], "{config}");
     }
-    // Flags alone are an input like any other, charged by the file.
-    let r = wider();
-    r.write(".cargo/config.toml", "[build]\nrustflags = [\"-Cdebuginfo=0\"]\n");
-    let c = r.commit("flags");
-    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
-    assert!(held["veredas-core"].inputs.as_ref().unwrap().0.contains_key(".cargo/config.toml"));
 }
 
+
+#[test]
+fn round_nineteen_raw_identifiers_a_shebang_and_what_a_data_file_names() {
+    // A raw identifier is the same macro or attribute; a first line that is a shebang is dropped,
+    // as rustc drops it; what a data file (include_str!) holds is never read as Rust.
+    let src = "#!/usr/bin/env -S echo \"hi\nconst A: &str = r#include_str!(\"raw.txt\");\n#[r#path = \"raw.rs\"]\nmod m;\n// \"\n";
+    assert_eq!(alforge::inputs::literals(src), ["raw.txt", "raw.rs"]);
+    assert_eq!(alforge::inputs::literals("#![allow(dead_code)]\ninclude!(\"kept.rs\");\n"), ["kept.rs"], "an inner attribute is no shebang");
+    assert_eq!(alforge::inputs::literals("const X: &str = include_str!(\"/etc/hostname\");\n"), ["/etc/hostname"]);
+}
+
+#[test]
+fn round_nineteen_the_lock_by_requirement_a_package_by_path_through_the_lock_and_a_later_conflict() {
+    let reg = "registry+https://github.com/rust-lang/crates.io-index";
+    // Portal ships with itoa 1 and tests with itoa 0.4 (under another name); a fork of serde_json's
+    // itoa... is not needed: a member reached only through the lock (a [patch] to a member) is
+    // named by its folder.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-portal\", \"tools/itoa\"]\n\n[patch.crates-io]\nitoa = { path = \"tools/itoa\" }\n");
+    r.write(
+        "crates/veredas-portal/Cargo.toml",
+        "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nserde_json = \"1\"\nryu = \"1\"\n\n[dev-dependencies]\nryu_old = { package = \"ryu\", version = \"0.2\" }\n",
+    );
+    r.write("crates/veredas-portal/src/lib.rs", "\n");
+    r.write("tools/itoa/Cargo.toml", "[package]\nname = \"itoa\"\nversion = \"1.0.18\"\nedition = \"2024\"\n");
+    r.write("tools/itoa/src/lib.rs", "\n");
+    let lock = |old_ryu: &str| {
+        format!(
+            "version = 4\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\n\n[[package]]\nname = \"ryu\"\nversion = \"0.2.8\"\nsource = \"{reg}\"\nchecksum = \"{old_ryu}\"\n\n\
+             [[package]]\nname = \"ryu\"\nversion = \"1.0.20\"\nsource = \"{reg}\"\nchecksum = \"6666\"\n\n[[package]]\nname = \"serde_json\"\nversion = \"1.0.140\"\nsource = \"{reg}\"\nchecksum = \"5555\"\ndependencies = [\n \"itoa\",\n]\n\n\
+             [[package]]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\ndependencies = [\n \"ryu 0.2.8\",\n \"ryu 1.0.20\",\n \"serde_json\",\n]\n"
+        )
+    };
+    r.write("Cargo.lock", &lock("7777"));
+    let c1 = r.commit("a test's other ryu, a patched itoa");
+    let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
+    let keys: Vec<String> = held["veredas-portal"].inputs.as_ref().unwrap().0.keys().filter(|k| k.starts_with("Cargo.lock") || k.starts_with("tools")).cloned().collect();
+    assert_eq!(keys, ["Cargo.lock: ryu 1.0.20", "Cargo.lock: serde_json 1.0.140", "tools/itoa/"], "the test's ryu 0.2 not charged; the patched itoa by its folder");
+    // The test's ryu updated: no charge.
+    r.write("Cargo.lock", &lock("7878"));
+    let c2 = r.commit("the test's ryu updated");
+    let pin = |release: &str, commit: &str| -> (PathBuf, Manifest) {
+        let text = format!(
+            "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
+             [[component]]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\n\n[tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+        );
+        (PathBuf::from(format!("{release}.toml")), manifest::load(&text).unwrap())
+    };
+    assert_eq!(manifest::check_together(r.path(), &[pin("2.0.0", &c1), pin("2.0.1", &c2)]).unwrap(), Vec::<String>::new());
+    // A lock entry of the member at another version: refused as a lock that is not this workspace's.
+    r.write("Cargo.lock", &lock("7777").replace("name = \"veredas-portal\"\nversion = \"2.0.0\"", "name = \"veredas-portal\"\nversion = \"1.9.0\""));
+    let stale = r.commit("a stale lock");
+    let held = manifest::components_at(r.path(), &stale, &mut Vec::new()).unwrap();
+    assert_eq!(held["veredas-portal"].inputs, Err("its Cargo.lock does not pin veredas-portal 2.0.0: the lock file is not this workspace's".to_string()));
+    // An unreadable first pin hides no conflict between the later ones.
+    r.write("Cargo.lock", &lock("7777"));
+    r.write("crates/veredas-portal/src/lib.rs", "pub fn changed() {}\n");
+    let c4 = r.commit("portal changed");
+    let got = manifest::check_together(r.path(), &[pin("2.0.0", &stale), pin("2.0.1", &c1), pin("2.0.2", &c4)]).unwrap();
+    assert_eq!(
+        got,
+        [
+            "veredas-portal 2.0.0 is pinned by releases 2.0.0 and 2.0.1, and its build inputs at 2.0.0's commit do not read: its Cargo.lock does not pin veredas-portal 2.0.0: the lock file is not this workspace's".to_string(),
+            "veredas-portal 2.0.0 is pinned by releases 2.0.1 and 2.0.2 at different build inputs (crates/veredas-portal/): a version names everything its build reads".to_string(),
+        ]
+    );
+    // A name holding a control character: the commit refused by that path.
+    r.write("crates/veredas-portal/src/a\tb.rs", "\n");
+    let tab = r.commit("a tab in a name");
+    let mut refusals = Vec::new();
+    manifest::components_at(r.path(), &tab, &mut refusals).unwrap();
+    assert_eq!(refusals, [format!("commit {tab}: the path \"crates/veredas-portal/src/a\\tb.rs\" holds a control character: a release's tree names its files without one")]);
+}
+
+#[test]
+fn round_nineteen_an_absolute_path_is_refused_and_a_data_file_names_nothing() {
+    let r = wider();
+    r.write("crates/veredas-portal/src/bin/porteiro.rs", "const H: &str = include_str!(\"/etc/hostname\");\nfn main() {}\n");
+    let c = r.commit("an absolute include");
+    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    assert_eq!(held["veredas-portal"].inputs, Err("crates/veredas-portal/src/bin/porteiro.rs names `/etc/hostname`, outside the commit's tree".to_string()));
+    // What a data file holds is not read: a file it names in Rust's form charges nothing.
+    let r = wider();
+    r.write("docs/notes.txt", "include_str!(\"../named-by-data.txt\")\n");
+    r.write("named-by-data.txt", "x\n");
+    let c = r.commit("a data file naming a file");
+    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    assert!(!held["veredas-portal"].inputs.as_ref().unwrap().0.contains_key("named-by-data.txt"));
+}

@@ -263,6 +263,14 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         if !tree.join("Cargo.toml").is_file() {
             return Ok(Some(format!("commit {commit} holds no Cargo.toml")));
         }
+        // A cargo configuration in the tree is refused whole, before cargo reads it: what one may
+        // set reaches past what a version names (`paths`, sources, an `include` of another file, a
+        // flag naming a linker or a wrapper), and none is tracked.
+        for f in [".cargo/config.toml", ".cargo/config"] {
+            if tree.join(f).exists() {
+                return Ok(Some(format!("commit {commit}: its {f} is a cargo configuration in the tree, which a release's build does not follow: what one sets reaches past what a version names")));
+            }
+        }
         // A root that is no workspace sends cargo looking for one above the tree, in folders the
         // history does not hold.
         let Ok(root_manifest) = String::from_utf8(std::fs::read(tree.join("Cargo.toml"))?) else {
@@ -326,6 +334,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                     .map(|d| inputs::Dep {
                         name: d["name"].as_str().unwrap_or_default().to_string(),
                         dir: d["path"].as_str().map(|p| from_root(Path::new(p)).unwrap_or_else(|| p.to_string())),
+                        req: d["req"].as_str().unwrap_or("*").to_string(),
                     })
                     .collect();
                 // Each target that goes into what ships starts from a file cargo names; its tests',
@@ -541,11 +550,19 @@ pub fn check_together(root: &Path, all: &[(PathBuf, Manifest)]) -> Result<Vec<St
             let Some(h) = held.get(&x.name).filter(|h| h.version == x.version.to_string()) else { continue };
             let key = (x.name.clone(), x.version.to_string());
             match first.get(&key) {
+                // A first pin whose inputs do not read gives way to the next that does, so it
+                // hides no conflict between later ones.
+                Some((other, Err(why))) => {
+                    refusals.push(format!("{} {} is pinned by releases {other} and {}, and its build inputs at {other}'s commit do not read: {why}", x.name, x.version, m.release));
+                    if h.inputs.is_ok() {
+                        first.insert(key, (m.release.to_string(), h.inputs.clone()));
+                    }
+                }
                 None => {
                     first.insert(key, (m.release.to_string(), h.inputs.clone()));
                 }
-                Some((other, before)) => match (before, &h.inputs) {
-                    (Ok(a), Ok(b)) => {
+                Some((other, Ok(a))) => match &h.inputs {
+                    Ok(b) => {
                         let differ = a.differ(b);
                         if !differ.is_empty() {
                             refusals.push(format!(
@@ -557,8 +574,7 @@ pub fn check_together(root: &Path, all: &[(PathBuf, Manifest)]) -> Result<Vec<St
                             ));
                         }
                     }
-                    (Err(why), _) => refusals.push(format!("{} {} is pinned by releases {other} and {}, and its build inputs at {other}'s commit do not read: {why}", x.name, x.version, m.release)),
-                    (_, Err(why)) => refusals.push(format!("{} {} is pinned by releases {other} and {}, and its build inputs at {}'s commit do not read: {why}", x.name, x.version, m.release, m.release)),
+                    Err(why) => refusals.push(format!("{} {} is pinned by releases {other} and {}, and its build inputs at {}'s commit do not read: {why}", x.name, x.version, m.release, m.release)),
                 },
             }
         }

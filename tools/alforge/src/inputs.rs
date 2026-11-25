@@ -64,6 +64,8 @@ pub struct Dep {
     pub name: String,
     /// The folder, from the root, of a dependency by path; `None` for one the lock file pins.
     pub dir: Option<String>,
+    /// The version requirement it states (`^1`), which tells two locked versions of one name apart.
+    pub req: String,
 }
 
 /// A package of the lock file.
@@ -136,32 +138,6 @@ impl Workspace<'_> {
     /// vendored sources its build may read.
     pub fn inputs_and_packages(&self, name: &str) -> Result<(Inputs, BTreeSet<String>), String> {
         let lock = self.lock()?;
-        // A cargo configuration's `paths` builds folders in place of the packages the lock pins,
-        // by a rule no lock entry records; its sources, patches, compilers, wrappers and linkers
-        // likewise bring in programs or code no version names.
-        for f in [".cargo/config.toml", ".cargo/config"] {
-            let Ok(text) = std::fs::read_to_string(self.tree.join(f)) else { continue };
-            let Ok(t) = toml::from_str::<toml::Table>(&text) else {
-                return Err(format!("its {f} overrides packages by `paths` (or does not read), which a release does not follow"));
-            };
-            if t.contains_key("paths") {
-                return Err(format!("its {f} overrides packages by `paths` (or does not read), which a release does not follow"));
-            }
-            let mut set: Vec<String> = ["source", "patch", "host"].iter().filter(|k| t.contains_key(**k)).map(|k| k.to_string()).collect();
-            if let Some(b) = t.get("build").and_then(|b| b.as_table()) {
-                set.extend(["rustc", "rustc-wrapper", "rustc-workspace-wrapper", "rustdoc"].iter().filter(|k| b.contains_key(**k)).map(|k| format!("build.{k}")));
-            }
-            if let Some(targets) = t.get("target").and_then(|v| v.as_table()) {
-                for (triple, v) in targets {
-                    if let Some(v) = v.as_table() {
-                        set.extend(["linker", "ar", "runner"].iter().filter(|k| v.contains_key(**k)).map(|k| format!("target.{triple}.{k}")));
-                    }
-                }
-            }
-            if !set.is_empty() {
-                return Err(format!("its {f} sets {}: programs or code a version does not name, which a release does not follow", set.join(", ")));
-            }
-        }
         let mut named = BTreeMap::new();
         // The workspace's manifest whole, any byte of it charging every component (docs/questions.md
         // Q442: what cargo reads of it for this component alone is recommended).
@@ -206,7 +182,10 @@ impl Workspace<'_> {
         // The lock file's entries for their external dependencies, transitively.
         let mut queue: Vec<usize> = Vec::new();
         for m in &used {
-            let wanted: BTreeSet<&str> = m.deps.iter().filter(|d| d.dir.is_none()).map(|d| d.name.as_str()).collect();
+            // By name and requirement: a test's other version of the same crate charges none.
+            let wanted_by: Vec<(&str, Option<semver::VersionReq>)> =
+                m.deps.iter().filter(|d| d.dir.is_none()).map(|d| (d.name.as_str(), semver::VersionReq::parse(&d.req).ok())).collect();
+            let wanted: BTreeSet<&str> = wanted_by.iter().map(|(n, _)| *n).collect();
             if wanted.is_empty() {
                 continue;
             }
@@ -219,7 +198,12 @@ impl Workspace<'_> {
                 .ok_or_else(|| format!("its Cargo.lock does not pin {} {}: the lock file is not this workspace's", m.name, m.version))?;
             for d in &own.dependencies {
                 let at = resolve(lock, d)?;
-                if wanted.contains(lock[at].name.as_str()) {
+                let l = &lock[at];
+                let meets = |req: &Option<semver::VersionReq>| match (req, semver::Version::parse(&l.version)) {
+                    (Some(r), Ok(v)) => r.matches(&v),
+                    _ => true,
+                };
+                if wanted_by.iter().any(|(n, req)| *n == l.name && meets(req)) {
                     queue.push(at);
                 }
             }
@@ -379,7 +363,11 @@ pub fn literals(text: &str) -> Vec<String> {
 /// a char literal `'"'`, a raw string, nested comments and tokens apart by comments are rustc's.
 /// A text that does not lex as Rust is read for the same forms as text instead.
 pub fn named(text: &str) -> Vec<(String, bool)> {
-    let lf = text.replace("\r\n", "\n");
+    let mut lf = text.replace("\r\n", "\n");
+    // rustc drops a first line that is a shebang (`#!` not followed by `[`), as here.
+    if lf.starts_with("#!") && !lf[2..].trim_start().starts_with('[') {
+        lf = lf.find('\n').map(|i| lf[i..].to_string()).unwrap_or_default();
+    }
     match lf.parse::<proc_macro2::TokenStream>() {
         Ok(ts) => {
             let mut all = Vec::new();
@@ -423,13 +411,14 @@ fn tokens(ts: proc_macro2::TokenStream, out: &mut Vec<(String, bool)>) {
                     attribute(g.stream(), out);
                 }
             }
-            TokenTree::Ident(id) if ["include_str", "include_bytes", "include"].contains(&id.to_string().as_str()) => {
+            // A raw identifier (`r#include_str`) is the same macro.
+            TokenTree::Ident(id) if ["include_str", "include_bytes", "include"].contains(&id.to_string().trim_start_matches("r#")) => {
                 if let (Some(TokenTree::Punct(bang)), Some(TokenTree::Group(g))) = (tts.get(i + 1), tts.get(i + 2))
                     && bang.as_char() == '!'
                     && let Some(TokenTree::Literal(lit)) = g.stream().into_iter().next()
                     && let Some(s) = string_of(&lit)
                 {
-                    out.push((s, id == "include"));
+                    out.push((s, id.to_string().trim_start_matches("r#") == "include"));
                 }
             }
             TokenTree::Group(g) => tokens(g.stream(), out),
@@ -444,12 +433,12 @@ fn attribute(ts: proc_macro2::TokenStream, out: &mut Vec<(String, bool)>) {
     use proc_macro2::{Delimiter, TokenTree};
     let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
     match tts.as_slice() {
-        [TokenTree::Ident(id), TokenTree::Punct(eq), TokenTree::Literal(lit), ..] if id == "path" && eq.as_char() == '=' => {
+        [TokenTree::Ident(id), TokenTree::Punct(eq), TokenTree::Literal(lit), ..] if id.to_string().trim_start_matches("r#") == "path" && eq.as_char() == '=' => {
             if let Some(s) = string_of(lit) {
                 out.push((s, true));
             }
         }
-        [TokenTree::Ident(id), TokenTree::Group(g), ..] if id == "cfg_attr" && g.delimiter() == Delimiter::Parenthesis => {
+        [TokenTree::Ident(id), TokenTree::Group(g), ..] if id.to_string().trim_start_matches("r#") == "cfg_attr" && g.delimiter() == Delimiter::Parenthesis => {
             // The predicate, then attributes apart by commas at the top.
             let mut parts: Vec<Vec<TokenTree>> = vec![vec![]];
             for t in g.stream() {
@@ -685,7 +674,10 @@ pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs, pa
     // The builds share one output folder and one copy of the vendored sources: a build may read
     // there only what its own packages made or brought (a build script's `OUT_DIR`,
     // `build/<package>-<hash>/`, and `vendor/<package>-<version>/`), never another's.
-    let own = |dir: &str| packages.iter().any(|p| dir.strip_prefix(p.as_str()).and_then(|r| r.strip_prefix('-')).is_some_and(|r| r.starts_with(|c: char| c.is_ascii_alphanumeric())));
+    // `build/<package>-<16 hexadecimal>/` and `vendor/<package>-<version>/`: the package named
+    // whole (`foo` never owns `foo-bar-1.0.0`).
+    let built_by = |dir: &str| packages.iter().any(|p| dir.strip_prefix(p.as_str()).and_then(|r| r.strip_prefix('-')).is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit())));
+    let vendored = |dir: &str| packages.iter().any(|p| dir.strip_prefix(p.as_str()).and_then(|r| r.strip_prefix('-')).is_some_and(|v| semver::Version::parse(v).is_ok()));
     let mut out = BTreeSet::new();
     for path in dep_info_paths(dep_info) {
         // A path as rustc or cargo writes it may climb back (`crates/x/src/../../../docs/y.rs`, a
@@ -701,12 +693,12 @@ pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs, pa
         let landed = PathBuf::from(format!("/{}", rooted(&path)));
         let built = Path::new(src).join("target/release/build");
         if let Ok(rest) = landed.strip_prefix(&built)
-            && rest.components().next().is_some_and(|c| own(&c.as_os_str().to_string_lossy()))
+            && rest.components().next().is_some_and(|c| built_by(&c.as_os_str().to_string_lossy()))
         {
             continue;
         }
         if let Ok(rest) = landed.strip_prefix(vendor)
-            && rest.components().next().is_some_and(|c| own(&c.as_os_str().to_string_lossy()))
+            && rest.components().next().is_some_and(|c| vendored(&c.as_os_str().to_string_lossy()))
         {
             continue;
         }

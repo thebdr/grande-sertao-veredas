@@ -751,7 +751,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
             let more = if b == "segundo" { extra } else { "" };
             std::fs::write(
                 deps.join(format!("{b}.d")),
-                format!("/build/src/target/release/{b}: /build/src/crates/veredas-core/src/main.rs /build/src/docs/shared.rs /build/src/target/release/build/x-1a2b/out/gen.rs{more}\n"),
+                format!("/build/src/target/release/{b}: /build/src/crates/veredas-core/src/main.rs /build/src/docs/shared.rs /build/src/target/release/build/x-0123456789abcdef/out/gen.rs{more}\n"),
             )
             .unwrap();
         }
@@ -1281,11 +1281,11 @@ fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
     // doubled, a line continued; a rule with no prerequisites; the build's own output and the
     // vendored sources left out.
     let info = "/build/src/target/release/veredas-portal: /build/src/crates/veredas-portal/src/main.rs /build/src/crates/veredas-core/src/lib.rs \\\n \
-                /build/src/docs/a\\ b.rs /build/src/docs/shared.rs /build/src/docs/cost$$.txt /build/src/target/release/build/x-1/out/gen.rs \
+                /build/src/docs/a\\ b.rs /build/src/docs/shared.rs /build/src/docs/cost$$.txt /build/src/target/release/build/x-0123456789abcdef/out/gen.rs \
                 /build/vendor/serde-1.0.200/src/lib.rs /etc/fora.conf /build/src/crates/veredas-portalx/src/lib.rs \
                 /build/src/crates/veredas-portal/src/../../../docs/unix.rs /build/src/crates/veredas-core/../../docs/shared.rs \
-                /build/src/crates/../../etc/climbed.rs /build/src/crates/veredas-portal/../../target/release/build/y-9f/out/z.rs \
-                /build/src/target/release/build/x/h/out/../../../../../../docs/fora.rs /build/vendor/../src/docs/fora2.rs /build/vendor/serde-1/../../src/docs/fora3.rs\n\n\
+                /build/src/crates/../../etc/climbed.rs /build/src/crates/veredas-portal/../../target/release/build/y-fedcba9876543210/out/z.rs \
+                /build/src/target/release/build/x-0123456789abcdef/h/out/../../../../../../docs/fora.rs /build/vendor/../src/docs/fora2.rs /build/vendor/serde-1/../../src/docs/fora3.rs\n\n\
                 /build/src/crates/veredas-portal/src/main.rs:\n";
     // A path that climbs back (as rustc writes a `#[path]` module's) is judged where it lands: in a
     // named file, in another folder, out of the tree, in the build's own output.
@@ -1307,10 +1307,10 @@ fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
     );
     // The shared output folder and vendored sources: another component's executable, another
     // package's build script output and a crate the build does not pin, each refused.
-    let shared = "/build/src/target/release/x: /build/src/target/release/veredas-a /build/src/target/release/build/veredas-a-77/out/a.rs /build/vendor/other-1.0.0/src/lib.rs /build/src/target/release/build/x-1/out/ok.rs /build/vendor/serde-1.0.200/src/lib.rs\n";
+    let shared = "/build/src/target/release/x: /build/src/target/release/veredas-a /build/src/target/release/build/veredas-a-7777777777777777/out/a.rs /build/vendor/other-1.0.0/src/lib.rs /build/src/target/release/build/x-0123456789abcdef/out/ok.rs /build/vendor/serde-1.0.200/src/lib.rs\n";
     assert_eq!(
         alforge::inputs::read_outside(shared, builder::SRC, builder::VENDOR, &inputs, &packages),
-        ["/build/vendor/other-1.0.0/src/lib.rs", "target/release/build/veredas-a-77/out/a.rs", "target/release/veredas-a"]
+        ["/build/vendor/other-1.0.0/src/lib.rs", "target/release/build/veredas-a-7777777777777777/out/a.rs", "target/release/veredas-a"]
     );
     // The vendored sources' stanza, written beside the tree (never over a configuration it holds),
     // names its folder from there.
