@@ -11,15 +11,15 @@
     "manifest"
   ],
   "exitCode": 0,
-  "outputSha": "c61811912749013d0fa93935dda6d202046ba458bc299da4b632e0582e36c133",
-  "outputTail": "        PASS [   0.424s] (33/45) alforge::manifest a_repository_at_an_odd_path_a_root_that_does_not_parse_and_braces_in_the_scratch_path\n        PASS [   0.322s] (34/45) alforge::manifest round_nineteen_the_lock_by_requirement_a_package_by_path_through_the_lock_and_a_later_conflict\n        PASS [   0.453s] (35/45) alforge::manifest a_release_whose_commit_is_absent_hides_no_other_refusal\n        PASS [   0.322s] (36/45) alforge::manifest round_twenty_a_pre_release_git_dependency_is_charged_and_every_unread_pin_says_why\n        PASS [   0.355s] (37/45) alforge::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.374s] (38/45) alforge::manifest the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them\n        PASS [   0.596s] (39/45) alforge::manifest a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none\n        PASS [   0.684s] (40/45) alforge::manifest a_false_pin_charges_no_true_release_and_hides_no_conflict\n        PASS [   0.795s] (41/45) alforge::manifest round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_path\n        PASS [   1.159s] (42/45) alforge::manifest build_inputs_that_do_not_read_are_refused_where_a_version_is_pinned_twice\n        PASS [   1.838s] (43/45) alforge::manifest a_version_names_everything_its_build_reads_but_the_toolchain\n        PASS [   5.101s] (44/45) alforge::manifest every_release_of_this_repository_checks_against_its_history\n        PASS [   7.099s] (45/45) alforge::manifest every_road_into_a_build_charges_the_components_it_reaches\n────────────\n     Summary [   7.117s] 45 tests run: 45 passed, 0 skipped",
-  "ranAt": "2026-11-25T10:25:17.133Z",
-  "headCommit": "2671f094a3f8ff81d381513ae9f371f9059ddb5d",
+  "outputSha": "2dff97f786951239dd035dbe739cd5e1be557a3e4da1f8d81badcaf8d0b49ade",
+  "outputTail": "        PASS [   0.417s] (33/45) alforge::manifest a_version_or_an_executable_that_differs_is_refused\n        PASS [   0.316s] (34/45) alforge::manifest round_nineteen_the_lock_by_requirement_a_package_by_path_through_the_lock_and_a_later_conflict\n        PASS [   0.359s] (35/45) alforge::manifest replace_refs_and_grafts_change_neither_objects_nor_ancestry\n        PASS [   0.324s] (36/45) alforge::manifest round_twenty_a_pre_release_git_dependency_is_charged_and_every_unread_pin_says_why\n        PASS [   0.350s] (37/45) alforge::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.364s] (38/45) alforge::manifest the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them\n        PASS [   0.563s] (39/45) alforge::manifest a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none\n        PASS [   0.612s] (40/45) alforge::manifest a_false_pin_charges_no_true_release_and_hides_no_conflict\n        PASS [   0.739s] (41/45) alforge::manifest round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_path\n        PASS [   1.034s] (42/45) alforge::manifest build_inputs_that_do_not_read_are_refused_where_a_version_is_pinned_twice\n        PASS [   1.651s] (43/45) alforge::manifest a_version_names_everything_its_build_reads_but_the_toolchain\n        PASS [   3.568s] (44/45) alforge::manifest every_release_of_this_repository_checks_against_its_history\n        PASS [   4.695s] (45/45) alforge::manifest every_road_into_a_build_charges_the_components_it_reaches\n────────────\n     Summary [   4.702s] 45 tests run: 45 passed, 0 skipped",
+  "ranAt": "2026-11-25T10:53:52.991Z",
+  "headCommit": "e359418787e150f94519b360112ce79e758124f0",
   "tests": [
     {
       "name": "tools/alforge/tests/manifest.rs",
       "file": "tools/alforge/tests/manifest.rs",
-      "fileSha": "827614eddd2dcad1c5e64437f8e881250cf3b608f972a8c6016e15f144e3aebd"
+      "fileSha": "e75d01de4110f88a491e2d1e8de820960f02c0b85159f9e178f123f5c2d35cfa"
     }
   ]
 }
