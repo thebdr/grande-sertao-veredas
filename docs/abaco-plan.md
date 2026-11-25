@@ -303,6 +303,13 @@ workspace/log.txt             the log, one escaped entry per line
 The grid's model is no phase: Oficina writes the grid's behaviour (Q341), and what the worker
 serves its tab is agreed with Oficina's plan.
 
+## The engine's known gaps
+Found beside the corpus, which holds none of them (the parity measure stands), each the engine's
+own to close in a fork change of its own:
+- **A reference a function returns, in the range operator:** `A1:INDEX(A1:A3,3)` evaluates
+  `#VALUE!` (Excel's dynamic-range idiom `SUM(A1:INDEX(A:A,n))` among it): `:` takes INDEX's value,
+  not the cell it names. Spelled right since fork change 30b; its evaluation is next.
+
 ## On this machine
 - No Excel, no Office: Excel's acceptance of a written file is owed elsewhere (Rules).
 - Python 3.14.8 is installed with its shared library, but without `libpython3.14-dev`'s link name

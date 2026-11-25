@@ -2624,3 +2624,51 @@ fn a_name_set_in_another_case_of_a_letter_beyond_ascii_replaces_the_one_there() 
     assert_eq!(book.matches("<definedName ").count(), 1, "{book}");
     assert!(book.contains("S!$A$2</definedName>"), "{book}");
 }
+
+// ---- refute round 14 --------------------------------------------------------------------------
+
+#[test]
+fn an_operation_under_an_implicit_intersection_is_written_as_the_edit_wrote_it() {
+    // `@(A1:A3*B1)` is not `@A1:A3*B1` (fork change 30, refined): written as Excel 365 writes it,
+    // `_xlfn.SINGLE(…)`, with its own value, whatever the sheet held or another edit did
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("at.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    let data: String = (1..=3)
+        .map(|r| {
+            let d = if r == 2 { r#"<c r="D2"><f>A1:A3*B1</f><v>20</v></c>"# } else { "" };
+            format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c><c r="B{r}"><v>{}</v></c><c r="C{r}"><v>{}</v></c>{d}</row>"#, r * 10, r * 100)
+        })
+        .collect();
+    plain_book(&src, &[("S", worksheet(&data, ""))], "", &[]);
+    let formula = |cell: &str, f: &str| Edit::Formula { sheet: "S".into(), cell: cell.into(), formula: f.into(), expect: None };
+    let written = |edits: &[Edit], cell: &str| {
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, edits, &verified()).unwrap();
+        element(&part(&dst, "xl/worksheets/sheet1.xml"), cell).unwrap().to_string()
+    };
+    let alone = written(&[formula("F2", "=@(A1:A3*B1)")], "F2");
+    assert!(alone.contains("_xlfn.SINGLE(A1:A3*B1)") && alone.ends_with("<v>10</v></c>"), "{alone}");
+    let set = Edit::SetName { name: "X".into(), formula: "=S!$A$1".into(), scope: None };
+    assert_eq!(written(&[formula("F2", "=@(A1:A3*B1)"), set], "F2"), alone);
+    // over the legacy `A1:A3*B1` the sheet holds (`@A1:A3*B1`, 20), and beside it
+    let d2 = written(&[formula("D2", "=@(A1:A3*B1)")], "D2");
+    assert!(d2.contains("_xlfn.SINGLE(A1:A3*B1)") && d2.ends_with("<v>10</v></c>"), "{d2}");
+    let e2 = written(&[formula("E2", "=@(B1:B3*C1)")], "E2");
+    assert!(e2.contains("_xlfn.SINGLE(B1:B3*C1)") && e2.ends_with("<v>1000</v></c>"), "{e2}");
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "D2"), Some(r#"<c r="D2"><f>A1:A3*B1</f><v>20</v></c>"#));
+}
+
+#[test]
+fn a_name_the_engine_tells_apart_only_in_upper_case_is_written_beside_the_other() {
+    // the KELVIN SIGN's lower case is `k`, its upper case itself: `Kx` and `kx` are two names to the
+    // engine, which compares them in Unicode's upper case, and so to the patcher
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("kelvin.xlsx");
+    let dst = dir.path().join("out.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row>"#, ""))], "<definedName name=\"\u{212A}x\">S!$A$1</definedName>", &[]);
+    patch(&src, &dst, &[Edit::SetName { name: "kx".into(), formula: "=S!$A$2".into(), scope: None }], &verified()).unwrap();
+    let book = part(&dst, "xl/workbook.xml");
+    assert_eq!(book.matches("<definedName ").count(), 2, "{book}");
+    assert!(book.contains("<definedName name=\"\u{212A}x\">S!$A$1</definedName>") && book.contains("S!$A$2</definedName>"), "{book}");
+}

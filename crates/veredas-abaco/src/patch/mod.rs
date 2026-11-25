@@ -1566,7 +1566,7 @@ pub fn patch(
                 }
                 wb.set_name(name, &user, scope.as_deref())
                     .map_err(|e| fail(e.to_string()))?;
-                let key = (name.to_lowercase(), scope.as_ref().map(|s| s.to_lowercase()));
+                let key = (name.to_uppercase(), scope.as_ref().map(|s| s.to_lowercase()));
                 deleted_names.retain(|k| *k != key);
                 set_names.push(key);
                 names_touched = true;
@@ -1574,7 +1574,7 @@ pub fn patch(
             Edit::DeleteName { name, scope } => {
                 wb.delete_name(name, scope.as_deref())
                     .map_err(|e| fail(e.to_string()))?;
-                let key = (name.to_lowercase(), scope.as_ref().map(|s| s.to_lowercase()));
+                let key = (name.to_uppercase(), scope.as_ref().map(|s| s.to_lowercase()));
                 set_names.retain(|k| *k != key);
                 deleted_names.push(key);
                 names_touched = true;
@@ -2716,10 +2716,10 @@ fn rewrite_defined_names(
                 .is_some_and(|e| !e.is_worksheet());
             // still in the model? (a deleted name goes; a built-in one the engine may not hold,
             // `_xlnm._FilterDatabase`, stays unless an edit deleted it)
-            let key = (name.to_lowercase(), scope.as_ref().map(|s| s.to_lowercase()));
+            let key = (name.to_uppercase(), scope.as_ref().map(|s| s.to_lowercase()));
             let in_model = (on_a_chart_sheet
                 || model_names.iter().any(|n| {
-                n.name.eq_ignore_ascii_case(&name)
+                n.name.to_uppercase() == name.to_uppercase()
                     && n.scope.as_deref().map(str::to_lowercase)
                         == scope.as_deref().map(str::to_lowercase)
             }) || name.starts_with("_xlnm."))
@@ -2728,7 +2728,7 @@ fn rewrite_defined_names(
                 continue;
             }
             seen.push((
-                name.to_lowercase(),
+                name.to_uppercase(),
                 scope.as_ref().map(|s| s.to_lowercase()),
             ));
             let element = &inner[a..b];
@@ -2747,12 +2747,12 @@ fn rewrite_defined_names(
             }
             // a name the edits set: its new formula, from the model
             let key = (
-                name.to_lowercase(),
+                name.to_uppercase(),
                 scope.as_ref().map(|s| s.to_lowercase()),
             );
             if set_names.contains(&key)
                 && let Some(m) = model_names.iter().find(|n| {
-                    n.name.eq_ignore_ascii_case(&name)
+                    n.name.to_uppercase() == name.to_uppercase()
                         && n.scope.as_deref().map(str::to_lowercase) == key.1
                 }) {
                     let user = strip_file_prefixes(&text);
@@ -2781,7 +2781,7 @@ fn rewrite_defined_names(
     // names only the model has: added by the edits
     for n in &model_names {
         let key = (
-            n.name.to_lowercase(),
+            n.name.to_uppercase(),
             n.scope.as_ref().map(|s| s.to_lowercase()),
         );
         if seen.contains(&key) {
