@@ -1649,7 +1649,7 @@ without a scene (drives alone) every 4 ms. A point is written by one model at mo
 
 **A drive** (an entry of `drive`): a speed ramped toward a setpoint while it runs, in the drive's
 own unit.
-- `name` (required): the model's name, unique in its part.
+- `name` (required): the model's name, not empty nor padded, unique in its part.
 - `run` (required): a bool point read, run while 1.
 - `setpoint` (required): a number point read, the speed wanted.
 - `reverse` (none): a bool point read, the setpoint negated while 1.
@@ -1657,7 +1657,7 @@ own unit.
   toward 0 or a smaller setpoint; finite and over 0. Through 0 when the sign changes, in one ramp:
   the step that passes 0 carries on at the acceleration. The setpoint landed on exactly, at the
   first step at or after its time; an infinite setpoint ramped toward at the acceleration.
-- `tolerance` (`0`): how near the setpoint the speed counts as at it.
+- `tolerance` (`0`): how near the setpoint the speed counts as at it; finite, 0 or more.
 - `speed` (none): a number point written, the speed.
 - `running` (none): a bool point written, 1 while the speed is not 0.
 - `at_speed` (none): a bool point written, 1 while `run` is 1 and the speed within the tolerance of
@@ -1669,10 +1669,10 @@ own unit.
 - `speed` (none), `running` (none), `at_speed` (none): as a drive's.
 - `belt` (required): the scene's belt.
 - `metres_per_unit` (required): the belt's surface speed in m/s for one unit of the drive's speed,
-  not 0; the belt's speed held to the scene's 100 m/s.
+  finite and not 0; the belt's speed held to the scene's 100 m/s.
 
 **A sensor model** (an entry of `sensor`): a scene sensor reported on a point.
-- `name` (required): the model's name.
+- `name` (required): the model's name, not empty nor padded, unique in its part.
 - `sensor` (required): the scene's sensor.
 - `point` (required): a bool point written, 1 while a body or a mover is inside.
 - `normally_closed` (`false`): the point 0 while something is inside, 1 while it is empty.
@@ -1680,7 +1680,7 @@ own unit.
   without a break before the point says so, up to 600000; the first step at or after the delay.
 
 **An actuator** (an entry of `actuator`): a cylinder moving a mover of the scene between two poses.
-- `name` (required): the model's name.
+- `name` (required): the model's name, not empty nor padded, unique in its part.
 - `mover` (required): the scene's mover.
 - `extend` (required): a bool point read, extend while 1, retract while 0.
 - `retracted` (required), `extended` (required): its two poses.

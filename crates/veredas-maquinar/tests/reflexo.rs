@@ -1087,3 +1087,205 @@ mod round_3 {
         }
     }
 }
+
+/// C-115's fourth refute round: the critic's probes (`~/.cache/veredas/critic-c115-r4/probes`), kept
+/// as pins: a drive skipped for the rest of its step, an actuator's line in every coordinate and
+/// angle, a reversed drive's rates, a setpoint changed mid-reversal, nine point refusals, models on
+/// an adapter's points and without a scene through the bench, a reversal's exact zero step.
+mod round_4 {
+    use super::*;
+
+    const DRIVE: &str = "drive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", accel = 100, decel = 100, tolerance = 100, speed = \"m.speed\", running = \"m.running\", at_speed = \"m.at\" } ]";
+
+    #[test]
+    fn a_drive_whose_read_fails_neither_ramps_nor_writes_for_the_rest_of_its_step() {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 10.0), ("speed", Number, 7.0), ("running", Bool, 7.0), ("at", Bool, 7.0)]);
+        let mut d = models(DRIVE, &m);
+        d.step(None);
+        d.step(None);
+        assert!((d.speed("d").unwrap() - 0.8).abs() < 1e-12);
+        for p in ["speed", "running", "at"] {
+            m.set(p, 7.0);
+        }
+        *m.unreadable.lock().unwrap() = Some("sp".into());
+        d.step(None);
+        let s = d.status();
+        assert_eq!((s.errors, s.last_error.as_deref()), (1, Some("drive `d`: m.sp: unreadable")));
+        assert_eq!((d.speed("d"), m.get("speed"), m.get("running"), m.get("at")), (Some(0.8), 7.0, 7.0, 7.0));
+    }
+
+    #[test]
+    fn a_drive_whose_write_fails_writes_nothing_after_it() {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 10.0), ("speed", Number, 7.0), ("running", Bool, 7.0), ("at", Bool, 7.0)]);
+        let mut d = models(DRIVE, &m);
+        *m.refusing.lock().unwrap() = Some("running".into());
+        d.step(None);
+        assert_eq!((m.get("speed"), m.get("at")), (0.4, 7.0), "the at-speed point written after the refused running point");
+    }
+
+    #[test]
+    fn an_actuator_moves_every_coordinate_and_angle_evenly() {
+        let m = mem(&[("ext", Bool, 1.0)]);
+        let mut a = models("actuator = [ { name = \"a\", mover = \"pusher\", extend = \"m.ext\", retracted = { at = [3.0, -0.4, 0.9] }, extended = { at = [3.4, 0.2, 1.3], yaw = 40, pitch = 20, roll = 30 }, stroke_ms = 100 } ]", &m);
+        let mut w = World::new(&fisica::load(&cena()).unwrap()).unwrap();
+        let mut off = Vec::new();
+        for k in 1..=25u32 {
+            a.step(Some(&mut w));
+            w.step();
+            let p = 0.04 * f64::from(k);
+            let b = w.body("pusher").unwrap();
+            let (want, want_angles) = ([3.0 + 0.4 * p, -0.4 + 0.6 * p, 0.9 + 0.4 * p], [40.0 * p, 20.0 * p, 30.0 * p]);
+            let angles = b.angles();
+            if (0..3).any(|i| (b.at[i] - want[i]).abs() > 1e-6 || (angles[i] - want_angles[i]).abs() > 1e-3) {
+                off.push(format!("{k}: at {:?} for {want:?}, angles {angles:?} for {want_angles:?}", b.at));
+            }
+        }
+        assert!(off.is_empty(), "{off:#?}");
+    }
+
+    #[test]
+    fn a_reversed_drive_ramps_at_its_acceleration_away_from_0_and_its_deceleration_toward_it() {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 50.0), ("rev", Bool, 1.0)]);
+        let mut d = models("drive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", reverse = \"m.rev\", accel = 100, decel = 200 } ]", &m);
+        // 0 to -50 at 100 a second: 0.4 a step, on -50 at the 125th.
+        for k in 1..125u32 {
+            d.step(None);
+            assert!((d.speed("d").unwrap() + 0.4 * f64::from(k)).abs() < 1e-9, "step {k}: {:?}", d.speed("d"));
+        }
+        d.step(None);
+        assert_eq!(d.speed("d"), Some(-50.0));
+        // -50 to -20 at 200 a second: 0.8 a step, 37.5 steps, on -20 at the 38th.
+        m.set("sp", 20.0);
+        for k in 1..38u32 {
+            d.step(None);
+            assert!((d.speed("d").unwrap() + 50.0 - 0.8 * f64::from(k)).abs() < 1e-9, "step {k}: {:?}", d.speed("d"));
+        }
+        d.step(None);
+        assert_eq!(d.speed("d"), Some(-20.0));
+        // Stopped from -20: 25 steps at 0.8.
+        m.set("run", 0.0);
+        for _ in 1..25 {
+            d.step(None);
+            assert!(d.speed("d").unwrap() < 0.0);
+        }
+        d.step(None);
+        assert_eq!(d.speed("d"), Some(0.0));
+    }
+
+    /// A drive at -50 reversed, then forward 30 steps into its ramp through 0 (at -30.8).
+    fn mid_reversal() -> (Arc<Mem>, Models) {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 50.0), ("rev", Bool, 1.0)]);
+        let mut d = models("drive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", reverse = \"m.rev\", accel = 120, decel = 160 } ]", &m);
+        while d.speed("d") != Some(-50.0) {
+            d.step(None);
+        }
+        m.set("rev", 0.0);
+        for _ in 0..30 {
+            d.step(None);
+        }
+        assert!((d.speed("d").unwrap() + 30.8).abs() < 1e-9, "{:?}", d.speed("d"));
+        (m, d)
+    }
+
+    #[test]
+    fn a_setpoint_changed_mid_reversal_is_ramped_to_and_landed_at_its_step() {
+        // At -30.8 the setpoint becomes 30: 30.8 / 0.64 + 30 / 0.48 = 110.625 steps more, on 30 at
+        // the 111th.
+        let (m, mut d) = mid_reversal();
+        m.set("sp", 30.0);
+        for k in 1..111u32 {
+            d.step(None);
+            assert!(d.speed("d").unwrap() < 30.0, "step {k}: {:?}", d.speed("d"));
+        }
+        d.step(None);
+        assert_eq!(d.speed("d"), Some(30.0));
+        // The reverse put back mid-reversal: from -30.8 toward -50 at the acceleration again.
+        let (m, mut d) = mid_reversal();
+        m.set("rev", 1.0);
+        d.step(None);
+        assert!((d.speed("d").unwrap() + 30.8 + 0.48).abs() < 1e-9, "{:?}", d.speed("d"));
+    }
+
+    #[test]
+    fn every_point_key_refuses_a_point_not_there_and_one_of_the_other_kind() {
+        let dir = scratch("round4-keys");
+        let base = "format = \"veredas-bench\"\nversion = 1\n[[modbus]]\nname = \"m\"\nport = 0\npoints = [ { name = \"run\", table = \"coil\", address = 0 }, { name = \"sp\", table = \"holding-register\", address = 0 }, { name = \"b\", table = \"discrete-input\", address = 0 } ]\n[[fisica]]\nname = \"sc\"\nscene = \"line.cena.toml\"\n[[reflexo]]\nname = \"r\"\nscene = \"sc\"\n";
+        let act = |extra: &str, extend: &str| format!("actuator = [ {{ name = \"a\", mover = \"pusher\", extend = \"{extend}\", retracted = {{ at = [0.0, 0.0, 0.0] }}, extended = {{ at = [0.0, 0.0, 0.0] }}, stroke_ms = 1{extra} }} ]\n");
+        let drive = |extra: &str| format!("drive = [ {{ name = \"d\", run = \"m.run\", setpoint = \"m.sp\", accel = 1, decel = 1{extra} }} ]\n");
+        let cases: Vec<(String, &str)> = vec![
+            (act("", "m.nope"), "reflexo[0] (`r`).actuator[0] (`a`).extend: `m` has no point `nope`"),
+            (act("", "m.sp"), "reflexo[0] (`r`).actuator[0] (`a`).extend: `m.sp` is a number, a bool point is wanted"),
+            (act(", retracted_switch = \"m.sp\"", "m.run"), "reflexo[0] (`r`).actuator[0] (`a`).retracted_switch: `m.sp` is a number, a bool point is wanted"),
+            (act(", retracted_switch = \"m.nope\"", "m.run"), "reflexo[0] (`r`).actuator[0] (`a`).retracted_switch: `m` has no point `nope`"),
+            ("sensor = [ { name = \"s\", sensor = \"B1\", point = \"m.nope\" } ]\n".into(), "reflexo[0] (`r`).sensor[0] (`s`).point: `m` has no point `nope`"),
+            ("sensor = [ { name = \"s\", sensor = \"B1\", point = \"m.sp\" } ]\n".into(), "reflexo[0] (`r`).sensor[0] (`s`).point: `m.sp` is a number, a bool point is wanted"),
+            (drive(", speed = \"m.b\""), "reflexo[0] (`r`).drive[0] (`d`).speed: `m.b` is a bool, a number point is wanted"),
+            (drive(", at_speed = \"m.sp\""), "reflexo[0] (`r`).drive[0] (`d`).at_speed: `m.sp` is a number, a bool point is wanted"),
+            (drive(", speed = \"m.nope\""), "reflexo[0] (`r`).drive[0] (`d`).speed: `m` has no point `nope`"),
+        ];
+        let mut wrong = Vec::new();
+        for (models, want) in cases {
+            match bench::load(&format!("{base}{models}"), &dir) {
+                Err(e) if e.to_string() == want => {}
+                Err(e) => wrong.push(format!("{models}: {e}")),
+                Ok(_) => wrong.push(format!("loaded: {models}")),
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    #[test]
+    fn the_bench_binds_a_model_to_an_adapter_s_points() {
+        let dir = scratch("round4-adapter");
+        let file = "format = \"veredas-bench\"\nversion = 1\n[[ethernetip]]\nname = \"x\"\nbind = \"127.0.0.1\"\nport = 0\nio_port = 0\nassemblies = [ { instance = 100, size = 4 } ]\npoints = [ { name = \"run\", assembly = 100, byte = 0, bit = 0, value = \"true\" }, { name = \"sp\", assembly = 100, byte = 1, value = \"2\" }, { name = \"speed\", assembly = 100, byte = 2 } ]\n[[reflexo]]\nname = \"r\"\ndrive = [ { name = \"d\", run = \"x.run\", setpoint = \"x.sp\", accel = 100, decel = 100, speed = \"x.speed\" } ]\n";
+        let plant = Bench::start(bench::load(file, &dir).unwrap()).unwrap();
+        assert!(until(Duration::from_secs(3), || plant.ethernetip("x").unwrap().get("speed").unwrap() == ethernetip::Value::U8(2)), "the adapter's speed point never reached 2");
+        plant.stop();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_bench_steps_a_part_without_a_scene_every_4_ms() {
+        let dir = scratch("round4-sceneless");
+        let file = "format = \"veredas-bench\"\nversion = 1\n[[modbus]]\nname = \"m\"\nport = 0\npoints = [ { name = \"run\", table = \"coil\", address = 0, value = \"true\" }, { name = \"sp\", table = \"holding-register\", address = 0, value = \"1000\" } ]\n[[reflexo]]\nname = \"r\"\ndrive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", accel = 250, decel = 250 } ]\n";
+        let spec = bench::load(file, &dir).unwrap();
+        assert_eq!(spec.plan()[1], "reflexo `r`: 1 model(s) every 4 ms");
+        let begun = Instant::now();
+        let plant = Bench::start(spec).unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+        let models = plant.reflexo("r").unwrap();
+        // 250 a second at 4 ms is 1 a step: the speed counts the steps.
+        let (steps, speed) = (models.status().steps, models.speed("d").unwrap());
+        let due = begun.elapsed().as_nanos() / 4_000_000;
+        plant.stop();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!((speed - steps as f64).abs() < 1e-9, "a step of {} units, not 1 ({steps} steps)", speed / steps as f64);
+        assert!(u128::from(steps) <= due && u128::from(steps) + 50 >= due, "{steps} steps, {due} due");
+    }
+
+    /// A reversal from -sp whose deceleration ends exactly on a step: that step's speed and running.
+    fn zero_step(sp: u32, decel: u32, accel: u32) -> (u64, f64, f64) {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, f64::from(sp)), ("rev", Bool, 1.0), ("running", Bool, 9.0)]);
+        let mut d = models(&format!("drive = [ {{ name = \"d\", run = \"m.run\", setpoint = \"m.sp\", reverse = \"m.rev\", accel = {accel}, decel = {decel}, running = \"m.running\" }} ]"), &m);
+        while d.speed("d") != Some(-f64::from(sp)) {
+            d.step(None);
+        }
+        m.set("rev", 0.0);
+        assert_eq!(u64::from(sp) * 250 % u64::from(decel), 0);
+        let z = u64::from(sp * 250 / decel);
+        for _ in 0..z {
+            d.step(None);
+        }
+        (z, d.speed("d").unwrap(), m.get("running"))
+    }
+
+    #[test]
+    fn a_reversal_s_exact_zero_step_is_0_whatever_the_rounding() {
+        // 9 / (18 x 0.004) came out 124.99999999999999 and the 125th step 1e-15, running.
+        for (sp, rate) in [(50u32, 100u32), (9, 18), (11, 22), (7, 14), (13, 26)] {
+            let (z, speed, running) = zero_step(sp, rate, rate);
+            assert_eq!((speed.to_bits(), running), (0f64.to_bits(), 0.0), "-{sp} to {sp} at {rate}: step {z}");
+        }
+    }
+}

@@ -456,6 +456,9 @@ impl Segment {
         }
         let k = self.k as f64;
         let v = match self.to_zero {
+            // On 0 at a step within the slack of its time (the division's rounding put 9/(18 x
+            // 0.004) at 124.99999999999999): 0, not a speck of either sign with the drive running.
+            Some((to_zero, _)) if (k - to_zero).abs() <= to_zero * 16.0 * f64::EPSILON + 1e-9 => 0.0,
             Some((to_zero, after)) if k >= to_zero => after * (k - to_zero),
             // Before 0 the speed keeps its sign, whatever the rounding.
             Some(_) if self.from > 0.0 => (self.from + self.per_step * k).max(0.0),
