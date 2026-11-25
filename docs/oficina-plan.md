@@ -96,10 +96,10 @@ controlador.
 - **The bench's surfaces:** the bench file editor; a traffic monitor with decoded fields; starting
   a bench beside the portal session that reads it. Later: the live pressure panel.
 - **Supervisão's pages** embedded as tabs.
-- **Aranha's surfaces**, aranha keeping no interface of its own (Q280, ruled 2026-11-25): the
-  device table, the topology, the diff, identify, name and address, as the bench's are.
 
 ### Surfaces that arrive with their components
+- **Aranha**, which keeps no interface of its own (Q280, ruled 2026-11-25): the device table, the
+  topology, the diff, identify, name and address, as the bench's surfaces are Oficina's.
 - **Ábaco:** the grid as a tab, with the engine and Python of each workspace in its own process; a
   Python editor with completion; run with stop-on-error; a full debugger; forms as controls on the
   sheet and as designed dialogs. Later: a macro recorder.
