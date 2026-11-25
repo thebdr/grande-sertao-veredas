@@ -10,15 +10,15 @@
     "tables"
   ],
   "exitCode": 0,
-  "outputSha": "4009d27dde1f38711800543ae2c89d8604589ca2e64c3304ceb853ad989b7636",
-  "outputTail": "\nrunning 1 test\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal has been running for over 60 seconds\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 147.64s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s\n     Running tests/tables.rs (target/debug/build/veredas-supervisao/5431f326a426d62c/out/tables-5431f326a426d62c)",
-  "ranAt": "2026-11-25T05:47:04.968Z",
-  "headCommit": "8b0294bce44c4ce798019731960a4e1b93b5e4e3",
+  "outputSha": "cf091a8b55ea242c7c70f7ef54f6ae67efde7cc5b698d824377d5e1efd5fb51d",
+  "outputTail": "\nrunning 1 test\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal has been running for over 60 seconds\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 156.26s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s\n     Running tests/tables.rs (target/debug/build/veredas-supervisao/aa73752103b32520/out/tables-aa73752103b32520)",
+  "ranAt": "2026-11-25T10:14:17.655Z",
+  "headCommit": "255bf55e381e0f470072f0fca46f15cd5e18e130",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/tables.rs",
       "file": "crates/veredas-supervisao/tests/tables.rs",
-      "fileSha": "6201488aa3d87db95c3370cbd833e49abdd92f7cb50f36efd79cecb557b3a840"
+      "fileSha": "552f79ec5f873c7b19adfd00154b52e5b854bac6b3d747b190653d9be58af527"
     }
   ]
 }

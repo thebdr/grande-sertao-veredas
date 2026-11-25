@@ -12,15 +12,15 @@
     "component"
   ],
   "exitCode": 0,
-  "outputSha": "6d67155def329ee7ead2b45e55240979318d4d5d5330a7d120d9c54f19e2c8c7",
-  "outputTail": "\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.36s\n\n\nrunning 4 tests\ntest before_any_status_every_action_is_off_and_posts_nothing ... ok\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 46.80s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running tests/component.rs (target/debug/build/veredas-supervisao/96cd8fd8ca0af47a/out/component-96cd8fd8ca0af47a)\n     Running tests/writes.rs (target/debug/build/veredas-supervisao/cf60ea46531902aa/out/writes-cf60ea46531902aa)",
-  "ranAt": "2026-11-25T08:22:56.354Z",
-  "headCommit": "50c67dcac8435a74413f4e2e9988f8639d0ef9e6",
+  "outputSha": "9febe627fe0a28f64530d54b6e13c1946c672d2452b9902afca35b62b050bfcc",
+  "outputTail": "\nrunning 4 tests\ntest before_any_status_every_action_is_off_and_posts_nothing ... ok\ntest every_answer_portal_gives_a_write_is_said_as_it_means ... ok\ntest a_press_with_no_answer_and_a_page_with_no_status_are_said_as_they_are ... ok\ntest a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_armed ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 55.74s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s\n     Running tests/component.rs (target/debug/build/veredas-supervisao/6427ddb0ff41c847/out/component-6427ddb0ff41c847)\n     Running tests/writes.rs (target/debug/build/veredas-supervisao/32d943d0fb4c8b46/out/writes-32d943d0fb4c8b46)",
+  "ranAt": "2026-11-25T10:16:55.488Z",
+  "headCommit": "255bf55e381e0f470072f0fca46f15cd5e18e130",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/writes.rs",
       "file": "crates/veredas-supervisao/tests/writes.rs",
-      "fileSha": "30878b44fed1907735ec278e83d255435410d3fb70883bab49638daa27986bdb"
+      "fileSha": "2f0deb54719023510d0869f4143fc0d57605551eff82f1a94bd0c69f1a6a29ad"
     },
     {
       "name": "crates/veredas-supervisao/tests/component.rs",
