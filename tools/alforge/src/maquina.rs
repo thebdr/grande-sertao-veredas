@@ -796,6 +796,12 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
     if !p.console.contains(&format!("VEREDAS-SUMS-OK {release}")) {
         out.push(format!("the boot did not check the release's sums (VEREDAS-SUMS-OK {release})"));
     }
+    // Said before a login starts on the serial console (whose agetty would hang the line up).
+    if let (Some(login), Some(said)) = (p.console.find("login:"), p.console.find("VEREDAS-SUMS-"))
+        && login < said
+    {
+        out.push("the boot's check said its lines after a login started on the serial console".to_string());
+    }
     // The machine holds this cut's bundle, not another cut's of the same release.
     if p.bundle.is_empty() || !p.console.contains(&format!("VEREDAS-BUNDLE {}", p.bundle)) {
         out.push(format!("the machine does not hold this cut's bundle (no `VEREDAS-BUNDLE {}` on the console)", p.bundle));

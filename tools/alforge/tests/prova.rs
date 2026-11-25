@@ -132,6 +132,9 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     ] {
         assert_eq!(maquina::proof_faults(&proof(&good.replace(said, instead), 0.3, "a"), "2.0.0"), vec![fault.to_string()], "{said}");
     }
+    // The boot's check said after a login started on the serial console: named.
+    let late = format!("vmw_pvscsi\nvmxnet3\nveredas login: \nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
+    assert_eq!(maquina::proof_faults(&proof(&late, 0.3, "a"), "2.0.0"), ["the boot's check said its lines after a login started on the serial console"]);
     // The plant's own faults are the proof's: `alforge prova` fails on a page not served (and
     // whatever else the plant's check names).
     let mut dead = proof(&good, 0.3, "a");
@@ -259,17 +262,35 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
         assert!(unit.lines().any(|l| l == format!("User={}", r.machine.user)), "{unit}");
     }
     assert!(s.contains(&format!("[ \"$(systemctl show -p User --value \"$s.service\")\" = \"{}\" ]", r.machine.user)));
+    // Each key in its own section, as systemd reads it (elsewhere it ignores it).
+    let in_section = |unit: &str, section: &str, line: &str| -> bool {
+        let mut current = "";
+        unit.lines().any(|l| {
+            if l.starts_with('[') {
+                current = l;
+            }
+            current == section && l == line
+        })
+    };
     let unit = &s[s.find("cat > /etc/systemd/system/veredas-verifica.service").unwrap()..];
     let unit = &unit[..unit.find("\nUNIT\n").unwrap()];
-    assert!(unit.lines().any(|l| l == "Before=serial-getty@ttyS0.service getty@tty1.service"), "{unit}");
+    assert!(in_section(unit, "[Unit]", "Before=serial-getty@ttyS0.service getty@tty1.service"), "{unit}");
     // A oneshot service: `Before=` waits for it to finish, not only to start.
-    assert!(unit.lines().any(|l| l == "Type=oneshot"), "{unit}");
+    assert!(in_section(unit, "[Service]", "Type=oneshot"), "{unit}");
+    assert!(in_section(unit, "[Service]", "StandardOutput=journal+console"), "{unit}");
+    for service in ["veredas-bancada", "veredas-supervisao"] {
+        let u = &s[s.find(&format!("cat > /etc/systemd/system/{service}.service")).unwrap()..];
+        let u = &u[..u.find("\nUNIT\n").unwrap()];
+        for line in ["Restart=always", "RestartSec=3", &format!("User={}", r.machine.user)] {
+            assert!(in_section(u, "[Service]", line), "{service}: {line}");
+        }
+    }
     // The script stops at its first failing step and says OK last.
     assert_eq!(s.lines().next(), Some("set -eu"));
     assert_eq!(s.lines().rfind(|l| !l.trim().is_empty()), Some("echo ALFORGE-PROVISION-OK"));
     // The guide at the commit copied, then the update's section appended to it.
-    let copied = s.find("cp /alforge/guide.md /home/veredas/README-veredas.md\n").expect("the guide copied");
-    assert!(copied < s.find("cat >> /home/veredas/README-veredas.md <<'GUIDE'").unwrap());
+    let line = |want: &str| s.lines().position(|l| l == want).unwrap_or_else(|| panic!("no line {want}"));
+    assert!(line("cp /alforge/guide.md /home/veredas/README-veredas.md") < line("cat >> /home/veredas/README-veredas.md <<'GUIDE'"), "the guide copied whole, then its section appended");
     assert!(unit.lines().any(|l| l == "StandardOutput=journal+console"), "{unit}");
     // A recipe that leaves out what it removes is refused: removal is stated, never assumed.
     let text = std::fs::read_to_string(repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
@@ -637,3 +658,45 @@ fn a_release_is_proven_by_its_own_recipe_and_page_at_its_commit() {
     let s = maquina::proof_setup(root, release, target).unwrap();
     assert_eq!((s.recipe.machine.memory_mb, s.ova, s.canvas, s.bundle), (3072, ova, (0x10, 0x20, 0x30), sums));
 }
+
+#[test]
+fn a_machine_is_built_from_its_releases_own_recipe_and_guide_in_the_folders_former_name() {
+    use std::process::Command;
+    // The release's commit holds the recipe in the member's former folder and no guide; a later
+    // HEAD renames the folder, holds a guide and a recipe that does not read. The build reads the
+    // release's own and is refused for the guide its commit lacks, before any machine.
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    let git = |args: &[&str]| {
+        let out = Command::new("git").arg("-C").arg(root).args(["-c", "user.name=alforge", "-c", "user.email=alforge@example.invalid", "-c", "commit.gpgsign=false"]).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    let recipe = std::fs::read_to_string(repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(root.join(".gitignore"), "/target/\n").unwrap();
+    std::fs::create_dir_all(root.join("tools/entrega/maquina")).unwrap();
+    std::fs::write(root.join("tools/entrega/maquina/maquina.toml"), &recipe).unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "the release's commit"]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    git(&["mv", "tools/entrega", "tools/alforge"]);
+    std::fs::write(root.join("tools/alforge/maquina/maquina.toml"), "format = \"veredas-machine\"\nversion = 1\nnot = \"a recipe\"\n").unwrap();
+    std::fs::write(root.join("tools/alforge/maquina/guide.md"), "HEAD's guide\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "renamed, another recipe and a guide"]);
+    let release = "0.0.0-trial.8";
+    let target = "x86_64-unknown-linux-gnu";
+    let work = root.join("target/alforge").join(release);
+    let name = format!("veredas-{release}-{target}");
+    std::fs::create_dir_all(work.join(&name)).unwrap();
+    let text = alforge::cut::manifest_text(&semver::Version::parse(release).unwrap(), &commit, target, "rustc 1.100.0", &[("veredas-core".to_string(), "2.0.0".to_string(), vec![])], alforge::cut::NOT_RUN);
+    std::fs::write(work.join(&name).join("release.toml"), &text).unwrap();
+    std::fs::write(work.join(format!("{release}.toml")), &text).unwrap();
+    alforge::bundle::pack(&work, &name, "1", &work.join(format!("{name}.tar.gz"))).unwrap();
+    match maquina::from_release(root, release, target) {
+        Err(alforge::vm::VmError::Failed { stderr, .. }) => assert_eq!(stderr, format!("commit {commit} holds no tools/entrega/maquina/guide.md")),
+        other => panic!("not refused by the guide its commit lacks: {:?}", other.map(|p| p.ova)),
+    }
+}
+
