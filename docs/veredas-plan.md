@@ -33,7 +33,7 @@ scheme, one naming rule, and a clear role for each component.
 - **The tester machine.** A suite release also ships as a virtual machine for VMware, on a light
   Linux distribution, holding the whole release suite: testers and designers run the suite
   without building it (the architect, 2026-11-22). Both are planned in `docs/alforge-plan.md`
-  (the contract's P-011 and P-022).
+  (the contract's C-290 to C-292, P-011 promoted into them, and P-022).
 - **Core ripples outward.** A MAJOR bump of `veredas-core` means every dependent is rebuilt
   and retested before its own next release.
 - **Versioned files.** Every plain-text config and project file is TOML and states its

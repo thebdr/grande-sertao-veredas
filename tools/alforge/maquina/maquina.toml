@@ -1,6 +1,7 @@
 # The tester machine's recipe data (docs/alforge-plan.md, "How the image is built"): the
 # architect's choices are here, never in code, so a ruling is an edit of this file. Read by
-# `alforge` (tools/alforge/src/machine.rs); the options taken meanwhile are named by their question.
+# `alforge` (tools/alforge/src/machine.rs); each choice is named by the question that ruled it
+# (docs/questions.md, Q433 to Q439, ruled 2026-11-25).
 format = "veredas-machine"
 version = 1
 

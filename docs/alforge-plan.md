@@ -1,10 +1,11 @@
 # alforge: the plan
 
 What Veredas 2 ships: the suite release and the tester machine. `docs/veredas-plan.md` ("How
-releases work") wins on intent; `.zen/contract.md` (P-011, P-022, then the `C-xxx` clauses from
-C-290 they become) wins on status. This file says what a release is made of and how it is cut,
+releases work") wins on intent; `.zen/contract.md` (the `C-xxx` clauses from
+C-290, P-011 promoted into them, and P-022) wins on status. This file says what a release is made of and how it is cut,
 what the tester machine holds and how it is built and proven, what was found of this machine's
-means, and the questions the architect has not ruled (`docs/questions.md`, from Q430).
+means, and the questions put to the architect (`docs/questions.md`, from Q430; Q430 to Q441 ruled
+2026-11-25).
 
 **Alforge** (a saddlebag: what the rider carries; the architect's name, Q430) is no component. It
 adds no `veredas-*` crate and edits no component's crate; its code is a tool, `tools/alforge`, the
@@ -75,7 +76,8 @@ together = "the bundle's bench and supervisão on its plant"
 
 Keys (each required unless a default is given):
 - `format` = `"veredas-release"`, `version` = 1; another format or version is refused by name.
-- `release`: the suite release's own SemVer (Q431), unique across `releases/`, the file's name.
+- `release`: the suite release's own SemVer (Q431, ruled), unique across `releases/`, the file's
+  name.
 - `commit`: the full 40-hexadecimal id of the commit the bundle was built from, an ancestor of the
   commit that adds the manifest.
 - `target`: the Rust target triple the executables were built for.
@@ -135,7 +137,8 @@ Keys (each required unless a default is given):
    disarmed); then closes both stdins and sees both exit 0.
 6. **The manifest** written into `releases/` only then, naming the commit and what was run, and
    checked like any other (C-290); the person cutting commits it and pushes. The bundle stays under
-   `target/alforge/<release>/`. A git tag `suite-<release>` on the commit is Q432's.
+   `target/alforge/<release>/`. No git tag marks the commit (Q432, ruled): the manifest alone
+   names it.
 
 A MAJOR bump of `veredas-core` ripples (the plan): every dependent's next version is cut only once
 it has been rebuilt and retested against it, which the cut sees as the suite green at the commit.
@@ -251,7 +254,7 @@ release left beside the bundle); a bundle a refused cut left behind is refused.
 - What only VMware proves is listed below, and stays the architect's to try.
 
 The image test downloads the base once and needs KVM; it runs by its own command, recorded with its
-clause and run at every cut, not in every run of the suite (Q440).
+clause and run at every cut, not in every run of the suite (Q440, ruled).
 
 ### What this machine can build (found 2026-11-22)
 Verified by running each, not assumed:
@@ -323,9 +326,9 @@ passed on 2026-11-23.
 ### Delivery and updates
 - **An OVA**, one file every VMware product opens, VirtualBox too: 1.09 GB for 2.0.0-alpha.1
   (the disk 16 GB to the guest, 1.09 GB stream-optimized; provisioned in about 12 minutes).
-  Where it is published is Q436: a GitHub release of the repository (2 GB per file) or a share
-  the architect names. Until ruled, it is built and kept on this machine: the one to try in
-  `/home/thebdr/veredas-entrega/`, outside the repository and every build folder.
+  Published nowhere yet (Q436, ruled "OVA" and "Nowhere yet"): it is built and kept on this
+  machine and the architect hands it over, the one to try in `/home/thebdr/veredas-entrega/`,
+  outside the repository and every build folder.
 - **Updates** (Q437): meanwhile a new OVA per release, the machine disposable; then an update
   command in the machine that fetches a newer bundle, checks its sums and its manifest, installs it
   beside the old one under `/opt/veredas/` and moves `current`, leaving the plant's files alone.
