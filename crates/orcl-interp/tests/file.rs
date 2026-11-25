@@ -276,3 +276,66 @@ fn a_program_read_from_its_file_runs_as_the_one_written() {
         assert_eq!((r, read.steps(), read.memory()), (w, written.steps(), written.memory()), "sum({n})");
     }
 }
+
+#[test]
+#[ignore = "writes the fixture; run once by hand when the format changes on purpose, with its version"]
+fn write_the_every_kind_fixture() {
+    std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/every_kind.orclb"), file::write(&header(), &every_kind())).unwrap();
+}
+
+#[test]
+fn every_kind_s_bytes_are_pinned_so_no_code_of_the_format_drifts_unseen() {
+    // a code swapped in both the writer and the reader still reads its own files back; only the bytes say it moved
+    let pinned: &[u8] = include_bytes!("every_kind.orclb");
+    let bytes = file::write(&header(), &every_kind());
+    assert!(bytes == pinned, "every kind's bytes differ from the pinned ones ({} against {} bytes)", bytes.len(), pinned.len());
+    let (h, back) = file::read(pinned).unwrap();
+    assert_eq!((h, format!("{back:?}")), (header(), format!("{:?}", every_kind())));
+}
+
+#[test]
+fn a_file_of_another_format_is_said_so_whatever_its_language_says_or_however_short() {
+    let mut bytes = file::write(&header(), &every_kind());
+    bytes[6] = 2;
+    bytes[8] = 7;
+    assert_eq!(file::read(&bytes), Err(FileError::Format { found: 2 }), "format 2, its language field 7");
+    assert_eq!(file::read(&bytes[..8]), Err(FileError::Format { found: 2 }), "format 2 and nothing after");
+    assert_eq!(file::read(&bytes[..7]), Err(FileError::Malformed { at: 6, what: "cut short" }), "half a format");
+    let mut ours = file::write(&header(), &every_kind());
+    ours[8] = 7;
+    assert_eq!(file::read(&ours[..10]), Err(FileError::Language { found: 7 }), "format 1, language 7, nothing after");
+}
+
+#[test]
+fn an_integer_outside_its_type_and_a_bool_neither_0_nor_1_are_refused_at_their_bytes() {
+    // fn f() -> u8 { _0 = const 1_u8 }, the constant's value set to 300, then its flag-free cousin with a bool
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[u8t]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 1)])), 1)], ret())],
+    });
+    let mut bytes = file::write(&header(), &b.program);
+    let one = 1i128.to_le_bytes();
+    let at = bytes.windows(16).position(|w| w == one).expect("the constant's value");
+    bytes[at..at + 16].copy_from_slice(&300i128.to_le_bytes());
+    assert_eq!(file::read(&bytes), Err(FileError::Malformed { at, what: "an integer outside its type" }));
+    let mut b = Build::default();
+    let boolean = b.bool();
+    let r = b.reference(boolean, true);
+    let _ = r;
+    let mut bytes = file::write(&header(), &b.program);
+    // the reference type's mutability, its last byte before the function count
+    let at = bytes.len() - 5;
+    assert_eq!(bytes[at], 1);
+    bytes[at] = 2;
+    assert_eq!(file::read(&bytes), Err(FileError::Malformed { at, what: "a bool that is neither 0 nor 1" }));
+}
+
+#[test]
+fn an_empty_program_is_written_and_read_back() {
+    let bytes = file::write(&header(), &Program::default());
+    assert_eq!(file::read(&bytes), Ok((header(), Program::default())));
+}

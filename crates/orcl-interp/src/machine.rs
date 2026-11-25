@@ -105,17 +105,29 @@ struct Frame {
     ret: Option<(u32, u32)>,
 }
 
-/// What loading fixed: the program, its layout, the host's regions and where the stack begins.
+/// What loading fixed: the program, its layout, the host's regions, where the stack begins, and the room every
+/// buffer of the state is given.
 #[derive(Clone, Debug)]
 struct Code {
     program: Program,
     layout: Layout,
     regions: Vec<(u32, TypeId)>,
     stack: u32,
+    room: Room,
 }
 
-/// What running changes; every buffer sized at load.
-#[derive(Clone, Debug)]
+/// The most each buffer of the state ever holds, from the layout: the deepest path's frames, the largest result
+/// and the largest value built.
+#[derive(Clone, Copy, Debug)]
+struct Room {
+    frames: usize,
+    result: usize,
+    scratch: usize,
+}
+
+/// What running changes; every buffer sized at load, and a copy sized alike (a `Vec`'s own clone keeps its length
+/// alone, and would grow, so allocate, at the copy's first deeper call).
+#[derive(Debug)]
 struct State {
     memory: Vec<Scalar>,
     frames: Vec<Frame>,
@@ -125,11 +137,36 @@ struct State {
     steps: u64,
 }
 
-/// A loaded program and its memory.
-#[derive(Clone, Debug)]
+/// A loaded program and its memory. A copy is a machine of its own, standing where the original stood, with the
+/// same room in every buffer.
+#[derive(Debug)]
 pub struct Machine {
     code: Code,
     state: State,
+}
+
+fn with_room<T: Copy>(items: &[T], room: usize) -> Vec<T> {
+    let mut v = Vec::with_capacity(room.max(items.len()));
+    v.extend_from_slice(items);
+    v
+}
+
+impl Clone for Machine {
+    fn clone(&self) -> Machine {
+        let room = self.code.room;
+        let state = &self.state;
+        Machine {
+            code: self.code.clone(),
+            state: State {
+                memory: state.memory.clone(),
+                frames: with_room(&state.frames, room.frames),
+                result: with_room(&state.result, room.result),
+                scratch: with_room(&state.scratch, room.scratch),
+                failed: state.failed,
+                steps: state.steps,
+            },
+        }
+    }
 }
 
 fn get<T: Copy>(slice: &[T], index: impl TryInto<usize>) -> Result<T, ErrorKind> {
@@ -465,7 +502,7 @@ impl State {
                 let base = plus(frame.base, code.frame(frame.function)?.size)?;
                 let callee = code.frame(g.0)?;
                 let end = plus(base, callee.size)?;
-                if self.frames.len() >= self.frames.capacity() {
+                if self.frames.len() >= code.room.frames {
                     return Err(ErrorKind::Internal("a stack deeper than laid out"));
                 }
                 self.memory
@@ -639,7 +676,7 @@ impl Machine {
             .unwrap_or(0) as usize;
         let largest = layout.largest as usize;
         Ok(Machine {
-            code: Code { program, layout, regions: placed, stack },
+            code: Code { program, layout, regions: placed, stack, room: Room { frames, result: returns, scratch: largest } },
             state: State {
                 memory: vec![Scalar::Uninit; total as usize],
                 frames: Vec::with_capacity(frames),
@@ -784,9 +821,13 @@ impl Machine {
     }
 
     /// Runs up to `budget` instructions: [`Step::Returned`] once the entry has returned, [`Step::Ran`] when the
-    /// budget ran out first, [`Step::Idle`] when nothing was running.
+    /// budget ran out first (a budget of zero included, the entry standing where it stood), [`Step::Idle`] when
+    /// nothing was running; a failed entry's error, as [`Machine::step`] gives it.
     pub fn run(&mut self, budget: u64) -> Result<Step, ProgramError> {
-        let mut last = Step::Idle;
+        if let Some(e) = self.state.failed {
+            return Err(e);
+        }
+        let mut last = if self.running() { Step::Ran } else { Step::Idle };
         for _ in 0..budget {
             last = self.step()?;
             if last != Step::Ran {

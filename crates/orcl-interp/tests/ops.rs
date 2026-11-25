@@ -520,3 +520,100 @@ fn float_arithmetic_comparison_and_casts_give_what_rust_gives() {
         }
     }
 }
+
+#[test]
+fn every_float_negation_and_cast_between_floats_and_from_bool_gives_what_rust_gives() {
+    let mut b = Build::default();
+    let (f32t, f64t, boolean) = (b.ty(Type::F32), b.ty(Type::F64), b.bool());
+    let one = |b: &mut Build, result: TypeId, arg: TypeId, value: Value| {
+        b.function(Function {
+            name: format!("f{}", b.program.functions.len()),
+            params: 1,
+            locals: locals(&[result, arg]),
+            blocks: vec![block(vec![assign(place(0), value, 1)], ret())],
+        })
+    };
+    let neg32 = one(&mut b, f32t, f32t, Value::Unary(UnOp::Neg, copy(1)));
+    let casts = [(f32t, f32t), (f32t, f64t), (f64t, f64t), (f64t, f32t)];
+    let cast_fns: Vec<(TypeId, TypeId, FunctionId)> =
+        casts.iter().map(|(from, to)| (*from, *to, one(&mut b, *to, *from, Value::Cast(copy(1), *to)))).collect();
+    let from_bool: Vec<(Int, FunctionId)> = INTS
+        .iter()
+        .map(|t| {
+            let ty = b.int(*t);
+            (*t, one(&mut b, ty, boolean, Value::Cast(copy(1), ty)))
+        })
+        .collect();
+    let bool_bool = one(&mut b, boolean, boolean, Value::Cast(copy(1), boolean));
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    for x in floats_f64() {
+        let narrow = x as f32;
+        let got = run(&mut m, neg32, &[Scalar::F32(narrow)]).unwrap();
+        assert!(same_float(got[0], Scalar::F32(-narrow)), "-{narrow}");
+        for (from, to, f) in &cast_fns {
+            let arg = if *from == f32t { Scalar::F32(narrow) } else { Scalar::F64(x) };
+            let want = match (*from == f32t, *to == f32t) {
+                (true, true) => Scalar::F32(narrow),
+                (true, false) => Scalar::F64(f64::from(narrow)),
+                (false, false) => Scalar::F64(x),
+                (false, true) => Scalar::F32(x as f32),
+            };
+            let got = run(&mut m, *f, &[arg]).unwrap();
+            assert!(same_float(got[0], want), "{arg:?} as another float: {got:?} against {want:?}");
+        }
+    }
+    for flag in [false, true] {
+        for (t, f) in &from_bool {
+            assert_eq!(run(&mut m, *f, &[Scalar::Bool(flag)]), Ok(vec![int(*t, flag as i128)]), "{flag} as {t:?}");
+        }
+        assert_eq!(run(&mut m, bool_bool, &[Scalar::Bool(flag)]), Ok(vec![Scalar::Bool(flag)]));
+    }
+}
+
+#[test]
+fn a_wide_integer_becomes_the_nearest_float_in_one_rounding() {
+    // values whose nearest f32 differs from the f32 nearest to their nearest f64: rounding twice gets them wrong
+    let mut b = Build::default();
+    let (f32t, f64t) = (b.ty(Type::F32), b.ty(Type::F64));
+    let mut fns = vec![];
+    for t in [Int::U64, Int::I64, Int::Usize, Int::Isize, Int::U32, Int::I32] {
+        let ty = b.int(t);
+        for fty in [f32t, f64t] {
+            let f = b.function(Function {
+                name: format!("w{}", b.program.functions.len()),
+                params: 1,
+                locals: locals(&[fty, ty]),
+                blocks: vec![block(vec![assign(place(0), Value::Cast(copy(1), fty), 1)], ret())],
+            });
+            fns.push((t, fty == f32t, f));
+        }
+    }
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut values: Vec<i128> = vec![];
+    for k in 25..64 {
+        // 2^k + 2^(k-24) + 1: halfway between two f32s, plus one below the f64's precision
+        values.push((1i128 << k) + (1i128 << (k - 24)) + 1);
+        values.push((1i128 << k) + (1i128 << (k - 24)) - 1);
+        values.push((1i128 << k) + (1i128 << (k - 24)));
+        values.push(-((1i128 << k) + (1i128 << (k - 24)) + 1));
+    }
+    let mut checked = 0;
+    for (t, narrow, f) in &fns {
+        for v in &values {
+            if !t.holds(*v) {
+                continue;
+            }
+            let want = match (t.signed(), narrow) {
+                (true, true) => Scalar::F32(*v as i64 as f32),
+                (false, true) => Scalar::F32(*v as u64 as f32),
+                (true, false) => Scalar::F64(*v as i64 as f64),
+                (false, false) => Scalar::F64(*v as u64 as f64),
+            };
+            let got = run(&mut m, *f, &[int(*t, *v)]).unwrap();
+            assert!(same_float(got[0], want), "{v} of {t:?}: {got:?} against {want:?}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 200, "{checked}");
+    assert_eq!((((1u64 << 60) + (1 << 36) + 1) as f32).to_bits(), 0x5d80_0001, "the case rounds up once, down twice");
+}

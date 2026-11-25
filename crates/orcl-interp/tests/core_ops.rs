@@ -291,6 +291,43 @@ fn a_default_is_false_zero_or_no_time() {
     fns.push((caller(&mut b, CoreOp::Default, d, &[]), dur(Duration::default())));
     let mut m = Machine::load(b.program, &[]).unwrap();
     for (f, want) in fns {
-        assert_eq!(call(&mut m, f, &[]), want);
+        let got = call(&mut m, f, &[]);
+        // compared slot by slot and, for a float, bit for bit: `-0.0 == 0.0` would let a negative zero pass
+        assert_eq!(got.len(), want.len());
+        for (g, w) in got.iter().zip(&want) {
+            match (g, w) {
+                (Scalar::F32(x), Scalar::F32(y)) => assert_eq!(x.to_bits(), y.to_bits(), "f32's default"),
+                (Scalar::F64(x), Scalar::F64(y)) => assert_eq!(x.to_bits(), y.to_bits(), "f64's default"),
+                _ => assert_eq!(g, w),
+            }
+        }
+    }
+}
+
+#[test]
+fn a_checked_shift_s_none_after_a_some_into_the_same_place_leaves_no_payload() {
+    // fn f(a: u8) -> Option<u8> { _0 = a.checked_shl(1); _0 = a.checked_shl(9); _0 }, and the same with shr
+    let mut b = Build::default();
+    let (u8t, u32t) = (b.int(Int::U8), b.int(Int::U32));
+    let opt = b.option(u8t);
+    let mut fns = vec![];
+    for op in [CoreOp::CheckedShl(Int::U8), CoreOp::CheckedShr(Int::U8)] {
+        let sh = |n, next| Terminator::Call {
+            callee: Callee::Core(op),
+            args: vec![copy(1), konst(u32t, vec![int(Int::U32, n)])],
+            dest: place(0),
+            next: BlockId(next),
+            at: at(1),
+        };
+        fns.push(b.function(Function {
+            name: format!("{op:?}"),
+            params: 1,
+            locals: locals(&[opt, u8t]),
+            blocks: vec![block(vec![], sh(1, 1)), block(vec![], sh(9, 2)), block(vec![], ret())],
+        }));
+    }
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    for f in fns {
+        assert_eq!(call(&mut m, f, &[vec![int(Int::U8, 3)]]), vec![int(Int::Isize, 0), Scalar::Uninit]);
     }
 }

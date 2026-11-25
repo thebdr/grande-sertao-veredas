@@ -121,7 +121,7 @@ fn a_run_stopped_at_any_instruction_goes_on_to_the_same_end_and_a_copy_of_it_too
     let mut whole = Machine::load(program.clone(), &[]).unwrap();
     let want = whole.call(twice, &[Arg::Value(&arg)]).unwrap().to_vec();
     let steps = whole.steps();
-    for budget in [1u64, 2, 3, 7, 50, 333] {
+    for budget in 1u64..=333 {
         let mut m = Machine::load(program.clone(), &[]).unwrap();
         m.start(twice, &[Arg::Value(&arg)]).unwrap();
         assert_eq!(m.position(), Some((twice, BlockId(0), 0)));
@@ -393,4 +393,242 @@ fn the_same_program_and_arguments_give_the_same_memory_result_and_count_every_ti
         })
         .collect();
     assert!(runs.windows(2).all(|w| w[0] == w[1]));
+}
+
+/// A chain `f1` → `f2` → ... → `f{depth}`, the last giving 7 and each the one below's result plus one.
+fn chain(depth: u32) -> (Program, FunctionId) {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let mut below = b.function(Function {
+        name: format!("f{depth}"),
+        params: 0,
+        locals: locals(&[u8t]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 7)])), 1)], ret())],
+    });
+    for k in (1..depth).rev() {
+        below = b.function(Function {
+            name: format!("f{k}"),
+            params: 0,
+            locals: locals(&[u8t, u8t]),
+            blocks: vec![
+                block(vec![], Terminator::Call { callee: Callee::Function(below), args: vec![], dest: place(1), next: BlockId(1), at: at(k) }),
+                block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(1), konst(u8t, vec![int(Int::U8, 1)])), k)], ret()),
+            ],
+        });
+    }
+    (b.program, below)
+}
+
+#[test]
+fn a_copy_taken_at_any_instruction_or_idle_is_a_machine_of_its_own_that_goes_on_alike() {
+    // a copy at every instruction of a run, at every depth, each finished and compared with the run left alone
+    let (program, _, twice) = sum_program();
+    let arg = [int(Int::U32, 12)];
+    let mut alone = Machine::load(program.clone(), &[]).unwrap();
+    let want = alone.call(twice, &[Arg::Value(&arg)]).unwrap().to_vec();
+    let mut m = Machine::load(program, &[]).unwrap();
+    m.start(twice, &[Arg::Value(&arg)]).unwrap();
+    let mut copies = 0;
+    loop {
+        let mut copy = m.clone();
+        while copy.step().unwrap() == Step::Ran {}
+        assert_eq!((copy.result(), copy.steps(), copy.memory()), (want.as_slice(), alone.steps(), alone.memory()));
+        copies += 1;
+        if m.step().unwrap() == Step::Returned {
+            break;
+        }
+    }
+    assert_eq!(copies as u64, alone.steps(), "a copy at every instruction");
+    // a copy of an idle machine, and of one just started, through a chain of calls five deep
+    let (program, top) = chain(5);
+    let idle = Machine::load(program, &[]).unwrap();
+    let mut copy = idle.clone();
+    assert_eq!(copy.call(top, &[]).unwrap(), &[int(Int::U8, 11)]);
+    let mut started = idle.clone();
+    started.start(top, &[]).unwrap();
+    let mut copy = started.clone();
+    assert_eq!(copy.run(u64::MAX).unwrap(), Step::Returned);
+    assert_eq!((copy.result(), copy.depth()), (&[int(Int::U8, 11)][..], 0));
+    assert_eq!(started.run(u64::MAX).unwrap(), Step::Returned, "and the original, untouched by its copy");
+    assert_eq!(started.result(), &[int(Int::U8, 11)]);
+}
+
+#[test]
+fn a_budget_of_zero_runs_nothing_and_says_what_stands() {
+    let (program, sum, _) = sum_program();
+    let mut m = Machine::load(program, &[]).unwrap();
+    assert_eq!(m.run(0), Ok(Step::Idle), "nothing running");
+    let arg = [int(Int::U32, 3)];
+    m.start(sum, &[Arg::Value(&arg)]).unwrap();
+    assert_eq!((m.run(0), m.steps(), m.position()), (Ok(Step::Ran), 0, Some((sum, BlockId(0), 0))), "running, untouched");
+    assert_eq!(m.run(u64::MAX), Ok(Step::Returned));
+    let big = [int(Int::U32, 92_682)];
+    m.start(sum, &[Arg::Value(&big)]).unwrap();
+    let err = m.run(u64::MAX).unwrap_err();
+    assert_eq!(m.run(0), Err(err), "a failed entry's error");
+}
+
+#[test]
+fn a_second_start_while_an_entry_runs_is_refused_and_so_are_arguments_that_are_not_its_parameters() {
+    let (program, sum, twice) = sum_program();
+    let mut b = Build { program };
+    let (u8t, u16t, unit) = (b.int(Int::U8), b.int(Int::U16), b.unit());
+    let r = b.reference(u8t, true);
+    let takes_ref = b.function(Function { name: "takes_ref".into(), params: 1, locals: locals(&[unit, r]), blocks: vec![block(vec![], ret())] });
+    let mut m = Machine::load(b.program, &[u8t, u16t]).unwrap();
+    let arg = [int(Int::U32, 5)];
+    m.start(twice, &[Arg::Value(&arg)]).unwrap();
+    m.step().unwrap();
+    assert_eq!(m.start(sum, &[Arg::Value(&arg)]), Err(HostError::Busy), "inside a call");
+    assert_eq!(m.run(u64::MAX).unwrap(), Step::Returned);
+    assert_eq!(m.result(), u32s(30).as_slice(), "and the running entry went on undisturbed");
+    assert_eq!(m.start(sum, &[Arg::Value(&arg), Arg::Value(&arg)]), Err(HostError::Arguments), "too many");
+    assert_eq!(m.start(sum, &[]), Err(HostError::Arguments), "too few");
+    let u16_arg = [int(Int::U16, 5)];
+    assert_eq!(m.start(sum, &[Arg::Value(&u16_arg)]), Err(HostError::Arguments), "a value of another type");
+    assert_eq!(m.start(takes_ref, &[Arg::Ref(RegionId(1))]), Err(HostError::Arguments), "a region of another type");
+    assert_eq!(m.start(takes_ref, &[Arg::Ref(RegionId(0))]), Ok(()));
+}
+
+#[test]
+fn slots_that_are_no_value_of_a_region_s_type_are_refused() {
+    let mut b = Build::default();
+    let (u8t, d) = (b.int(Int::U8), b.ty(Type::Duration));
+    let opt = b.option(u8t);
+    let mut m = Machine::load(b.program, &[opt, d]).unwrap();
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 0), int(Int::U8, 9)]), Err(HostError::Slots), "None with a payload");
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 2), int(Int::U8, 9)]), Err(HostError::Slots), "no such variant");
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 1), int(Int::U8, 9)]), Ok(()));
+    assert_eq!(m.set_region(RegionId(1), &[int(Int::U64, 0), int(Int::U32, 1_000_000_000)]), Err(HostError::Slots), "a second's nanoseconds");
+    assert_eq!(m.set_region(RegionId(1), &[int(Int::U64, 0), int(Int::U32, 999_999_999)]), Ok(()));
+    assert_eq!(m.set_region(RegionId(2), &[]), Err(HostError::NoSuchRegion));
+}
+
+#[test]
+fn a_caller_s_own_local_is_written_through_a_reference_and_a_callee_indexes_its_own_locals() {
+    // fn bump(x: &mut u8) { *x = *x + 1 }  fn caller() -> u8 { let mut v = 5; bump(&mut v); bump(&mut v); v }
+    let mut b = Build::default();
+    let (u8t, unit, usize_t) = (b.int(Int::U8), b.unit(), b.int(Int::Usize));
+    let r = b.reference(u8t, true);
+    let one = konst(u8t, vec![int(Int::U8, 1)]);
+    let bump = b.function(Function {
+        name: "bump".into(),
+        params: 1,
+        locals: locals(&[unit, r]),
+        blocks: vec![block(vec![assign(proj(1, vec![Projection::Deref]), Value::Binary(BinOp::Add, copy_at(proj(1, vec![Projection::Deref])), one), 1)], ret())],
+    });
+    let call_bump = |next| Terminator::Call { callee: Callee::Function(bump), args: vec![copy(2)], dest: place(3), next: BlockId(next), at: at(2) };
+    let caller = b.function(Function {
+        name: "caller".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t, r, unit]),
+        blocks: vec![
+            block(vec![assign(place(1), Value::Use(konst(u8t, vec![int(Int::U8, 5)])), 1), assign(place(2), Value::Ref(place(1), true), 2)], call_bump(1)),
+            block(vec![], call_bump(2)),
+            block(vec![assign(place(0), Value::Use(copy(1)), 3)], ret()),
+        ],
+    });
+    // fn get(a: [u8; 4], i: usize) -> u8 { a[i] }  fn main(k: usize) -> u8 { get([10, 20, 30, 40], 3 - k) }
+    let arr = b.ty(Type::Array { element: u8t, len: 4 });
+    let get = b.function(Function {
+        name: "get".into(),
+        params: 2,
+        locals: locals(&[u8t, arr, usize_t]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Index(Local(2))]))), 1)], ret())],
+    });
+    let c = |v| konst(u8t, vec![int(Int::U8, v)]);
+    let main = b.function(Function {
+        name: "main".into(),
+        params: 1,
+        locals: locals(&[u8t, usize_t, arr, usize_t]),
+        blocks: vec![
+            block(
+                vec![
+                    assign(place(2), Value::Aggregate(arr, None, vec![c(10), c(20), c(30), c(40)]), 2),
+                    assign(place(3), Value::Binary(BinOp::Sub, konst(usize_t, vec![int(Int::Usize, 3)]), copy(1)), 2),
+                ],
+                Terminator::Call { callee: Callee::Function(get), args: vec![copy(2), copy(3)], dest: place(0), next: BlockId(1), at: at(2) },
+            ),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    assert_eq!(m.call(caller, &[]).unwrap(), &[int(Int::U8, 7)]);
+    for k in 0..4 {
+        let arg = [int(Int::Usize, k)];
+        assert_eq!(m.call(main, &[Arg::Value(&arg)]).unwrap(), &[int(Int::U8, 10 * (4 - k))], "a[3 - {k}] in the callee");
+    }
+}
+
+#[test]
+fn a_callee_calling_a_small_then_a_large_function_has_room_for_both() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let big = b.ty(Type::Array { element: u8t, len: 64 });
+    let leaf = |b: &mut Build, name: &str, extra: &[TypeId], v: i128| {
+        let mut types = vec![u8t];
+        types.extend_from_slice(extra);
+        b.function(Function {
+            name: name.into(),
+            params: 0,
+            locals: locals(&types),
+            blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, v)])), 1)], ret())],
+        })
+    };
+    let small = leaf(&mut b, "small", &[], 1);
+    let large = leaf(&mut b, "large", &[big], 2);
+    let call = |f, dest, next| Terminator::Call { callee: Callee::Function(f), args: vec![], dest: place(dest), next: BlockId(next), at: at(1) };
+    let mid = b.function(Function {
+        name: "mid".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t]),
+        blocks: vec![block(vec![], call(small, 1, 1)), block(vec![], call(large, 0, 2)), block(vec![], ret())],
+    });
+    let main = b.function(Function {
+        name: "main".into(),
+        params: 0,
+        locals: locals(&[u8t]),
+        blocks: vec![block(vec![], call(mid, 0, 1)), block(vec![], ret())],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    assert_eq!(m.call(main, &[]).unwrap(), &[int(Int::U8, 2)]);
+    assert_eq!(m.memory().len(), 1 + 2 + 65, "main's frame, mid's and the larger callee's, laid out");
+}
+
+/// `fn g(flag: bool) -> u8 { let y; if flag { y = 7 } y + 0 }`: its `y` unwritten when the flag is off.
+fn maybe_unwritten(b: &mut Build) -> FunctionId {
+    let (u8t, boolean) = (b.int(Int::U8), b.bool());
+    b.function(Function {
+        name: "g".into(),
+        params: 1,
+        locals: locals(&[u8t, boolean, u8t]),
+        blocks: vec![
+            block(vec![], Terminator::SwitchInt { value: copy(1), targets: vec![(0, BlockId(2))], otherwise: BlockId(1), at: at(1) }),
+            block(vec![assign(place(2), Value::Use(konst(u8t, vec![int(Int::U8, 7)])), 2)], Terminator::Goto(BlockId(2))),
+            block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(2), konst(u8t, vec![int(Int::U8, 0)])), 3)], ret()),
+        ],
+    })
+}
+
+#[test]
+fn a_local_is_unwritten_again_at_every_start_and_every_call() {
+    let mut b = Build::default();
+    let g = maybe_unwritten(&mut b);
+    let (u8t, boolean) = (b.int(Int::U8), b.bool());
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[u8t, boolean]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(g), args: vec![copy(1)], dest: place(0), next: BlockId(1), at: at(4) }),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    for entry in [g, f] {
+        assert_eq!(m.call(entry, &[Arg::Value(&[Scalar::Bool(true)])]).unwrap(), &[int(Int::U8, 7)]);
+        let e = m.call(entry, &[Arg::Value(&[Scalar::Bool(false)])]).map(|r| r.to_vec());
+        assert!(matches!(e, Err(CallError::Program(ProgramError { kind: ErrorKind::Uninit, function, .. })) if function == g), "{e:?}");
+        m.abort();
+    }
 }
