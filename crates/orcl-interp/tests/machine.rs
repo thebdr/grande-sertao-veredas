@@ -1454,3 +1454,48 @@ fn a_callee_writes_the_caller_s_array_through_a_reference_and_nested_indices_rea
         assert_eq!(got, dur(want), "(o[{i}] as Some).0");
     }
 }
+
+// Round 8's (the critic's kill-tests, kept): a failed statement's position, and a budget's count.
+
+#[test]
+fn a_failed_statement_leaves_the_machine_at_that_statement() {
+    // fn f() -> u8 { let y; _0 = 1; _0 = y + 1 }: the second statement fails, and the machine stands at it
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let one = || konst(u8t, vec![int(Int::U8, 1)]);
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(one()), 1), assign(place(0), Value::Binary(BinOp::Add, copy(1), one()), 2)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let err = m.call(f, &[]).unwrap_err();
+    assert_eq!(err, CallError::Program(ProgramError { function: f, block: BlockId(0), statement: Some(1), at: at(2), kind: ErrorKind::Uninit }));
+    assert_eq!(m.position(), Some((f, BlockId(0), 1)), "the machine stays at the failed statement");
+    assert_eq!(m.clone().position(), Some((f, BlockId(0), 1)), "and so does a copy of it");
+}
+
+#[test]
+fn a_budget_runs_that_many_instructions_and_no_more() {
+    // fn f() -> u8 { _0 = 1; _0 = _0 + 1; ... } with nine statements, then its return
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let one = || konst(u8t, vec![int(Int::U8, 1)]);
+    let mut statements = vec![assign(place(0), Value::Use(one()), 1)];
+    for k in 2..=9 {
+        statements.push(assign(place(0), Value::Binary(BinOp::Add, copy(0), one()), k));
+    }
+    let f = b.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(statements, ret())] });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    m.start(f, &[]).unwrap();
+    let mut ran = 0u64;
+    for budget in [1u64, 2, 3] {
+        assert_eq!(m.run(budget), Ok(Step::Ran));
+        ran += budget;
+        assert_eq!((m.steps(), m.position()), (ran, Some((f, BlockId(0), ran as u32))), "a budget of {budget}");
+    }
+    // three statements and the return are left: a budget of four ends on the return, one more than that is unused
+    assert_eq!(m.run(5), Ok(Step::Returned));
+    assert_eq!((m.steps(), m.result()), (10, &[int(Int::U8, 9)][..]));
+}

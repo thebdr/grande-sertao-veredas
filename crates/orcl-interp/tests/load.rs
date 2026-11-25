@@ -898,3 +898,56 @@ fn a_variant_of_one_slot_beside_many_fields_of_no_slot_is_checked_by_its_one_slo
     assert_eq!(within_a_minute(move || Machine::load(p, &[]).map(|_| ())), Some(Ok(())));
     assert_eq!(within_a_minute(move || Machine::load(bad, &[]).map(|_| ())), Some(Err(at_statement("a constant whose slots are not its type's"))), "one slot of another kind");
 }
+
+// Round 8's (the critic's kill-tests, kept): sizes past reach summed, and an index local that does not exist.
+
+#[test]
+fn a_structure_and_an_enum_variant_past_reach_are_refused_as_too_large() {
+    // struct S { a: [u8; 2^31], b: [u8; 2^31] }: 2^32 slots, past what a slot's index reaches
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let half = b.ty(Type::Array { element: u8t, len: 1 << 31 });
+    let s = b.tuple(&[half, half]);
+    assert_eq!(Machine::load(b.program, &[]).map(|_| ()), Err(LoadError::Type { ty: s.0, reason: "too large" }), "a structure");
+    // enum E { A([u8; 2^31], [u8; 2^31]) }: its discriminant and 2^32 slots
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let half = b.ty(Type::Array { element: u8t, len: 1 << 31 });
+    let e = b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::U8,
+        variants: vec![Variant { name: "A".into(), discriminant: 0, fields: vec![Field { name: "0".into(), ty: half }, Field { name: "1".into(), ty: half }] }],
+    });
+    assert_eq!(Machine::load(b.program, &[]).map(|_| ()), Err(LoadError::Type { ty: e.0, reason: "too large" }), "a variant");
+}
+
+#[test]
+fn a_region_and_a_stack_past_reach_together_are_refused() {
+    // a region of 2^31 slots and a function whose frame holds 2^31: each within reach, the two past it
+    let mut b = Build::default();
+    let (u8t, unit) = (b.int(Int::U8), b.unit());
+    let half = b.ty(Type::Array { element: u8t, len: 1 << 31 });
+    b.function(Function { name: "f".into(), params: 0, locals: locals(&[unit, half]), blocks: vec![block(vec![], ret())] });
+    assert_eq!(
+        Machine::load(b.program, &[half]).map(|_| ()),
+        Err(LoadError::Region { index: 1, reason: "memory past the machine's reach" })
+    );
+}
+
+#[test]
+fn an_index_by_a_local_that_does_not_exist_is_refused() {
+    // _0 = _1[_9] in a function of two locals
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let arr = b.ty(Type::Array { element: u8t, len: 4 });
+    b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[u8t, arr]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Index(Local(9))]))), 1)], ret())],
+    });
+    assert_eq!(
+        Machine::load(b.program, &[]).map(|_| ()),
+        Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "no such local" })
+    );
+}
