@@ -1028,10 +1028,11 @@ fn string_at(code: &str, i: usize) -> Option<(usize, String)> {
 /// The string literal opening at `i` as rustc reads one: at every `"` (after a number too: `1"/*"`
 /// is the number 1 and the string `/*`), and at a `b`, `c` or `r` prefix that starts a token: not
 /// the `r` ending `attr`, nor the one of a raw identifier (`r#r"\"…"` is `r#r` and a plain string)
-/// or of a lifetime (`'r"\"…"`).
+/// or of a lifetime (`'r"\"…"`), nor the one right after a string's closing quote, which is that
+/// string's suffix (`"x"r"\"…"` is `"x"`, the suffix `r` and a plain string).
 fn string_token_at(code: &str, i: usize) -> Option<(usize, String)> {
     let b = code.as_bytes();
-    if b.get(i) != Some(&b'"') && i > 0 && (b[i - 1].is_ascii_alphanumeric() || matches!(b[i - 1], b'_' | b'#' | b'\'')) {
+    if b.get(i) != Some(&b'"') && i > 0 && (b[i - 1].is_ascii_alphanumeric() || matches!(b[i - 1], b'_' | b'#' | b'\'' | b'"')) {
         return None;
     }
     string_at(code, i)
@@ -1452,15 +1453,46 @@ fn no_socket_in_its_sources_or_the_engine_s() {
     files.extend(library_files.iter().cloned());
     files.extend(script_files.iter().cloned());
     assert!(files.iter().any(|f| f.ends_with("forks/ironcalc/base/build.rs")));
+    let relative = |f: &Path| f.canonicalize().unwrap_or_else(|_| f.to_path_buf()).strip_prefix(root().canonicalize().unwrap()).map(|p| p.display().to_string()).unwrap_or_else(|_| f.display().to_string());
+    let mut macros: Vec<(String, String)> = Vec::new();
+    let mut scripts: Vec<(String, String)> = Vec::new();
     for file in &files {
-        let text = String::from_utf8_lossy(&std::fs::read(file).unwrap()).to_string();
+        let bytes = std::fs::read(file).unwrap();
+        let text = String::from_utf8_lossy(&bytes).to_string();
         // a build script's source (and none a library compiles) may run `git`
         let canonical = file.canonicalize().unwrap_or_else(|_| file.clone());
         let script = script_files.contains(&canonical) && !library_files.contains(&canonical);
         if let Some(route) = socket_route_in(&text, script) {
             panic!("{}: {route}", file.display());
         }
+        for m in macro_definitions(&without_comments(&text)) {
+            macros.push((relative(file), sha256_hex(m.as_bytes())));
+        }
+        if script {
+            scripts.push((relative(file), sha256_hex(&bytes)));
+        }
     }
+    // every macro and every build script the reviewed one
+    macros.sort();
+    macros.dedup();
+    scripts.sort();
+    scripts.dedup();
+    let pinned = |list: &[(&str, &str)]| -> Vec<(String, String)> { list.iter().map(|(f, h)| (f.to_string(), h.to_string())).collect() };
+    assert_eq!(macros, pinned(REVIEWED_MACROS), "a `macro_rules!` not reviewed (its file and SHA-256)");
+    assert_eq!(scripts, pinned(REVIEWED_BUILD_SCRIPTS), "a build script not reviewed (its file and SHA-256)");
+    // and every file compiled is the repository's: tracked and unchanged (an ignored
+    // `src/target/mod.rs` a module names is none)
+    for file in &files {
+        let rel = relative(file);
+        let tracked = Command::new("git").args(["ls-files", "--error-unmatch", "--", &rel]).current_dir(root()).output().unwrap();
+        assert!(tracked.status.success(), "{rel} is compiled and not in the repository");
+    }
+    let mut paths: Vec<String> = ["crates/veredas-abaco/src", "forks/ironcalc/base/src", "forks/ironcalc/xlsx/src"].iter().map(|s| s.to_string()).collect();
+    paths.extend(scripts.iter().map(|(f, _)| f.clone()));
+    let mut args: Vec<&str> = vec!["status", "--porcelain", "--ignored", "--untracked-files=all", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let changed = git(&args);
+    assert!(changed.trim().is_empty(), "sources changed, added or ignored beside the repository's:\n{changed}");
 }
 
 /// The words of the standard library's sockets and Winsock, matched in a source's text whole.
@@ -1472,6 +1504,71 @@ const SOCKET_WORDS: [&str; 11] =
 /// find a function by a name built at run time.
 const SOCKET_IDENTIFIERS: &[&str] =
     &["net", "ToSocketAddrs", "lookup_host", "libc", "dlsym", "dlvsym", "dlopen", "dlmopen", "GetProcAddress", "LoadLibraryA", "LoadLibraryW", "LoadLibraryExA", "LoadLibraryExW", "link_ordinal"];
+
+/// Every `macro_rules!` definition of `code` (comments blanked): its text from `macro_rules!` to the
+/// end of the group that holds its rules.
+fn macro_definitions(code: &str) -> Vec<String> {
+    let b = code.as_bytes();
+    let mut out = Vec::new();
+    for (start, _) in code.match_indices("macro_rules!") {
+        let Some(open) = code[start..].find(['{', '(', '[']).map(|o| start + o) else { continue };
+        let mut depth = 0;
+        let mut k = open;
+        while k < b.len() {
+            if let Some((end, _)) = string_token_at(code, k) {
+                k = end;
+                continue;
+            }
+            if let Some(end) = char_at(code, k) {
+                k = end;
+                continue;
+            }
+            match b[k] {
+                b'{' | b'(' | b'[' => depth += 1,
+                b'}' | b')' | b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            k += 1;
+        }
+        out.push(code[start..(k + 1).min(code.len())].to_string());
+    }
+    out
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The `macro_rules!` of the three packages' sources, each reviewed, by its file and the SHA-256 of
+/// its text: a macro's transcriber can put a call, an attribute or an `extern` block together from
+/// its inputs out of any reading's sight, so a macro not here, or changed, fails until it is
+/// reviewed again.
+const REVIEWED_MACROS: &[(&str, &str)] = &[
+    // `time_part_fn`, `date_part_fn`, the date parts' `elem`
+    ("forks/ironcalc/base/src/functions/date_and_time.rs", "65439b6defe783f49745a964093e999614cc1da1bc2ca1f3a6c9e8bbee62dabe"),
+    ("forks/ironcalc/base/src/functions/date_and_time.rs", "783a1593b7bcb6357acf87eeb671cf5fc9340439d807595909c1a59b2c27771f"),
+    ("forks/ironcalc/base/src/functions/date_and_time.rs", "988b6a49db116e4b6e513d26b247e0f1f7ce0fbc1fd7b793abac3a9a550bfe90"),
+    // `single_number_fn`
+    ("forks/ironcalc/base/src/functions/macros.rs", "234c2ec3b8f017246b18ede98174d187d241c6fbebe1a56144ab2048e0fd19ca"),
+    // `impl_function_lookup`
+    ("forks/ironcalc/base/src/functions/mod.rs", "bee14d1023e56c9b03408594a0424ea5ad520d69adcc5324094749bb3daa3b7f"),
+];
+
+/// The build scripts of the three packages, each reviewed, by the SHA-256 of its bytes: what a
+/// build script runs (base's runs `git describe`) is read in it, so a changed one fails until it is
+/// reviewed again.
+const REVIEWED_BUILD_SCRIPTS: &[(&str, &str)] = &[
+    // base's release for `INFO("release")`: `git describe` twice, `rerun-if-changed`, `rustc-env`
+    ("forks/ironcalc/base/build.rs", "88c2bf9753fcf76cb217662b3a11714e5bc3d00e95d012be27b3cb12d519ed2a"),
+    // xlsx's: the calc tests' functions generated from the test folders, `rerun-if-changed`
+    ("forks/ironcalc/xlsx/build.rs", "39e76676fbda0d81d9a944edbd12c206bb23b765402f1e803b001839cfe41604"),
+];
 
 /// The foreign items the three packages declare, each reviewed: the engine's time zones in a
 /// browser, read through the JavaScript of [`INLINE_JS_SHA256`]. An `extern` block declaring any
@@ -1652,6 +1749,8 @@ fn every_route_the_critics_found_is_a_socket_route() {
         ("js_sys under an alias", "use js_sys as j; fn f() { let _ = j::eval(\"x\"); }"),
         ("an Array's constructor", "let f = js_sys::Array::new().constructor().constructor();"),
         ("a child process", "fn f() { let _ = std::process::Command::new(\"bash\").args([\"-c\", \"exec 3<>/dev/tcp/plant/4840\"]).status(); }"),
+        // the round at 3df0bd89: an `r` after a string's closing quote is its suffix
+        ("a suffix before a string", "const _: &str = stringify!(\"x\"r\"\\\" /* \");\nunsafe extern \"C\" { fn socket(d: i32) -> i32; }\n// */"),
     ] {
         assert!(socket_route(text).is_some(), "{what}: {text}");
     }
@@ -1667,6 +1766,13 @@ fn every_route_the_critics_found_is_a_socket_route() {
         assert!(socket_route_in(script, true).is_some(), "{script}");
     }
     assert_eq!(socket_route("let n = std::process::id();"), None);
+    // a macro is found whole, so a transcriber that puts a call, an attribute or an `extern` block
+    // together from its inputs is a definition the reviewed list must hold
+    let glue = "macro_rules! glue { ($m:ident, $b:tt, $c:tt) => { $m $b $c; } }\nmacro_rules! item { ($h:tt, $a:tt, $i:item) => { $h $a $i }; }";
+    let found = macro_definitions(glue);
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found[0].starts_with("macro_rules! glue") && found[0].ends_with("$m $b $c; } }"), "{found:?}");
+    assert!(found.iter().all(|m| !REVIEWED_MACROS.iter().any(|(_, h)| *h == sha256_hex(m.as_bytes()))));
     assert!(socket_route("// see std::net").is_some());
 }
 
@@ -1854,6 +1960,31 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
     for file in ["tests/column_outline_roundtrip.rs", "tests/missing_styles_part_import.rs", "tests/excel_function_spelling.rs", "tests/package_relationships.rs"] {
         assert!(stderr.contains(file), "{file} did not run:\n{stderr}");
     }
+    // and the engine's build scripts, run for the fork's own test build (its features its own:
+    // `mock_time` among them), gave cargo no instruction Ábaco's build refuses: what cargo kept of
+    // every run under this target folder, read as `built` reads Ábaco's
+    let mut outputs = Vec::new();
+    let mut stack = vec![target.join("debug").join("build")];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let path = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                // the engine's two packages' folders (`ironcalc_base`, `ironcalc-<hash>`), and below them
+                if d != target.join("debug").join("build") || name.starts_with("ironcalc") {
+                    stack.push(path);
+                }
+            } else if name == "output" || (name == "stdout" && path.parent().is_some_and(|p| p.ends_with("run"))) {
+                outputs.push(path);
+            }
+        }
+    }
+    assert!(!outputs.is_empty(), "no kept output of the engine's build scripts under {}", target.display());
+    for output in &outputs {
+        for line in std::fs::read_to_string(output).unwrap().lines().map(str::trim).filter(|l| l.starts_with("cargo:")) {
+            assert_eq!(refused_instruction(line), None, "{}: the fork's test build's script prints `{line}`", output.display());
+        }
+    }
 }
 
 /// The rows of every table of the record's `## Local changes` section (to the next heading of level 1
@@ -1982,15 +2113,14 @@ fn change_rows(record: &str) -> Vec<String> {
     };
     for k in 1..end {
         let (head, delim) = (bare(lines[k - 1]), bare(lines[k]));
-        // (a line of indented code, four columns in outside a quote, is no header)
-        let code_line = |l: &str| column_of(l) >= 4 && !l.trim_start().starts_with('>');
-        // (one at the margin outside a quote is a paragraph's lazy line, or no table: GFM shows none)
+        // (one at the margin outside a quote is a paragraph's lazy line, or no table: GFM shows none;
+        // one indented is a list item's, whatever its marker's width, `10. ` and `-   ` holding their
+        // content four columns in, so no indent is taken for code; a delimiter of `-` alone could be
+        // a setext heading's underline, so a pipe or a colon marks one)
         let nested = lines[k].trim_start().starts_with('>') || column_of(lines[k]) >= 1;
         if !read[k]
             && nested
-            && !code_line(lines[k - 1])
-            && !code_line(lines[k])
-            && delim.contains('|')
+            && delim.contains(['|', ':'])
             && delimiter(&delim)
             && gfm_cells(&head).len() == gfm_cells(&delim).len()
         {
@@ -2286,6 +2416,17 @@ fn the_record_s_rows_are_read_as_markdown_reads_a_table() {
     assert!(change_rows(record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{:?}", change_rows(record));
     let record = "## Local changes\nSome text\n<span class=\"x\">\n| # | Change |\n|---|---|\n| 32 | after a span |\n";
     assert_eq!(change_rows(record), ["32"]);
+    // the round at 3df0bd89: a list item whose marker is wide holds its table four columns in
+    // (`10. `, `-   `), loose or tight, and a quote's one-column table with no pipe: each fails the
+    // reading, which does not read it
+    for record in [
+        "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n10. Later:\n\n    | # | Change |\n    |---|---|\n    | 33 | in the item |\n",
+        "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n10. | # | Change |\n    |---|---|\n    | 33 | tight |\n",
+        "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n-   Later:\n\n    | # | Change |\n    |---|---|\n    | 33 | wide bullet |\n",
+        "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n> Change\n> :--\n> 33\n",
+    ] {
+        assert!(change_rows(record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{record:?}: {:?}", change_rows(record));
+    }
     // cells split at unescaped pipes alone, one leading pipe passed over
     assert_eq!(gfm_cells("||28| a \\| b |"), ["", "28", "a \\| b"]);
 }
