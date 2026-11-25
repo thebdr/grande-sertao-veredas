@@ -197,7 +197,8 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   takeover. takeover after restart remains possible for all cases". So the previous version can
   always be put back for the next start; a live takeover happens only for an edit that nothing
   disqualifies; and what disqualifies an edit is a specification controlador writes whole, as a
-  proposal the architect rules as a document (2026-11-25, Q32). After a fallback the state carries
+  proposal the architect rules as a document (2026-11-25, Q32): `docs/controlador/live-takeover.md`,
+  written the same day and not ruled. After a fallback the state carries
   the maintenance request `fault_on_update`; an edit that failed (the old version took over, or the
   edit was put back) leaves a fault record named "the edit failed", not a controller fault; and
   while the old version watches and may still take over, the state text carries a term with the
@@ -504,8 +505,8 @@ Where each item stands on 2026-11-25:
   Resilience Act; the fieldbus organisations' terms), 40 and 41 (no language a PLC programmer
   knows; no closed loop), 44 (libraries; structures), 46 (what a Rust engineer gets), and the
   minors 47 to 50, 53 and 55.
-- **Q32** the specification of what disqualifies an edit from a live takeover, which controlador
-  owes as a proposal. **Q42** the robustness round's areas not opened. **Q43** the security round.
+- **Q32** the specification of what disqualifies an edit from a live takeover, proposed in
+  `docs/controlador/live-takeover.md` for the architect to rule. **Q42** the robustness round's areas not opened. **Q43** the security round.
   **Q44** the conversion's type table. **Q45** the briefing's readings.
 - Ruled and not yet stated by the crates here: **Q35** the licence, `MIT OR Apache-2.0`, its files
   naming the repository's owner.
