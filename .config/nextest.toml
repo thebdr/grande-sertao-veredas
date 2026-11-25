@@ -18,6 +18,14 @@ threads-required = 'num-cpus'
 filter = '(package(veredas-core) & (binary(enip_scanner) | binary(modbus_client))) | package(mestres)'
 threads-required = 'num-cpus'
 
+# Aranha's listener and asking measure their pace where the wire is handed each frame, against
+# bounds a few milliseconds wide (C-142, C-144): under the whole suite's processes a 20 ms poll came
+# late, the load's doing, not the code's (docs/aranha-plan.md, "Traps"). Each runs with the machine
+# to itself.
+[[profile.default.overrides]]
+filter = 'package(veredas-aranha) & (test(the_defaults_and_the_pace_are_what_the_listener_promises) | test(sending_is_paced_bounded_and_only_where_it_listens) | test(an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer) | test(askers_at_once_each_take_their_turn_and_their_answers))'
+threads-required = 'num-cpus'
+
 # A test that keeps the machine's cores busy for seconds (a slow view read through a dashboard, so
 # a stop meets a computation still running: C-049) runs alone too, so its load lands on no other
 # test's timing (a dashboard asked between two equal computations, a page waited for).

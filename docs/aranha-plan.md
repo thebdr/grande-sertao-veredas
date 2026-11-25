@@ -299,6 +299,9 @@ is pinned by a test when its phase lands.
   bench devices, C-144) forwards DCP's group addresses but not `01:80:c2:00:00:0e`, as a switch
   does not: behind it a device is heard by its DCP, and a test that needs its LLDP cables it to the
   listener directly (C-143).
+- **A pace measured under the whole suite's load comes late.** The listener's and asking's timed
+  tests bound the pace within a few milliseconds where the wire is handed each frame; they run
+  with the machine to themselves (`.config/nextest.toml`), as maquinar's timed tests do.
 - **A private network's `/sys` is the host's.** The namespace is a network of its own, but sysfs
   stays mounted as the host's, so its interfaces are not in `/sys/class/net`: a test reads an
   interface's MAC from a raw link on it (C-143), or asks the kernel by netlink (`ip`).
