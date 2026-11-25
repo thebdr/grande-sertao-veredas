@@ -79,8 +79,19 @@ target's settings (`veredas-alvo`), not built yet.
   broken) ends the entry's run with a typed error that names the instruction's source location; the machine is
   left as it was at that instruction, for the fault record. Never a panic (O11).
 - **The engine of a scan** runs an interpreted program as it runs a native one. A native `Program::scan` cannot
-  fail, so `orcl-runtime` gains a program whose scan may end in a program error, which the task turns into its
-  fault; a native program is that kind of program and never fails (C-151 changes with it).
+  fail, so `orcl-runtime` runs a `TaskProgram`, whose scan may end in an error of its own, which the task turns
+  into its fault (`Fault::Program`, dated at the scan's start, its outputs never written, the safe outputs from
+  then on, as for the watchdog's); a native `Program` is a `TaskProgram` that never fails (C-151).
+- **An interpreted program on the engine** (`orcl_runtime::Interpreted`, C-155) is a machine and its scan entry,
+  `fn scan(&mut self, scan: &Scan, inputs: &I, outputs: &mut O)` as the front end lowers it, over four regions:
+  the program's state, the scan, the inputs and the outputs. Its inputs and outputs are the native program's own
+  types, `Copy` and `Default`, each read from and written to slots by an `Image`, so a native program and its
+  interpreted twin run on the same task, the same plant and the same clock, which the conformance suite compares.
+  Each scan writes the scan, the inputs and the output image the task holds into their regions, calls the entry
+  to its return, and reads the outputs back; nothing is allocated. A program error faults the task, and the
+  machine is left at the instruction that failed, for the fault record. Its first state and its safe outputs are
+  handed in when it is made (Q231). A scan that never returns is the host's watchdog's to catch, as a native
+  one's is; an instruction budget per scan would let the engine stop it itself (open).
 - **Determinism**: no host time or randomness inside the machine; integer and float operations as Rust's on every
   target (IEEE 754 for the basic float operations; no transcendental function is on the list); the same program,
   inputs and scan times give the same outputs and the same instruction count.
@@ -103,14 +114,18 @@ with Veredas 1's conveyor and a probe that reaches every block of `orcl-std` and
 1. **`orcl-interp`'s program and machine**, its tests on stable with programs built by hand in Rust, as the bench's
    fixtures are (fixture first): every instruction, every place, the faults, memory laid out at load, a scan halted
    at an instruction and resumed. Built on 2026-11-25 (C-153), with `orcl-std`'s on-delay and rising edge lowered by
-   hand and run beside the native blocks. The engine of a scan running an interpreted program comes with the
-   program kind whose scan may fail ("Running"), a change to C-151.
-2. **The program file**: written and read back, its header checked, a file refused by name. Built on 2026-11-25
+   hand and run beside the native blocks.
+2. **The engine of a scan running an interpreted program**, with the program kind whose scan may fail
+   ("Running"): C-151 changed, C-155 new, on 2026-11-25, a hand-lowered program and its native twin on one task.
+3. **The program file**: written and read back, its header checked, a file refused by name. Built on 2026-11-25
    (C-154): every file it accepts writes back to the very same bytes, and one small program's bytes are pinned.
-3. **`crates/orcl-front`**: the shell on stable, the driver on the nightly lowering the conveyor and the probe. A
+4. **`crates/orcl-front`**: the shell on stable, the driver on the nightly lowering the conveyor and the probe. A
    clause, its run the nightly command.
-4. **The conformance suite and the closed list** as it grows.
+5. **The conformance suite and the closed list** as it grows.
 
 ## Open
 - **Q230** a program whose functions call themselves: refused at load (taken meanwhile), or run on a stack of a size
   the target sets, a fault when it is exceeded.
+- **Q231** where an interpreted program's first state and safe outputs come from: handed in by the host at load
+  (taken meanwhile; the front end would compute them), or entries the machine calls.
+- **An instruction budget per scan**, so the engine stops a scan that never returns rather than the host's watchdog.

@@ -9,15 +9,18 @@
 //! drawn so that starts, ends and writes land on deadlines, a nanosecond either side of them, and at one and two
 //! periods, with periods from a microsecond to two seconds; the program's safe outputs depend on its own state. One
 //! step in twenty the host is away for up to a million periods, and a wait that has to wait wakes past its deadline,
-//! by a nanosecond, part of a period or more, as a target's does under load. Three mixes: anything (the watchdog's fault early in
-//! most sequences), every scan held to twice the period (the task runs the whole way), and held so until a step drawn
-//! late in the run, after a drawn streak of time errors, where the task faults. After every step the model and the
-//! engine must agree on everything the clause states.
+//! by a nanosecond, part of a period or more, as a target's does under load. The program's scan may end in an error
+//! of its own, after writing junk into its outputs: the task faults so too, dated at the scan's start, its outputs
+//! never written, and the error is the fault even on a scan past twice the period. Three mixes: anything (the
+//! watchdog's fault early in most sequences, one scan in forty failing), every scan held to twice the period and none
+//! failing (the task runs the whole way), and held so until a step drawn late in the run, after a drawn streak of time
+//! errors, where the task faults by the watchdog, by the program's error, or by both on one scan. After every step the
+//! model and the engine must agree on everything the clause states.
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use orcl_runtime::{Clock, Fault, Io, RunState, Task, TaskConfig, VirtualClock};
+use orcl_runtime::{Clock, Fault, Io, RunState, Task, TaskConfig, TaskProgram, VirtualClock};
 use orcl_std::{Program, Scan};
 
 /// A small deterministic generator (xorshift64*), so every run draws the same sequences.
@@ -36,11 +39,13 @@ impl Draw {
     }
 }
 
-/// The lengths the plant and the program take, one per read, scan and write, pushed in step by step.
+/// The lengths the plant and the program take, one per read, scan and write, and whether each scan fails, pushed in
+/// step by step.
 #[derive(Default)]
 struct Costs {
     read: Vec<u128>,
     scan: Vec<u128>,
+    fail: Vec<bool>,
     write: Vec<u128>,
 }
 
@@ -50,7 +55,8 @@ fn ns(v: u128) -> Duration {
 
 /// Takes the time it is told, computes its output from the outputs it is handed and its input (three times the
 /// output it is handed, plus its input, plus one), so the output image the engine hands it shows in every write, and
-/// declares safe outputs that depend on its state: 1000 plus the last input it scanned.
+/// declares safe outputs that depend on its state: 1000 plus the last input it scanned. A scan it is told to fail
+/// takes its time, writes junk into its outputs and fails with its own index.
 struct Program1 {
     clock: VirtualClock,
     costs: Rc<RefCell<Costs>>,
@@ -59,20 +65,30 @@ struct Program1 {
     last_scan: Option<Scan>,
 }
 
-impl Program for Program1 {
+/// The junk a failing scan leaves in its outputs, which no write may show.
+const JUNK: u64 = 0xdead_beef_dead_beef;
+
+impl TaskProgram for Program1 {
     type Inputs = u64;
     type Outputs = u64;
+    type Error = usize;
 
-    fn scan(&mut self, scan: &Scan, inputs: &u64, outputs: &mut u64) {
-        let cost = self.costs.borrow().scan[self.scans];
+    fn scan(&mut self, scan: &Scan, inputs: &u64, outputs: &mut u64) -> Result<(), usize> {
+        let (cost, fail) = (self.costs.borrow().scan[self.scans], self.costs.borrow().fail[self.scans]);
+        let index = self.scans;
         self.scans += 1;
         self.last_input = *inputs;
         self.last_scan = Some(*scan);
         self.clock.advance(ns(cost));
+        if fail {
+            *outputs = JUNK;
+            return Err(index);
+        }
         *outputs = outputs.wrapping_mul(3).wrapping_add(inputs + 1);
+        Ok(())
     }
 
-    fn safe_outputs(&self) -> u64 {
+    fn safe_outputs(&mut self) -> u64 {
         1000 + self.last_input
     }
 }
@@ -100,13 +116,22 @@ impl Io<u64, u64> for Plant {
     }
 }
 
+/// Why the model's task faulted: the watchdog, with the scan's length, or the program, with its scan's index.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Why {
+    Watchdog(u128),
+    Program(usize),
+}
+
 /// The reference model: the clause, in nanoseconds.
 #[derive(Default)]
 struct Model {
     period: u128,
     now: u128,
     cycle: u128,
-    faulted: Option<(u128, u128)>,
+    faulted: Option<(u128, Why)>,
+    /// The program's scans so far.
+    scans: usize,
     last_input: u64,
     /// The output image as the last scan left it, which the next scan's program is handed.
     image: u64,
@@ -130,7 +155,7 @@ struct Seen {
 }
 
 impl Model {
-    fn step(&mut self, host: u128, wake: u128, read: u128, scan: u128) -> Seen {
+    fn step(&mut self, host: u128, wake: u128, read: u128, scan: u128, fail: bool) -> Seen {
         self.now += host;
         let due = self.cycle * self.period;
         // a wait that has to wait wakes `wake` past the deadline; a deadline passed already runs at once
@@ -140,18 +165,22 @@ impl Model {
         self.reads.push(start);
         self.now += read;
         let running = self.faulted.is_none();
+        let failed = running && fail;
         if running {
             self.last_input = input;
             self.now += scan;
+            self.scans += 1;
         }
         let end = self.now;
         let exec = end - start;
         let time_error = running && exec > self.period;
         if time_error {
             self.overruns += 1;
-            if exec > 2 * self.period {
-                self.faulted = Some((start, exec));
-            }
+        }
+        if failed {
+            self.faulted = Some((start, Why::Program(self.scans - 1)));
+        } else if time_error && exec > 2 * self.period {
+            self.faulted = Some((start, Why::Watchdog(exec)));
         }
         let outputs = if self.faulted.is_none() {
             self.image.wrapping_mul(3).wrapping_add(input + 1)
@@ -203,19 +232,30 @@ fn length(draw: &mut Draw, period: u128, from: u128, rarely_long: bool) -> u128 
 /// How a sequence's scans are drawn.
 #[derive(Clone, Copy)]
 enum Mix {
-    /// Anything: most sequences fault early.
+    /// Anything: most sequences fault early, one scan in forty failing.
     Free,
-    /// Every scan held to twice the period, so the task runs the whole sequence with its time errors, skips, late
-    /// starts and output image.
+    /// Every scan held to twice the period, none failing, so the task runs the whole sequence with its time errors,
+    /// skips, late starts and output image.
     NeverFaults,
     /// Held to twice the period up to a step drawn between the 60th and the 1960th, the scans before it a drawn streak
-    /// of up to 40 time errors, then a scan past twice the period, so the watchdog meets a task far into its run.
+    /// of up to 40 time errors, then a scan that faults the task far into its run: past twice the period, failing
+    /// within it, or both.
     FaultsLate,
 }
 
-/// What a sequence draws once: its period, and for `FaultsLate` the step of its fault and the streak before it.
-fn draw_sequence(seed: u64, mix: Mix) -> (Draw, u128, Option<(usize, usize)>) {
+/// How a `FaultsLate` sequence's task faults.
+#[derive(Clone, Copy, PartialEq)]
+enum Late {
+    Watchdog,
+    Program,
+    Both,
+}
+
+/// What a sequence draws once: its period, and for `FaultsLate` the step of its fault, the streak before it and how
+/// it faults. Whether a scan fails is drawn from a stream of its own, returned with the sequence's.
+fn draw_sequence(seed: u64, mix: Mix) -> (Draw, Draw, u128, Option<(usize, usize, Late)>) {
     let mut draw = Draw(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+    let mut fails = Draw(seed.wrapping_mul(0xbf58_476d_1ce4_e5b9) ^ 0x94d0_49bb_1331_11eb | 1);
     let periods: [u128; 7] = [1_000, 333_333, 500_000, 2_500_000, 10_000_000, 1_000_000_000, 1_500_000_000];
     let period = if draw.below(3) == 0 {
         1_000 + draw.below(2_000_000_000)
@@ -224,16 +264,17 @@ fn draw_sequence(seed: u64, mix: Mix) -> (Draw, u128, Option<(usize, usize)>) {
     };
     let late_fault = match mix {
         Mix::FaultsLate => {
-            Some((60 + usize::try_from(draw.below(1_900)).unwrap(), usize::try_from(draw.below(41)).unwrap()))
+            let how = [Late::Watchdog, Late::Program, Late::Both][usize::try_from(fails.below(3)).unwrap()];
+            Some((60 + usize::try_from(draw.below(1_900)).unwrap(), usize::try_from(draw.below(41)).unwrap(), how))
         }
         Mix::Free | Mix::NeverFaults => None,
     };
-    (draw, period, late_fault)
+    (draw, fails, period, late_fault)
 }
 
-/// One step's draws: the host's delay before it, how late a wait wakes, the read's and the program's lengths, and
-/// the write's.
-fn draw_step(draw: &mut Draw, model: &Model, mix: Mix, late_fault: Option<(usize, usize)>, step: usize) -> [u128; 5] {
+/// One step's draws: the host's delay before it, how late a wait wakes, the read's and the program's lengths, the
+/// write's, and whether the scan fails (1) or not (0).
+fn draw_step(draw: &mut Draw, fails: &mut Draw, model: &Model, mix: Mix, late_fault: Option<(usize, usize, Late)>, step: usize) -> [u128; 6] {
     let period = model.period;
     // one step in twenty the host is away for up to a million periods, coming back on a deadline, a nanosecond past
     // one, or anywhere in a period
@@ -261,14 +302,20 @@ fn draw_step(draw: &mut Draw, model: &Model, mix: Mix, late_fault: Option<(usize
     let total = match (mix, late_fault) {
         (Mix::Free, _) => total,
         (Mix::NeverFaults, _) | (Mix::FaultsLate, None) => total.min(2 * period),
-        (Mix::FaultsLate, Some((at, _))) if step == at => 2 * period + 1 + draw.below(period),
-        (Mix::FaultsLate, Some((at, streak))) if step < at && step + streak >= at => period + 1 + draw.below(period),
-        (Mix::FaultsLate, Some((at, _))) if step < at => total.min(2 * period),
+        (Mix::FaultsLate, Some((at, _, Late::Program))) if step == at => total.min(2 * period),
+        (Mix::FaultsLate, Some((at, _, _))) if step == at => 2 * period + 1 + draw.below(period),
+        (Mix::FaultsLate, Some((at, streak, _))) if step < at && step + streak >= at => period + 1 + draw.below(period),
+        (Mix::FaultsLate, Some((at, _, _))) if step < at => total.min(2 * period),
         (Mix::FaultsLate, Some(_)) => total,
     };
     let read = draw.below(total + 1);
     let write = if draw.below(4) == 0 { length(draw, period, start + total, true) } else { 0 };
-    [host, wake, read, total - read, write]
+    let fail = match (mix, late_fault) {
+        (Mix::Free, _) => fails.below(40) == 0,
+        (Mix::NeverFaults, _) | (Mix::FaultsLate, None) => false,
+        (Mix::FaultsLate, Some((at, _, how))) => step == at && how != Late::Watchdog,
+    };
+    [host, wake, read, total - read, write, u128::from(fail)]
 }
 
 /// Virtual time whose wait, when it has to wait, wakes `wake` past its deadline, as a target's does under load.
@@ -292,7 +339,7 @@ impl Clock for WakesLate {
 
 /// One sequence of `steps` scans, drawn as `mix` says.
 fn run_one(seed: u64, steps: usize, mix: Mix) {
-    let (mut draw, period, late_fault) = draw_sequence(seed, mix);
+    let (mut draw, mut fails, period, late_fault) = draw_sequence(seed, mix);
     let clock = VirtualClock::new();
     let costs = Rc::new(RefCell::new(Costs::default()));
     let program = Program1 { clock: clock.clone(), costs: costs.clone(), scans: 0, last_input: 0, last_scan: None };
@@ -302,16 +349,18 @@ fn run_one(seed: u64, steps: usize, mix: Mix) {
     let mut target = WakesLate { clock: clock.clone(), wake: Duration::ZERO };
 
     for step in 0..steps {
-        let [host, wake, read, scan, write] = draw_step(&mut draw, &model, mix, late_fault, step);
+        let [host, wake, read, scan, write, fail] = draw_step(&mut draw, &mut fails, &model, mix, late_fault, step);
+        let fail = fail == 1;
         {
             let mut c = costs.borrow_mut();
             c.read.push(read);
             if model.faulted.is_none() {
                 c.scan.push(scan);
+                c.fail.push(fail);
             }
             c.write.push(write);
         }
-        let want = model.step(host, wake, read, if model.faulted.is_none() { scan } else { 0 });
+        let want = model.step(host, wake, read, if model.faulted.is_none() { scan } else { 0 }, fail);
         clock.advance(ns(host));
         target.wake = ns(wake);
         let report = task.step(&mut plant, &mut target);
@@ -326,7 +375,8 @@ fn run_one(seed: u64, steps: usize, mix: Mix) {
         assert_eq!(*report.outputs, model.writes.last().unwrap().1, "{at}: the outputs written");
         let state = match model.faulted {
             None => RunState::Running,
-            Some((at, exec)) => RunState::Faulted { at: ns(at), fault: Fault::Watchdog { exec: ns(exec) } },
+            Some((at, Why::Watchdog(exec))) => RunState::Faulted { at: ns(at), fault: Fault::Watchdog { exec: ns(exec) } },
+            Some((at, Why::Program(index))) => RunState::Faulted { at: ns(at), fault: Fault::Program { error: index } },
         };
         assert_eq!(report.state, state, "{at}: the state");
         if want.program_scanned {
@@ -356,6 +406,7 @@ fn run_one(seed: u64, steps: usize, mix: Mix) {
     let writes: Vec<(u128, u64)> = plant.writes.iter().map(|&(t, v)| (t.as_nanos(), v)).collect();
     assert_eq!(reads, model.reads, "seed {seed}: every read, by its time");
     assert_eq!(writes, model.writes, "seed {seed}: every write, by its time and value");
+    assert!(writes.iter().all(|&(_, v)| v != JUNK), "seed {seed}: no failed scan's outputs written");
 }
 
 #[test]
@@ -520,24 +571,26 @@ fn the_draws_reach_every_case_the_clause_names() {
     let (mut faults_past_scan_1000, mut faults_after_20_time_errors, mut faults_after_10_in_a_row) = (0, 0, 0);
     let (mut faults_after_100_skips, mut late_by_1000_periods_running, mut late_by_1000_periods_faulted) = (0, 0, 0);
     let mut woke_late = 0;
+    let (mut program_faults, mut program_faults_on_a_time_error, mut program_faults_past_twice) = (0, 0, 0);
+    let (mut program_faults_past_scan_1000, mut program_faults_in_free_sequences) = (0, 0);
     let runs = [(Mix::Free, 0..4_000, 50), (Mix::Free, 10_000..10_040, 2_000), (Mix::NeverFaults, 20_000..20_040, 2_000)];
     let runs = runs.into_iter().chain([(Mix::FaultsLate, 30_000..30_100, 2_000)]);
     for (mix, seeds, steps) in runs {
         for seed in seeds {
-            let (mut draw, period, late_fault) = draw_sequence(seed, mix);
+            let (mut draw, mut fails, period, late_fault) = draw_sequence(seed, mix);
             if period >= 1_000_000_000 && steps == 50 {
                 long_periods += 1;
             }
             let mut model = Model { period, ..Model::default() };
             let mut in_a_row = 0;
             for step in 0..steps {
-                let [host, wake, read, scan, write] = draw_step(&mut draw, &model, mix, late_fault, step);
+                let [host, wake, read, scan, write, fail] = draw_step(&mut draw, &mut fails, &model, mix, late_fault, step);
                 let was_faulted = model.faulted.is_some();
                 let skipped = model.skipped;
                 if wake > 0 && model.now + host < model.cycle * period {
                     woke_late += 1;
                 }
-                let seen = model.step(host, wake, read, if was_faulted { 0 } else { scan });
+                let seen = model.step(host, wake, read, if was_faulted { 0 } else { scan }, fail == 1);
                 in_a_row = if seen.time_error { in_a_row + 1 } else { 0 };
                 let late = seen.start - seen.cycle * period;
                 if late > 0 && late < 1_000_000 && !late.is_multiple_of(1_000) {
@@ -558,6 +611,13 @@ fn the_draws_reach_every_case_the_clause_names() {
                     if !was_faulted && model.faulted.is_some() {
                         faulting_ends_on_a_deadline += 1;
                     }
+                }
+                if let (false, Some((_, Why::Program(_)))) = (was_faulted, model.faulted) {
+                    program_faults += 1;
+                    program_faults_on_a_time_error += usize::from(seen.time_error);
+                    program_faults_past_twice += usize::from(seen.exec > 2 * period);
+                    program_faults_past_scan_1000 += usize::from(step >= 1_000);
+                    program_faults_in_free_sequences += usize::from(matches!(mix, Mix::Free));
                 }
                 if !was_faulted && model.faulted.is_some() {
                     faults_past_scan_1000 += usize::from(step >= 1_000);
@@ -591,6 +651,11 @@ fn the_draws_reach_every_case_the_clause_names() {
         ("a running scan late by 1000 periods or more", late_by_1000_periods_running),
         ("a faulted scan late by 1000 periods or more", late_by_1000_periods_faulted),
         ("a scan started by a wait that woke past its deadline", woke_late),
+        ("a program fault", program_faults),
+        ("a program fault on a scan that is a time error", program_faults_on_a_time_error),
+        ("a program fault on a scan past twice the period, the program's error the fault", program_faults_past_twice),
+        ("a program fault past the 1000th scan", program_faults_past_scan_1000),
+        ("a program fault in a free sequence", program_faults_in_free_sequences),
     ] {
         assert!(count >= 20, "{case}: reached {count} times only");
     }

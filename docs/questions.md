@@ -3210,6 +3210,41 @@ The assistant recommends (a) now, and (c) when the language's rules are next rev
 
 ---
 
+## Q231 - Where an interpreted program's first state and safe outputs come from
+
+**Raised** 2026-11-25, by the controlador session, putting an interpreted program on the engine of a
+scan (`docs/orcl/interpreter.md`, "Running").
+
+A native program starts from its `Default` (controlador makes it so) and the engine asks it for its
+safe outputs on the scan that faults and on every faulted scan; `safe_outputs(&self)` may read the
+program's state, as the engine's own model test makes it do. An interpreted program's state is a
+region of the machine, laid out at load and unwritten until something writes it, and its safe
+outputs are a value of its outputs' type. Who gives the two?
+- (a) The host hands both at load, as slots: the front end computes them when it lowers the program
+  (calling `Default::default` and `safe_outputs` on the native crate on the nightly) and writes them
+  into the program file. Nothing of the program runs after a fault, but safe outputs that depend on
+  the state are those of the first state, so the front end refuses a program whose `safe_outputs`
+  reads its state, or the conformance suite finds it.
+- (b) The front end lowers `Default::default` and `safe_outputs` as entries of their own: the machine
+  calls the first at load and the second on the faulting scan and every faulted one, its state as
+  the fault left it (the failed call aborted first). Natively faithful, but program code runs on a
+  faulted machine, and a `safe_outputs` that fails needs an answer of its own (all-default outputs).
+- (c) As (b) for the first state, and safe outputs computed once at load.
+
+The assistant recommends (a): the safe state is what a fault falls back on, so it is best fixed
+before anything runs, and checked when the program is built; ORCL may state that safe outputs are a
+constant.
+
+**Taken meanwhile**: (a), without the file's part: `orcl_runtime::Interpreted` is handed the first
+state as slots and the safe outputs as a value when it is made (DECISION PENDING in
+`crates/orcl-runtime/src/interpreted.rs`). The engine's `TaskProgram::safe_outputs` takes `&mut self`,
+so (b) needs no change to the engine.
+
+**Reversible?** Yes: the host's hand-over is one constructor; (b) or (c) adds entries the adapter
+calls.
+
+---
+
 ## Q47 - How much debug information do development builds carry?
 
 **Raised** 2026-11-23, by the orchestrating session, on the home disk's use with ten sessions.

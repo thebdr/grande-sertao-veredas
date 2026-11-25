@@ -1,6 +1,6 @@
 //! The engine of a scan on virtual time: one cyclic task over a process image, absolute deadlines, skipped cycles,
 //! the time-error rule and safe outputs, every figure exact because the clock moves only when the test moves it.
-use orcl_runtime::{Clock, Fault, Io, RunState, Task, TaskConfig, TaskError, VirtualClock};
+use orcl_runtime::{Clock, Fault, Io, RunState, Task, TaskConfig, TaskError, TaskProgram, VirtualClock};
 use orcl_std::{Program, Scan};
 use std::time::Duration;
 
@@ -773,4 +773,90 @@ fn a_first_step_more_than_a_period_late_runs_scan_zero_and_counts_the_rest_skipp
     assert_eq!(plant.reads, vec![ms(25), ms(30)]);
     let s = *t.stats();
     assert_eq!((s.max_lateness, s.skipped, s.cycles + s.skipped), (ms(25), 2, t.next_cycle()));
+}
+
+// A program whose scan may fail (`TaskProgram`): the task faults on its error as on the watchdog's.
+
+/// Adds one to its input, as `Count` does, but fails the scans of the cycles it is told, after writing 99 into its
+/// outputs and moving the clock by `cost`; its error is the cycle it failed on. Its safe outputs are 7.
+struct Failing {
+    fail_on: Vec<u64>,
+    cost: Duration,
+    clock: VirtualClock,
+    scanned: Vec<u64>,
+}
+
+impl TaskProgram for Failing {
+    type Inputs = u32;
+    type Outputs = u32;
+    type Error = u64;
+
+    fn scan(&mut self, scan: &Scan, inputs: &u32, outputs: &mut u32) -> Result<(), u64> {
+        self.scanned.push(scan.cycle);
+        if self.fail_on.contains(&scan.cycle) {
+            self.clock.advance(self.cost);
+            *outputs = 99;
+            return Err(scan.cycle);
+        }
+        *outputs = inputs.saturating_add(1);
+        Ok(())
+    }
+
+    fn safe_outputs(&mut self) -> u32 {
+        7
+    }
+}
+
+fn failing(clock: &VirtualClock, fail_on: &[u64], cost: Duration) -> Task<Failing> {
+    let program = Failing { fail_on: fail_on.to_vec(), cost, clock: clock.clone(), scanned: Vec::new() };
+    Task::new(TaskConfig { name: "main", period: ms(10) }, program).unwrap()
+}
+
+#[test]
+fn a_program_error_faults_the_task_and_its_scan_s_own_outputs_are_never_written() {
+    // the scan of cycle 3 fails after 1 ms, its outputs left at 99: the task faults at its start, it writes the safe
+    // outputs, and from then on every scan reads its inputs and writes the safe outputs without scanning the program
+    let mut clock = VirtualClock::new();
+    let mut plant = Loop::new(&clock, |_| ms(1));
+    let mut t = failing(&clock, &[3, 5], ms(1));
+    let mut seen = Vec::new();
+    t.run_until(&mut plant, &mut clock, ms(70), |r| seen.push((r.scan.cycle, *r.outputs, r.time_error, r.state)));
+    let fault = RunState::Faulted { at: ms(30), fault: Fault::Program { error: 3 } };
+    assert_eq!(seen[2], (2, 3, false, RunState::Running));
+    assert_eq!(seen[3], (3, 7, false, fault), "the failing scan writes the safe outputs, never its own 99");
+    assert_eq!(seen[4..], [(4, 7, false, fault), (5, 7, false, fault), (6, 7, false, fault)], "the first fault kept");
+    let written: Vec<u32> = plant.writes.iter().map(|&(_, v)| v).collect();
+    assert_eq!(written, [1, 2, 3, 7, 7, 7, 7], "one write per scan, the safe outputs from the failing scan on");
+    assert_eq!(plant.writes[3].0, ms(32), "the failing scan's write at its end, its own time taken");
+    assert_eq!(t.program().scanned, [0, 1, 2, 3], "the program is not scanned once faulted");
+    assert_eq!(plant.reads.len(), 7, "the inputs are still read every scan");
+    let s = *t.stats();
+    assert_eq!((s.cycles, s.overruns, s.skipped, t.state()), (7, 0, 0, fault));
+}
+
+#[test]
+fn a_program_error_on_a_scan_past_twice_its_period_is_the_fault_and_the_scan_a_time_error() {
+    // the scan of cycle 1 runs 25 ms and fails: the watchdog would fault it too, but the error ended the scan
+    let mut clock = VirtualClock::new();
+    let mut plant = Loop::new(&clock, |_| Duration::ZERO);
+    let mut t = failing(&clock, &[1], ms(25));
+    t.step(&mut plant, &mut clock);
+    let r = t.step(&mut plant, &mut clock);
+    let fault = RunState::Faulted { at: ms(10), fault: Fault::Program { error: 1 } };
+    assert_eq!((r.scan.cycle, r.exec, r.time_error, *r.outputs, r.state), (1, ms(25), true, 7, fault));
+    let s = *t.stats();
+    assert_eq!((s.overruns, t.next_cycle(), t.state()), (1, 4, fault), "an overrun, its passed deadlines skipped");
+}
+
+#[test]
+fn a_program_error_on_a_time_error_counts_the_overrun_and_faults() {
+    // the scan of cycle 0 runs 15 ms and fails: a time error, not the watchdog's, and the program's fault
+    let mut clock = VirtualClock::new();
+    let mut plant = Loop::new(&clock, |_| Duration::ZERO);
+    let mut t = failing(&clock, &[0], ms(15));
+    let r = t.step(&mut plant, &mut clock);
+    let fault = RunState::Faulted { at: ms(0), fault: Fault::Program { error: 0 } };
+    assert_eq!((r.exec, r.time_error, *r.outputs, r.state), (ms(15), true, 7, fault));
+    assert_eq!(plant.writes, [(ms(15), 7)]);
+    assert_eq!(t.stats().overruns, 1);
 }

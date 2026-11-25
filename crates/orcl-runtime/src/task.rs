@@ -2,8 +2,42 @@
 //! cycle statistics.
 use crate::clock::Clock;
 use orcl_std::{Program, Scan};
+use core::convert::Infallible;
 use core::fmt;
 use core::time::Duration;
+
+/// What a task runs: a program whose scan may end in an error of its own, which faults the task. A native
+/// [`Program`] is one whose scan never fails; an interpreted one ([`crate::Interpreted`]) fails where Rust would
+/// panic (`docs/orcl/interpreter.md`, "Running").
+pub trait TaskProgram {
+    type Inputs: Copy + Default;
+    type Outputs: Copy + Default;
+    /// Why a scan of the program failed.
+    type Error: Copy + fmt::Debug + PartialEq + Eq;
+
+    /// Scans the inputs into the outputs. An error ends the scan: its outputs, whatever it left in them, are never
+    /// written, and the task faults.
+    fn scan(&mut self, scan: &Scan, inputs: &Self::Inputs, outputs: &mut Self::Outputs) -> Result<(), Self::Error>;
+
+    /// The outputs the task applies while faulted, asked on the scan that faults and on every faulted scan. It
+    /// takes `&mut self` so that a program that computes them may run (`docs/questions.md` Q231).
+    fn safe_outputs(&mut self) -> Self::Outputs;
+}
+
+impl<P: Program> TaskProgram for P {
+    type Inputs = P::Inputs;
+    type Outputs = P::Outputs;
+    type Error = Infallible;
+
+    fn scan(&mut self, scan: &Scan, inputs: &P::Inputs, outputs: &mut P::Outputs) -> Result<(), Infallible> {
+        Program::scan(self, scan, inputs, outputs);
+        Ok(())
+    }
+
+    fn safe_outputs(&mut self) -> P::Outputs {
+        Program::safe_outputs(self)
+    }
+}
 
 /// The task's connection to the plant: a fieldbus, real I/O, or a simulation. `read_inputs` is called once at
 /// the start of every scan, with the scan's time; `write_outputs` once at its end, with the time the scan ended
@@ -38,20 +72,23 @@ impl fmt::Display for TaskError {
 
 impl core::error::Error for TaskError {}
 
-/// Why a task faulted.
+/// Why a task faulted. `E` is the program's error, [`Infallible`] for a native program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Fault {
+pub enum Fault<E = Infallible> {
     /// One scan ran longer than twice the task's period (the controller's reason 501 `watchdog(task)`).
     Watchdog { exec: Duration },
+    /// The program's scan ended in an error (the controller's reason 502 `program(at)`). It ended the scan, so it is
+    /// the fault even when the same scan also ran past twice its period.
+    Program { error: E },
 }
 
 /// Whether the task runs its program or, faulted, applies the safe outputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunState {
+pub enum RunState<E = Infallible> {
     Running,
     /// Faulted by the scan that started `at`. From that scan on the program is not scanned and every scan
     /// applies the safe outputs, so the plant's exchange goes on.
-    Faulted { at: Duration, fault: Fault },
+    Faulted { at: Duration, fault: Fault<E> },
 }
 
 /// The statistics of every scan so far. Lateness is a scan's start against its absolute deadline.
@@ -107,7 +144,7 @@ fn first_due_at_or_after(period: Duration, now: Duration) -> u64 {
 }
 
 /// What one scan did, for the host to watch.
-pub struct Report<'a, P: Program> {
+pub struct Report<'a, P: TaskProgram> {
     /// The scan the program was handed: its time, the period and its cycle number.
     pub scan: Scan,
     pub program: &'a P,
@@ -119,22 +156,22 @@ pub struct Report<'a, P: Program> {
     /// The scan ran longer than the period: a time error, the one the time-error handler answers.
     pub time_error: bool,
     pub stats: &'a CycleStats,
-    pub state: RunState,
+    pub state: RunState<P::Error>,
 }
 
 /// A cyclic task running one program.
-pub struct Task<P: Program> {
+pub struct Task<P: TaskProgram> {
     config: TaskConfig,
     program: P,
     inputs: P::Inputs,
     outputs: P::Outputs,
-    state: RunState,
+    state: RunState<P::Error>,
     stats: CycleStats,
     /// The cycle that runs next.
     cycle: u64,
 }
 
-impl<P: Program> Task<P> {
+impl<P: TaskProgram> Task<P> {
     /// A task that has run nothing yet; its first scan is due at zero on the clock it is stepped on.
     pub fn new(config: TaskConfig, program: P) -> Result<Self, TaskError> {
         if config.period.is_zero() {
@@ -159,7 +196,7 @@ impl<P: Program> Task<P> {
         &self.program
     }
 
-    pub fn state(&self) -> RunState {
+    pub fn state(&self) -> RunState<P::Error> {
         self.state
     }
 
@@ -181,9 +218,10 @@ impl<P: Program> Task<P> {
     /// that snapshot (or, faulted, not scanned), the outputs written once at the end. The scan ends when its
     /// outputs are handed to the plant: its length, the time-error rule and the deadlines it skipped are all judged
     /// at that moment, and the plant's own time to take the outputs is not the scan's. A scan longer than the
-    /// period is a time error; a scan longer than twice the period faults the task, and its own outputs are never
-    /// written: the safe outputs are, from that scan on. Deadlines that passed while the scan ran are skipped and
-    /// counted, never caught up.
+    /// period is a time error; a scan longer than twice the period faults the task, and so does a scan whose
+    /// program ends in an error, which is the fault when both meet: that scan's own outputs are never written, the
+    /// safe outputs are, from that scan on. Deadlines that passed while the scan ran are skipped and counted, never
+    /// caught up.
     ///
     /// The rule is measured when the scan ends: a scan that never ends is the host's watchdog to catch, below
     /// this engine (`docs/controlador/execution-model.md`, point 6).
@@ -203,8 +241,11 @@ impl<P: Program> Task<P> {
         };
         self.inputs = io.read_inputs(start);
         let running = self.state == RunState::Running;
+        let mut fault = None;
         if running {
-            self.program.scan(&scan, &self.inputs, &mut self.outputs);
+            if let Err(error) = self.program.scan(&scan, &self.inputs, &mut self.outputs) {
+                fault = Some(Fault::Program { error });
+            }
         } else {
             self.outputs = self.program.safe_outputs();
         }
@@ -213,13 +254,13 @@ impl<P: Program> Task<P> {
         let time_error = running && exec > period;
         if time_error {
             self.stats.overruns = self.stats.overruns.saturating_add(1);
-            if exec > period.saturating_mul(2) {
-                self.state = RunState::Faulted {
-                    at: start,
-                    fault: Fault::Watchdog { exec },
-                };
-                self.outputs = self.program.safe_outputs();
+            if fault.is_none() && exec > period.saturating_mul(2) {
+                fault = Some(Fault::Watchdog { exec });
             }
+        }
+        if let Some(fault) = fault {
+            self.state = RunState::Faulted { at: start, fault };
+            self.outputs = self.program.safe_outputs();
         }
         io.write_outputs(end, &self.outputs);
         self.stats.record(start.saturating_sub(due), exec);

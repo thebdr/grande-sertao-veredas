@@ -2921,6 +2921,7 @@ dependencies = [
 name = "orcl-runtime"
 version = "2.0.0-alpha.1"
 dependencies = [
+ "orcl-interp",
  "orcl-std",
 ]
 

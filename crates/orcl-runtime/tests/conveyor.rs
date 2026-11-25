@@ -4,8 +4,9 @@
 #![allow(clippy::arithmetic_side_effects)] // the tests' own time arithmetic, as Veredas 1's tests allowed it
 
 /// The program, held to ORCL's rules as Veredas 1's `no_std` logic crate was: no `unsafe`, no panic path, no
-/// interior mutability (the lints below; the list of types O13 forbids is kept by convention until a `clippy.toml`
-/// may sit in the repository, `docs/questions.md` Q225, DECISION PENDING). Its function blocks, [`Door`] and
+/// interior mutability (the lints below). The list of types O13 forbids is kept by convention here: clippy reads one
+/// `clippy.toml` per crate, a program crate's as `orcl-std` carries it (`docs/questions.md` Q225), and this module
+/// sits in the tests of the engine, whose virtual clock holds a `Cell`. Its function blocks, [`Door`] and
 /// [`Conveyor`], are not `Copy`.
 ///
 /// - [`Door`]: a two-channel guard door. A channel discrepancy that lasts 500 ms raises the alarm, so a short

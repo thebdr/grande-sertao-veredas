@@ -5,8 +5,9 @@
 //! That the clock only counts forward is read in the source, since no test can step the system's clock without
 //! privileges: it is `std::time::Instant`, never the settable `SystemTime` that NTP or a rewind moves, and its wait
 //! judges the deadline on that reading. Since another crate or unsafe code would reach the system's clock, or the
-//! operating system, without naming either, cargo's own report pins the engine to orcl-std alone, with every
-//! feature on, and its root to `forbid(unsafe_code)`; and std is used only at the paths the engine needs.
+//! operating system, without naming either, cargo's own report pins the engine to orcl-std and orcl-interp all the
+//! way down, with every feature on, and each root to `forbid(unsafe_code)`; std is used only at the paths the engine
+//! needs, and the interpreter's sources name it nowhere.
 use orcl_runtime::{Clock, Io, MonoClock, RunState, Task, TaskConfig};
 use orcl_std::{Program, Scan};
 use std::time::{Duration, Instant};
@@ -124,21 +125,45 @@ fn on_a_target_clock_a_scan_past_twice_its_period_is_measured_whole_and_faults()
 }
 
 /// Every file of the crate's `src/`.
-const SOURCES: [(&str, &str); 3] = [
+const SOURCES: [(&str, &str); 4] = [
     ("clock.rs", include_str!("../src/clock.rs")),
+    ("interpreted.rs", include_str!("../src/interpreted.rs")),
     ("lib.rs", include_str!("../src/lib.rs")),
     ("task.rs", include_str!("../src/task.rs")),
 ];
 
+/// Every file of `src/` of the interpreter the engine uses, `orcl-interp`.
+const INTERPRETER: [(&str, &str); 7] = [
+    ("core_ops.rs", include_str!("../../orcl-interp/src/core_ops.rs")),
+    ("file.rs", include_str!("../../orcl-interp/src/file.rs")),
+    ("layout.rs", include_str!("../../orcl-interp/src/layout.rs")),
+    ("lib.rs", include_str!("../../orcl-interp/src/lib.rs")),
+    ("machine.rs", include_str!("../../orcl-interp/src/machine.rs")),
+    ("ops.rs", include_str!("../../orcl-interp/src/ops.rs")),
+    ("program.rs", include_str!("../../orcl-interp/src/program.rs")),
+];
+
 /// The paths at which the engine uses std, as they read with whitespace removed: std brought into the `no_std`
-/// root by name, shared time for the virtual clock, the monotonic `Instant`, and the sleep of the target's wait.
-/// Everything else the engine uses comes from `core`, which reaches no operating system.
-const STD_PATHS: [&str; 4] = [
+/// root by name, shared time for the virtual clock, the monotonic `Instant`, the sleep of the target's wait, and the
+/// vector that holds the slots an interpreted program's regions are handed, reserved when it is made. Everything else
+/// the engine uses comes from `core`, which reaches no operating system.
+const STD_PATHS: [&str; 5] = [
     "externcratestd;",
     "usestd::rc::Rc;",
     "usestd::time::Instant;",
     "std::thread::sleep(remaining.saturating_sub(self.spin));",
+    "usestd::vec::Vec;",
 ];
+
+/// The words of a source's code, its comment lines left out.
+fn words(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().filter(|line| !line.trim_start().starts_with("//")).collect();
+    without_block_comments(&lines.join("\n"))
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
+}
 
 /// A source with its comment lines and block comments taken out and every whitespace character removed.
 fn code_squeezed(text: &str) -> String {
@@ -200,23 +225,43 @@ fn the_target_s_clock_reads_the_monotonic_instant_never_the_settable_system_time
 }
 
 #[test]
-fn the_engine_depends_on_orcl_std_alone_and_forbids_unsafe_code() {
-    // cargo's own report of the crate's normal and build dependencies, on every target
+fn the_engine_depends_on_orcl_std_and_orcl_interp_alone_and_forbids_unsafe_code() {
+    // cargo's own report of the crate's normal and build dependencies, on every target, all the way down
     let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
     let out = std::process::Command::new(env!("CARGO"))
-        .args(["tree", "-p", "orcl-runtime", "-e", "normal,build", "--depth", "1", "--prefix", "none", "--all-features"])
+        .args(["tree", "-p", "orcl-runtime", "-e", "normal,build", "--prefix", "none", "--all-features"])
         .args(["--target", "all", "--offline", "--manifest-path", manifest])
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let listed = String::from_utf8(out.stdout).unwrap();
     let crates: Vec<&str> = listed.lines().filter_map(|line| line.split_whitespace().next()).collect();
-    assert_eq!(crates, ["orcl-runtime", "orcl-std"], "the engine and the one crate it uses");
-    let root = code_squeezed(SOURCES[1].1);
+    assert_eq!(crates, ["orcl-runtime", "orcl-interp", "orcl-std"], "the engine and the two crates it uses, which use none");
+    let root = code_squeezed(SOURCES[2].1);
     assert!(root.contains("#![forbid(unsafe_code)]"), "lib.rs forbids unsafe code");
+    let interpreter_root = code_squeezed(INTERPRETER[3].1);
+    assert!(interpreter_root.contains("#![forbid(unsafe_code)]"), "the interpreter's lib.rs forbids unsafe code");
     // no_std, std brought in by name and no macro of it imported: every use of std is written out and counted
     assert!(root.contains("#![no_std]") && root.contains("externcratestd;"), "lib.rs: no_std, std by name");
     for (file, text) in SOURCES {
         assert!(!code_squeezed(text).contains("macro_use"), "{file} imports macros wholesale");
+    }
+}
+
+#[test]
+fn the_interpreter_the_engine_uses_names_no_std_prints_nothing_and_takes_no_file_in() {
+    // orcl-interp has std's prelude alone: no path into std, so no clock, thread, file, socket, environment or
+    // process; no print to the terminal; no file taken in from elsewhere, where none of this would be read
+    let listed = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../orcl-interp/src")).unwrap().count();
+    assert_eq!(listed, INTERPRETER.len(), "every file of the interpreter's src/ is read");
+    for (file, text) in INTERPRETER {
+        let words = words(text);
+        for refused in ["std", "SystemTime", "UNIX_EPOCH", "Instant", "print", "println", "eprint", "eprintln", "dbg"] {
+            assert!(!words.iter().any(|w| w == refused), "the interpreter's {file} names {refused}");
+        }
+        let code = code_squeezed(text);
+        for refused in ["#[path", "include!(", "include_str!(", "include_bytes!(", "externcrate", "macro_use"] {
+            assert!(!code.contains(refused), "the interpreter's {file} holds {refused}");
+        }
     }
 }

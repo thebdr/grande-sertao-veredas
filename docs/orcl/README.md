@@ -39,7 +39,7 @@ suite's plan, "Naming"), so its crates keep the names `orcl-*`, live under `crat
 | Crate | What it is | Uses | Stands |
 |---|---|---|---|
 | `orcl-std` | The standard control library, `no_std`: the scan model (`Scan`, `Program`), IEC-style timers (`Ton`, `Tof`, `Tp`), edges (`RTrig`, `FTrig`), a counter (`Ctu`), bit access (`Bits`) | nothing | carried from Veredas 1 |
-| `orcl-runtime` | The engine of a scan: a task's cycle over a process image, on a clock it is handed (virtual or real), the time-error rule, safe outputs, cycle statistics; no operating-system code, `no_std` with std named where it is used (the target's clock and its sleep) | `orcl-std` | carried from Veredas 1, reworked |
+| `orcl-runtime` | The engine of a scan: a task's cycle over a process image, on a clock it is handed (virtual or real), the time-error rule, safe outputs, cycle statistics; no operating-system code, `no_std` with std named where it is used (the target's clock and its sleep); a native program or an interpreted one, whose scan may fault | `orcl-std`, `orcl-interp` | carried from Veredas 1, reworked; interpreted programs since 2026-11-25 (C-155) |
 | `orcl-interp` | The interpreter and its program format: bytecode made from the compiler's intermediate form, run one instruction at a time, suspendable at every instruction boundary | nothing (`orcl-std` for its tests) | its machine (C-153) and its program file (C-154) built, on programs built by hand; the front end and the conformance suite to come (`interpreter.md`) |
 | `orcl-front` | The front end: reads an ORCL crate through `rustc_public` on the pinned nightly and writes the program `orcl-interp` runs | `orcl-interp` | planned: a member on stable, its driver behind a feature on the pinned nightly (Q221, Q222) |
 
