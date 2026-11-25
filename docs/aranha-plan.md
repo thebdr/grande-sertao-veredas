@@ -125,8 +125,10 @@ plant in production.
 - **Configured, not programmed.** Every plain-text file is TOML stating `format` and `version`
   (law L7), a misspelled key refused; a scan is `veredas-scan`.
 - **A library first, one executable on top.** Everything runs in-process behind handles, so
-  Oficina and controlador embed it. No interface of its own (`docs/questions.md` Q280, taken
-  meanwhile).
+  Oficina and controlador embed it. No interface of its own (`docs/questions.md` Q280, ruled
+  2026-11-25): a library and one command-line executable (scan to a file, identify, diff two
+  scans); the table, the topology and the diff are Oficina's surfaces, and until then the scan
+  file is read as text.
 - **Light.** The bench depends on aranha for its codecs, and the bench is test-only and light: no
   database, no web stack, no UI crate in aranha's graph.
 - **Typed errors on the public surface**; no `unwrap`/`expect` on an I/O path; tests may unwrap.
@@ -155,7 +157,7 @@ Read before the port: `docs/aranha-plan.md` and `docs/aranha-usage.md`, all of
 | `write.rs` (the gates, `actions.log`) | later, `write` | the gates re-read against the rulings of 2026-11-15 |
 | `oui.rs` (thirty vendor prefixes built in) | not carried as a table | content-agnostic: the IEEE registry file is read at run time, and the column says when a prefix is not in it |
 | `prefs.rs`, `project.rs`, `files.rs` (`%APPDATA%` JSON, the project's `aranha/` folder) | not carried | a scan file and the executable's arguments; where a project keeps its baselines is Oficina's and controlador's to say |
-| `server.rs`, `main.rs` (axum: JSON, SSE), the `aranha/` page (vite, TypeScript) | not carried | Q280: the surfaces are Oficina's; the executable is a command line |
+| `server.rs`, `main.rs` (axum: JSON, SSE), the `aranha/` page (vite, TypeScript) | not carried | Q280 (ruled): the surfaces are Oficina's; the executable is a command line |
 | `examples/fake_switch.rs` (an SNMP agent) | maquinar, with the SNMP phase | a fixture is the bench's |
 | `examples/npcap_probe.rs`, `examples/synth_capture.rs` | not carried | a spike and a fixture builder; the codecs' own encoders build fixtures in the tests |
 | `tests/offline_capture.rs`, `tests/opcua_probe.rs` | `tests/*.rs`, one per clause | real links and real servers |
