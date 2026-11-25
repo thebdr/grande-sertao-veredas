@@ -1,13 +1,13 @@
 {
   "clause": "C-115",
   "verdict": "refuted",
-  "ranAt": "2026-11-25T01:00:03.992Z",
-  "headCommit": "463118feced3480aeaa14627ed378ca21093af4e",
+  "ranAt": "2026-11-25T10:25:26.729Z",
+  "headCommit": "1624c00c1897acd6bfb1a774e97af98fa811ba65",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/reflexo.rs",
       "file": "crates/veredas-maquinar/tests/reflexo.rs",
-      "symbolSha": "cf3b4bbe7942f22f6264789d423a8ef14ca237f4fbce408939a8265d6324494e"
+      "symbolSha": "15d7cb2b1ca94e1777684e15a4baededfa9b98319f6403a4f9033dcf1934d433"
     }
   ]
 }
