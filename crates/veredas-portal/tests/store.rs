@@ -1416,6 +1416,28 @@ fn the_weighing_counts_numbers_alone_its_limits_and_the_dialect_a_view_names() {
     assert_eq!(page.rows[0], vec![serde_json::json!(1), serde_json::json!("alpha"), serde_json::json!("10,20,30")]);
 }
 
+/// Every way a linked CSV reads, for a person to pick where the weighing cannot tell
+/// (docs/questions.md Q131): the limit's files give both readings, the weighing's proposal first,
+/// each with its first rows (the `;` reading of the one-decimal export with its decimal comma, its
+/// temperature 21.5); a file only one dialect fits gives that one.
+#[test]
+fn every_way_a_linked_csv_reads_with_its_first_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let json = |v: serde_json::Value| v;
+    let lists = csv_file(dir.path(), "lists.csv", "id;name;x,y,z\n1;alpha;10,20,30\n2;beta;40,50,60\n3;gamma\n");
+    let readings = csv_readings(&lists, 2).unwrap();
+    assert_eq!(readings.iter().map(|r| r.dialect.delim.as_deref()).collect::<Vec<_>>(), [Some(","), Some(";")]);
+    assert_eq!(readings[0].first_rows.rows.len(), 2, "the rows asked for");
+    assert_eq!((names(&readings[1].first_rows), readings[1].first_rows.rows[0].clone()), (vec!["id", "name", "x,y,z"], vec![json(1.into()), json("alpha".into()), json("10,20,30".into())]));
+    let export = csv_file(dir.path(), "export.csv", "Zeit;Temperatur, C\n10:00:00;21,5\n10:00:01;22,0\n10:00:02;21,7\n10:00:03\n");
+    let readings = csv_readings(&export, 10).unwrap();
+    assert_eq!(readings.iter().map(|r| (r.dialect.delim.as_deref(), r.dialect.decimal_comma)).collect::<Vec<_>>(), [(Some(","), false), (Some(";"), true)]);
+    assert_eq!((names(&readings[1].first_rows), readings[1].first_rows.rows[0][1].clone(), readings[1].first_rows.total), (vec!["Zeit", "Temperatur, C"], serde_json::json!(21.5), 4));
+    let plain = csv_file(dir.path(), "plain.csv", "a;b\n1;2\n3;4\n");
+    let readings = csv_readings(&plain, 10).unwrap();
+    assert_eq!((readings.len(), readings[0].first_rows.rows.len()), (1, 2), "{:?}", readings.iter().map(|r| &r.dialect).collect::<Vec<_>>());
+}
+
 /// Round 13's files, read on their own delimiter as round 10 read them: a `;` export of decimal
 /// commas whose note column's name holds the comma (`Notiz, frei`), with a short row or a note
 /// holding a comma too, on `;` whatever the dialect given (their ids give `;` the numbers); and a

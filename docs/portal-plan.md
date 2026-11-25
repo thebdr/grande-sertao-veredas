@@ -497,7 +497,8 @@ Recorded as the port meets them.
   commoner (ids glued to a decimal's integer part pass for a list), so the weighing is round
   10's again and those files are stated limits (round 14 gave their real reach). The weighing
   proposes; a view names its dialect (`CsvOptions` written into its reader), and a link's page
-  can show both readings when two fit (Q131).
+  shows every reading `store::csv_readings` gives, each with its first rows, for the person to pick
+  (Q131, ruled 2026-11-25).
 - **A transaction does not freeze a file** (C-041, round 11). The engine reads a CSV again at
   every statement, so a page's count and rows over a view of a log still being written were two
   reads of it, though one transaction held them. A view's window is read once into a table of the

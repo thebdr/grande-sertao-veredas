@@ -1261,9 +1261,15 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
         },
     }
 
-    let plain = describe_types(&conn, &csv_scan_sql(path, &opts))?;
+    with_decimal_comma(&conn, path, opts)
+}
+
+/// `opts` with the decimal comma where reading so strictly improves the typing (a column becomes
+/// numeric and none that was numeric regresses), decided by reading the file both ways.
+fn with_decimal_comma(conn: &Connection, path: &str, mut opts: CsvOptions) -> Result<CsvOptions, StoreError> {
+    let plain = describe_types(conn, &csv_scan_sql(path, &opts))?;
     let comma_opts = CsvOptions { decimal_comma: true, ..opts.clone() };
-    let Ok(comma) = describe_types(&conn, &csv_scan_sql(path, &comma_opts)) else {
+    let Ok(comma) = describe_types(conn, &csv_scan_sql(path, &comma_opts)) else {
         return Ok(opts);
     };
     if plain.len() != comma.len() {
@@ -1281,6 +1287,46 @@ pub fn sniff_csv_options(path: &str) -> Result<CsvOptions, StoreError> {
     }
     opts.decimal_comma = gained > 0;
     Ok(opts)
+}
+
+/// One way a linked CSV reads: a dialect that fits it, and its first rows as the preview reads
+/// them in that dialect.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CsvReading {
+    pub dialect: CsvOptions,
+    pub first_rows: RowsPage,
+}
+
+/// Every way a linked CSV reads, for a person to pick where the weighing's numbers cannot tell
+/// (docs/questions.md Q131): the dialect [`sniff_csv_options`] proposes first, then every other
+/// delimiter whose header fits the file's rows ([`csv_header_fits`]), each with the decimal comma
+/// where reading so strictly improves its typing, each with its first `rows` rows. One reading
+/// where only one dialect fits; the pick is written into the view as its `CsvOptions`.
+pub fn csv_readings(path: &str, rows: usize) -> Result<Vec<CsvReading>, StoreError> {
+    let path = path.trim();
+    let proposed = sniff_csv_options(path)?;
+    let conn = Connection::open_in_memory()?;
+    // The delimiter the proposal reads on: its own, or the engine's sniffer's for a file it
+    // reads itself.
+    let sniffed = sniffed_dialect(&conn, path, false);
+    let taken = proposed.delim.clone().or_else(|| sniffed.as_ref().and_then(|d| d.delim.clone()));
+    let quote = proposed.quote_char.clone().or_else(|| sniffed.as_ref().and_then(|d| d.quote_char.clone())).or_else(|| Some("\"".into()));
+    let escape = proposed.escape_char.clone().or_else(|| sniffed.as_ref().and_then(|d| d.escape_char.clone())).or_else(|| quote.clone());
+    let mut readings = vec![CsvReading { first_rows: preview_csv(path, rows, &proposed)?, dialect: proposed }];
+    for d in CSV_DELIMS {
+        if taken.as_deref() == Some(d) {
+            continue;
+        }
+        let other = CsvOptions { delim: Some(d.to_string()), quote_char: quote.clone(), escape_char: escape.clone(), decimal_comma: false };
+        if !csv_header_fits(path, &other) {
+            continue;
+        }
+        let other = with_decimal_comma(&conn, path, other)?;
+        if let Ok(first_rows) = preview_csv(path, rows, &other) {
+            readings.push(CsvReading { dialect: other, first_rows });
+        }
+    }
+    Ok(readings)
 }
 
 /// The dialect the engine's sniffer settles on for a file, read as it is or asked to pad short
