@@ -2582,13 +2582,27 @@ impl<'a> Model<'a> {
     /// another formula than the one the engine holds: what a file storing that spelling would read
     /// back otherwise. (Veredas fork change 31)
     pub fn formulas_reading_back_otherwise(&self) -> Vec<(u32, i32, i32)> {
+        self.formulas_reading_back_otherwise_with(self.locale, self.language)
+    }
+
+    /// [`Model::formulas_reading_back_otherwise`] for a reader of another locale and language than
+    /// the model's own: each formula spelled as [`Model::get_cell_formula_in`] spells it, and parsed
+    /// as [`Model::from_workbook`] with that language parses it, the workbook's settings naming the
+    /// locale. (Veredas fork change 31, refined)
+    pub fn formulas_reading_back_otherwise_in(&self, locale_id: &str, language_id: &str) -> Result<Vec<(u32, i32, i32)>, String> {
+        let locale = get_locale(locale_id).map_err(|_| format!("Invalid locale: {locale_id}"))?;
+        let language = get_language(language_id).map_err(|_| format!("Invalid language: {language_id}"))?;
+        Ok(self.formulas_reading_back_otherwise_with(locale, language))
+    }
+
+    fn formulas_reading_back_otherwise_with(&self, locale: &'a Locale, language: &'a Language) -> Vec<(u32, i32, i32)> {
         let worksheet_names = self.workbook.worksheets.iter().map(|s| s.get_name()).collect();
         let mut parser = Parser::new(
             worksheet_names,
             self.workbook.get_defined_names_with_scope(),
             self.workbook.tables.clone(),
-            self.locale,
-            self.language,
+            locale,
+            language,
         );
         let mut out = Vec::new();
         for (sheet, worksheet) in self.workbook.worksheets.iter().enumerate() {
@@ -2597,13 +2611,26 @@ impl<'a> Model<'a> {
                 let Some(index) = cell.get_formula() else { continue };
                 let Some((held, _)) = formulas.get(index as usize) else { continue };
                 let cell_reference = CellReferenceRC { sheet: worksheet.get_name(), row, column };
-                let spelled = to_localized_string(held, &cell_reference, self.locale, self.language);
+                let spelled = to_localized_string(held, &cell_reference, locale, language);
                 if parser.parse(&spelled, &cell_reference) != **held {
                     out.push((sheet as u32, row, column));
                 }
             }
         }
         out
+    }
+
+    /// The formula in (`sheet`, `row`, `column`), if any, spelled in the locale and the language
+    /// named, not the model's own: what a reader of those reads back. (Veredas fork change 31,
+    /// refined)
+    pub fn get_cell_formula_in(&self, sheet: u32, row: i32, column: i32, locale_id: &str, language_id: &str) -> Result<Option<String>, String> {
+        let locale = get_locale(locale_id).map_err(|_| format!("Invalid locale: {locale_id}"))?;
+        let language = get_language(language_id).map_err(|_| format!("Invalid language: {language_id}"))?;
+        let worksheet = self.workbook.worksheet(sheet)?;
+        let Some(index) = worksheet.cell(row, column).and_then(|c| c.get_formula()) else { return Ok(None) };
+        let (formula, _) = self.parsed_formulas.get(sheet as usize).ok_or("missing sheet")?.get(index as usize).ok_or("missing formula")?;
+        let cell_ref = CellReferenceRC { sheet: worksheet.get_name(), row, column };
+        Ok(Some(format!("={}", to_localized_string(formula, &cell_ref, locale, language))))
     }
 
     /// Returns the text for the formula in (`sheet`, `row`, `column`) in English if any

@@ -65,3 +65,25 @@ fn a_range_joins_its_sides_into_the_area_holding_both() {
     }
 }
 
+/// Veredas fork change 31, refined: a formula spelled and checked in the reader's language and
+/// locale, not the model's.
+#[test]
+fn the_reader_s_language_and_locale_are_the_check_s() {
+    let mut model = new_empty_model();
+    for r in 1..=3 {
+        model.set_user_input(0, r, 1, r.to_string()).unwrap();
+    }
+    model.set_user_input(0, 6, 3, "=SUM(A1:A3)".to_string()).unwrap();
+    // the model in Spanish: spelled for an English reader, and checked as one reads it
+    model.set_language("es").unwrap();
+    assert_eq!(model.get_cell_formula(0, 6, 3).unwrap().unwrap(), "=SUMA(A1:A3)");
+    assert_eq!(model.get_cell_formula_in(0, 6, 3, "en", "en").unwrap().unwrap(), "=SUM(A1:A3)");
+    assert_eq!(model.formulas_reading_back_otherwise_in("en", "en").unwrap(), Vec::<(u32, i32, i32)>::new());
+    // for a reader of another locale than the model's, spelled in that locale (its decimal comma,
+    // its separators), which it reads back
+    model.set_language("en").unwrap();
+    model.set_user_input(0, 9, 3, "=SUM(1.5,2)".to_string()).unwrap();
+    assert_eq!(model.get_cell_formula_in(0, 9, 3, "de", "en").unwrap().unwrap(), "=SUM(1,5;2)");
+    assert_eq!(model.formulas_reading_back_otherwise_in("de", "en").unwrap(), Vec::<(u32, i32, i32)>::new());
+    assert!(model.formulas_reading_back_otherwise_in("xx", "en").is_err());
+}
