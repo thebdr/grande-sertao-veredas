@@ -248,9 +248,15 @@ where they differ.
   every file as it stood at the start are stored; a comissionador replay and supervisão's host
   wait for it instead of guessing from stillness.
 - **Every gated write and send kept in the store with the moment it was answered** (Q318,
-  2026-11-25; not built): a table of the session's writes, what was written to what, the plant's
-  answer and when, so a replay's write moves its clock to that moment; its columns follow what
-  comissionador reads (C-097 to come).
+  2026-11-25; not built, C-097 proposed): a table of the session's own, `writes`, one row per
+  write or send: when it was asked and when answered (the answer's arrival its stamp on the
+  store's axis), the source, what (an OPC tag and its value; a channel's message and fields),
+  and the answer (each tag's status; the send's outcome; a refusal by the switch, so a refused
+  write is a row too). Kept off the narrow surface (its columns are no series of the source).
+  Portal records what passes through it: `ChannelHandle::send` already does, and an OPC write
+  needs a call of portal's (`Live::write_tags`, core's handle inside it), the HTTP surface's
+  write moving to it and comissionador's `plant.rs` write with it (through the orchestrator).
+  Its columns follow what comissionador states it reads.
 - **Q14 stands:** portal builds no desktop UI. Oficina is a component of its own.
 - Open: the review's entries 22 and 33 (Q31); robust requests (Q37); what gives way at a size
   limit, and the window's ceiling (Q41); the security round (Q43, P-014).
