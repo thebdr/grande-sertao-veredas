@@ -554,3 +554,197 @@ fn a_device_flagging_a_conflict_on_no_address_names_none() {
     assert!(f.devices[&DEV].addresses().is_empty());
     assert_eq!(f.conflicts(), [Conflict { kind: ConflictKind::ReportsIpConflict, value: String::new(), macs: vec![DEV] }]);
 }
+
+/// The third refute round's cases (its critic's probes): what the code did and the test did not
+/// hold it to; each applied in every order where order is the question.
+mod round_3 {
+    use std::net::Ipv4Addr;
+
+    use veredas_aranha::fusion::{Conflict, ConflictKind, Fusion};
+    use veredas_aranha::observe::{Observation, Observed, Probe, Witness};
+    use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpStatus, IpSuite};
+    use veredas_aranha::profinet::lldp::{ChassisId, LldpPdu, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+
+    const DEV: Mac = Mac([0x02, 0, 0, 0, 0, 0x01]);
+    const DEV2: Mac = Mac([0x02, 0, 0, 0, 0, 0x03]);
+    const PORT: Mac = Mac([0x02, 0, 0, 0, 0, 0x02]);
+
+    fn w(probe: Probe, at_ns: u64, frame: u64) -> Witness {
+        Witness { probe, iface: "eth1".into(), at_ns, frame }
+    }
+    fn named(mac: Mac, name: &str, at_ns: u64, frame: u64) -> Observation {
+        let identity = DeviceIdentity { name: Some(name.into()), ..Default::default() };
+        Observation { witness: w(Probe::DcpHeard, at_ns, frame), observed: Observed::Dcp { mac, service: dcp::Service::Hello, service_type: dcp::ServiceType::Request, identity } }
+    }
+    fn dcp_id(mac: Mac, identity: DeviceIdentity, at_ns: u64, frame: u64) -> Observation {
+        Observation { witness: w(Probe::DcpHeard, at_ns, frame), observed: Observed::Dcp { mac, service: dcp::Service::Hello, service_type: dcp::ServiceType::Request, identity } }
+    }
+    fn lldp(src: Mac, pdu: LldpPdu, at_ns: u64, frame: u64) -> Observation {
+        Observation { witness: w(Probe::LldpHeard, at_ns, frame), observed: Observed::Lldp { src, pdu } }
+    }
+    fn fused(obs: &[&Observation]) -> Fusion {
+        let mut f = Fusion::new();
+        for o in obs {
+            f.apply(o);
+        }
+        f
+    }
+    fn perms<T: Clone>(xs: &[T]) -> Vec<Vec<T>> {
+        if xs.len() <= 1 {
+            return vec![xs.to_vec()];
+        }
+        let mut out = Vec::new();
+        for i in 0..xs.len() {
+            let mut rest = xs.to_vec();
+            let x = rest.remove(i);
+            for mut p in perms(&rest) {
+                p.insert(0, x.clone());
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// One stamp, three frames: a value's first and last witness, the candidates' order and the current
+    /// value by stamp then index, whatever order they are applied in.
+    #[test]
+    fn one_stamp_told_apart_by_index_in_every_order() {
+        let (a4, a2, b3) = (named(DEV, "a", 300, 4), named(DEV, "a", 300, 2), named(DEV, "b", 300, 3));
+        for order in perms(&[&a4, &a2, &b3]) {
+            let f = fused(&order);
+            let d = &f.devices[&DEV];
+            let seen: Vec<_> = d.name.candidates.iter().map(|c| (c.value.as_str(), c.first.frame, c.last.frame, c.count)).collect();
+            let frames: Vec<u64> = order.iter().map(|o| o.witness.frame).collect();
+            assert_eq!(seen, [("a", 2, 4, 2), ("b", 3, 3, 1)], "applied {frames:?}");
+            assert_eq!(d.name.current().map(String::as_str), Some("a"), "applied {frames:?}");
+            assert_eq!(d.label(), "a", "applied {frames:?}");
+            assert_eq!(f.conflicts(), [Conflict { kind: ConflictKind::NameChanged, value: "a, b".into(), macs: vec![DEV] }], "applied {frames:?}");
+        }
+    }
+
+    /// The label is the station name heard last, an empty one none.
+    #[test]
+    fn the_label_is_the_current_station_name() {
+        let f = fused(&[&named(DEV, "a", 100, 0), &named(DEV, "b", 200, 1)]);
+        assert_eq!(f.devices[&DEV].label(), "b");
+        let f = fused(&[&named(DEV, "a", 100, 0), &named(DEV, "", 200, 1)]);
+        assert_eq!(f.devices[&DEV].label(), DEV.to_string());
+    }
+
+    /// A device that spoke DCP, then a PDU from it naming no chassis MAC, then one naming another
+    /// device: it is a device of its own before it is named another's port; nothing of it is taken in.
+    #[test]
+    fn a_device_that_spoke_first_is_taken_in_by_nothing() {
+        let nameless = LldpPdu::new(ChassisId::Local { id: "x".into() }, PortId::Local { id: "port-001.x".into() }, 0);
+        let mut names_dev = LldpPdu::new(ChassisId::Local { id: "io".into() }, PortId::Local { id: "port-001.io".into() }, 20);
+        names_dev.pn.chassis_mac = Some(DEV);
+        let (spoke, gone, named_port) = (named(PORT, "io-device-7", 40, 0), lldp(PORT, nameless, 50, 1), lldp(PORT, names_dev, 100, 2));
+        let f = fused(&[&spoke, &gone, &named_port]);
+        assert_eq!(f.devices.keys().copied().collect::<Vec<_>>(), [DEV, PORT]);
+        let p = &f.devices[&PORT];
+        assert!(!p.by_source);
+        assert_eq!((p.label(), p.ports["port-001"].left_ns), ("io-device-7".to_string(), Some(50)));
+        assert!(f.devices[&DEV].name.is_empty());
+    }
+
+    /// Conflicts of one kind ordered by their value, and each device's on record though another's
+    /// reads alike.
+    #[test]
+    fn conflicts_of_one_kind_by_value_each_on_record() {
+        // DEV (the lower MAC) renamed b then c; DEV2 renamed a then b: "a, b" before "b, c".
+        let f = fused(&[&named(DEV, "b", 1, 0), &named(DEV, "c", 2, 1), &named(DEV2, "a", 3, 2), &named(DEV2, "b", 4, 3)]);
+        assert_eq!(
+            f.conflicts(),
+            [
+                Conflict { kind: ConflictKind::NameChanged, value: "a, b".into(), macs: vec![DEV2] },
+                Conflict { kind: ConflictKind::NameChanged, value: "b, c".into(), macs: vec![DEV] },
+            ]
+        );
+        // Two devices renamed alike: two conflicts.
+        let f = fused(&[&named(DEV, "a", 1, 0), &named(DEV, "b", 2, 1), &named(DEV2, "a", 3, 2), &named(DEV2, "b", 4, 3)]);
+        assert_eq!(
+            f.conflicts(),
+            [
+                Conflict { kind: ConflictKind::DuplicateName, value: "b".into(), macs: vec![DEV, DEV2] },
+                Conflict { kind: ConflictKind::NameChanged, value: "a, b".into(), macs: vec![DEV] },
+                Conflict { kind: ConflictKind::NameChanged, value: "a, b".into(), macs: vec![DEV2] },
+            ]
+        );
+        // Two duplicate addresses: by value.
+        let at = |mac, last: u8, frame| dcp_id(mac, DeviceIdentity { ip: Some(IpSuite { ip: Ipv4Addr::new(10, 0, 0, last), mask: Ipv4Addr::new(255, 0, 0, 0), gateway: Ipv4Addr::UNSPECIFIED }), ip_status: Some(IpStatus { set: 1, conflict: false }), ..Default::default() }, 1, frame);
+        let arp = |mac, last: u8, frame| Observation { witness: w(Probe::ArpHeard, 2, frame), observed: Observed::Arp { mac, ip: Ipv4Addr::new(10, 0, 0, last) } };
+        let f = fused(&[&at(DEV, 9, 0), &arp(DEV2, 9, 1), &at(PORT, 10, 2), &arp(Mac([0x02, 0, 0, 0, 0, 0x04]), 10, 3)]);
+        let values: Vec<(ConflictKind, String)> = f.conflicts().into_iter().map(|c| (c.kind, c.value)).collect();
+        assert_eq!(values, [(ConflictKind::DuplicateIp, "10.0.0.10".to_string()), (ConflictKind::DuplicateIp, "10.0.0.9".to_string())]);
+    }
+
+    fn names_dev(ttl: u16) -> LldpPdu {
+        let mut p = LldpPdu::new(ChassisId::Local { id: "io".into() }, PortId::Local { id: "port-001.io".into() }, ttl);
+        p.pn.chassis_mac = Some(DEV);
+        p
+    }
+    fn nameless(ttl: u16) -> LldpPdu {
+        LldpPdu::new(ChassisId::Local { id: "io".into() }, PortId::Local { id: "port-001.io".into() }, ttl)
+    }
+
+    /// Two returns (or two leavings) of one stamp: the later by index is the port's last of its kind.
+    #[test]
+    fn a_leaving_within_one_stamp_against_two_returns() {
+        let first = lldp(PORT, names_dev(20), 100, 0);
+        let (r5, l6, r7) = (lldp(PORT, names_dev(20), 200, 5), lldp(PORT, names_dev(0), 200, 6), lldp(PORT, names_dev(20), 200, 7));
+        for order in perms(&[&first, &r5, &l6, &r7]) {
+            let p = &fused(&order).devices[&DEV].ports["port-001"];
+            assert_eq!((p.left_ns, p.leaving, p.spoke), (None, Some((200, 6)), Some((200, 7))), "{:?}", order.iter().map(|o| o.witness.frame).collect::<Vec<_>>());
+        }
+        let (l5, r6, l7) = (lldp(PORT, names_dev(0), 200, 5), lldp(PORT, names_dev(20), 200, 6), lldp(PORT, names_dev(0), 200, 7));
+        for order in perms(&[&first, &l5, &r6, &l7]) {
+            let p = &fused(&order).devices[&DEV].ports["port-001"];
+            assert_eq!((p.left_ns, p.leaving, p.spoke), (Some(200), Some((200, 7)), Some((200, 6))), "{:?}", order.iter().map(|o| o.witness.frame).collect::<Vec<_>>());
+        }
+    }
+
+    /// A port not yet known that left, taken in by a naming PDU that itself was a leaving: the later
+    /// leaving against the later return, whichever side held it.
+    #[test]
+    fn a_leaving_on_both_sides_of_a_take_in() {
+        let cases = [
+            // the port not yet known left last
+            ([lldp(PORT, names_dev(0), 100, 0), lldp(PORT, nameless(20), 150, 1), lldp(PORT, nameless(0), 200, 2)], (Some(200), Some((200, 2)), Some((150, 1)))),
+            // the naming PDU left last
+            ([lldp(PORT, nameless(0), 50, 0), lldp(PORT, nameless(20), 100, 1), lldp(PORT, names_dev(0), 200, 2)], (Some(200), Some((200, 2)), Some((100, 1)))),
+        ];
+        for (obs, expect) in &cases {
+            for order in perms(&[&obs[0], &obs[1], &obs[2]]) {
+                let f = fused(&order);
+                assert_eq!(f.devices.keys().copied().collect::<Vec<_>>(), [DEV]);
+                let p = &f.devices[&DEV].ports["port-001"];
+                assert_eq!((p.left_ns, p.leaving, p.spoke), *expect, "{:?}", order.iter().map(|o| o.witness.frame).collect::<Vec<_>>());
+            }
+        }
+    }
+
+    /// A port whose frames came from a first MAC and then a second: a leaving from the second, naming
+    /// no chassis MAC, is that port's device's.
+    #[test]
+    fn a_port_is_its_device_s_by_a_later_mac_of_its_frames() {
+        let second = Mac([0x02, 0, 0, 0, 0, 0x08]);
+        let obs = [lldp(PORT, names_dev(20), 100, 0), lldp(second, names_dev(20), 150, 1), lldp(second, nameless(0), 200, 2)];
+        for order in perms(&[&obs[0], &obs[1], &obs[2]]) {
+            let f = fused(&order);
+            let frames: Vec<u64> = order.iter().map(|o| o.witness.frame).collect();
+            assert_eq!(f.devices.keys().copied().collect::<Vec<_>>(), [DEV], "{frames:?}");
+            assert_eq!((f.devices[&DEV].ports["port-001"].left_ns, f.port_owner(second), f.port_owner(PORT)), (Some(200), Some(DEV), Some(DEV)), "{frames:?}");
+        }
+    }
+
+    /// Readdressed from a higher address to a lower: ip-changed names them in the order heard.
+    #[test]
+    fn ip_changed_in_the_order_heard() {
+        let at = |last: u8, at_ns, frame| dcp_id(DEV, DeviceIdentity { ip: Some(IpSuite { ip: Ipv4Addr::new(192, 168, 0, last), mask: Ipv4Addr::new(255, 255, 255, 0), gateway: Ipv4Addr::UNSPECIFIED }), ..Default::default() }, at_ns, frame);
+        let (hi, lo) = (at(11, 100, 0), at(10, 200, 1));
+        for order in [[&hi, &lo], [&lo, &hi]] {
+            assert_eq!(fused(&order).conflicts(), [Conflict { kind: ConflictKind::IpChanged, value: "192.168.0.11, 192.168.0.10".into(), macs: vec![DEV] }]);
+        }
+    }
+}
