@@ -13,15 +13,15 @@
     "serve"
   ],
   "exitCode": 0,
-  "outputSha": "f84c50bf4c027283b24e2d3591d4fa163313dcb3f45491c3e6770d825ca0ec26",
-  "outputTail": "test a_file_held_from_a_past_start_says_read_only_of_its_own_history ... ok\ntest a_reader_holding_the_store_never_holds_the_pump ... ok\ntest a_history_left_unread_is_never_said_read ... ok\ntest a_window_that_lets_go_of_a_history_before_it_is_read_never_says_it_read ... ok\ntest the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says ... ok\ntest a_held_active_started_at_its_end_is_read_from_where_it_stood ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.48s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/0e94a57538877d80/out/veredas_portal-0e94a57538877d80)\n     Running tests/serve.rs (target/debug/build/veredas-portal/c74a554ca502c39e/out/serve-c74a554ca502c39e)\n     Running tests/session.rs (target/debug/build/veredas-portal/ed5e27e9b4457520/out/session-ed5e27e9b4457520)",
-  "ranAt": "2026-11-25T09:32:51.900Z",
-  "headCommit": "21af0cc01b50743675749a24ccf69fa8ab902acd",
+  "outputSha": "3eb1dba7fd51ecb2409253845de1eb16ebc0e658b2ce9d069019b74e13a503a8",
+  "outputTail": "test a_stop_stores_every_row_the_workers_sent_and_publishes_the_end ... ok\ntest a_log_says_when_its_start_s_history_is_in_the_store ... ok\ntest a_file_held_from_a_past_start_says_read_only_of_its_own_history ... ok\ntest a_reader_holding_the_store_never_holds_the_pump ... ok\ntest a_history_left_unread_is_never_said_read ... ok\ntest the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says ... ok\ntest a_held_active_started_at_its_end_is_read_from_where_it_stood ... ok\ntest a_window_that_lets_go_of_a_history_before_it_is_read_never_says_it_read ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 45.65s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/0e94a57538877d80/out/veredas_portal-0e94a57538877d80)\n     Running tests/serve.rs (target/debug/build/veredas-portal/c74a554ca502c39e/out/serve-c74a554ca502c39e)\n     Running tests/session.rs (target/debug/build/veredas-portal/ed5e27e9b4457520/out/session-ed5e27e9b4457520)",
+  "ranAt": "2026-11-25T10:29:03.913Z",
+  "headCommit": "f8c135f12e39e1e5c7b884bd0905a19e9fd4a71a",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/session.rs",
       "file": "crates/veredas-portal/tests/session.rs",
-      "fileSha": "56dc77de5fc374eec5c1202a1a889fc446f57a255c17c6ddd15a065f11839abd"
+      "fileSha": "5151ef6da11e2d92fc1032afeefd50edca4c041d3f4fef6ada3a3e6c1dc9f18e"
     },
     {
       "name": "crates/veredas-portal/tests/serve.rs",
