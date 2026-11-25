@@ -3240,8 +3240,40 @@ state as slots and the safe outputs as a value when it is made (DECISION PENDING
 `crates/orcl-runtime/src/interpreted.rs`). The engine's `TaskProgram::safe_outputs` takes `&mut self`,
 so (b) needs no change to the engine.
 
+Both (a) and (b) need a program file of a format past 1, which holds neither the values nor a table
+of entries (C-154: such a table comes with a new format version). And (b)'s "the failed call aborted
+first" throws away the machine's position at the failure, which the fault record keeps
+(`docs/orcl/interpreter.md`, "Running"): the position would have to be copied out before.
+
 **Reversible?** Yes: the host's hand-over is one constructor; (b) or (c) adds entries the adapter
-calls.
+calls, and a format version to the file.
+
+---
+
+## Q232 - An instruction budget per scan for an interpreted program
+
+**Raised** 2026-11-25, by the controlador session, putting an interpreted program on the engine of a
+scan (`docs/orcl/interpreter.md`, "Running").
+
+The engine measures a scan when it ends; a scan that never ends is the host's watchdog's to catch
+(`docs/controlador/execution-model.md`, point 6: the bus thread faults at twice the period and sends
+the safe values). An interpreted scan runs one instruction at a time, so the engine could stop it
+itself after a number of instructions, and the controller could then acknowledge and restart it on
+the same thread, which a scan stuck in a native loop does not allow. Options:
+- (a) No budget: the entry is called to its return, and a scan that never returns waits for the
+  host's watchdog, as a native one does.
+- (b) A budget per scan, set with the task (a number of instructions, or the instructions a target
+  runs in twice the period, measured): past it the scan ends as the watchdog's fault, and the
+  machine stands at the instruction it reached, for the fault record.
+- (c) No budget, but the logic thread switches at instruction boundaries (Q223 with Q33): the bus
+  thread's watchdog marks the task faulted and the logic thread stops it at its next instruction.
+
+The assistant recommends (c) once several tasks are built, with (b) as its stand-in for one task: it
+is what makes a stuck interpreted scan recoverable without killing the thread.
+
+**Taken meanwhile**: (a). `orcl_runtime::Interpreted` calls its entry to its return (C-155 says so).
+
+**Reversible?** Yes: a budget is a field of the adapter, read by one loop.
 
 ---
 

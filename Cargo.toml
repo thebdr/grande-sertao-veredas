@@ -34,8 +34,9 @@ members = [
     # translatable subset of real Rust, versioned apart from the components. The standard control library,
     # no_std, depending on nothing.
     "crates/orcl-std",
-    # The engine of an ORCL scan: a cyclic task over a process image, its watchdog and safe outputs, with no
-    # operating-system code; uses orcl-std alone (law L5: orcl-* use each other and core).
+    # The engine of an ORCL scan: a cyclic task over a process image, its watchdog, program faults and safe
+    # outputs, with no operating-system code; uses orcl-std, and orcl-interp for interpreted programs (law L5:
+    # orcl-* use each other and core).
     "crates/orcl-runtime",
     # ORCL's interpreter (docs/orcl/interpreter.md): a program in the shape of rustc's MIR, run one instruction at a
     # time on memory laid out at load; depends on nothing (law L5: orcl-* use each other and core).
