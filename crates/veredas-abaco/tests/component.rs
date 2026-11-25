@@ -1026,11 +1026,12 @@ fn string_at(code: &str, i: usize) -> Option<(usize, String)> {
 }
 
 /// The string literal opening at `i` as rustc reads one: at every `"` (after a number too: `1"/*"`
-/// is the number 1 and the string `/*`), and at a `b`, `c` or `r` prefix that starts a token (the
-/// `r` ending `attr` is none).
+/// is the number 1 and the string `/*`), and at a `b`, `c` or `r` prefix that starts a token: not
+/// the `r` ending `attr`, nor the one of a raw identifier (`r#r"\"…"` is `r#r` and a plain string)
+/// or of a lifetime (`'r"\"…"`).
 fn string_token_at(code: &str, i: usize) -> Option<(usize, String)> {
     let b = code.as_bytes();
-    if b.get(i) != Some(&b'"') && i > 0 && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_') {
+    if b.get(i) != Some(&b'"') && i > 0 && (b[i - 1].is_ascii_alphanumeric() || matches!(b[i - 1], b'_' | b'#' | b'\'')) {
         return None;
     }
     string_at(code, i)
@@ -1216,6 +1217,15 @@ fn attribute_spans(code: &str) -> Vec<(usize, usize)> {
     attributes
 }
 
+/// The spans of `code`'s `use` items, `use` to its `;`.
+fn use_spans(code: &str) -> Vec<(usize, usize)> {
+    identifiers(code)
+        .into_iter()
+        .filter(|(w, _)| w == "use")
+        .map(|(_, at)| (at, code[at..].find(';').map_or(code.len(), |e| at + e)))
+        .collect()
+}
+
 /// The includes and the macro calls a macro's input names, after the path attributes.
 fn paths_and_includes_rest(code: &str, mut out: Vec<(Named, Option<String>)>) -> Vec<(Named, Option<String>)> {
     let b = code.as_bytes();
@@ -1226,6 +1236,7 @@ fn paths_and_includes_rest(code: &str, mut out: Vec<(Named, Option<String>)>) ->
         i
     };
     let literal = |i: usize| string_at(code, skip_ws(i)).map(|(_, s)| s);
+    let uses = use_spans(code);
     // a macro calling a macro its input names (`$m!(…)`): it can call `include!` or build `#[path]`
     // out of any reading's sight, so the reading fails closed
     for (i, _) in code.match_indices('$') {
@@ -1242,11 +1253,12 @@ fn paths_and_includes_rest(code: &str, mut out: Vec<(Named, Option<String>)>) ->
         };
         let bang = skip_ws(at);
         if b.get(bang) != Some(&b'!') {
-            // the builtin reached by its path, not called (`use std::include as grab`): its call is
-            // out of reach under another name, so the reading fails closed
+            // the builtin reached by its path, not called (`use std::include as grab`, `use
+            // std::{include_str as data}`): its call is out of reach under another name, so the
+            // reading fails closed
             let before = code[..at - word.len()].trim_end();
-            if kind == Named::Module && before.ends_with("::") {
-                out.push((Named::Module, None));
+            if before.ends_with("::") || uses.iter().any(|(a, e)| *a < at && at <= *e) {
+                out.push((kind, None));
             }
             continue;
         }
@@ -1302,6 +1314,19 @@ fn paths_and_includes_are_read_from_the_tokens_wherever_they_stand() {
         macro_rules! module_at { ($m:meta) => { #[cfg_attr(windows, $m)] #[cfg(windows)] mod plant; } }
     "##;
     assert_eq!(paths_and_includes(text), [(Named::Module, Some("../../veredas-aranha/src/fusion.rs".to_string())), (Named::Module, None)]);
+    // a raw identifier before a string hides nothing; an include named in a `use` tree, grouped or
+    // not, fails closed
+    let text = r##"
+        const _: &str = stringify!(r#r"\" /* ");
+        #[path = "../../veredas-aranha/src/fusion.rs"] mod plant;
+        // */
+        use std::{include as grab};
+        use std::include_str as data;
+    "##;
+    assert_eq!(
+        paths_and_includes(text),
+        [(Named::Module, Some("../../veredas-aranha/src/fusion.rs".to_string())), (Named::Module, None), (Named::Data, None)]
+    );
 }
 
 /// The build script cargo runs for the crate at `home`: `build.rs` unless the manifest names another
@@ -1330,13 +1355,22 @@ fn extern_functions(code: &str) -> Vec<String> {
         if word != "extern" {
             continue;
         }
-        // `extern "C" {`, `extern {`: the block's braces, an ABI string between
+        // `extern "C" {`, `extern {`: the block's braces, an ABI string between; an ABI or a body a
+        // macro supplies (`extern $abi {`, `extern "C" $body`) is out of any reading's sight
         let rest = &code[*at..];
         let rest = rest.trim_start();
+        if rest.starts_with('$') {
+            out.push("$".to_string());
+            continue;
+        }
         let rest = match string_at(rest, 0) {
             Some((end, _)) => rest[end..].trim_start(),
             None => rest,
         };
+        if rest.starts_with('$') {
+            out.push("$".to_string());
+            continue;
+        }
         if !rest.starts_with('{') {
             continue;
         }
@@ -1410,12 +1444,20 @@ fn no_socket_in_its_sources_or_the_engine_s() {
         files.extend(build_script(&home));
     }
     let built = built();
-    files.extend(built.libraries.into_iter().flat_map(|(_, f)| f));
-    files.extend(built.scripts.into_iter().flat_map(|(_, f)| f));
+    let library_files: BTreeSet<PathBuf> = built.libraries.into_iter().flat_map(|(_, f)| f).collect();
+    let mut script_files: BTreeSet<PathBuf> = built.scripts.into_iter().flat_map(|(_, f)| f).collect();
+    for folder in ["crates/veredas-abaco", "forks/ironcalc/base", "forks/ironcalc/xlsx"] {
+        script_files.extend(build_script(&root().join(folder)).and_then(|f| f.canonicalize().ok()));
+    }
+    files.extend(library_files.iter().cloned());
+    files.extend(script_files.iter().cloned());
     assert!(files.iter().any(|f| f.ends_with("forks/ironcalc/base/build.rs")));
     for file in &files {
         let text = String::from_utf8_lossy(&std::fs::read(file).unwrap()).to_string();
-        if let Some(route) = socket_route(&text) {
+        // a build script's source (and none a library compiles) may run `git`
+        let canonical = file.canonicalize().unwrap_or_else(|_| file.clone());
+        let script = script_files.contains(&canonical) && !library_files.contains(&canonical);
+        if let Some(route) = socket_route_in(&text, script) {
             panic!("{}: {route}", file.display());
         }
     }
@@ -1440,9 +1482,19 @@ const FOREIGN_ITEMS: [&str; 3] = ["ic_tz_validate", "ic_tz_all", "ic_tz_parts"];
 /// zones in a browser; it opens nothing): a changed one is reviewed again.
 const INLINE_JS_SHA256: &str = "638d33c970c627b0c2b44443f89593e34b06be18eb0ee493652f92c66d8d3fa0";
 
-/// What of `js_sys` the three packages use: a JavaScript `Date`, `Math` and `Array`; none of its
-/// `eval`, `Function` or `Reflect`, which reach any global (`WebSocket`, `fetch`).
+/// What of `js_sys` the three packages use: a JavaScript `Date`, `Math` and `Array`, each reached as
+/// `js_sys::Date` and the like (no alias); none of its `eval`, `Function` or `Reflect`, which reach
+/// any global (`WebSocket`, `fetch`).
 const JS_SYS_ITEMS: [&str; 3] = ["Date", "Math", "Array"];
+
+/// What reaches a browser's globals past [`JS_SYS_ITEMS`] and [`FOREIGN_ITEMS`]: a foreign item bound
+/// to another JavaScript name or object (`js_name = fetch`), an object's constructor (an `Array`'s
+/// is `Function`), and the casts that make a value of it callable; and a child process, which can
+/// hold a connection of its own (`bash -c 'exec 3<>/dev/tcp/…'`).
+const BRIDGE_IDENTIFIERS: &[&str] = &[
+    "js_name", "js_namespace", "js_class", "static_method_of", "constructor", "JsCast", "unchecked_into", "dyn_into", "unchecked_ref", "dyn_ref",
+    "unchecked_from_js", "unchecked_from_js_ref", "CommandExt",
+];
 
 /// How a source reaches a socket, if it does, by what it says: a socket word, an identifier of
 /// [`SOCKET_IDENTIFIERS`], a function or a static named as a socket function anywhere, an `extern`
@@ -1451,6 +1503,12 @@ const JS_SYS_ITEMS: [&str; 3] = ["Date", "Math", "Array"];
 /// among them), and the browser's: `web_sys`, a `js_sys` item not in [`JS_SYS_ITEMS`], a JavaScript
 /// module bound, an `inline_js` text not the reviewed one.
 fn socket_route(text: &str) -> Option<String> {
+    socket_route_in(text, false)
+}
+
+/// [`socket_route`] for a source that is a build script's (`build_script`), whose one child process
+/// is base's `git` (its release for `INFO("release")`): `Command::new("git")` alone.
+fn socket_route_in(text: &str, build_script: bool) -> Option<String> {
     let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
     for w in SOCKET_WORDS {
         for (at, _) in text.match_indices(w) {
@@ -1477,7 +1535,22 @@ fn socket_route(text: &str) -> Option<String> {
             return Some(format!("`{} {}`", pair[0].0, pair[1].0));
         }
     }
+    if let Some((w, _)) = words.iter().find(|(w, _)| BRIDGE_IDENTIFIERS.contains(&w.as_str())) {
+        return Some(format!("`{w}`"));
+    }
+    let uses = use_spans(&code);
     for (w, at) in &words {
+        // a child process: none in a library; in a build script `Command::new("git")` alone, and its
+        // `use` under its own name
+        if w == "Command" {
+            let in_use = uses.iter().any(|(a, b)| a < at && at <= b);
+            let rest = code[*at..].trim_start();
+            let git = rest.strip_prefix("::").map(str::trim_start).and_then(|r| r.strip_prefix("new")).map(str::trim_start).and_then(|r| r.strip_prefix('(')).map(str::trim_start).is_some_and(|r| r.starts_with("\"git\""));
+            let renamed = rest.starts_with("as") && rest[2..].starts_with(|c: char| c.is_whitespace());
+            if !build_script || !(git || in_use && !renamed) {
+                return Some("a child process (`Command`), which can hold a connection of its own".into());
+            }
+        }
         // a foreign item linked under another name: no reviewed item is
         if w == "link_name" {
             return Some("a `link_name`, which no reviewed foreign item has".into());
@@ -1485,11 +1558,12 @@ fn socket_route(text: &str) -> Option<String> {
         if w == "web_sys" {
             return Some("`web_sys`, the browser's every interface".into());
         }
-        if w == "js_sys" && let Some(rest) = code[*at..].trim_start().strip_prefix("::") {
-            let rest = rest.trim_start();
-            let item: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-            if !JS_SYS_ITEMS.contains(&item.as_str()) {
-                return Some(format!("`js_sys::{}`, no reviewed item", if item.is_empty() { rest.chars().next().unwrap_or(' ').to_string() } else { item }));
+        // `js_sys` reached as `js_sys::Date` and the like alone: no alias (`use js_sys as j`), no
+        // `extern crate`, no other item
+        if w == "js_sys" {
+            let item = code[*at..].trim_start().strip_prefix("::").map(|r| r.trim_start().chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect::<String>());
+            if !item.as_deref().is_some_and(|i| JS_SYS_ITEMS.contains(&i)) {
+                return Some(format!("`js_sys` reached otherwise than by `js_sys::{}`", JS_SYS_ITEMS.join("`, `js_sys::")));
             }
         }
     }
@@ -1504,6 +1578,13 @@ fn socket_route(text: &str) -> Option<String> {
             }
             if matches!(w.as_str(), "module" | "raw_module") && rest.starts_with('=') {
                 return Some(format!("a JavaScript module bound by `{w}`"));
+            }
+            // the one `wasm_bindgen` attribute is the reviewed inline text's
+            if w == "wasm_bindgen" {
+                let names: Vec<String> = identifiers(inner).into_iter().map(|(w, _)| w).collect();
+                if names != ["wasm_bindgen", "inline_js"] {
+                    return Some(format!("a `wasm_bindgen` attribute not the reviewed one ({names:?})"));
+                }
             }
             if w == "inline_js" {
                 let text = rest.strip_prefix('=').map(str::trim_start).and_then(|r| string_at(r, 0)).map(|(_, t)| t);
@@ -1562,6 +1643,15 @@ fn every_route_the_critics_found_is_a_socket_route() {
         ("web_sys", "use web_sys::WebSocket;"),
         ("js_sys's eval", "let _ = js_sys::eval(\"new WebSocket('ws://plant')\");"),
         ("js_sys's Reflect", "let _ = js_sys::Reflect::get(&js_sys::global(), &\"fetch\".into());"),
+        // the round at c434b0fb: a raw identifier's and a lifetime's `r` open no raw string
+        ("a raw identifier before a string", "const _: &str = stringify!(r#r\"\\\" /* \");\nunsafe extern \"C\" { fn socket(d: i32) -> i32; }\n// */"),
+        ("a lifetime before a string", "const _: &str = stringify!('r\"\\\" /* \");\nunsafe extern \"C\" { fn socket(d: i32) -> i32; }\n// */"),
+        ("an extern ABI from a macro", "macro_rules! ffi { ($abi:tt) => { unsafe extern $abi { fn rexec() -> i32; } } } ffi!(\"C\");"),
+        ("an extern body from a macro", "macro_rules! ffi { ($b:tt) => { unsafe extern \"C\" $b } } ffi!({ pub fn rexec() -> i32; });"),
+        ("a reviewed name bound to a global", "#[wasm_bindgen] extern \"C\" { #[wasm_bindgen(js_name = fetch)] pub fn ic_tz_all(url: &str) -> JsValue; }"),
+        ("js_sys under an alias", "use js_sys as j; fn f() { let _ = j::eval(\"x\"); }"),
+        ("an Array's constructor", "let f = js_sys::Array::new().constructor().constructor();"),
+        ("a child process", "fn f() { let _ = std::process::Command::new(\"bash\").args([\"-c\", \"exec 3<>/dev/tcp/plant/4840\"]).status(); }"),
     ] {
         assert!(socket_route(text).is_some(), "{what}: {text}");
     }
@@ -1569,6 +1659,14 @@ fn every_route_the_critics_found_is_a_socket_route() {
     // in a comment (the socket words are read in comments too, the identifiers in code alone)
     assert_eq!(socket_route("fn f(r#if: bool, include: bool) -> bool { r#if && include } // the net value"), None);
     assert_eq!(socket_route("use js_sys::Date; fn r() -> f64 { js_sys::Math::random() } extern \"C\" { fn ic_tz_all() -> js_sys::Array; }"), None);
+    // a build script runs `git` and no other program; a library none; `std::process::id()` is no child
+    let git = "use std::process::Command;\nfn main() { let _ = Command::new(\"git\").args([\"describe\"]).output(); }";
+    assert_eq!(socket_route_in(git, true), None);
+    assert!(socket_route_in(git, false).is_some());
+    for script in ["use std::process::Command as C; fn main() { C::new(\"bash\"); }", "fn main() { std::process::Command::new(\"bash\"); }"] {
+        assert!(socket_route_in(script, true).is_some(), "{script}");
+    }
+    assert_eq!(socket_route("let n = std::process::id();"), None);
     assert!(socket_route("// see std::net").is_some());
 }
 
@@ -1779,57 +1877,125 @@ fn change_rows(record: &str) -> Vec<String> {
                 })
         }
     };
+    // a setext heading's underline (`===`, `---` under a paragraph's line)
+    let underline = |l: &str| {
+        let t = l.trim();
+        column_of(l) <= 3 && !t.is_empty() && (t.chars().all(|c| c == '=') || t.chars().all(|c| c == '-'))
+    };
     let mut out = Vec::new();
+    // the lines a table read or a fence or an HTML block holds
+    let mut read = vec![false; lines.len()];
     let mut i = 0;
-    // whether the paragraph going on is a list item's or a quote's: a header line there is its lazy
-    // continuation, and opens no table
+    // whether a paragraph is going on, and whether it is a list item's or a quote's: a header line in
+    // the latter is its lazy continuation and opens no table; an HTML block of kind 7 interrupts none
+    let mut in_paragraph = false;
     let mut in_container_paragraph = false;
+    let mut end = lines.len();
     while i < lines.len() {
         let l = lines[i];
-        match block_start(l) {
+        let start = match block_start(l) {
+            Some(Block::Html(7)) if in_paragraph || in_container_paragraph => None,
+            other => other,
+        };
+        match start {
             // a fence or an HTML block: passed over to its end, a table in it is none
             Some(Block::Fence(ch, n)) => {
+                read[i] = true;
                 i += 1;
                 while i < lines.len() && !closes_fence(lines[i], ch, n) {
+                    read[i] = true;
                     i += 1;
                 }
-                in_container_paragraph = false;
+                if i < lines.len() {
+                    read[i] = true;
+                }
+                (in_paragraph, in_container_paragraph) = (false, false);
             }
             Some(Block::Html(kind)) => {
                 let ends = |line: &str| html_block_ends(kind, line);
+                read[i] = true;
                 if !ends(l) {
                     i += 1;
                     while i < lines.len() && !ends(lines[i]) {
+                        read[i] = true;
                         i += 1;
                     }
                 }
-                in_container_paragraph = false;
+                (in_paragraph, in_container_paragraph) = (false, false);
             }
-            // the section ends at the next heading of its level or above
-            Some(Block::Heading) if l.trim_start().chars().take_while(|c| *c == '#').count() <= 2 => break,
+            // the section ends at the next heading of its level or above, ATX or setext
+            Some(Block::Heading) if l.trim_start().chars().take_while(|c| *c == '#').count() <= 2 => {
+                end = i;
+                break;
+            }
+            None if !in_container_paragraph && i + 1 < lines.len() && underline(lines[i + 1]) && !lines[i + 1].contains('|') => {
+                end = i;
+                break;
+            }
             Some(Block::ListItem | Block::Quote) => {
                 // a marker with text after it opens a paragraph inside the item or the quote
                 let t = l.trim_start();
                 let after = t.trim_start_matches(|c: char| c.is_ascii_digit()).trim_start_matches(['-', '+', '*', '.', ')', '>']);
                 in_container_paragraph = !after.trim().is_empty();
+                in_paragraph = false;
             }
             None if !in_container_paragraph
                 && i + 1 < lines.len()
                 && delimiter(lines[i + 1])
                 && gfm_cells(l).len() == gfm_cells(lines[i + 1]).len() =>
             {
+                read[i] = true;
+                read[i + 1] = true;
                 i += 2;
                 while i < lines.len() && block_start(lines[i]).is_none() {
                     out.push(gfm_cells(lines[i]).into_iter().next().unwrap_or_default());
+                    read[i] = true;
                     i += 1;
                 }
+                (in_paragraph, in_container_paragraph) = (false, false);
                 // the line that ended the table is read for what it opens
                 continue;
             }
-            None => {}
-            _ => in_container_paragraph = false,
+            None => in_paragraph = !in_container_paragraph,
+            _ => (in_paragraph, in_container_paragraph) = (false, false),
         }
         i += 1;
+    }
+    // a table GitHub shows that this reading does not read (in a quote, in a list item): its rows
+    // are the record's too, so the reading fails, naming it
+    let bare = |l: &str| -> String {
+        let mut t = l.trim_start();
+        loop {
+            if let Some(r) = t.strip_prefix('>') {
+                t = r.trim_start();
+            } else if let Some(r) = t.strip_prefix(['-', '+', '*']).filter(|r| r.starts_with(' ')) {
+                t = r.trim_start();
+            } else {
+                let digits = t.chars().take_while(char::is_ascii_digit).count();
+                match t[digits..].strip_prefix(['.', ')']).filter(|r| digits > 0 && r.starts_with(' ')) {
+                    Some(r) => t = r.trim_start(),
+                    None => break,
+                }
+            }
+        }
+        t.to_string()
+    };
+    for k in 1..end {
+        let (head, delim) = (bare(lines[k - 1]), bare(lines[k]));
+        // (a line of indented code, four columns in outside a quote, is no header)
+        let code_line = |l: &str| column_of(l) >= 4 && !l.trim_start().starts_with('>');
+        // (one at the margin outside a quote is a paragraph's lazy line, or no table: GFM shows none)
+        let nested = lines[k].trim_start().starts_with('>') || column_of(lines[k]) >= 1;
+        if !read[k]
+            && nested
+            && !code_line(lines[k - 1])
+            && !code_line(lines[k])
+            && delim.contains('|')
+            && delimiter(&delim)
+            && gfm_cells(&head).len() == gfm_cells(&delim).len()
+        {
+            out.push(format!("(a table this reading does not read, at line {} of the section)", k));
+        }
     }
     out
 }
@@ -2104,6 +2270,22 @@ fn the_record_s_rows_are_read_as_markdown_reads_a_table() {
     assert_eq!(change_rows(record), Vec::<String>::new());
     let record = "## Local changes\n> quoted:\n| # | Change |\n|---|---|\n| 1 | a |\n\n| # | Change |\n|---|---|\n| 2 | b |\n";
     assert_eq!(change_rows(record), ["2"]);
+    // the round at c434b0fb: a setext heading ends the section (its underline is no delimiter); a
+    // table in a quote or a list item, which GitHub shows, fails the reading; an HTML line of kind 7
+    // in a paragraph is the paragraph's, and the table after it is read
+    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\nNotes\n---\n30 | a probe | x | none\n";
+    assert_eq!(change_rows(record), ["1"]);
+    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\nOther\n=====\n| # | x |\n|---|---|\n| 31 | no |\n";
+    assert_eq!(change_rows(record), ["1"]);
+    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n> | # | Change |\n> |---|---|\n> | 31 | quoted |\n";
+    assert!(change_rows(record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{:?}", change_rows(record));
+    // (a list item's table after a blank line stands where a table may: its row is read)
+    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n- More:\n\n  | # | Change |\n  |---|---|\n  | 33 | listed |\n";
+    assert_eq!(change_rows(record), ["1", "33"]);
+    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n- More:\n  | # | Change |\n  |---|---|\n  | 34 | in the item |\n";
+    assert!(change_rows(record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{:?}", change_rows(record));
+    let record = "## Local changes\nSome text\n<span class=\"x\">\n| # | Change |\n|---|---|\n| 32 | after a span |\n";
+    assert_eq!(change_rows(record), ["32"]);
     // cells split at unescaped pipes alone, one leading pipe passed over
     assert_eq!(gfm_cells("||28| a \\| b |"), ["", "28", "a \\| b"]);
 }
