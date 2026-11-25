@@ -45,9 +45,11 @@ users, the PLC programmer, the commissioning technician and the software enginee
   `#12101C`; the hover and data-series tint `#CFC3F2` is the assistant's proposal). Green
   `#30D158` means a good state and is never the accent (`docs/questions.md` Q22, reversed on
   2026-11-15).
-- **Licence GPLv3.** Every crate Oficina links carries a permissive licence that GPLv3 accepts,
-  MIT or Apache 2.0, and a check of dependency licences runs in CI (the architect, 2026-11-15;
-  which expression is Q35).
+- **Licence GPLv3.** Every crate Oficina links carries a permissive licence that GPLv3 accepts, and
+  a check of dependency licences runs in CI (the architect, 2026-11-15). The suite's permissive
+  crates state `MIT OR Apache-2.0` (Q35, ruled 2026-11-25); not yet ruled: whether Oficina's GPL is
+  version 3 only or version 3 or later, and the copyright holder the licence files name. Nothing is
+  stated in Oficina's manifest until they are.
 - **Every capability's test drives the real interface**: Rust tests through the Spix tool.
 - Qt Creator was dropped as a base and is kept as a reference.
 
@@ -102,9 +104,19 @@ controlador.
   topology, the diff, identify, name and address, as the bench's surfaces are Oficina's.
 - **Ábaco:** the grid as a tab, with the engine and Python of each workspace in its own process; a
   Python editor with completion; run with stop-on-error; a full debugger; forms as controls on the
-  sheet and as designed dialogs. Later: a macro recorder.
+  sheet and as designed dialogs. Later: a macro recorder. The grid's behaviour (Excel's navigation
+  and selection, the editor's modes, the clipboard, the filters) is Oficina's own code, written new:
+  nothing of Veredas 1's grid is carried, neither its egui crate nor its renderer-neutral core,
+  which may be read as a description of the behaviour (Q341, ruled 2026-11-25). Ábaco's worker
+  serves the model (cells, values, edits, recalculation) over a local interface the two plans agree
+  when the tab is planned.
 - **Comissionador:** the flow-chart designer, the text editor on the same file, and the
-  run-and-report screen (PDF, sign-off), delivered together.
+  run-and-report screen, delivered together. The report is comissionador's TOML record of a run,
+  its evidence beside it, which the screen draws as PDF (Q312, ruled 2026-11-25); anyone signs by a
+  typed name, a test may name the roles that must sign (the report reads "awaiting witness" until
+  they have), and a signed report is frozen. A run started from Oficina first shows the test's gated
+  writes for the person to confirm, then arms portal's write switch at its start and disarms it at
+  its end (Q314, ruled 2026-11-25): that confirming step is a screen of Oficina's.
 - **Controlador:**
   - the ORCL editor with a language server, and a quick switch between ORCL and a ladder view of
     the same source (ladder read-only at first);
@@ -175,8 +187,9 @@ only. The architect kept it on 2026-11-15, under three rules:
 
 ## The crate
 `crates/veredas-oficina`, from 2026-11-25 (C-250): a library whose model builds on any machine the
-suite builds on, and the window behind two features, neither on by default, so no member's build
-needs Qt (docs/questions.md Q370, taken meanwhile).
+suite builds on, and the window behind two features, neither on by default yet. Q370 is ruled (the
+window built by default); the switch comes once every member's build on this machine finds Qt and
+the C++ libraries, and the tests' driver stays a feature of its own.
 - **The model**, no Qt: `tree` (the project tree) and `formats` (which component reads each
   format). Its members are core alone, without core's default features: the header reader, with
   none of core's plant-facing layers (C-073).
@@ -458,12 +471,11 @@ kept, rust-analyzer is held to running nothing of the folder, and the embedded b
   run nothing), 33 (loopback and a tunnel are not a boundary), 34 (text from the plant shown as
   plain text), 42 (opening the project from the target; pairing in one step), 43 (the outline's
   contrast; no light theme), 45 (exports, examples, help), and the minors 51, 52 and 54.
-- **Q341** (ábaco's, not ruled): its recommendation that Oficina link the grid's
-  drawing-independent logic in its own process and paint it, the worker serving the model, which
-  would put ábaco in Oficina's `MAP` row.
-- **Q370**, Oficina's: whether the suite's build needs Qt (taken meanwhile: the window and the
-  tests' driver behind features, off by default; "The crate").
-- **Q35** the licence expression. **Q36, Q37** the download's integrity and the robust link.
+- **Q370**, Oficina's, ruled 2026-11-25: the window is built by default. The switch waits until
+  every member's build on this machine finds Qt and the C++ libraries (the orchestrator's order:
+  the machine's cargo configuration first, the switch after); meanwhile it stays behind `shell`.
+- **Q35**'s remainder: Oficina's GPL version and the licence files' copyright holder. **Q36,
+  Q37** the download's integrity and the robust link.
   **Q43** the security round. **Q45** the briefing's readings, among them where "identify, name
   and address" runs, on the laptop or through a target.
 - The research behind these decisions (five PLC suites' manuals; three toolkits, Qt 6.12, Avalonia

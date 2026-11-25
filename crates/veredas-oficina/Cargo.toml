@@ -14,7 +14,8 @@ description = "The workshop of Veredas 2 (Oficina): the one native application t
 # meanwhile). Depends on core alone (law L5: a component outside the map uses core alone).
 
 [features]
-# DECISION PENDING (Q370): nothing on by default, so no member's build needs Qt.
+# Q370 ruled 2026-11-25: the window built by default (`default = ["shell"]`), once every member's
+# build on the development machine finds Qt and the C++ libraries; until then nothing is on.
 default = []
 # The window: Qt 6.12, whose qmake `QMAKE` names in cargo's environment, KDDockWidgets in
 # `OFICINA_DEPS` (`~/.local/opt/oficina-deps` by default).
