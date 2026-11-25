@@ -1007,3 +1007,166 @@ fn round_four_a_rollback_names_what_it_left_another_version_and_a_missing_symbol
     assert_eq!(m.snapshot(), before);
 }
 
+
+#[test]
+fn round_five_the_lock_through_the_watch_the_checks_order_and_what_a_run_leaves() {
+    use std::io::Write;
+    let tools = tempfile::tempdir().unwrap();
+    let disk = failing_disk(tools.path());
+    let w = tempfile::tempdir().unwrap();
+    let staging = |m: &Machine| -> Vec<String> {
+        std::fs::read_dir(m.path("opt/veredas")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).filter(|n| n.starts_with(".atualizar-")).collect()
+    };
+    // The lock held through the restart and the watch: a second update started while the first
+    // watches its services is refused at once, and `current` names the first's release.
+    let m = Machine::new();
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |_| {});
+    let c = bundle_of(w.path(), "1.2.0", TARGET, &["veredas-portal"], |_| {});
+    let first = m.command(&[&b], &[("VEREDAS_SETTLE", "2")]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    let start = std::time::Instant::now();
+    while !m.calls().contains("restart") {
+        assert!(start.elapsed() < std::time::Duration::from_secs(60), "the first update did not restart the services");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let second = within(m.command(&[&c], &[("VEREDAS_SETTLE", "0")]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap(), 30);
+    assert_eq!((second.status.code(), String::from_utf8_lossy(&second.stderr).into_owned()), (Some(2), "veredas-atualizar: another update is running\n".to_string()));
+    let out = within(first, 60);
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).ends_with("veredas-atualizar: the bench and supervisão restarted on it and stayed up\n"));
+    assert_eq!(std::fs::read_link(m.path("opt/veredas/current")).unwrap(), PathBuf::from(format!("veredas-1.1.0-{TARGET}")));
+    assert_eq!(m.calls().matches("restart").count(), 1, "the second restarted nothing");
+
+    // The checks in their stated order, the first that fails alone said: the sums before the
+    // manifest, the manifest before the libraries, the libraries before the PATH.
+    let reasons = |b: &Path, m: &Machine| -> Vec<String> {
+        let before = m.snapshot();
+        let (code, out, err) = m.run(&[b]);
+        assert_eq!(code, Some(2), "{out}{err}");
+        assert_eq!(m.snapshot(), before, "the machine as it was");
+        let lines: Vec<&str> = err.lines().collect();
+        assert_eq!(lines[0], "veredas-atualizar: not installed, the machine is as it was:", "{err}");
+        lines[1..].iter().map(|l| l.trim_start().to_string()).collect()
+    };
+    let missing_library = |d: &Path| {
+        let lib = tempfile::tempdir().unwrap();
+        std::fs::write(lib.path().join("f.c"), "int fantasma(void) { return 0; }\n").unwrap();
+        assert!(Command::new("cc").args(["-shared", "-fPIC", "-o"]).arg(lib.path().join("libfantasma.so")).arg(lib.path().join("f.c")).status().unwrap().success());
+        exe(&d.join("bin/veredas-portal"), &["-Wl,--no-as-needed", &format!("-L{}", lib.path().display()), "-lfantasma"]);
+    };
+    let m = Machine::new();
+    let w = tempfile::tempdir().unwrap();
+    let older_and_changed = bundle_of(w.path(), "0.9.0", TARGET, &["veredas-portal"], |d| std::fs::write(d.join("README.md"), "changed\n").unwrap());
+    assert_eq!(reasons(&older_and_changed, &m), ["README.md does not match its sum"]);
+    let w = tempfile::tempdir().unwrap();
+    let bad_manifest_and_library = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |d| {
+        let t = std::fs::read_to_string(d.join("release.toml")).unwrap().replace("format = \"veredas-release\"", "format = \"veredas-bench\"");
+        std::fs::write(d.join("release.toml"), t).unwrap();
+        missing_library(d);
+        bundle::write_sums(d).unwrap();
+    });
+    assert_eq!(reasons(&bad_manifest_and_library, &m), ["release.toml is `veredas-bench` version 1, not `veredas-release` version 1"]);
+    let w = tempfile::tempdir().unwrap();
+    let library_and_path = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal", "veredas-outro"], |d| {
+        missing_library(d);
+        bundle::write_sums(d).unwrap();
+    });
+    std::fs::write(m.path("usr/local/bin/veredas-outro"), "a tester's own file\n").unwrap();
+    assert_eq!(reasons(&library_and_path, &m), ["bin/veredas-portal would not start here: libfantasma.so => not found"]);
+    std::fs::remove_file(m.path("usr/local/bin/veredas-outro")).unwrap();
+
+    // A component's name and executables of their kinds: a number for a name, a string for the
+    // list of executables, each refused by its shape.
+    for (from, to, shown) in [("name = \"veredas-portal\"", "name = 5", "5"), ("bins = [\"veredas-portal\"]", "bins = \"veredas-portal\"", "veredas-portal")] {
+        let w = tempfile::tempdir().unwrap();
+        let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |d| {
+            let t = std::fs::read_to_string(d.join("release.toml")).unwrap();
+            assert!(t.contains(from), "{t}");
+            std::fs::write(d.join("release.toml"), t.replacen(from, to, 1)).unwrap();
+            bundle::write_sums(d).unwrap();
+        });
+        assert_eq!(reasons(&b, &m), [format!("release.toml's component `{shown}` is not a name, a SemVer version and its executables")]);
+    }
+
+    // The staging folder's removal judged: a refusal that cannot remove it is not "as it was" (exit
+    // 4, the folder named, no way back to say: `current` never moved); an install that cannot says
+    // so and stays installed. The next update removes it and says so.
+    let m = Machine::new();
+    let w = tempfile::tempdir().unwrap();
+    let older = bundle_of(w.path(), "0.9.0", TARGET, &["veredas-portal"], |_| {});
+    let out = m.command(&[&older], &[("VEREDAS_SETTLE", "0"), ("LD_PRELOAD", disk.to_str().unwrap()), ("ALFORGE_FAIL_UNLINK", "bundle.tar.gz")]).output().unwrap();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(4), "{err}");
+    let left = staging(&m);
+    assert_eq!(left.len(), 1, "{left:?}");
+    let stage = m.path(&format!("opt/veredas/{}", left[0]));
+    assert_eq!(
+        err,
+        format!(
+            "veredas-atualizar: not installed, and the machine could not all be put back as it was:\n  release 0.9.0 is not newer than the installed 1.0.0\n  its staging folder {s} could not all be removed: {s}/bundle.tar.gz (Input/output error); the next update removes it\n",
+            s = stage.display()
+        )
+    );
+    let w = tempfile::tempdir().unwrap();
+    let newer = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |_| {});
+    let out = m.command(&[&newer], &[("VEREDAS_SETTLE", "0"), ("LD_PRELOAD", disk.to_str().unwrap()), ("ALFORGE_FAIL_UNLINK", "bundle.tar.gz")]).output().unwrap();
+    let (stdout, err) = (String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap());
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    // The earlier one could not be removed either (the same failing disk), and is said so; this
+    // run's own staging is said, the release installed.
+    assert!(err.starts_with(&format!("veredas-atualizar: what an earlier run left could not all be removed: {}/bundle.tar.gz (Input/output error)\n", stage.display())), "{err}");
+    let this = err.lines().nth(1).unwrap_or_default();
+    assert!(this.starts_with("veredas-atualizar: its staging folder ") && this.ends_with("/bundle.tar.gz (Input/output error); the next update removes it"), "{err}");
+    assert_eq!(err.lines().count(), 2, "{err}");
+    assert!(stdout.ends_with("veredas-atualizar: the bench and supervisão restarted on it and stayed up\n"), "{stdout}");
+    assert_eq!(std::fs::read_link(m.path("opt/veredas/current")).unwrap(), PathBuf::from(format!("veredas-1.1.0-{TARGET}")));
+    let mut was = staging(&m);
+    was.sort();
+    assert_eq!(was.len(), 2, "{was:?}");
+    let w = tempfile::tempdir().unwrap();
+    let next = bundle_of(w.path(), "1.2.0", TARGET, &["veredas-portal"], |_| {});
+    let (code, stdout, err) = m.run(&[&next]);
+    assert_eq!(code, Some(0), "{err}");
+    for n in &was {
+        assert!(stdout.contains(&format!("veredas-atualizar: removed what an earlier run left: {}\n", m.path(&format!("opt/veredas/{n}")).display())), "{stdout}");
+    }
+    assert_eq!(staging(&m), Vec::<String>::new());
+
+    // A run killed while it reads the bundle (a reboot's SIGTERM): its staging folder stays, and
+    // the next run removes it, with a scratch link a kill left beside `current` and on the PATH.
+    // What is not a run's own (a dot file of another's, a link not ending in a process number) is
+    // kept.
+    let m = Machine::new();
+    let w = tempfile::tempdir().unwrap();
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |_| {});
+    let bytes = std::fs::read(&b).unwrap();
+    let fifo = w.path().join("slow.tar.gz");
+    assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let child = m.command(&[&fifo], &[("VEREDAS_SETTLE", "0")]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    let mut writer = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+    writer.write_all(&bytes[..bytes.len() / 2]).unwrap();
+    writer.flush().unwrap();
+    let start = std::time::Instant::now();
+    // The copy's file made (the half written may still sit in its buffer): the run is reading.
+    while staging(&m).is_empty() || !m.path(&format!("opt/veredas/{}/bundle.tar.gz", staging(&m)[0])).exists() {
+        assert!(start.elapsed() < std::time::Duration::from_secs(30), "the run did not start copying");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(Command::new("kill").arg("-TERM").arg(child.id().to_string()).status().unwrap().success());
+    drop(writer);
+    let killed = within(child, 30);
+    assert_eq!(killed.status.code(), None, "killed by its signal");
+    let left = staging(&m);
+    assert_eq!(left.len(), 1, "a killed run leaves its staging folder");
+    std::os::unix::fs::symlink(format!("veredas-1.0.0-{TARGET}"), m.path("opt/veredas/.current.atualizar-4242")).unwrap();
+    std::os::unix::fs::symlink("/opt/veredas/current/bin/veredas-portal", m.path("usr/local/bin/.veredas-portal.atualizar-4242")).unwrap();
+    std::os::unix::fs::symlink("/usr/bin/true", m.path("usr/local/bin/.alias.atualizar-mine")).unwrap();
+    std::fs::write(m.path("opt/veredas/.atualizar-notes"), "a tester's own file\n").unwrap();
+    let (code, stdout, err) = m.run(&[&b]);
+    assert_eq!(code, Some(0), "{err}");
+    for p in [format!("opt/veredas/{}", left[0]), "opt/veredas/.current.atualizar-4242".to_string(), "usr/local/bin/.veredas-portal.atualizar-4242".to_string()] {
+        assert!(stdout.contains(&format!("veredas-atualizar: removed what an earlier run left: {}\n", m.path(&p).display())), "{p}: {stdout}");
+        assert!(!m.path(&p).exists() && std::fs::symlink_metadata(m.path(&p)).is_err(), "{p} removed");
+    }
+    assert!(std::fs::symlink_metadata(m.path("usr/local/bin/.alias.atualizar-mine")).is_ok() && m.path("opt/veredas/.atualizar-notes").is_file(), "another's kept");
+    assert_eq!(std::fs::read_link(m.path("opt/veredas/current")).unwrap(), PathBuf::from(format!("veredas-1.1.0-{TARGET}")));
+}

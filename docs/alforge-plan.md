@@ -363,8 +363,11 @@ passed on 2026-11-23.
   over the old one), relinks the PATH (a link for each new executable, none left for one it
   dropped) and restarts the bench and supervisão on it. The plant's files in the home folder are
   left as they are; the new release's own plant is in `/opt/veredas/current/planta`. Anything
-  refused leaves the machine as it was, one update runs at a time (the release's folder locked),
-  and a restart that fails says how to point `current` back. The boot's check names the release
+  refused leaves the machine as it was, one update runs at a time (the release's folder locked
+  to its end, the services' watch included), and a restart that fails says how to point `current`
+  back. What a run killed midway leaves (a reboot or a closed terminal during the read: its
+  staging folder `/opt/veredas/.atualizar-*`, a scratch link) is removed and said by the next run,
+  under the lock. The boot's check names the release
   `current` names, and says the command is there (`VEREDAS-ATUALIZAR ok`). A trial's bundle is
   never installed. The command watches the services after the restart (active, one main process,
   at two looks): a release that refuses the kept plant exits and is restarted by systemd, and the

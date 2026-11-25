@@ -11,7 +11,9 @@ exactly the executables it holds, every executable finds its libraries here, and
 room. It then goes beside the installed release under /opt/veredas/, `current` is moved to it in
 one step, the PATH's links follow, and the bench and supervisão restart on it and are seen to stay
 up. The plant's files in the home folder are left as they are; the old release stays where it was.
-Anything refused, an I/O error included, leaves the machine as it was.
+Anything refused, an I/O error included, leaves the machine as it was; what the update could not
+remove of its own is said, and is no refusal "as it was" (exit 4). What a run killed midway left
+(its staging folder, a scratch link) is removed at the next run's start, under the lock.
 
 Exit 0 when installed, 2 when refused (the reasons of the first check that fails said: the
 archive, then its sums, its manifest, its executables' libraries, the PATH), 3 when installed but
@@ -51,6 +53,17 @@ class Broken(Exception):
     def __init__(self, reasons):
         super().__init__("\n".join(reasons))
         self.reasons = reasons
+
+
+class Alone(Exception):
+    """A refusal said in its own line, without the heading (the bundle not there)."""
+
+    def __init__(self, reasons):
+        super().__init__("\n".join(reasons))
+        self.reasons = reasons
+
+
+BROKEN = "not installed, and the machine could not all be put back as it was:"
 
 
 class Refused(Exception):
@@ -215,6 +228,32 @@ def check_starts(folder):
         raise Refused(wrong)
 
 
+def leftovers():
+    """What an earlier run killed midway left (a reboot, a closed terminal), removed under the lock,
+    which proves no run owns it: its staging folder `/opt/veredas/.atualizar-*` and its scratch
+    links `.<name>.atualizar-<pid>` beside `current` and on the PATH. Each one removed is said; one
+    that cannot be is said too, and left."""
+    found = []
+    if os.path.isdir(OPT):
+        found += [os.path.join(OPT, n) for n in sorted(os.listdir(OPT)) if n.startswith(".atualizar-") and os.path.isdir(os.path.join(OPT, n)) and not os.path.islink(os.path.join(OPT, n))]
+    for d in [OPT, PATH_DIR]:
+        if os.path.isdir(d):
+            found += [os.path.join(d, n) for n in sorted(os.listdir(d)) if n.startswith(".") and ".atualizar-" in n and n.rsplit(".atualizar-", 1)[1].isdigit() and os.path.islink(os.path.join(d, n))]
+    for p in found:
+        left = []
+        if os.path.islink(p):
+            try:
+                os.unlink(p)
+            except OSError as e:
+                left.append(f"{p} ({e.strerror})")
+        else:
+            shutil.rmtree(p, onexc=lambda _f, q, x: left.append(f"{q} ({getattr(x, 'strerror', x)})"))
+        if left:
+            print(f"veredas-atualizar: what an earlier run left could not all be removed: {left[0]}", file=sys.stderr)
+        else:
+            print(f"veredas-atualizar: removed what an earlier run left: {p}")
+
+
 def point(link, target):
     """`link` made to name `target` in one step: a new link under a name of this run's own, made
     (never an existing file removed for it), then renamed over it."""
@@ -299,7 +338,7 @@ def install(stage, top, old_top, bins):
             left = []
             shutil.rmtree(dest, onexc=lambda _f, p, x: left.append(f"{p} ({getattr(x, 'strerror', x)})"))
             if left:
-                raise Broken([why, f"the new release's folder {dest} could not all be removed: {left[0]}; a later update of this release is refused while it stands"])
+                raise Broken([why, f"the new release's folder {dest} could not all be removed: {left[0]}; a later update of this release is refused while it stands (remove it with `sudo rm -rf {dest}`)"])
         raise Refused([why])
 
 
@@ -351,11 +390,16 @@ def main(argv):
     except Refused as e:
         print("veredas-atualizar: the installed release does not read:\n" + str(e), file=sys.stderr)
         return 2
+    leftovers()
     try:
         stage = tempfile.mkdtemp(prefix=".atualizar-", dir=OPT)
     except PermissionError:
         print(f"veredas-atualizar: {OPT} is not writable here: run it with sudo", file=sys.stderr)
         return 2
+    # Why the update stopped: its exit code, the heading said before its reasons (none for a line
+    # said alone), the reasons, and what is said after them. None once installed.
+    stopped = None
+    as_it_was = "not installed, the machine is as it was:"
     try:
         # The bundle read once, into the staging folder: its digest and its contents are of the
         # same bytes, whatever the file does meanwhile.
@@ -365,8 +409,7 @@ def main(argv):
         try:
             size = os.stat(bundle).st_size
         except FileNotFoundError as e:
-            print(f"veredas-atualizar: {bundle}: {e.strerror}", file=sys.stderr)
-            return 2
+            raise Alone([f"{bundle}: {e.strerror}"])
         free = shutil.disk_usage(OPT).free
         if size + RESERVE > free:
             raise Refused([f"the bundle's archive needs {size >> 20} MB under {OPT} and {RESERVE >> 20} MB left free; {free >> 20} MB are free"])
@@ -377,8 +420,7 @@ def main(argv):
                     h.update(chunk)
                     dst.write(chunk)
         except FileNotFoundError as e:
-            print(f"veredas-atualizar: {bundle}: {e.strerror}", file=sys.stderr)
-            return 2
+            raise Alone([f"{bundle}: {e.strerror}"])
         print(f"veredas-atualizar: {bundle} (SHA-256 {h.hexdigest()})")
         top = unpack(copy, stage)
         folder = os.path.join(stage, top)
@@ -391,28 +433,40 @@ def main(argv):
         bins = sorted(os.listdir(os.path.join(folder, "bin")))
         check_path(bins)
         install(stage, top, old_top, bins)
+    except Alone as e:
+        stopped = (2, None, e.reasons)
     except OSError as e:
-        print("veredas-atualizar: not installed, the machine is as it was:", file=sys.stderr)
-        print(f"  {e.filename2 or e.filename or bundle}: {e.strerror}", file=sys.stderr)
-        return 2
+        stopped = (2, as_it_was, [f"{e.filename2 or e.filename or bundle}: {e.strerror}"])
     except Refused as e:
-        print("veredas-atualizar: not installed, the machine is as it was:", file=sys.stderr)
-        for r in e.reasons:
-            print(f"  {r}", file=sys.stderr)
-        return 2
+        stopped = (2, as_it_was, e.reasons)
     except Broken as e:
-        print("veredas-atualizar: not installed, and the machine could not all be put back as it was:", file=sys.stderr)
-        for r in e.reasons:
-            print(f"  {r}", file=sys.stderr)
-        print(f"veredas-atualizar: to go back: sudo ln -sfn {os.path.basename(old_top)} /opt/veredas/current, and the links named above", file=sys.stderr)
-        return 4
+        stopped = (4, BROKEN, e.reasons)
     except Exception as e:
         # Whatever else a bundle makes go wrong before it is installed is a refusal too.
-        print("veredas-atualizar: not installed, the machine is as it was:", file=sys.stderr)
-        print(f"  {type(e).__name__}: {e}", file=sys.stderr)
-        return 2
-    finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        stopped = (2, as_it_was, [f"{type(e).__name__}: {e}"])
+    # The staging folder removed, and judged: what it leaves is said, and a refusal that leaves it
+    # is no longer "as it was". The next update removes it ([`leftovers`]).
+    left = []
+    shutil.rmtree(stage, onexc=lambda _f, p, x: left.append(f"{p} ({getattr(x, 'strerror', x)})"))
+    if left:
+        line = f"its staging folder {stage} could not all be removed: {left[0]}; the next update removes it"
+        if stopped is None:
+            print(f"veredas-atualizar: {line}", file=sys.stderr)
+        else:
+            stopped = (4, BROKEN, stopped[2] + [line])
+    if stopped is not None:
+        code, heading, reasons = stopped
+        if heading is None:
+            for r in reasons:
+                print(f"veredas-atualizar: {r}", file=sys.stderr)
+        else:
+            print(f"veredas-atualizar: {heading}", file=sys.stderr)
+            for r in reasons:
+                print(f"  {r}", file=sys.stderr)
+        # The way back, when `current` does not name the release it named.
+        if code == 4 and old_top and (not os.path.islink(CURRENT) or os.readlink(CURRENT) != old_top):
+            print(f"veredas-atualizar: to go back: sudo ln -sfn {os.path.basename(old_top)} /opt/veredas/current, and the links named above", file=sys.stderr)
+        return code
     old = os.path.join(OPT, os.path.basename(old_top)) if old_top else "(none)"
     print(f"veredas-atualizar: release {installed['release']} -> {m['release']} (commit {m.get('commit')})")
     print(f"veredas-atualizar: installed at {os.path.join(OPT, top)}; the old release kept at {old}")
