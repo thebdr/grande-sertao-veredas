@@ -316,22 +316,21 @@ pub fn compare(op: CmpOp, l: &Value, r: &Value) -> Result<bool, EvalError> {
     use Value::*;
     let ord: Option<Ordering> = match (l, r) {
         (Int(a), Int(b)) => Some(a.cmp(b)),
-        (Int(_) | Float(_), Int(_) | Float(_)) => num(l).zip(num(r)).and_then(|(a, b)| a.partial_cmp(&b)),
+        (Int(_) | Float(_), Int(_) | Float(_)) => num_cmp(l, r),
         (Bool(a), Bool(b)) => Some(a.cmp(b)),
         (Bool(b), Int(i)) => Some((*b as i64).cmp(i)),
         (Int(i), Bool(b)) => Some(i.cmp(&(*b as i64))),
         (Text(a), Text(b)) => Some(a.cmp(b)),
         (Text(t), n @ (Int(_) | Float(_))) | (n @ (Int(_) | Float(_)), Text(t)) => {
-            let Some(x) = text_number(t) else {
+            let Some(x) = text_numeric(t) else {
                 return match op {
                     CmpOp::Eq => Ok(false),
                     CmpOp::Ne => Ok(true),
                     _ => Err(fault(format!("\"{t}\" is no number to order against {n}"))),
                 };
             };
-            let y = num(n).unwrap_or(0.0);
             // Keep the sides as written.
-            if matches!(l, Text(_)) { x.partial_cmp(&y) } else { y.partial_cmp(&x) }
+            if matches!(l, Text(_)) { num_cmp(&x, n) } else { num_cmp(n, &x) }
         }
         (Time(a), Time(b)) => Some(a.cmp(b)),
         (Duration(a), Duration(b)) => Some(a.cmp(b)),
@@ -349,6 +348,43 @@ pub fn compare(op: CmpOp, l: &Value, r: &Value) -> Result<bool, EvalError> {
         CmpOp::Gt => o == Ordering::Greater,
         CmpOp::Ge => o != Ordering::Less,
     })
+}
+
+/// Two numbers ordered exactly: a whole number against a float never through the float's 53 bits.
+fn num_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    use Value::*;
+    match (a, b) {
+        (Int(x), Int(y)) => Some(x.cmp(y)),
+        (Float(x), Float(y)) => x.partial_cmp(y),
+        (Int(x), Float(y)) => int_float(*x, *y),
+        (Float(x), Int(y)) => int_float(*y, *x).map(std::cmp::Ordering::reverse),
+        _ => None,
+    }
+}
+
+/// A whole number against a float: the float's whole part compared as a whole number, then its
+/// fraction; past the 64 bits, the float's side.
+fn int_float(i: i64, f: f64) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering::*;
+    if f.is_nan() {
+        return None;
+    }
+    if f >= 9_223_372_036_854_775_808.0 {
+        return Some(Less);
+    }
+    if f < -9_223_372_036_854_775_808.0 {
+        return Some(Greater);
+    }
+    let whole = f.trunc();
+    Some(i.cmp(&(whole as i64)).then(if f > whole { Less } else if f < whole { Greater } else { Equal }))
+}
+
+/// A text read as a number: a whole number when it is one, else a float.
+fn text_numeric(t: &str) -> Option<Value> {
+    match t.trim().parse::<i64>() {
+        Ok(i) => Some(Value::Int(i)),
+        Err(_) => text_number(t).map(Value::Float),
+    }
 }
 
 fn builtin(name: &str, v: &[Value], now: i64) -> E {

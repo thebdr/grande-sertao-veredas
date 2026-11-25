@@ -265,6 +265,10 @@ Recorded as the build meets them.
   write in a replay: a tight wait times out, an await takes an earlier row, a read the old value.
   Until portal keeps each write's moment, a test meant to replay reads nothing right after a
   write.
+- **The run's bound is the run's clock's** (C-202, C-203). Judged on the machine's clock live, a
+  read's settle put a run past its bound that its own window, replayed, never reached; on the
+  run's clock in both modes a script box meets it never, its statement budget and the tester's
+  stop ending a runaway loop.
 - **A view's rows carry no source or sequence** (C-202). An await told the last row it took by
   its source and sequence, so over a view it retook a row of a shared stamp; a stamp's rows now
   stand in one order whatever the store's, and an await counts what it passed.

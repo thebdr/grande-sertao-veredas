@@ -1856,8 +1856,9 @@ pair of quotes removed.
   session of another name is refused before anything is written.
 - `modes` (`live, replay`): the modes the test runs in, `live`, `replay` or both; a run in
   another mode is refused.
-- `timeout` (`10min`): the whole run's bound. A wait with no timeout of its own is bounded by
-  what is left of it.
+- `timeout` (`10min`): the whole run's bound, on the run's clock (the plant's time, which a replay
+  of the run's own window reproduces, never the machine's work), judged at each step and between
+  its actions. A wait with no timeout of its own is bounded by what is left of it.
 - `use` (none; once per file): a function file, its path relative to the test file's folder.
 - `let` (none; once per name): `let <name> = <expression>`, a constant, the expression made of
   literals and the constants above it, with no call in it.
@@ -1983,7 +1984,8 @@ The body of a script box, of a function, and of an `if` or a `for`:
 - `for <name> in <expression> .. <expression> { ... }`: whole numbers, both ends included; a
   range whose end is below its start runs nothing. A script box or a step's call runs at most
   10 000 000 statements, each turn of a loop counted as one, and then ends in `error`; the
-  tester's stop and the run's bound end it as they end a wait.
+  tester's stop ends it as it ends a wait, and the run's bound when a wait or a call inside it
+  has moved the clock past it (a script box moves none).
 - `fail ["<reason>"]`: ends the script or the call in `fail`.
 - In a function only: `wait <condition> [timeout <duration>]` and `wait <duration>`;
   `<name> = await <table> [where <condition>] [timeout <duration>]`, the row the condition reads

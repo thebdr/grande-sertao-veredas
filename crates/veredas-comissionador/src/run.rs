@@ -275,9 +275,9 @@ fn stmt_rows(body: &[Stmt], rows: &mut HashMap<String, BTreeSet<String>>, copies
                 rows.entry(bind.value.clone()).or_default().insert(table.value.clone());
             }
             StmtKind::Assign { target, value, .. } => {
-                if let ExprKind::Name(n) = &value.kind {
-                    copies.push((target.value.clone(), n.clone()));
-                }
+                let mut from = Vec::new();
+                row_sources(value, &mut from);
+                copies.extend(from.into_iter().map(|n| (target.value.clone(), n)));
             }
             StmtKind::If { arms, otherwise } => {
                 arms.iter().for_each(|(_, b)| stmt_rows(b, rows, copies));
@@ -288,6 +288,16 @@ fn stmt_rows(body: &[Stmt], rows: &mut HashMap<String, BTreeSet<String>>, copies
             StmtKind::For { body, .. } => stmt_rows(body, rows, copies),
             _ => {}
         }
+    }
+}
+
+/// The names an expression's value may be one of, unchanged: a bare name, and the values `min`
+/// and `max` choose among.
+fn row_sources(e: &Expr, out: &mut Vec<String>) {
+    match &e.kind {
+        ExprKind::Name(n) => out.push(n.clone()),
+        ExprKind::Call { name, args } if name.value == "min" || name.value == "max" => args.iter().for_each(|a| row_sources(a, out)),
+        _ => {}
     }
 }
 
@@ -716,6 +726,9 @@ impl Runner<'_> {
             if taken > MAX_STEPS {
                 return self.halted(Halt::Steps, Some(name.clone()));
             }
+            if let Err(h) = self.check_stop() {
+                return self.halted(h, Some(name.clone()));
+            }
             if self.past_bound() {
                 return self.halted(Halt::Bound, Some(name.clone()));
             }
@@ -785,11 +798,10 @@ impl Runner<'_> {
         self.c.test.steps[idx].on.iter().find(|o| o.outcomes.iter().any(|x| x.value == outcome)).map(|o| o.route.value.clone())
     }
 
+    /// Whether the run's bound has passed, on the run's clock in both modes: the plant's time, which
+    /// a replay of the run's own window reproduces, not the machine's work.
     fn past_bound(&self) -> bool {
-        match self.mode {
-            RunMode::Live => self.plant.now_ms() > self.deadline,
-            RunMode::Replay { .. } => self.clock > self.deadline,
-        }
+        self.clock > self.deadline
     }
 
     fn check_stop(&self) -> R<()> {
@@ -801,6 +813,7 @@ impl Runner<'_> {
     fn settle(&self, t: i64) -> R<()> {
         match self.mode {
             RunMode::Replay { .. } => {
+                self.check_stop()?;
                 if t > self.horizon {
                     return Err(Halt::WindowEnded(self.horizon));
                 }
@@ -841,7 +854,10 @@ impl Runner<'_> {
     /// poll first.
     fn reach(&self, until: i64, first: bool) -> R<i64> {
         match self.mode {
-            RunMode::Replay { .. } => Ok(until.min(self.horizon)),
+            RunMode::Replay { .. } => {
+                self.check_stop()?;
+                Ok(until.min(self.horizon))
+            }
             RunMode::Live => {
                 if !first {
                     std::thread::sleep(POLL);
@@ -1043,6 +1059,7 @@ impl Runner<'_> {
     /// Wait a duration, from the clock. A replay's window ends first when it ends before both the
     /// duration and the bound: the clock never passes it.
     fn delay(&mut self, d: i64, until: i64) -> R<bool> {
+        self.check_stop()?;
         let target = self.clock.saturating_add(d.max(0));
         if let RunMode::Replay { .. } = self.mode
             && target.min(until) > self.horizon
@@ -1062,7 +1079,8 @@ impl Runner<'_> {
                 std::thread::sleep(Duration::from_millis(left.min(POLL.as_millis() as i64) as u64));
             },
         }
-        self.clock = end;
+        // Never back: a bound already behind the clock leaves it where it stands.
+        self.clock = self.clock.max(end);
         Ok(target <= until)
     }
 }
@@ -1098,7 +1116,8 @@ impl Runner<'_> {
         let mut why = String::new();
         let actions = step.actions.clone();
         for a in &actions {
-            let flow = match self.action(a, &name, attempt) {
+            // The bound judged between actions too: an action after it is not run.
+            let flow = match if self.past_bound() { Err(Halt::Bound) } else { self.action(a, &name, attempt) } {
                 Ok(f) => f,
                 Err(h) => {
                     // Cut short: what it did so far is kept, with no outcome.
@@ -1182,8 +1201,9 @@ impl Runner<'_> {
                         Flow::Out(Outcome::Timeout, format!("{text} did not hold within {}", eval::duration_text(until - t0)))
                     }
                     Waited::Timeout => {
-                        // The run's bound passed inside the wait: the clock stands at it.
-                        self.clock = until;
+                        // The run's bound passed inside the wait: the clock stands at it, or past it
+                        // when it already was.
+                        self.clock = self.clock.max(until);
                         return Err(Halt::Bound);
                     }
                     Waited::Fault(f) => Flow::Out(Outcome::Error, format!("{text}: {f}")),
@@ -1213,7 +1233,7 @@ impl Runner<'_> {
                         Flow::Out(Outcome::Timeout, format!("no row of `{}` within {}", table.value, eval::duration_text(until - t0)))
                     }
                     Waited::Timeout => {
-                        self.clock = until;
+                        self.clock = self.clock.max(until);
                         return Err(Halt::Bound);
                     }
                     Waited::Fault(f) => Flow::Out(Outcome::Error, f),
@@ -1308,6 +1328,7 @@ impl Runner<'_> {
 
     /// A write or a send: sent live and its answer kept; noted, not sent, in a replay.
     fn gated(&mut self, step: &str, attempt: u32, text: String, send: impl Fn(&dyn Plant) -> Result<String, PlantError>) -> R<Flow> {
+        self.check_stop()?;
         let (flow, record) = match self.mode {
             // DECISION PENDING (Q318): a replay's write leaves the clock where it stands, where the
             // live one moved it to the plant's answer.
@@ -1517,7 +1538,7 @@ impl Runner<'_> {
                         StmtFlow::Next
                     }
                     Waited::Timeout => {
-                        self.clock = until;
+                        self.clock = self.clock.max(until);
                         if !own && until >= self.deadline {
                             return Err(Halt::Bound);
                         }
@@ -1543,7 +1564,7 @@ impl Runner<'_> {
                         StmtFlow::Next
                     }
                     Waited::Timeout => {
-                        self.clock = until;
+                        self.clock = self.clock.max(until);
                         if !own && until >= self.deadline {
                             return Err(Halt::Bound);
                         }
