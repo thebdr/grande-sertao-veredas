@@ -40,7 +40,8 @@ time."
 ### Execution
 - **Production on Linux with a real-time kernel only.** Windows is for development and simulation.
   A production target refused real-time scheduling does not run: it stays in STOP.
-- **64-bit processors only** (the architect, 2026-11-16).
+- **64-bit processors only** (the architect, 2026-11-16), **and 64-bit systems**: the build refuses a
+  32-bit target, whose 32-bit time value would come back (2026-11-25, Q39).
 - **Programs run in our own interpreter**, a crate of the ORCL family that maquinar uses too. Its
   bytecode is made from the Rust compiler's intermediate form, through `rustc_public` as it is
   ("rustc_public is ok as is / proceed as decided", the architect, 2026-11-15), which means one
@@ -120,7 +121,10 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   during the halt is dropped, and the program continues as if no time had passed.
 - **Time-of-day blocks wait for a confirmed date** (2026-11-16): they do not start while the
   controller's date is unconfirmed, and starts that fall before the confirmation do not run
-  afterwards (`docs/robustness.md`, "Time over decades").
+  afterwards (`docs/robustness.md`, "Time over decades"); nor does a start that fell while the
+  controller was powered off (2026-11-25, Q39). For a program with such blocks the confirmed date is
+  inside what must survive, so its target's hardware description names a clock chip that keeps
+  time (Q38).
 
 ### Start, stop and power
 - **Start kinds:** warm (retained variables kept; the normal start, also after a power cycle) and
@@ -192,8 +196,12 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   only when feasible. we need to build the specification for what disqualifies the edits for auto
   takeover. takeover after restart remains possible for all cases". So the previous version can
   always be put back for the next start; a live takeover happens only for an edit that nothing
-  disqualifies; and what disqualifies an edit is Q32. After a fallback the state carries the
-  maintenance request `fault_on_update`.
+  disqualifies; and what disqualifies an edit is a specification controlador writes whole, as a
+  proposal the architect rules as a document (2026-11-25, Q32). After a fallback the state carries
+  the maintenance request `fault_on_update`; an edit that failed (the old version took over, or the
+  edit was put back) leaves a fault record named "the edit failed", not a controller fault; and
+  while the old version watches and may still take over, the state text carries a term with the
+  time it has left (Q32).
 - **The last 10 downloads are kept** on the controller: hash, time, origin, kind, source revision,
   the program itself and the source archive.
 
@@ -209,7 +217,10 @@ think Siemens did a great job in the PLC implementation") and kept every family 
 - **Overruns follow Siemens' OB80:** the time-error handler runs once on the first overrun, and
   the controller faults only when one scan exceeds twice its period.
 - **A maximum and a warning cycle time**, both set by the user (the architect, 2026-11-16): "the
-  warning after years is a hint of possible degrading". How the two meet the overrun rule is Q39.
+  warning after years is a hint of possible degrading". The warning raises a maintenance request,
+  not urgent, with a reason of its own beside `overruns`; the maximum gives a free-running main
+  block its limit; and the controller records each task's longest cycle per day, so a drift shows
+  before the warning (2026-11-25, Q39).
 - **A fault clears every debug condition** and records what was active.
 - **A fault record** holds the cause, the time, the download number, the task, the source
   location, the debug conditions that were active, a snapshot of the data, the last seconds before
@@ -285,9 +296,14 @@ in a fixed order, with counts and identifiers and never lists.
   maintenance request gives maintenance required; a clean RUN gives normal.
 - **Not ruled:** the review's entries 17 to 21 on this text (one name meaning two things, the
   spelling rules, the `id` of a maintenance request, a version for the text, what a debug
-  condition is), Q31. The terms and numbers the robustness round owes are not assigned either: an
-  unconfirmed date, the clock battery and NTP, a certificate near its end, the warning cycle time,
-  a start from the last save (Q39, Q40).
+  condition is), Q31. The terms the rulings of 2026-11-25 add join core's table of the state text,
+  their spelling and numbers core's to propose: conditions for an unconfirmed date (Q39), a start
+  from the last save (Q40, a condition and no request) and an armed fallback with its time left
+  (Q32); maintenance reasons for the clock chip that lost its time and for NTP silent or not set
+  (two, an NTP silent only after a waiting time, the urgency following the present situation while
+  the request stays until cleared, Q39), a certificate a year from its end (its own and its peers',
+  Q39), the warning cycle time (Q39), a drive's wear past its threshold and a data area that cannot
+  be written (Q41), and a retained save that fails (Q40).
 
 ### Networks and devices
 - **Four networks in the first release**, built in this order: PROFINET IO controller (written
@@ -337,17 +353,42 @@ in a fixed order, with counts and identifiers and never lists.
   behind SSH, commands on the same link (2026-11-16; `docs/oficina-plan.md`, "How it reaches a
   target"). Controlador handles the commands behind its portal and checks the switch there.
 - **Everything that alters the controller is robust** (2026-11-16), a download above all: it
-  carries a hash, "so no corrupted program may run" (Q36, Q37).
+  carries a hash, "so no corrupted program may run". Ruled point by point on 2026-11-25:
+  - **a download** (Q36) is a manifest listing every part with its SHA-256 and length, the
+    manifest's SHA-256 being the download's identity. The controller stores it to a temporary
+    file, reads it back from the drive and verifies it, and only then renames it into place,
+    answering with the identity it computed. The stored program is verified again before every
+    load (a swap, a restart, a power-on); a check that fails where the two copies cannot mend each
+    other is the FAULT 506 `load`, never a substitute. Swap, start and rollback name the identity
+    they act on. A signature over the manifest waits for the security round (Q43);
+  - **every request that alters the controller** (Q37), a variable write, a breakpoint, a state
+    change and a download alike, carries a SHA-256 of its content (as HTTP's Content-Digest, RFC
+    9530), checked before anything is done; a session and a strictly increasing number, a repeat
+    answered with its first outcome and not run again, a gap or an old number refused; the
+    controller's identity, the download's, and for a state change the state it expects to leave;
+    and the controller's own last clock value, so a request held back and delivered late is
+    refused. A change is applied whole at one point of the scan; its answer is read back from the
+    controller, a write's telling applied and saved apart; a lost answer is shown in Oficina as
+    unknown and asked for by the request's number. A command passes portal's master write switch
+    and then the commissioning switch. This binds the Oficina link, not peers' writes. A keyed
+    check, the refusal of an unexpected `Host` and the random session value wait for Q43.
 - **State changes and faults are stored like any other data**, and the history view reads them.
 - **By default the embedded portal keeps its recorded values in memory, as a fixed window**, and
   writes nothing to the drive (2026-11-19; `docs/robustness.md`, "Wear and filling"). Two
-  additions came with that ruling and were not objected to. Portal has built them and the window
-  on three answers it took meanwhile, none of them ruled (`docs/questions.md` Q41):
-  - the project may turn on recording to the drive (C-091). Every row is written in batches to a
-    record of the run's own, which stops at its size limit and deletes nothing;
-  - at a fault, portal writes its store to the drive with the fault record (C-093), when the
-    embedding names a fault folder. Every fault gets its copy, and none is deleted;
-  - the window has no ceiling in bytes yet (C-090).
+  additions came with that ruling and were not objected to: the project may turn on recording to
+  the drive (C-091), and at a fault portal writes its store to the drive with the fault record
+  (C-093) when the embedding names a fault folder. Portal built them and the window on three
+  answers it took meanwhile; the architect ruled them on 2026-11-25 (Q41), and what portal built
+  gives way where the rulings differ:
+  - a growing record on the controller's drive (fault records, the state history, earlier
+    downloads, logs, a recording, the fault's copies) loses its oldest at its size limit, a fault
+    that repeats being counted on its record and not written again, the running program and its
+    fallback never deleted (C-091 as built stops at its limit instead);
+  - the fault's copies of the window are limited in number, the oldest going first, no more than
+    one written per shortest gap, and the program may ask for one (C-093 as built keeps them all);
+  - the window has a span and a ceiling in bytes, the shorter of the two, the controller saying
+    so when the ceiling came first (C-090 as built has a span only); it holds everything portal
+    reads unless the project narrows it.
 - **Controlador owes the embedding**, none of it built yet: portal as a dependency, its controller
   source fed with every state and fault record (C-092), and the fault folder named (C-093).
 
@@ -366,7 +407,8 @@ hardware configuration** convert to native PLC code, Siemens S7-1500 and S7-1200
 is new. The architect began a table mapping ORCL data types to S7 types; its open points are Q44.
 
 ### What keeps it running for decades
-The robustness round's rulings, stated in `docs/robustness.md`, bind controlador first:
+The robustness round's rulings, stated in `docs/robustness.md`, bind controlador and its embedded
+portal, and no other component (2026-11-25, Q42):
 - what must survive is "every piece of data that is necessary for computing the logic flawlessly
   in RUN mode"; the commissioning scope is outside it;
 - the program is stored twice with a hash per block, the two copies mend each other, the
@@ -377,6 +419,35 @@ The robustness round's rulings, stated in `docs/robustness.md`, bind controlador
 - a maintenance request a year before any certificate expires;
 - retained variables by what the target can do, the last save flagged where it cannot save at
   power loss, and a write from outside saved at once.
+
+Ruled on 2026-11-25:
+- **What must survive** (Q38): the running program and its source, the hardware configuration and
+  IO mapping, the retained variables, the settings a scan depends on, the interpreter, the
+  operating system and what boots them, the integrity data, what peers need to talk to the
+  controller when the project uses them, and for a program with time-of-day blocks the confirmed
+  date. Outside: forces, breakpoints, a shadow test, the commissioning switch, earlier downloads,
+  fault records, the state history, the store and the logs, which may be lost but must never harm
+  what is inside. A dry run survives a power cycle without that protection.
+- **The retained save** (Q40) holds the retained variables as they stood at the end of one
+  successful cycle, never a mix of two, in two copies each with its hash, written one after the
+  other; with both unreadable at start the retained variables reset and `retain_reset` is raised.
+  A save equal to the last is skipped. Its period is the engineer's and never refused, Oficina
+  showing the years the drive has left at it; a write from outside is applied at once and saved
+  when the shortest gap (the engineer's, with a default) ends; the program may ask for a save,
+  held to that gap. On a target that cannot save at power loss, the flag "started from the last
+  save" is raised only when cycles ran since that save. A save failing while the controller runs
+  leaves RUN going, its maintenance request not urgent while one copy can still be written and
+  urgent when none can.
+- **The unconfirmed date** (Q39) marks the controller's fault records, its state history and every
+  sample of the embedded portal's store, whose format gains the mark by a new version.
+- **Storage in three kinds** (Q41), kept apart so wearing or filling one cannot touch another: what
+  RUN needs (written only at a download), the retained save, and everything that grows, on a data
+  area of its own. Where the drive reports its wear the controller reads it and raises a request,
+  not urgent, at a threshold the engineer sets. When the data area fails, RUN goes on, recording
+  stops and a request is raised.
+- **Not opened yet** (Q42), each waiting for a proposal: running unattended beyond what is ruled
+  (memory errors, slow leaks), an old controller and a new Oficina, replacing the hardware, and how
+  each rule is proven by injecting faults on the bench.
 
 ### Out of scope
 Technology objects entirely (axes, PID, cams, counters). Security features, until the security
@@ -433,12 +504,11 @@ Where each item stands on 2026-11-25:
   Resilience Act; the fieldbus organisations' terms), 40 and 41 (no language a PLC programmer
   knows; no closed loop), 44 (libraries; structures), 46 (what a Rust engineer gets), and the
   minors 47 to 50, 53 and 55.
-- **Q32** what disqualifies an edit from a live takeover. **Q39, Q40, Q42** the robustness round's
-  open points. **Q43** the security round. **Q44** the conversion's type table. **Q45** the
-  briefing's readings.
-- Ruled on 2026-11-25 and not yet carried into this plan: **Q36** a download's integrity, **Q37**
-  every request that alters the controller made robust, **Q38** what must survive, **Q41** wear and
-  filling; `docs/questions.md` holds each answer, and **Q35** the licence every crate here states.
+- **Q32** the specification of what disqualifies an edit from a live takeover, which controlador
+  owes as a proposal. **Q42** the robustness round's areas not opened. **Q43** the security round.
+  **Q44** the conversion's type table. **Q45** the briefing's readings.
+- Ruled and not yet stated by the crates here: **Q35** the licence, `MIT OR Apache-2.0`, its files
+  naming the repository's owner.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan gives way to the
   prior art's LET. **Q230** a program whose functions call themselves.
 - Ruled and waiting on another member: Q225's `clippy.toml`, once law L7 and its clause (C-046,
