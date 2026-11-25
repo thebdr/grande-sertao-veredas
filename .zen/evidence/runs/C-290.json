@@ -1,25 +1,25 @@
 {
   "clause": "C-290",
-  "command": "cargo nextest run -p entrega --test manifest",
+  "command": "cargo nextest run -p alforge --test manifest",
   "commandArgv": [
     "cargo",
     "nextest",
     "run",
     "-p",
-    "entrega",
+    "alforge",
     "--test",
     "manifest"
   ],
   "exitCode": 0,
-  "outputSha": "bf5657dd0d95a8176f859e7d88fa2010aaa251b9549469f66945e0889c8c51ee",
-  "outputTail": "        PASS [   0.301s] (17/29) entrega::manifest nothing_outside_the_commits_tree_is_read_or_written\n        PASS [   0.258s] (18/29) entrega::manifest the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them\n        PASS [   0.376s] (19/29) entrega::manifest settings_outside_the_history_change_nothing_that_is_read\n        PASS [   0.366s] (20/29) entrega::manifest the_folder_is_judged_whole_and_a_shallow_clone_refused\n        PASS [   0.489s] (21/29) entrega::manifest replace_refs_and_grafts_change_neither_objects_nor_ancestry\n        PASS [   0.507s] (22/29) entrega::manifest a_version_names_one_tree_across_releases\n        PASS [   0.523s] (23/29) entrega::manifest a_version_or_an_executable_that_differs_is_refused\n        PASS [   0.560s] (24/29) entrega::manifest a_repository_at_an_odd_path_a_root_that_does_not_parse_and_braces_in_the_scratch_path\n        PASS [   0.585s] (25/29) entrega::manifest a_release_whose_commit_is_absent_hides_no_other_refusal\n        PASS [   0.584s] (26/29) entrega::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.687s] (27/29) entrega::manifest every_release_of_this_repository_checks_against_its_history\n        PASS [   0.945s] (28/29) entrega::manifest a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none\n        PASS [   1.137s] (29/29) entrega::manifest a_false_pin_charges_no_true_release_and_hides_no_conflict\n────────────\n     Summary [   1.138s] 29 tests run: 29 passed, 0 skipped",
-  "ranAt": "2026-11-22T23:09:48.993Z",
-  "headCommit": "c100ac9ff824b1babb308a2d358851432695c2bf",
+  "outputSha": "785aa66d26dadaf43eda93ea3a88289b44404c2e315867a17f4335aa476f67fc",
+  "outputTail": "        PASS [   0.255s] (20/32) alforge::manifest the_folder_is_judged_whole_and_a_shallow_clone_refused\n        PASS [   0.322s] (21/32) alforge::manifest settings_outside_the_history_change_nothing_that_is_read\n        PASS [   0.366s] (22/32) alforge::manifest a_version_or_an_executable_that_differs_is_refused\n        PASS [   0.368s] (23/32) alforge::manifest a_release_whose_commit_is_absent_hides_no_other_refusal\n        PASS [   0.380s] (24/32) alforge::manifest a_repository_at_an_odd_path_a_root_that_does_not_parse_and_braces_in_the_scratch_path\n        PASS [   0.383s] (25/32) alforge::manifest a_version_names_one_tree_across_releases\n        PASS [   0.371s] (26/32) alforge::manifest replace_refs_and_grafts_change_neither_objects_nor_ancestry\n        PASS [   0.373s] (27/32) alforge::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.581s] (28/32) alforge::manifest a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none\n        PASS [   0.665s] (29/32) alforge::manifest a_false_pin_charges_no_true_release_and_hides_no_conflict\n        PASS [   0.874s] (30/32) alforge::manifest every_release_of_this_repository_checks_against_its_history\n        PASS [   1.015s] (31/32) alforge::manifest build_inputs_that_do_not_read_are_refused_where_a_version_is_pinned_twice\n        PASS [   1.984s] (32/32) alforge::manifest a_version_names_everything_its_build_reads_but_the_toolchain\n────────────\n     Summary [   1.993s] 32 tests run: 32 passed, 0 skipped",
+  "ranAt": "2026-11-25T00:26:51.485Z",
+  "headCommit": "e21c5e9dc5b817da1052400bdba8ac3819df3d1b",
   "tests": [
     {
-      "name": "tools/entrega/tests/manifest.rs",
-      "file": "tools/entrega/tests/manifest.rs",
-      "fileSha": "cf402c1890dec87ce063ad96c4e052e63692dc7588f3ba6b89c3755540b8ef3f"
+      "name": "tools/alforge/tests/manifest.rs",
+      "file": "tools/alforge/tests/manifest.rs",
+      "fileSha": "40108b52209a23f2f6de2748dcac9e03c8479feb892317e99e07dca7595a4e2e"
     }
   ]
 }
