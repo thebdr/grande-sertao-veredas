@@ -431,9 +431,12 @@ Where each item stands on 2026-11-25:
   Resilience Act; the fieldbus organisations' terms), 40 and 41 (no language a PLC programmer
   knows; no closed loop), 44 (libraries; structures), 46 (what a Rust engineer gets), and the
   minors 47 to 50, 53 and 55.
-- **Q32** what disqualifies an edit from a live takeover. **Q36, Q37** the download's integrity
-  and robust requests. **Q38 to Q42** the robustness round's open points. **Q43** the security
-  round. **Q44** the conversion's type table. **Q45** the briefing's readings.
+- **Q32** what disqualifies an edit from a live takeover. **Q39, Q40, Q42** the robustness round's
+  open points. **Q43** the security round. **Q44** the conversion's type table. **Q45** the
+  briefing's readings.
+- Ruled on 2026-11-25 and not yet carried into this plan: **Q36** a download's integrity, **Q37**
+  every request that alters the controller made robust, **Q38** what must survive, **Q41** wear and
+  filling; `docs/questions.md` holds each answer, and **Q35** the licence every crate here states.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan gives way to the
   prior art's LET.
 - Ruled and waiting on another member: Q225's `clippy.toml`, once law L7 and its clause (C-046,
