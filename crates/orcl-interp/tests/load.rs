@@ -951,3 +951,106 @@ fn an_index_by_a_local_that_does_not_exist_is_refused() {
         Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "no such local" })
     );
 }
+
+// The fourteenth refute round: a shift whose left operand is no integer, a bool switch on a negative value,
+// `get_or_insert` into a reference of another type, and a refusal past the first block and statement named there.
+
+fn load_r14(types: &[Type], locals_: &[u32], value: Value) -> Result<(), LoadError> {
+    let mut p = Program { types: types.to_vec(), ..Program::default() };
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&locals_.iter().map(|t| TypeId(*t)).collect::<Vec<_>>()),
+        blocks: vec![block(vec![assign(place(0), value, 1)], ret())],
+    });
+    Machine::load(p, &[]).map(|_| ())
+}
+
+fn refused_r14(block: u32, statement: Option<u32>, reason: &'static str) -> Result<(), LoadError> {
+    Err(LoadError::Instruction { function: "f".into(), block, statement, reason })
+}
+
+/// f01: `bool << u32` and `f32 >> u32`, the right operand an integer, the left none.
+#[test]
+fn a_shift_of_what_is_no_integer_by_an_integer_is_refused() {
+    // types: 0 u8, 1 u32, 2 bool, 3 f32
+    let types = [Type::Int(Int::U8), Type::Int(Int::U32), Type::Bool, Type::F32];
+    for (op, l, name) in [(BinOp::Shl, 2, "bool << u32"), (BinOp::Shr, 3, "f32 >> u32")] {
+        assert_eq!(load_r14(&types, &[l, l, 1], Value::Binary(op, copy(1), copy(2))), refused_r14(0, Some(0), "a shift of what is no integer"), "{name}");
+    }
+    assert_eq!(load_r14(&types, &[0, 0, 1], Value::Binary(BinOp::Shl, copy(1), copy(2))), Ok(()), "u8 << u32 loads");
+}
+
+/// f02: a switch on a `bool` whose value is -1.
+#[test]
+fn a_switch_on_a_bool_with_a_negative_value_is_refused() {
+    let mut b = Build::default();
+    let boolean = b.bool();
+    b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[boolean, boolean]),
+        blocks: vec![
+            block(vec![], Terminator::SwitchInt { value: copy(1), targets: vec![(-1, BlockId(1))], otherwise: BlockId(1), at: at(1) }),
+            block(vec![assign(place(0), Value::Use(copy(1)), 2)], ret()),
+        ],
+    });
+    assert_eq!(Machine::load(b.program, &[]).map(|_| ()), refused_r14(0, None, "a switch's value outside its operand's type"));
+}
+
+/// f03: `Option::<Duration>::get_or_insert` into a `&mut u8`, its value right.
+#[test]
+fn get_or_insert_into_a_reference_of_another_type_is_refused() {
+    let mut b = Build::default();
+    let (u8t, d) = (b.int(Int::U8), b.ty(Type::Duration));
+    let optd = b.option(d);
+    let (ropt, ru8, rd) = (b.reference(optd, true), b.reference(u8t, true), b.reference(d, true));
+    for (dest, good) in [(rd, true), (ru8, false)] {
+        let mut p = Build { program: b.program.clone() };
+        p.function(Function {
+            name: "f".into(),
+            params: 2,
+            locals: locals(&[dest, ropt, d]),
+            blocks: vec![
+                block(vec![], Terminator::Call { callee: Callee::Core(CoreOp::OptionGetOrInsert), args: vec![copy(1), copy(2)], dest: place(0), next: BlockId(1), at: at(1) }),
+                block(vec![], ret()),
+            ],
+        });
+        let got = Machine::load(p.program, &[]).map(|_| ());
+        if good {
+            assert_eq!(got, Ok(()), "into &mut Duration");
+        } else {
+            assert_eq!(got, refused_r14(0, None, "a core operation called with types it does not take"), "into &mut u8");
+        }
+    }
+}
+
+/// f06, f07: a refused statement and a refused terminator past the first block and statement, each named where it
+/// stands.
+#[test]
+fn a_refusal_past_the_first_block_and_statement_names_its_own() {
+    let mut b = Build::default();
+    let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
+    let good = |line| assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 1)])), line);
+    let bad = assign(place(0), Value::Use(konst(u16t, vec![int(Int::U16, 1)])), 9);
+    let mut p = Build { program: b.program.clone() };
+    p.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[u8t]),
+        blocks: vec![block(vec![good(1)], Terminator::Goto(BlockId(1))), block(vec![good(2), good(3), bad], ret())],
+    });
+    assert_eq!(Machine::load(p.program, &[]).map(|_| ()), refused_r14(1, Some(2), "a value of another type than its place"), "a statement");
+    p = Build { program: b.program.clone() };
+    p.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[u8t]),
+        blocks: vec![
+            block(vec![good(1)], Terminator::Goto(BlockId(1))),
+            block(vec![good(2)], Terminator::Goto(BlockId(1))),
+            block(vec![good(3)], Terminator::Goto(BlockId(7))),
+        ],
+    });
+    assert_eq!(Machine::load(p.program, &[]).map(|_| ()), refused_r14(2, None, "no such block"), "a terminator");
+}
