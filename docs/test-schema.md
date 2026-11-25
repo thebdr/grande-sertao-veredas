@@ -171,6 +171,8 @@ pair of quotes removed.
   of the run's own window reproduces, never the machine's work), judged at each step and between
   its actions. A wait with no timeout of its own is bounded by what is left of it.
 - `use` (none; once per file): a function file, its path relative to the test file's folder.
+- `sign` (none): the roles that must sign each run's report, `tester`, `witness` or both
+  (`docs/questions.md` Q312 (e)): the report awaits each until it has signed.
 - `let` (none; once per name): `let <name> = <expression>`, a constant, the expression made of
   literals and the constants above it, with no call in it.
 
@@ -418,7 +420,9 @@ test-file     = header "test" string "{" { setting } { step } "}" [ layout ]
 function-file = header function { function }
 header        = TOML lines: format, version
 setting       = ( "id" | "area" | "portal" | "use" ) rest-of-line
-              | "modes" mode { "," mode } | "timeout" duration | "let" name "=" expr
+              | "modes" mode { "," mode } | "timeout" duration | "sign" role { "," role }
+              | "let" name "=" expr
+role          = "tester" | "witness"
 step          = "step" name action { action } { on }
 action        = "write" ref ":=" expr
               | "send" name "." name "(" [ args ] ")"

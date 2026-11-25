@@ -82,6 +82,8 @@ pub enum SettingKind {
     Use(Spanned<String>),
     Modes(Vec<Spanned<Mode>>),
     Timeout(Spanned<i64>),
+    /// The roles that must sign the run's report (Q312 (e)).
+    Sign(Vec<Spanned<String>>),
     Let { name: Spanned<String>, value: Expr },
 }
 
@@ -94,13 +96,17 @@ impl SettingKind {
             SettingKind::Use(_) => "use",
             SettingKind::Modes(_) => "modes",
             SettingKind::Timeout(_) => "timeout",
+            SettingKind::Sign(_) => "sign",
             SettingKind::Let { .. } => "let",
         }
     }
 }
 
 /// The setting keys, in the order the reference lists them.
-pub const SETTINGS: &[&str] = &["id", "area", "portal", "modes", "timeout", "use", "let"];
+pub const SETTINGS: &[&str] = &["id", "area", "portal", "modes", "timeout", "use", "sign", "let"];
+
+/// The roles a report is signed as.
+pub const ROLES: [&str; 2] = ["tester", "witness"];
 
 /// A run's mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -156,6 +162,17 @@ impl TestFile {
     }
 
     /// The run's bound in milliseconds: ten minutes when the test says nothing.
+    /// The roles the test names to sign its runs' reports, in its order; none when it names none.
+    pub fn sign_roles(&self) -> Vec<String> {
+        self.settings
+            .iter()
+            .find_map(|s| match &s.kind {
+                SettingKind::Sign(r) => Some(r.iter().map(|r| r.value.clone()).collect()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
     pub fn timeout_ms(&self) -> i64 {
         self.settings
             .iter()

@@ -183,6 +183,9 @@ is the plant's clock on the store's axis, `YYYY-MM-DD HH:MM:SS.mmm`.
 - `file` (required): the copy of the test that ran, in the run's folder: `test.test`.
 - `functions` (none): one table per function file the test used: `used_as`, the path its `use`
   wrote, and `file`, its copy in the run's folder (`functions/<n>.fn`, in the order of the uses).
+- `sign` (none): the roles the test names to sign the report (its `sign` setting), each once.
+  Each of them signs once, and the report stands `awaiting <roles>` until all have, then
+  `signed`; with none named, the first signature makes it `signed` (Q312 (e)).
 
 **The run** (`[run]`).
 - `number` (required): the run's place among the test's runs, its folder's name without zeros.
@@ -240,8 +243,9 @@ form, an attempt or a run's number below 1, a file named otherwise than the run'
 (`test.test`, `functions/<n>.fn` in the order of the uses, the evidence's names), a table's
 evidence or a file given twice, in any case. A run past the last number a run can take
 (4294967295), or with a moment a report cannot hold (a year past 9999). A test's folder, or a
-run's, that cannot be read, which `list` names rather than pass over. A note or a
-signature on a report already signed: a signed report is frozen, a correction being a new run
-(Q312, (d) taken meanwhile). This is the engine's refusal, nothing sealed in the file. A signature
+run's, that cannot be read, which `list` names rather than pass over. A note on a report
+signed by anyone, and a signature once the report is `signed`: a signed report is frozen, a
+correction being a new run (Q312). A signature as a role the test does not name, or as one that
+has signed already, when it names roles; a second signature when it names none. This is the engine's refusal, nothing sealed in the file. A signature
 whose role is neither `tester` nor `witness`, or whose name holds no letter or digit. A run of a
 test with no `id`, which has no folder.

@@ -418,6 +418,23 @@ impl<'a> Parser<'a> {
                 self.line_end()?;
                 SettingKind::Timeout(d)
             }
+            "sign" => {
+                let mut roles = Vec::new();
+                loop {
+                    let t = self.peek().clone();
+                    match &t.tok {
+                        Tok::Name(r) if ROLES.contains(&r.as_str()) => roles.push(Spanned::new(r.clone(), t.span)),
+                        Tok::Name(r) => return Err(self.problem(t.span.start, format!("`{r}` is no role ({})", ROLES.join(", ")))),
+                        _ => return Err(self.expected(&t, &format!("a role ({})", ROLES.join(", ")))),
+                    }
+                    self.next();
+                    if !self.eat_sym(Sym::Comma) {
+                        break;
+                    }
+                }
+                self.line_end()?;
+                SettingKind::Sign(roles)
+            }
             _ => {
                 let name = self.name("a constant's name")?;
                 self.expect_sym(Sym::Eq, "`=`")?;

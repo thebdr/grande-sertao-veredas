@@ -113,6 +113,14 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
                     }
                 }
             }
+            SettingKind::Sign(roles) => {
+                let mut named = BTreeSet::new();
+                for r in roles.iter() {
+                    if !named.insert(r.value.as_str()) {
+                        out.push(at(r.span, format!("`{}` is named twice in `sign`", r.value)));
+                    }
+                }
+            }
             SettingKind::Let { name, value } => {
                 resolve_expr(value, &lets, &Plants::Let, &BTreeSet::new(), &mut |span, msg| out.push(at(span, msg)));
                 if !lets.insert(name.value.clone()) {

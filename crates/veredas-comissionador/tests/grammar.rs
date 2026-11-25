@@ -450,7 +450,7 @@ fn settings_come_first_with_their_defaults() {
     assert_eq!(one("  id T\n  modes live, sometimes\n"), ["6:15: `sometimes` is no mode (live, replay)"]);
     assert_eq!(one("  id T\n  modes live, live\n"), ["6:15: `live` is named twice in `modes`"]);
     assert_eq!(one("  id T\n  timeout 5\n"), ["6:11: `5` where a duration (`5s`, `250ms`) was expected"]);
-    assert_eq!(one("  id T\n  owner me\n"), ["6:3: `owner` is no setting (id, area, portal, modes, timeout, use, let)"]);
+    assert_eq!(one("  id T\n  owner me\n"), ["6:3: `owner` is no setting (id, area, portal, modes, timeout, use, sign, let)"]);
     assert_eq!(one("  id T\n  let items = 1\n  let items = 2\n"), ["7:7: `items` is defined twice"]);
     assert_eq!(one("  id T\n  let a = b\n  let b = 1\n"), ["6:11: a `let` is made of literals and the constants above it: `b`"]);
     assert_eq!(one("  id T\n  let a = 1\n  let b = a * 2 + 1\n"), Vec::<String>::new());
@@ -1597,6 +1597,20 @@ fn a_stamp_s_own_fault_beside_another_key_is_core_s_words_for_the_stamp() {
     }
 }
 
+// ---- the architect's Q312 (e) ----------------------------------------------------------------
+
+#[test]
+fn the_roles_a_test_names_to_sign_are_read_and_checked() {
+    let c = checked(&test_of("  sign tester, witness\n  step a stop pass\n"));
+    assert_eq!(c.test.sign_roles(), ["tester", "witness"]);
+    assert_eq!(checked(&test_of("  step a stop pass\n")).test.sign_roles(), Vec::<String>::new());
+    assert_eq!(problems(&test_of("  sign boss\n  step a stop pass\n")), ["6:8: `boss` is no role (tester, witness)"]);
+    assert_eq!(problems(&test_of("  sign tester, tester\n  step a stop pass\n")), ["6:16: `tester` is named twice in `sign`"]);
+    assert_eq!(problems(&test_of("  sign tester\n  sign witness\n  step a stop pass\n")), ["7:3: `sign` is given twice"]);
+    let e = problems(&test_of("  sign\n  step a stop pass\n"));
+    assert!(e.len() == 1 && e[0].starts_with("6:7: ") && e[0].contains("a role (tester, witness)"), "{e:?}");
+}
+
 /// How long `f` keeps this thread on a processor: its CPU time as Linux's scheduler counts it, so
 /// the machine's other work is left out; the wall clock where that count is not kept.
 fn on_cpu(f: impl FnOnce()) -> std::time::Duration {
@@ -1860,6 +1874,8 @@ pair of quotes removed.
   of the run's own window reproduces, never the machine's work), judged at each step and between
   its actions. A wait with no timeout of its own is bounded by what is left of it.
 - `use` (none; once per file): a function file, its path relative to the test file's folder.
+- `sign` (none): the roles that must sign each run's report, `tester`, `witness` or both
+  (`docs/questions.md` Q312 (e)): the report awaits each until it has signed.
 - `let` (none; once per name): `let <name> = <expression>`, a constant, the expression made of
   literals and the constants above it, with no call in it.
 
@@ -2107,7 +2123,9 @@ test-file     = header "test" string "{" { setting } { step } "}" [ layout ]
 function-file = header function { function }
 header        = TOML lines: format, version
 setting       = ( "id" | "area" | "portal" | "use" ) rest-of-line
-              | "modes" mode { "," mode } | "timeout" duration | "let" name "=" expr
+              | "modes" mode { "," mode } | "timeout" duration | "sign" role { "," role }
+              | "let" name "=" expr
+role          = "tester" | "witness"
 step          = "step" name action { action } { on }
 action        = "write" ref ":=" expr
               | "send" name "." name "(" [ args ] ")"

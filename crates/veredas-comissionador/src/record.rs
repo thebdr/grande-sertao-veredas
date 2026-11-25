@@ -29,7 +29,7 @@ pub const TEST_FILE: &str = "test.test";
 /// signature reads the report, judges it and writes it under that lock, one change at a time.
 pub const LOCK_FILE: &str = "report.lock";
 /// The roles a signer signs as.
-pub const ROLES: [&str; 2] = ["tester", "witness"];
+pub use crate::model::ROLES;
 
 /// Why a run was not kept, or a report not read or changed.
 #[derive(Debug, Error)]
@@ -49,6 +49,9 @@ pub enum RecordError {
     /// The test's folder holds a run numbered as high as a number goes.
     #[error("{path}: no run number is left past {last}")]
     NoNumber { path: String, last: u32 },
+    /// A role the test names that has signed already.
+    #[error("{path}: `{role}` has signed it already")]
+    SignedAs { path: String, role: String },
     /// A moment of the run a report cannot hold (a year past 9999 or before 0000).
     #[error("the run's moment `{0}` is no moment a report holds: a moment is `YYYY-MM-DD HH:MM:SS.mmm`")]
     Moment(String),
@@ -92,6 +95,9 @@ pub struct TestPart {
     pub file: String,
     #[serde(default)]
     pub functions: Vec<FunctionPart>,
+    /// The roles the test names to sign the report (Q312 (e)); none when it names none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sign: Vec<String>,
 }
 
 /// A function file the test used: as its `use` wrote it, and its copy in the run's folder.
@@ -184,9 +190,27 @@ pub struct Signature {
 }
 
 impl Report {
-    /// Whether anyone has signed it: then it is frozen.
+    /// Whether anyone has signed it: then it is frozen to notes.
     pub fn is_signed(&self) -> bool {
         !self.signatures.is_empty()
+    }
+
+    /// The roles the test names that have not signed yet, in the test's order.
+    pub fn awaiting(&self) -> Vec<&str> {
+        self.test.sign.iter().map(String::as_str).filter(|r| !self.signatures.iter().any(|g| g.role == *r)).collect()
+    }
+
+    /// How the report stands: `awaiting <roles>` while a role the test names has not signed,
+    /// `signed` once every one has (or anyone has, when it names none), `unsigned` before.
+    pub fn standing(&self) -> String {
+        let awaiting = self.awaiting();
+        if !awaiting.is_empty() {
+            format!("awaiting {}", awaiting.join(", "))
+        } else if self.is_signed() {
+            "signed".to_string()
+        } else {
+            "unsigned".to_string()
+        }
     }
 }
 
@@ -325,6 +349,7 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
             title: c.test.title.value.clone(),
             file: TEST_FILE.to_string(),
             functions,
+            sign: c.test.sign_roles(),
         },
         run: RunPart {
             number,
@@ -464,15 +489,40 @@ fn judge(r: &Report) -> Result<(), String> {
             return Err(format!("`evidence.file` `{}` is named twice", e.file));
         }
     }
+    // The roles the test names, each a role and once; a signature then of one of them, once each.
+    let mut named = std::collections::BTreeSet::new();
+    for role in &r.test.sign {
+        one_of("test.sign", role, &ROLES)?;
+        if !named.insert(role.as_str()) {
+            return Err(format!("`test.sign` names `{role}` twice"));
+        }
+    }
+    let mut signed = std::collections::BTreeSet::new();
     for g in &r.signatures {
         signer(&g.role, &g.name)?;
         moment("signature.at", &g.at)?;
+        if !named.is_empty() && (!named.contains(g.role.as_str()) || !signed.insert(g.role.as_str())) {
+            return Err(format!("a signature as `{}`: the test names {} to sign, each once", g.role, roles_text(&r.test.sign)));
+        }
+    }
+    if named.is_empty() && r.signatures.len() > 1 {
+        return Err("two signatures on a report whose test names no role to sign: the first froze it".to_string());
     }
     Ok(())
 }
 
 /// A signature's role and name as the reference states them: the role `tester` or `witness`, the
 /// name holding a letter or a digit.
+/// Roles as the reference names them: `tester` and `witness`.
+fn roles_text(roles: &[String]) -> String {
+    let quoted: Vec<String> = roles.iter().map(|r| format!("`{r}`")).collect();
+    match quoted.as_slice() {
+        [] => "no role".to_string(),
+        [one] => one.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
 fn signer(role: &str, name: &str) -> Result<(), String> {
     if !ROLES.contains(&role) {
         return Err(format!("a signature's role is `tester` or `witness`, not `{role}`"));
@@ -540,8 +590,19 @@ pub fn sign(folder: &Path, role: &str, name: &str) -> Result<Report, RecordError
     let (role, name) = (role.trim(), name.trim());
     signer(role, name).map_err(RecordError::BadSignature)?;
     changed(folder, |r| {
-        if r.is_signed() {
-            return Err(RecordError::Signed { path: folder.display().to_string() });
+        if r.test.sign.is_empty() {
+            // No role named: the first signature freezes it (Q312 (d)).
+            if r.is_signed() {
+                return Err(RecordError::Signed { path: folder.display().to_string() });
+            }
+        } else {
+            // The roles the test names each sign once (Q312 (e)); frozen once all have.
+            if !r.test.sign.iter().any(|x| x == role) {
+                return Err(RecordError::BadSignature(format!("the test names {} to sign, not `{role}`", roles_text(&r.test.sign))));
+            }
+            if r.signatures.iter().any(|g| g.role == role) {
+                return Err(RecordError::SignedAs { path: folder.display().to_string(), role: role.to_string() });
+            }
         }
         r.signatures.push(Signature { role: role.to_string(), name: name.to_string(), at: time_text(veredas_portal::serve::store_now_ms()) });
         Ok(())

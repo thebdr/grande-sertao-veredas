@@ -325,6 +325,11 @@ fn a_run_is_kept_whole_read_back_listed_noted_and_signed() {
     std::fs::write(third.join("report.toml"), std::fs::read_to_string(third.join("report.toml")).unwrap().replacen("[run]", "[run]\nmood = 1", 1)).unwrap();
     let e = record::read(&third).unwrap_err().to_string();
     assert!(e.starts_with(&format!("{}: ", third.join("report.toml").display())) && e.contains("unknown field `mood`"), "{e}");
+    // A test that names roles to sign: its report names them, and awaits them.
+    let roles = checked(&test_text.replacen("  use     functions/routing.fn\n", "  use     functions/routing.fn\n  sign    witness, tester\n", 1));
+    let kept = record::keep(&runs.join("named"), &roles, &live, &RunOptions::live().mode, &plant).unwrap();
+    let r = record::read(&kept).unwrap();
+    assert_eq!((r.test.sign.clone(), r.standing()), (vec!["witness".to_string(), "tester".to_string()], "awaiting witness, tester".to_string()));
     let _: Option<Report> = None;
 }
 
@@ -497,6 +502,9 @@ is the plant's clock on the store's axis, `YYYY-MM-DD HH:MM:SS.mmm`.
 - `file` (required): the copy of the test that ran, in the run's folder: `test.test`.
 - `functions` (none): one table per function file the test used: `used_as`, the path its `use`
   wrote, and `file`, its copy in the run's folder (`functions/<n>.fn`, in the order of the uses).
+- `sign` (none): the roles the test names to sign the report (its `sign` setting), each once.
+  Each of them signs once, and the report stands `awaiting <roles>` until all have, then
+  `signed`; with none named, the first signature makes it `signed` (Q312 (e)).
 
 **The run** (`[run]`).
 - `number` (required): the run's place among the test's runs, its folder's name without zeros.
@@ -554,9 +562,68 @@ form, an attempt or a run's number below 1, a file named otherwise than the run'
 (`test.test`, `functions/<n>.fn` in the order of the uses, the evidence's names), a table's
 evidence or a file given twice, in any case. A run past the last number a run can take
 (4294967295), or with a moment a report cannot hold (a year past 9999). A test's folder, or a
-run's, that cannot be read, which `list` names rather than pass over. A note or a
-signature on a report already signed: a signed report is frozen, a correction being a new run
-(Q312, (d) taken meanwhile). This is the engine's refusal, nothing sealed in the file. A signature
+run's, that cannot be read, which `list` names rather than pass over. A note on a report
+signed by anyone, and a signature once the report is `signed`: a signed report is frozen, a
+correction being a new run (Q312). A signature as a role the test does not name, or as one that
+has signed already, when it names roles; a second signature when it names none. This is the engine's refusal, nothing sealed in the file. A signature
 whose role is neither `tester` nor `witness`, or whose name holds no letter or digit. A run of a
 test with no `id`, which has no folder.
 "##;
+
+// ---- the architect's Q312 (e) ----------------------------------------------------------------
+
+#[test]
+fn the_roles_a_test_names_sign_its_report_each_once_and_it_awaits_them() {
+    let block = blocks("report-schema.md", "toml").remove(0);
+    let signature = "\n[[signature]]\nrole = \"tester\"\nname = \"A. Tester\"\nat = \"2026-11-22 14:10:42.000\"\n";
+    assert!(block.contains(signature));
+    let unsigned = block.replace(signature, "\n");
+    let named = |roles: &str| unsigned.replacen("file = \"test.test\"\n", &format!("file = \"test.test\"\nsign = [{roles}]\n"), 1);
+    let dir = tempfile::tempdir().unwrap();
+    let put = |name: &str, text: &str| {
+        let folder = dir.path().join(name);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("report.toml"), text).unwrap();
+        folder
+    };
+    // Both named: awaiting both, then the one left, then signed; each once; notes frozen at the
+    // first signature.
+    let f = put("both", &named("\"tester\", \"witness\""));
+    assert_eq!(record::read(&f).unwrap().standing(), "awaiting tester, witness");
+    assert_eq!(record::sign(&f, "witness", "W. Itness").unwrap().standing(), "awaiting tester");
+    assert!(matches!(record::note(&f, "later"), Err(RecordError::Signed { .. })));
+    let e = record::sign(&f, "witness", "W. Again").unwrap_err();
+    assert_eq!(e.to_string(), format!("{}: `witness` has signed it already", f.display()));
+    let r = record::sign(&f, "tester", "A. Tester").unwrap();
+    assert_eq!((r.standing(), r.signatures.len()), ("signed".to_string(), 2));
+    assert!(matches!(record::sign(&f, "tester", "B"), Err(RecordError::SignedAs { .. })));
+    assert_eq!(record::read(&f).unwrap().standing(), "signed");
+    // One named: the other role is refused.
+    let f = put("one", &named("\"witness\""));
+    let e = record::sign(&f, "tester", "A. Tester").unwrap_err();
+    assert_eq!(e.to_string(), "the test names `witness` to sign, not `tester`");
+    // None named: the first signature signs it, and freezes it.
+    let f = put("none", &unsigned);
+    assert_eq!(record::read(&f).unwrap().standing(), "unsigned");
+    assert_eq!(record::sign(&f, "witness", "W").unwrap().standing(), "signed");
+    assert!(matches!(record::sign(&f, "tester", "A"), Err(RecordError::Signed { .. })));
+    // A report that breaks these, as written by hand: refused by `read`.
+    let refused = |text: &str| record::parse(text).unwrap_err();
+    assert_eq!(refused(&named("\"boss\"")), "`test.sign` is `boss`: `tester`, `witness`");
+    assert_eq!(refused(&named("\"tester\", \"tester\"")), "`test.sign` names `tester` twice");
+    let with = |roles: &str, sigs: &[(&str, &str)]| {
+        let mut t = named(roles);
+        for (role, name) in sigs {
+            t.push_str(&format!("\n[[signature]]\nrole = \"{role}\"\nname = \"{name}\"\nat = \"2026-11-22 14:10:42.000\"\n"));
+        }
+        t
+    };
+    assert_eq!(refused(&with("\"witness\"", &[("tester", "A")])), "a signature as `tester`: the test names `witness` to sign, each once");
+    assert_eq!(refused(&with("\"witness\"", &[("witness", "A"), ("witness", "B")])), "a signature as `witness`: the test names `witness` to sign, each once");
+    assert!(record::parse(&with("\"tester\", \"witness\"", &[("witness", "W"), ("tester", "T")])).is_ok());
+    let mut two = unsigned.clone();
+    for name in ["A", "B"] {
+        two.push_str(&format!("\n[[signature]]\nrole = \"tester\"\nname = \"{name}\"\nat = \"2026-11-22 14:10:42.000\"\n"));
+    }
+    assert_eq!(refused(&two), "two signatures on a report whose test names no role to sign: the first froze it");
+}
