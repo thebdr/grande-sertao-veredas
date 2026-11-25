@@ -103,8 +103,9 @@ table, each keyed by its address:
 
 `style` is an index into the workbook part's `styles.cell_xfs`, written when it is not 0. A cell an
 array spills into is written only for its style; one not written holds style 0, whatever style its
-row or column has (which the engine would give a cell it creates). A formula is spelled so it
-reads back as the same formula: the brackets that change its meaning kept (`(A1&A2)*1`,
+row or column has (which the engine would give a cell it creates). A formula is spelled as the
+reader reads it, in English and the locale the workbook's settings name, whatever language or locale
+the model shows, and so it reads back as the same formula: the brackets that change its meaning kept (`(A1&A2)*1`,
 `(A1+A2)%`, `A1+(A2+A3)`), and a number, in an array constant too, in Excel's 15 digits when they
 hold it, otherwise the shortest spelling that does (`0.30000000000000004`). Of two dynamic arrays whose spills meet, the one that spills is decided
 on reading row by row, as the engine opens any workbook, not by the order they were entered in (a

@@ -1058,6 +1058,72 @@ fn a_formula_a_locale_spells_unreadably_is_refused_by_the_writer() {
 }
 
 #[test]
+fn a_formula_is_written_as_the_reader_reads_it_whatever_the_model_s_language_or_locale() {
+    // the reader reads in English and the workbook settings' locale: the writer spells so (fork
+    // change 31b), a Spanish or French model's `SUMA`, `SOMME` written `SUM`, a locale the settings
+    // name but the model does not hold written with its own decimal and separators
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spelled.abaco");
+    let at = |b: &Workbook, a: &str| b.value_now(0, Addr::parse(a).unwrap()).unwrap();
+    for language in ["es", "fr"] {
+        let mut book = Workbook::new("Lengua").unwrap();
+        book.set_value(0, Addr::parse("A1").unwrap(), &Value::Number(1.0)).unwrap();
+        book.set_value(0, Addr::parse("A2").unwrap(), &Value::Number(2.0)).unwrap();
+        book.set_formula(0, Addr::parse("B1").unwrap(), "=SUM(A1:A2)").unwrap();
+        book.set_formula(0, Addr::parse("B2").unwrap(), "=IF(TRUE,1,2)").unwrap();
+        book.model_mut().set_language(language).unwrap();
+        let mut file = AbacoFile::new(book);
+        abacofile::write(&mut file, &path).unwrap();
+        let mut back = abacofile::read(&path).unwrap();
+        assert_eq!((at(&back.book, "B1"), at(&back.book, "B2")), (Value::Number(3.0), Value::Number(1.0)), "{language}");
+        assert_eq!(back.book.content(0, Addr::parse("B1").unwrap()).unwrap(), Content::Formula("=SUM(A1:A2)".into()), "{language}");
+        let again = dir.path().join("again.abaco");
+        abacofile::write(&mut back, &again).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), std::fs::read(&again).unwrap(), "{language}");
+    }
+    let mut book = Workbook::new("Locale").unwrap();
+    book.set_formula(0, Addr::parse("B1").unwrap(), "=SUM(1,2)").unwrap();
+    book.set_formula(0, Addr::parse("B2").unwrap(), "=1.5*2").unwrap();
+    book.model_mut().workbook.settings.locale = "de".into();
+    let mut file = AbacoFile::new(book);
+    abacofile::write(&mut file, &path).unwrap();
+    let back = abacofile::read(&path).unwrap();
+    assert_eq!((at(&back.book, "B1"), at(&back.book, "B2")), (Value::Number(3.0), Value::Number(3.0)));
+}
+
+#[test]
+fn a_named_function_an_unknown_one_and_a_range_s_brackets_read_back_as_typed() {
+    // a lambda's name, a user function's, a function the engine lacks, typed in Ábaco in any case,
+    // and the range operator's bracketed operands (fork change 33): each reads back to the same
+    // content and value, and writes the same bytes again
+    let mut book = Workbook::new("Named").unwrap();
+    for r in 1..=3 {
+        book.set_value(0, Addr::new(r, 1), &Value::Number(f64::from(r))).unwrap();
+    }
+    book.set_name("Fn", "=LAMBDA(x,x*2)", None).unwrap();
+    let typed = [
+        "=Fn(3)", "=FN(3)", "=fn(3)", "=LET(F,LAMBDA(x,x*3),F(2))", "=LET(x,1,X+1)", "=MYUDF(1)", "=GETPIVOTDATA(\"x\",A1)",
+        "=EUROCONVERT(1,\"EUR\",\"DEM\")", "=IMAGE(\"x\")", "=WEBSERVICE(\"x\")", "=BAHTTEXT(1)", "=STOCKHISTORY(\"x\",1)",
+        "=SUM(A1:(A2:A3))", "=SUM(A1:(A3))", "=SUM((A1):A3)",
+    ];
+    for (i, f) in typed.iter().enumerate() {
+        book.set_formula(0, Addr::new(i as i32 + 1, 3), f).unwrap();
+    }
+    book.recalc();
+    assert_eq!(book.value_now(0, Addr::new(1, 3)).unwrap(), Value::Number(6.0));
+    assert_eq!(book.value_now(0, Addr::new(5, 3)).unwrap(), Value::Number(2.0));
+    let mut file = AbacoFile::new(book);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("named.abaco");
+    abacofile::write(&mut file, &path).unwrap();
+    let mut back = abacofile::read(&path).unwrap();
+    assert!(differences(&file.book, &back.book).is_empty(), "{:?}", differences(&file.book, &back.book));
+    let again = dir.path().join("again.abaco");
+    abacofile::write(&mut back, &again).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), std::fs::read(&again).unwrap());
+}
+
+#[test]
 fn two_dynamic_arrays_meeting_spill_on_reading_in_the_order_the_engine_opens_a_workbook_in() {
     // a limit, pinned: which of two dynamic arrays whose spills meet spills is the engine's order
     // of evaluation, the order they were entered in while the workbook is open; the file does not

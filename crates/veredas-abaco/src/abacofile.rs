@@ -738,6 +738,16 @@ fn cells_text(book: &Workbook, sheet: u32, part: &str) -> Result<String, ModelEr
                 let _ = write!(out, ", style = {style}");
             }
         };
+        // a formula spelled as the reader reads it: in the workbook settings' locale and Ábaco's
+        // language, whatever the model's own (fork change 31b)
+        let settings = &book.model().workbook.settings;
+        let spelled = |held: String| -> Result<String, ModelError> {
+            Ok(book
+                .model()
+                .get_cell_formula_in(sheet, addr.row, addr.column, &settings.locale, LANGUAGE)
+                .map_err(|e| bad(e))?
+                .unwrap_or(held))
+        };
         let line = match book.content(sheet, addr)? {
             Content::Spill if style == 0 => continue,
             Content::Empty | Content::Spill | Content::Value(Value::Empty) => format!("{addr} = {{ style = {style} }}"),
@@ -753,6 +763,7 @@ fn cells_text(book: &Workbook, sheet: u32, part: &str) -> Result<String, ModelEr
                 l + " }"
             }
             Content::Formula(f) => {
+                let f = spelled(f)?;
                 let mut l = format!("{addr} = {{ f = {}", quoted(bare(&f)));
                 match book.value_now(sheet, addr)? {
                     Value::Empty => {}
@@ -773,11 +784,13 @@ fn cells_text(book: &Workbook, sheet: u32, part: &str) -> Result<String, ModelEr
                 l + " }"
             }
             Content::ArrayFormula { formula, columns, rows } => {
+                let formula = spelled(formula)?;
                 let mut l = format!("{addr} = {{ array = {}, size = [{columns}, {rows}]", quoted(bare(&formula)));
                 styled(&mut l);
                 l + " }"
             }
             Content::DynamicFormula(f) => {
+                let f = spelled(f)?;
                 let mut l = format!("{addr} = {{ dynamic = {}", quoted(bare(&f)));
                 styled(&mut l);
                 l + " }"
@@ -835,7 +848,8 @@ pub fn parts(file: &AbacoFile) -> Result<Vec<(String, Vec<u8>)>, ModelError> {
     // the cell its context), is the formula the engine holds: one that reads back as another (an
     // engine spelling that loses a bracket, a locale's array rows its lexer does not read) is
     // refused by its address (fork change 31)
-    if let Some((sheet, row, column)) = model.formulas_reading_back_otherwise().into_iter().min() {
+    let otherwise = model.formulas_reading_back_otherwise_in(&ewb.settings.locale, LANGUAGE).map_err(|e| ModelError::Engine(format!("{WORKBOOK}: `settings`: {e}")))?;
+    if let Some((sheet, row, column)) = otherwise.into_iter().min() {
         let part = names.get(sheet as usize).cloned().unwrap_or_default();
         return Err(ModelError::Engine(format!(
             "{part} {}: a formula whose spelling the reader would read as another formula",
