@@ -86,7 +86,8 @@ fn the_hook_answers_its_names_and_only_its_names() {
     assert!(calls
         .borrow()
         .iter()
-        .any(|(n, a)| n == "DOUBLE" && a == &vec![UserValue::Number(21.0)]));
+        // (the name arrives in lower case, as the formula spells it; Veredas fork change 33)
+        .any(|(n, a)| n == "double" && a == &vec![UserValue::Number(21.0)]));
 }
 
 #[test]
@@ -102,7 +103,7 @@ fn arguments_arrive_typed_and_ranges_as_arrays() {
     model._set("C3", "=COUNTCELLS(A:A)");
     model.evaluate();
     let calls = calls.borrow();
-    let echo = calls.iter().rev().find(|(n, _)| n == "ECHO").unwrap();
+    let echo = calls.iter().rev().find(|(n, _)| n == "echo").unwrap();
     assert_eq!(
         echo.1,
         vec![

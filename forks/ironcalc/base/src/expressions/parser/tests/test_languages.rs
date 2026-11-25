@@ -45,8 +45,9 @@ fn simple_language() {
     assert!(matches!(t, Node::BooleanKind(true)));
     assert_eq!(to_rc_format(&t), "TRUE");
 
+    // (a named function's name held in lower case, as it is spelled; Veredas fork change 33)
     let t = parser.parse("TRUE()", &cell_reference);
-    assert!(matches!(t, Node::NamedFunctionKind { ref name, args: _, id: _ } if name == "TRUE"));
+    assert!(matches!(t, Node::NamedFunctionKind { ref name, args: _, id: _ } if name == "true"));
 
     let t = parser.parse("VERDADERO()", &cell_reference);
     assert!(matches!(

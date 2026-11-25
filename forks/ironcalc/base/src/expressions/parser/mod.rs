@@ -1119,8 +1119,11 @@ impl<'a> Parser<'a> {
                             args,
                         };
                     }
+                    // the name in lower case, as the formula spells it, an imported one arrives and
+                    // every lookup compares it: `=Fn(3)` typed reads back as the formula it is
+                    // (Veredas fork change 33)
                     return Node::NamedFunctionKind {
-                        name: name.trim_start_matches("_xlpm.").to_string(),
+                        name: name.trim_start_matches("_xlpm.").to_lowercase(),
                         args,
                         id: None,
                     };

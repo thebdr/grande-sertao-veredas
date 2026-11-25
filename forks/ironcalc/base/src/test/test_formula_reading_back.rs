@@ -87,3 +87,35 @@ fn the_reader_s_language_and_locale_are_the_check_s() {
     assert_eq!(model.formulas_reading_back_otherwise_in("de", "en").unwrap(), Vec::<(u32, i32, i32)>::new());
     assert!(model.formulas_reading_back_otherwise_in("xx", "en").is_err());
 }
+
+/// Veredas fork change 33: a named function's name and a range's operands read back as themselves,
+/// and LET's and LAMBDA's names bind in any case.
+#[test]
+fn a_named_function_and_a_range_read_back_and_names_bind_in_any_case() {
+    let mut model = new_empty_model();
+    for r in 1..=3 {
+        model.set_user_input(0, r, 1, r.to_string()).unwrap();
+    }
+    model.new_defined_name(crate::DefinedNameEntry::new("Fn", "LAMBDA(x,x*2)")).unwrap();
+    for (row, typed) in [
+        (1, "=Fn(3)"),
+        (2, "=FN(3)"),
+        (3, "=LET(F,LAMBDA(x,x*3),F(2))"),
+        (4, "=MYUDF(1)"),
+        (5, "=GETPIVOTDATA(\"x\",A1)"),
+        (6, "=SUM(A1:(A2:A3))"),
+        (7, "=SUM(A1:(A3))"),
+        (8, "=SUM((A1):A3)"),
+        (10, "=LET(x,1,X+1)"),
+        (11, "=LAMBDA(a,A*2)(4)"),
+    ] {
+        model.set_user_input(0, row, 3, typed.to_string()).unwrap();
+    }
+    model.evaluate();
+    assert_eq!(model.formulas_reading_back_otherwise(), Vec::<(u32, i32, i32)>::new());
+    for (row, value) in [(1, "6"), (2, "6"), (3, "6"), (6, "6"), (7, "6"), (8, "6"), (10, "2"), (11, "8")] {
+        assert_eq!(model.get_formatted_cell_value(0, row, 3).unwrap(), value, "row {row}");
+    }
+    assert_eq!(model.get_cell_formula(0, 6, 3).unwrap().unwrap(), "=SUM(A1:(A2:A3))");
+    assert_eq!(model.get_cell_formula(0, 1, 3).unwrap().unwrap(), "=fn(3)");
+}

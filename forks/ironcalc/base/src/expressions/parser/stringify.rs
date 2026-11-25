@@ -937,25 +937,18 @@ fn stringify(
             );
             format!("{s1}:{s2}")
         }
-        OpRangeKind { left, right } => format!(
-            "{}:{}",
-            stringify(
-                left,
-                context,
-                displace_data,
-                export_to_excel,
-                locale,
-                language
-            ),
-            stringify(
-                right,
-                context,
-                displace_data,
-                export_to_excel,
-                locale,
-                language
-            )
-        ),
+        // The range operator takes a primary on each side: what is no primary is bracketed, and so is
+        // a reference or a range on its right, which the lexer would otherwise read with the left as
+        // one range (`A1:(A3)`, `A1:(A2:A3)`), so the spelling reads back as the same formula
+        // (Veredas fork change 33)
+        OpRangeKind { left, right } => {
+            let x = stringify(left, context, displace_data, export_to_excel, locale, language);
+            let y = stringify(right, context, displace_data, export_to_excel, locale, language);
+            let x = if is_primary(left) || matches!(**left, ImplicitIntersection { .. } | SpillRangeOperator { .. }) { x } else { format!("({x})") };
+            let merges = matches!(**right, ReferenceKind { .. } | RangeKind { .. } | WrongReferenceKind { .. } | WrongRangeKind { .. } | ExternalReferenceKind { .. } | ExternalRangeKind { .. });
+            let y = if is_primary(right) && !merges { y } else { format!("({y})") };
+            format!("{x}:{y}")
+        }
         // An operand that binds less than its operator, or as much on the right (the parser reads
         // left to right), is bracketed, so the spelling reads back as the same formula:
         // `(A1&A2)*1`, `"x"&(A1>0)`, `(A1<A2)=(A2<A3)` (Veredas fork change 30)

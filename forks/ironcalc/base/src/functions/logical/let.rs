@@ -13,8 +13,11 @@ use crate::{
 /// When a nested LET is encountered that binds the same name, the walk stops past that
 /// pair's value expression — the inner LET will assign its own id for subsequent uses.
 pub(super) fn assign_variable_ids(node: &mut Node, target: &str, id: u32) {
+    // a name is the same in any case, as Excel reads LET's and LAMBDA's (`LET(x,1,X+1)`; Veredas
+    // fork change 33)
+    let same = |name: &str| name.to_lowercase() == target.to_lowercase();
     match node {
-        Node::NamedVariableKind { name, id: var_id } if name == target && var_id.is_none() => {
+        Node::NamedVariableKind { name, id: var_id } if same(name) && var_id.is_none() => {
             *var_id = Some(id);
         }
         Node::NamedFunctionKind {
@@ -22,7 +25,7 @@ pub(super) fn assign_variable_ids(node: &mut Node, target: &str, id: u32) {
             id: var_id,
             args,
         } => {
-            if name == target && var_id.is_none() {
+            if same(name) && var_id.is_none() {
                 *var_id = Some(id);
             }
             for arg in args.iter_mut() {
@@ -34,7 +37,7 @@ pub(super) fn assign_variable_ids(node: &mut Node, target: &str, id: u32) {
                 let n_pairs = (args.len().saturating_sub(1)) / 2;
                 // Find the first pair index where the inner LET shadows `target`.
                 let shadow_pair = (0..n_pairs).find(|&k| {
-                    matches!(&args[2 * k], Node::NamedVariableKind { name, .. } if name == target)
+                    matches!(&args[2 * k], Node::NamedVariableKind { name, .. } if same(name))
                 });
                 for i in 0..args.len() {
                     // Odd indices are value expressions; the last (even) index is the body.
@@ -75,7 +78,7 @@ pub(super) fn assign_variable_ids(node: &mut Node, target: &str, id: u32) {
         }
         Node::LambdaDefKind { parameters, body } => {
             // If a LAMBDA parameter shadows `target`, don't recurse into the body.
-            let shadowed = parameters.iter().any(|p| p.name == target);
+            let shadowed = parameters.iter().any(|p| same(&p.name));
             if !shadowed {
                 assign_variable_ids(body, target, id);
             }
