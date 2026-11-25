@@ -105,7 +105,11 @@ function outline(g: SVGGeometryElement, n: number): Outline[] {
     for (let i = 0; i < g.points.numberOfItems; i++) pts.push(g.points.getItem(i));
     return [plain(pts, g instanceof SVGPolygonElement)];
   }
-  if (g instanceof SVGRectElement && !g.rx.baseVal.value && !g.ry.baseVal.value) {
+  // A rect's corners by its used radii (one written `auto`, or not at all, takes the other's): sharp
+  // where either is 0, as the browser draws it.
+  const radius = (own: string, other: string) => parseFloat(own === "auto" ? (other === "auto" ? "0" : other) : own) || 0;
+  const rc = g instanceof SVGRectElement ? getComputedStyle(g) : null;
+  if (g instanceof SVGRectElement && rc && (!radius(rc.getPropertyValue("rx"), rc.getPropertyValue("ry")) || !radius(rc.getPropertyValue("ry"), rc.getPropertyValue("rx")))) {
     const [x, y, w, h] = [g.x.baseVal.value, g.y.baseVal.value, g.width.baseVal.value, g.height.baseVal.value];
     return [plain([{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }], true)];
   }

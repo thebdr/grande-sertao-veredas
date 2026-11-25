@@ -1551,7 +1551,7 @@ writes (the properties `all`, `transform`, `translate`, `rotate`, `scale`, `tran
 `perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, each by
 its name and every longhand of it (the name, a hyphen and more), in a `style`, under any vendor's
 prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a comment inside it declaring nothing; the attributes
-`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), on the root the attributes
+`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a shape's geometry written as CSS (the properties `d`, `x`, `y`, `width`, `height`, `rx`, `ry`, `cx`, `cy` and `r` in a `style`: the page reads a shape by its attributes, as Inkscape writes it), a stroke width written as a percentage, a `calc()` or a `var()` (as an attribute or in a `style`: the page reads a line's width as a length), on the root the attributes
 `preserveAspectRatio` and `overflow` (the second in its `style` too, and every longhand of it), with
 which the drawing would cut what the page writes at its edge or reach past its frame, and on its root
 nothing but `width`, `height`, `viewBox`, `version` and `id` and Inkscape's own attributes (in the two namespaces it writes there,
@@ -1668,7 +1668,7 @@ fn hint(kind: &str) -> &'static str {
 /// object's element, inside it and beside it). Every list is held to the reference's own sentence.
 #[test]
 fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
-    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DIRECTED, DRAWN, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, ROOT_ATTRIBUTES, ROOT_FRAMED, VENDOR_PREFIXES, declared, moves_the_page, says_important};
+    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DIRECTED, DRAWN, GEOMETRY, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, ROOT_ATTRIBUTES, ROOT_FRAMED, VENDOR_PREFIXES, declared, moves_the_page, says_important};
     // The lists are the reference's, each member named in its own sentence: the kinds an object is
     // shown on, what may stand around them and inside them, the animations, the properties and
     // attributes that move, time or unpin what the page writes.
@@ -1685,6 +1685,7 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     assert_eq!(named("`pointer-events` and every ", " property, each by"), MOVING_FAMILIES);
     assert_eq!(named("under any vendor's prefix (", ")"), VENDOR_PREFIXES);
     assert_eq!(named("declaring nothing; the attributes ", ", an element's own"), MOVING_ATTRIBUTES);
+    assert_eq!(named("a shape's geometry written as CSS (the properties ", " in a `style`"), GEOMETRY);
     const INFEED: &str = "<rect id=\"infeed\" x=\"20\" y=\"96\" width=\"40\" height=\"28\"/>";
     const LOOP: &str = "<path id=\"loop\" d=\"M 80 40 H 320 A 70 70 0 0 1 320 180 H 80 A 70 70 0 0 1 80 40 Z\" fill=\"none\" stroke=\"#26262A\" stroke-width=\"14\"/>";
     let with_svg = |from: &str, to: &str| {
@@ -1825,6 +1826,25 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
             for (place, el, ex) in places(&format!("style=\"{style}\"")) {
                 let got = binding_refusal(&ex);
                 assert!(got.ends_with(&format!("layout.svg holds `{prop}` (on <{el}>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself")), "{style}, {place}: {got}");
+            }
+        }
+    }
+    // A shape's geometry written as CSS: every property of `GEOMETRY` in a `style`, plainly and in
+    // capitals, refused at every place; and a stroke width the page cannot read as a length (a
+    // percentage, a `calc()`, a `var()`), as an attribute and in a `style`, refused at every place.
+    for prop in GEOMETRY {
+        for style in [format!("{prop}: 10px"), format!("fill: red; {}: 10px", prop.to_uppercase())] {
+            for (place, el, ex) in places(&format!("style=\"{style}\"")) {
+                let got = binding_refusal(&ex);
+                assert!(got.ends_with(&format!("layout.svg holds `{prop}` in a `style` (on <{el}>), a shape's geometry written as CSS, which the page reads by its attributes: Inkscape writes a shape's geometry as attributes")), "{style}, {place}: {got}");
+            }
+        }
+    }
+    for width in ["5%", "calc(1px + 2%)", "var(--w)"] {
+        for written in [format!("stroke-width=\"{width}\""), format!("style=\"stroke-width: {width}\"")] {
+            for (place, el, ex) in places(&written) {
+                let got = binding_refusal(&ex);
+                assert!(got.ends_with(&format!("layout.svg holds the stroke width `{width}` (on <{el}>), a percentage, a `calc()` or a `var()`, which the page reads as no width: write it as a number or a length, as Inkscape does")), "{written}, {place}: {got}");
             }
         }
     }

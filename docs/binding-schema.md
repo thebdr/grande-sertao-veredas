@@ -486,7 +486,7 @@ writes (the properties `all`, `transform`, `translate`, `rotate`, `scale`, `tran
 `perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, each by
 its name and every longhand of it (the name, a hyphen and more), in a `style`, under any vendor's
 prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a comment inside it declaring nothing; the attributes
-`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), on the root the attributes
+`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a shape's geometry written as CSS (the properties `d`, `x`, `y`, `width`, `height`, `rx`, `ry`, `cx`, `cy` and `r` in a `style`: the page reads a shape by its attributes, as Inkscape writes it), a stroke width written as a percentage, a `calc()` or a `var()` (as an attribute or in a `style`: the page reads a line's width as a length), on the root the attributes
 `preserveAspectRatio` and `overflow` (the second in its `style` too, and every longhand of it), with
 which the drawing would cut what the page writes at its edge or reach past its frame, and on its root
 nothing but `width`, `height`, `viewBox`, `version` and `id` and Inkscape's own attributes (in the two namespaces it writes there,

@@ -232,6 +232,16 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         if let Some(property) = moving {
             return Err(format!("{} holds `{property}` (on <{name}>), which would move, time or unpin what the page writes: the page places, animates and takes the clicks itself", path.display()));
         }
+        // A shape's geometry written as CSS (Q25: Inkscape writes it as attributes, and the page reads
+        // a shape's outline by them), and a stroke width the page cannot read as a length.
+        let styled_geometry = node.attribute("style").and_then(|st| declared(st).into_iter().find(|p| GEOMETRY.contains(&p.as_str())));
+        if let Some(property) = styled_geometry {
+            return Err(format!("{} holds `{property}` in a `style` (on <{name}>), a shape's geometry written as CSS, which the page reads by its attributes: Inkscape writes a shape's geometry as attributes", path.display()));
+        }
+        let widths = node.attribute("stroke-width").map(|w| w.trim().to_ascii_lowercase()).into_iter().chain(node.attribute("style").map(|st| style_values(st, "stroke-width")).unwrap_or_default());
+        if let Some(width) = widths.into_iter().find(|w| w.contains('%') || w.contains("calc(") || w.contains("var(")) {
+            return Err(format!("{} holds the stroke width `{width}` (on <{name}>), a percentage, a `calc()` or a `var()`, which the page reads as no width: write it as a number or a length, as Inkscape does", path.display()));
+        }
         // What the page's reset (`all: initial`) leaves to inheritance, CSS keeping both out of `all`:
         // a custom property, which the page's state colours read (each a `var(--…)`), and a
         // `direction`, which would turn what the page writes beside an element. Inkscape writes no
@@ -480,6 +490,10 @@ pub fn moves_the_page(property: &str) -> bool {
 /// The properties `moves_the_page` names by their family: a transition's, an animation's and a motion
 /// offset's, each by its name and every longhand of it.
 pub const MOVING_FAMILIES: [&str; 3] = ["transition", "animation", "offset"];
+
+/// A shape's geometry as CSS writes it, which a drawing may not write in a `style`: the page reads a
+/// shape's outline by its attributes, as Inkscape writes them.
+pub const GEOMETRY: [&str; 10] = ["d", "x", "y", "width", "height", "rx", "ry", "cx", "cy", "r"];
 
 /// The properties `moves_the_page` names whole, each with any longhand of it too.
 pub const MOVING: [&str; 10] = ["all", "transform", "translate", "rotate", "scale", "transform-origin", "transform-box", "transform-style", "perspective", "pointer-events"];

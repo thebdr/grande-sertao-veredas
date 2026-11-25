@@ -2086,6 +2086,11 @@ const LINES_SVG: &str = r##"  <line id="ln-normal" x1="15" y1="240" x2="15" y2="
   <path id="la-rev2" d="M 540 790 V 760 H 560 C 560 720 560 720 560 760 H 580 V 790" fill="none" stroke="#3a3a40" stroke-width="6"/>
   <g transform="translate(250 530)"><path id="la-leaf1" d="m 207.704,196.350 c 12.702,11.341 12.702,20.703 0,32.044 c -12.702,-11.341 -12.702,-20.703 0,-32.044 z" fill="none" stroke="#3a3a40" stroke-width="6"/></g>
   <g transform="translate(311 607)"><path id="la-leaf2" d="m 268.865,33.484 c 8.704,23.531 8.704,18.749 0,42.280 c -8.704,-23.531 -8.704,-18.749 0,-42.280 z" fill="none" stroke="#3a3a40" stroke-width="6"/></g>
+  <polygon id="la-poly" points="650,20 690,110 610,110" fill="none" stroke="#3a3a40" stroke-width="8"/>
+  <rect id="la-rr" x="620" y="150" width="60" height="40" rx="8" ry="8" transform="rotate(45 650 170)" fill="none" stroke="#3a3a40" stroke-width="8"/>
+  <rect id="la-rry" x="620" y="250" width="60" height="40" ry="8" transform="rotate(45 650 270)" fill="none" stroke="#3a3a40" stroke-width="8"/>
+  <rect id="la-rr0" x="620" y="350" width="60" height="40" rx="0" ry="8" transform="rotate(45 650 370)" fill="none" stroke="#3a3a40" stroke-width="8"/>
+  <rect id="la-rrx0" x="620" y="450" width="60" height="40" rx="8" ry="0" transform="rotate(45 650 470)" fill="none" stroke="#3a3a40" stroke-width="8"/>
   <g transform="translate(480 600)"><path id="la-leaf3" d="m 53.7,49.4 l 25.3,18.4 -22.6,0.8 -2.7,-19.2 z" fill="none" stroke="#3a3a40" stroke-width="6"/></g>
 </svg>"##;
 
@@ -2123,7 +2128,7 @@ const BODY_CASES: [(&str, (f64, f64)); 3] = [("nf-zero", (205.0, 320.0)), ("nf-b
 /// on its lines below its level, on them above it, and inside what they close (off every line), in
 /// its own coordinates.
 #[allow(clippy::type_complexity)]
-const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 45] = [
+const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 50] = [
     ("la-ring", 0.35, "normal", 6.0, &[(40.0, 386.0)], &[(40.0, 354.0), (24.0, 370.0)], &[(40.0, 370.0), (40.0, 380.0)]),
     ("la-bent", 0.35, "normal", 8.0, &[(100.0, 390.0), (80.0, 385.0), (122.5, 390.0)], &[(80.0, 360.0)], &[(95.0, 380.0)]),
     ("la-hollow", 1.0, "normal", 4.0, &[(160.0, 350.0), (140.0, 370.0), (180.0, 370.0), (160.0, 390.0)], &[], &[(160.0, 370.0)]),
@@ -2179,6 +2184,11 @@ const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64,
     ("la-leaf1", 1.0, "normal", 6.0, &[], &[], &[]),
     ("la-leaf2", 1.0, "normal", 6.0, &[], &[], &[]),
     ("la-leaf3", 1.0, "normal", 6.0, &[], &[], &[]),
+    ("la-poly", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-rr", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-rry", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-rr0", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-rrx0", 1.0, "normal", 8.0, &[], &[], &[]),
 ];
 
 /// The state's colours on a line, read from the page's own tokens as the browser computes a stroke:
@@ -2391,7 +2401,7 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
     let bench = plant(&dir.path().join("bench"));
     let mut ex = live_example(&bench, false);
     assert!(ex.svg.contains("viewBox=\"0 0 400 220\"") && ex.svg.ends_with("</svg>\n"));
-    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 600 800\"").replace("</svg>\n", LINES_SVG) + "\n";
+    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 700 800\"").replace("</svg>\n", LINES_SVG) + "\n";
     // Each object in its state: a rule over `fill2` (85) naming it, normal with none, stale on the
     // sorter's rate (its log empty: no value yet).
     let value_in = |state: &str| match state {
