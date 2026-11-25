@@ -44,6 +44,26 @@ fn split_script(s: &str) -> (Vec<&str>, Vec<(&str, String)>) {
     (outer, docs)
 }
 
+/// A shell script's statements in order: every line outside its heredocs' bodies (a heredoc's
+/// opening line among them), comments and blank lines left out.
+fn statements(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut lines = s.lines();
+    while let Some(l) = lines.next() {
+        if let Some(end) = heredoc_end(l) {
+            out.push(l);
+            for b in lines.by_ref() {
+                if b == end {
+                    break;
+                }
+            }
+        } else if !l.trim().is_empty() && !l.starts_with('#') {
+            out.push(l);
+        }
+    }
+    out
+}
+
 /// A script's lines naming `word`, in order: a heredoc whose opening line names it whole, with its
 /// body and end.
 fn naming(s: &str, word: &str) -> String {
@@ -159,7 +179,11 @@ fn proof(console: &str, share: f64, after: &str) -> Proof {
 fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     let card = format!("VEREDAS-CARD ens4 {}", maquina::PROOF_MAC);
     let promised = "VEREDAS-BUNDLE abababababababababababababababababababababababababababababababab\nVEREDAS-PACKAGES ok\nVEREDAS-SERVICES-USER ok\nVEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\nVEREDAS-ATUALIZAR ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
-    let good = format!("vmw_pvscsi\nvmxnet3\nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
+    // The kernel's own lines for the disk and the card, as a proof boot's console holds them.
+    let kernel = "[    1.838046] vmxnet3 0000:00:04.0 ens4: renamed from eth0\n[    1.961659] scsi host0: VMware PVSCSI storage adapter rev 2, req/cmp/msg rings: 8/8/1 pages, cmd_per_lun=254\n\
+                  [    1.967761] vmw_pvscsi 0000:00:03.0: VMware PVSCSI rev 2 host #0\n[    2.616482] sd 0:0:0:0: [sda] Attached SCSI disk\n\
+                  [    3.396986] EXT4-fs (sda1): mounted filesystem af01cf6d-3c1a-46f8-9d6f-70e2338496fd ro with ordered data mode. Quota mode: none.\n";
+    let good = format!("{kernel}VEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
     assert_eq!(maquina::proof_faults(&proof(&good, 0.3, "a"), "2.0.0"), Vec::<String>::new());
     let no_card = good.replace(&card, "VEREDAS-CARD ens4 52:54:00:12:34:56");
     assert_eq!(
@@ -192,8 +216,12 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
             "VEREDAS-BUNDLE cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "the machine does not hold this cut's bundle (no `VEREDAS-BUNDLE abababababababababababababababababababababababababababababababab` on the console)",
         ),
-        ("vmw_pvscsi\n", "", "the guest did not name vmw_pvscsi"),
-        ("vmxnet3\n", "", "the guest did not name vmxnet3"),
+        // The disk on another controller, the pvscsi host with nothing on it; the root from
+        // another disk; no pvscsi host at all; the proof's card one another driver drives.
+        ("sd 0:0:0:0: [sda] Attached SCSI disk", "virtio_blk virtio2: [vda] 33554432 512-byte logical blocks", "no disk was attached on the paravirtual SCSI host 0"),
+        ("EXT4-fs (sda1): mounted", "EXT4-fs (vda1): mounted", "the root file system was not mounted from sda1, the disk on the paravirtual SCSI host"),
+        ("scsi host0: VMware PVSCSI", "scsi host0: ata_piix", "the guest named no paravirtual SCSI host (`scsi host<N>: VMware PVSCSI`)"),
+        (&format!("VEREDAS-CARD ens4 {}", maquina::PROOF_MAC), &format!("VEREDAS-CARD enp0s5 {}", maquina::PROOF_MAC), "the proof's card enp0s5 is not one vmxnet3 drives (the kernel names {\"ens4\"})"),
         ("VEREDAS-SSH absent", "VEREDAS-SSH present", "the machine holds an SSH server (no `VEREDAS-SSH absent` on the console)"),
         ("VEREDAS-CLOUD-INIT disabled", "VEREDAS-CLOUD-INIT enabled", "cloud-init is not disabled (no `VEREDAS-CLOUD-INIT disabled` on the console)"),
         ("VEREDAS-ON-PATH ok", "VEREDAS-ON-PATH missing veredas-portal", "the release's executables are not all on the PATH (no `VEREDAS-ON-PATH ok` on the console)"),
@@ -207,7 +235,7 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
         assert_eq!(maquina::proof_faults(&proof(&good.replace(said, instead), 0.3, "a"), "2.0.0"), vec![fault.to_string()], "{said}");
     }
     // The boot's check said after a login started on the serial console: named.
-    let late = format!("vmw_pvscsi\nvmxnet3\nveredas login: \nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
+    let late = format!("{kernel}veredas login: \nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
     assert_eq!(maquina::proof_faults(&proof(&late, 0.3, "a"), "2.0.0"), ["the boot's check said its lines after a login started on the serial console"]);
     // A login between two of its lines, the check's first said before it and the rest after: named
     // too. A login after its last line: none.
@@ -226,6 +254,21 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     let mut bad_ova = proof(&good, 0.3, "a");
     bad_ova.ova = vec!["the descriptor's processors are not one item of 2".to_string()];
     assert_eq!(maquina::proof_faults(&bad_ova, "2.0.0"), vec!["the descriptor's processors are not one item of 2".to_string()]);
+}
+
+#[test]
+fn the_proof_boots_the_shipped_disk_on_vmwares_devices_alone() {
+    // The proof boot's QEMU devices, as `vm::args` hands them: the system disk on the paravirtual
+    // SCSI controller, the one card a VMXNET3 with the proof's address, nothing else that a disk
+    // or a card could be found on; the disk copy-on-write.
+    let r = Recipe::load_file(&repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
+    let spec = maquina::boot_spec(&r, Path::new("/x/disk1.vmdk"), 18902, Some(14444), Path::new("/x/console.log"));
+    let args = alforge::vm::args(&spec);
+    let after = |flag: &str| -> Vec<&str> { args.windows(2).filter(|w| w[0] == flag).map(|w| w[1].as_str()).collect() };
+    assert_eq!(after("-device"), ["pvscsi,id=scsi0", "scsi-hd,drive=sys,bus=scsi0.0,bootindex=0", &format!("vmxnet3,netdev=net0,mac={}", maquina::PROOF_MAC)]);
+    assert_eq!(after("-drive"), ["file=/x/disk1.vmdk,if=none,id=sys,format=vmdk,discard=unmap,detect-zeroes=unmap,snapshot=on"]);
+    assert_eq!(after("-netdev"), [format!("user,id=net0,hostfwd=tcp:127.0.0.1:18902-:{}", r.machine.supervisao_port)]);
+    assert_eq!((after("-smp"), after("-m")), (vec![r.machine.cpus.to_string().as_str()], vec![r.machine.memory_mb.to_string().as_str()]));
 }
 
 #[test]
@@ -363,6 +406,84 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
         ]
     );
     assert!(!outer.iter().any(|l| l.contains("/etc/systemd/") || l.contains(".service.d")), "{outer:?}");
+    // Every statement of the script outside its heredocs, whole and in order: no line added beside
+    // them (a drop-in made by `systemctl edit`, a README changed by a line not naming it).
+    let (u, pw) = (&r.machine.user, &r.machine.password);
+    let (packages, remove) = (r.machine.packages.join(" "), r.machine.remove.join(" "));
+    let want = format!(
+        r##"set -eu
+export DEBIAN_FRONTEND=noninteractive
+echo "ALFORGE-STEP packages"
+apt-get update
+apt-get install -y {packages} python3
+if [ -n "{remove}" ]; then apt-get purge -y {remove}; fi
+apt-get -y autoremove --purge
+echo "ALFORGE-STEP user"
+id debian >/dev/null 2>&1 && userdel -r debian || true
+useradd -m -s /bin/bash -G sudo {u}
+for g in netdev systemd-journal; do if getent group $g >/dev/null; then usermod -aG $g {u}; fi; done
+echo '{u}:{pw}' | chpasswd
+echo veredas > /etc/hostname
+sed -i 's/^127.0.1.1.*/127.0.1.1 veredas/' /etc/hosts
+grep -q '^127.0.1.1' /etc/hosts || echo '127.0.1.1 veredas' >> /etc/hosts
+echo "ALFORGE-STEP release"
+mkdir -p /opt/veredas
+tar -xzf /alforge/bundle.tar.gz -C /opt/veredas
+ln -sfn veredas-9.9.9-x86_64-unknown-linux-gnu /opt/veredas/current
+for b in /opt/veredas/current/bin/*; do ln -sf "$b" /usr/local/bin/; done
+mkdir -p /usr/local/sbin
+cat > /usr/local/sbin/veredas-atualizar <<'ATUALIZAR'
+chmod 755 /usr/local/sbin/veredas-atualizar
+cp -r /opt/veredas/current/planta /home/{u}/planta
+cp /alforge/guide.md /home/{u}/README-veredas.md
+cat >> /home/{u}/README-veredas.md <<'GUIDE'
+echo "ALFORGE-STEP services"
+cat > /etc/systemd/system/veredas-bancada.service <<'UNIT'
+cat > /etc/systemd/system/veredas-supervisao.service <<'UNIT'
+mkdir -p /usr/local/libexec
+cat > /usr/local/libexec/veredas-verifica <<'SCRIPT'
+chmod 755 /usr/local/libexec/veredas-verifica
+cat > /etc/systemd/system/veredas-verifica.service <<'UNIT'
+systemctl enable veredas-bancada.service veredas-supervisao.service veredas-verifica.service
+echo "ALFORGE-STEP desktop"
+mkdir -p /etc/lightdm/lightdm.conf.d
+printf '[Seat:*]\nautologin-user={u}\nautologin-session=xfce\n' > /etc/lightdm/lightdm.conf.d/50-veredas.conf
+systemctl set-default graphical.target
+H=/home/{u}
+mkdir -p $H/.config/autostart $H/.config/xfce4/xfconf/xfce-perchannel-xml $H/Desktop
+cp /etc/xdg/xfce4/panel/default.xml $H/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml
+cat > $H/.config/autostart/veredas-supervisao.desktop <<'DESK'
+ln -sfn /opt/veredas/current/docs $H/Desktop/docs
+ln -sfn $H/planta $H/Desktop/planta
+ln -sfn $H/README-veredas.md $H/Desktop/README-veredas.md
+chown -R {u}:{u} $H
+echo "ALFORGE-STEP network"
+rm -f /etc/netplan/*.yaml
+systemctl disable systemd-networkd.service systemd-networkd.socket systemd-networkd-wait-online.service || true
+systemctl enable NetworkManager.service
+echo "ALFORGE-STEP cleanup"
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+touch /etc/cloud/cloud-init.disabled
+rm -f /var/log/cloud-init.log /var/log/cloud-init-output.log
+truncate -s 0 /etc/machine-id
+rm -f /var/lib/dbus/machine-id
+rm -rf /alforge
+journalctl --rotate || true
+journalctl --vacuum-time=1s || true
+sync
+fstrim -av || true
+echo ALFORGE-PROVISION-OK"##
+    );
+    assert_eq!(statements(&s), want.lines().collect::<Vec<_>>());
+    // The desktop's autostart entry whole: the browser on the plant's page at login.
+    assert_eq!(
+        docs.iter().find(|(l, _)| *l == "cat > $H/.config/autostart/veredas-supervisao.desktop <<'DESK'").map(|(_, b)| b.as_str()).unwrap(),
+        format!(
+            "[Desktop Entry]\nType=Application\nName=Supervisão\nExec=chromium --no-first-run --no-default-browser-check --password-store=basic --start-maximized http://127.0.0.1:{}/s/loop/\n",
+            r.machine.supervisao_port
+        )
+    );
     let body = |opening: &str| docs.iter().find(|(l, _)| *l == opening).map(|(_, b)| b.as_str()).unwrap();
     // Each unit whole, as systemd reads it: every key in its section with its value, in order, and
     // none other (a key in another section is ignored, a later one of the same key wins).
@@ -557,7 +678,25 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
         [format!("the descriptor's DiskSection names no one stream-optimized disk vmdisk1 of {capacity} bytes on file1")]
     );
     let efi = |s: String| s.replacen(r#"vmw:key="firmware" vmw:value="bios""#, r#"vmw:key="firmware" vmw:value="efi""#, 1);
-    assert_eq!(faults("efi", "streamOptimized", r.machine.disk_gb, &efi, right), ["the descriptor's firmware is not BIOS"]);
+    assert_eq!(faults("efi", "streamOptimized", r.machine.disk_gb, &efi, right), ["the descriptor's firmware is not one BIOS setting"]);
+    // A later firmware setting of EFI, which VMware takes over the earlier BIOS: refused.
+    let later = |s: String| {
+        let bios = r#"<vmw:Config ovf:required="false" vmw:key="firmware" vmw:value="bios"/>"#;
+        assert_eq!(s.matches(bios).count(), 1);
+        s.replacen(bios, &format!(r#"{bios}
+      <vmw:Config ovf:required="false" vmw:key="firmware" vmw:value="efi"/>"#), 1)
+    };
+    assert_eq!(faults("later-efi", "streamOptimized", r.machine.disk_gb, &later, right), ["the descriptor's firmware is not one BIOS setting"]);
+    // Two items of one InstanceID (the processors given the controller's, which the disk's
+    // `Parent` names), and the card not connected at power-on: each refused.
+    let twice = |s: String| s.replacen("<rasd:InstanceID>1</rasd:InstanceID>", "<rasd:InstanceID>3</rasd:InstanceID>", 1);
+    assert_eq!(faults("ids", "streamOptimized", r.machine.disk_gb, &twice, right), ["the descriptor's items do not each have an InstanceID of their own"]);
+    let unplugged = |s: String| {
+        let on = "<rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>\n        <rasd:Connection>nat</rasd:Connection>";
+        assert_eq!(s.matches(on).count(), 1);
+        s.replacen(on, "<rasd:AutomaticAllocation>false</rasd:AutomaticAllocation>\n        <rasd:Connection>nat</rasd:Connection>", 1)
+    };
+    assert_eq!(faults("unplugged", "streamOptimized", r.machine.disk_gb, &unplugged, right), ["the descriptor's VMXNET3 card is not connected at power-on (AutomaticAllocation true)"]);
     // Each value VMware reads, offered wrong in its own place: another card, another controller,
     // another hardware version, another disk format, another file, memory in other units.
     let hw = format!("vmx-{:02}", r.machine.hardware_version);
@@ -651,7 +790,8 @@ fn an_ova_is_read_as_vmware_reads_it_each_fault_named() {
     assert_eq!(f, ["the descriptor's root is no OVF Envelope (its namespace or its name)"]);
     let bad_rasd = |s: String| s.replacen("CIM_ResourceAllocationSettingData", "CIM_ResourceAllocationSettingDat", 1);
     let f = faults("rasd", "streamOptimized", r.machine.disk_gb, &bad_rasd, right);
-    assert_eq!(f.len(), 5, "processors, memory, controller, disk and card all unread: {f:?}");
+    assert_eq!(f.len(), 6, "the items' InstanceIDs, processors, memory, controller, disk and card all unread: {f:?}");
+    assert_eq!(f[0], "the descriptor's items do not each have an InstanceID of their own");
     let bad_vssd = |s: String| s.replacen("CIM_VirtualSystemSettingData", "CIM_VirtualSystemSettingDat", 1);
     let f = faults("vssd", "streamOptimized", r.machine.disk_gb, &bad_vssd, right);
     assert_eq!(f, [format!("the descriptor's hardware version is not vmx-{:02}", r.machine.hardware_version)]);

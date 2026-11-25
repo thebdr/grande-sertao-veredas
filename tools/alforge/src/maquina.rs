@@ -398,7 +398,13 @@ pub const PROOF_MAC: &str = "00:50:56:3f:00:01";
 /// Boots a VMDK copy-on-write on VMware's devices, supervisão's port forwarded to `port` on the
 /// host's loopback, QEMU's monitor on `qmp` when given (for a screen dump).
 pub fn boot(r: &Recipe, vmdk: &Path, port: u16, qmp: Option<u16>, console: &Path) -> Result<Vm, VmError> {
-    Vm::start(&Spec {
+    Vm::start(&boot_spec(r, vmdk, port, qmp, console))
+}
+
+/// What [`boot`] starts: the disk copy-on-write on VMware's paravirtual SCSI, the proof's card a
+/// VMXNET3 with its address, the supervisão port forwarded from the host.
+pub fn boot_spec(r: &Recipe, vmdk: &Path, port: u16, qmp: Option<u16>, console: &Path) -> Spec {
+    Spec {
         disk: vmdk.to_path_buf(),
         hardware: Hardware::Vmware,
         cpus: r.machine.cpus,
@@ -411,7 +417,7 @@ pub fn boot(r: &Recipe, vmdk: &Path, port: u16, qmp: Option<u16>, console: &Path
         qmp,
         console: console.to_path_buf(),
         serial_in: false,
-    })
+    }
 }
 
 /// Why the provisioning's console (its log's tail, then its exit) does not show it finished: no
@@ -715,6 +721,12 @@ fn descriptor_faults(r: &Recipe, doc: &roxmltree::Document, vmdk_name: &str, siz
         out.push(format!("the descriptor's hardware version is not {system}"));
     }
     let items = children(hardware, OVF, "Item");
+    // Each Item keyed by an InstanceID of its own, as OVF resolves a `Parent` through it.
+    let ids: Vec<Option<String>> = items.iter().map(|i| text_of(*i, RASD, "InstanceID")).collect();
+    let distinct: std::collections::BTreeSet<&String> = ids.iter().flatten().collect();
+    if ids.iter().any(Option::is_none) || distinct.len() != ids.len() {
+        out.push("the descriptor's items do not each have an InstanceID of their own".into());
+    }
     let of_type = |t: &str| items.iter().filter(|i| text_of(**i, RASD, "ResourceType").as_deref() == Some(t)).copied().collect::<Vec<_>>();
     match of_type("3").as_slice() {
         [cpu] if text_of(*cpu, RASD, "VirtualQuantity") == Some(r.machine.cpus.to_string()) => {}
@@ -736,12 +748,19 @@ fn descriptor_faults(r: &Recipe, doc: &roxmltree::Document, vmdk_name: &str, siz
         _ => out.push("the descriptor's hard disk is not one item on vmdisk1 under the paravirtual SCSI controller".into()),
     }
     match of_type("10").as_slice() {
-        [n] if text_of(*n, RASD, "ResourceSubType").as_deref() == Some("VmxNet3") => {}
+        [n] if text_of(*n, RASD, "ResourceSubType").as_deref() == Some("VmxNet3") => {
+            // VMware's "connect at power on": a card that is not leaves the host no way to the plant.
+            if text_of(*n, RASD, "AutomaticAllocation").as_deref() != Some("true") {
+                out.push("the descriptor's VMXNET3 card is not connected at power-on (AutomaticAllocation true)".into());
+            }
+        }
         _ => out.push("the descriptor holds no one VMXNET3 card".into()),
     }
-    let firmware = hardware.children().any(|n| is(&n, VMW, "Config") && n.attribute((VMW, "key")) == Some("firmware") && n.attribute((VMW, "value")) == Some("bios"));
-    if !firmware {
-        out.push("the descriptor's firmware is not BIOS".into());
+    // One firmware setting, BIOS: VMware takes a later one of the same key over an earlier one.
+    let firmware: Vec<_> = hardware.descendants().filter(|n| is(n, VMW, "Config") && n.attribute((VMW, "key")) == Some("firmware")).collect();
+    match firmware.as_slice() {
+        [f] if f.parent() == Some(hardware) && f.attribute((VMW, "value")) == Some("bios") => {}
+        _ => out.push("the descriptor's firmware is not one BIOS setting".into()),
     }
     out
 }
@@ -822,6 +841,33 @@ pub const CHECK_LINES: [&str; 9] = [
     "VEREDAS-ATUALIZAR ",
 ];
 
+/// Why the console does not show the root file system on a disk of the paravirtual SCSI host, as
+/// the kernel says it: `scsi host<N>: VMware PVSCSI`, `sd <N>:0:0:0: [<disk>] Attached SCSI disk`,
+/// and `EXT4-fs (<disk>1): mounted`; None when it does.
+pub fn root_on_pvscsi(console: &str) -> Option<String> {
+    let host = console.lines().find_map(|l| {
+        let rest = &l[l.find("scsi host")? + "scsi host".len()..];
+        let (n, tail) = rest.split_once(':')?;
+        (tail.trim_start().starts_with("VMware PVSCSI") && n.bytes().all(|b| b.is_ascii_digit())).then(|| n.to_string())
+    });
+    let Some(host) = host else {
+        return Some("the guest named no paravirtual SCSI host (`scsi host<N>: VMware PVSCSI`)".into());
+    };
+    let at = format!("sd {host}:0:0:0: [");
+    let disk = console.lines().find_map(|l| {
+        let rest = &l[l.find(&at)? + at.len()..];
+        let (d, tail) = rest.split_once(']')?;
+        tail.trim().starts_with("Attached SCSI disk").then(|| d.to_string())
+    });
+    let Some(disk) = disk else {
+        return Some(format!("no disk was attached on the paravirtual SCSI host {host}"));
+    };
+    if !console.contains(&format!("EXT4-fs ({disk}1): mounted")) {
+        return Some(format!("the root file system was not mounted from {disk}1, the disk on the paravirtual SCSI host"));
+    }
+    None
+}
+
 /// Why a proof does not show the machine working: the OVA as VMware reads it, the release's sums
 /// checked at boot, the guest on VMware's disk and network drivers and naming the proof's card, the
 /// plant from the host, the page drawn by the desktop's browser, the disk unchanged. Empty when it
@@ -857,13 +903,29 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
             out.push(format!("{what} (no `{line}` on the console)"));
         }
     }
-    for driver in ["vmw_pvscsi", "vmxnet3"] {
-        if !p.console.contains(driver) {
-            out.push(format!("the guest did not name {driver}"));
-        }
+    // The root disk on the paravirtual SCSI host and the proof's card driven by vmxnet3, as the
+    // kernel says them: the drivers' names alone are said by a controller with nothing on it.
+    if let Some(why) = root_on_pvscsi(&p.console) {
+        out.push(why);
     }
-    if !p.console.lines().any(|l| l.contains("VEREDAS-CARD ") && l.trim_end().ends_with(PROOF_MAC)) {
-        out.push(format!("the guest named no card with the proof's address {PROOF_MAC}"));
+    let vmxnet3: std::collections::BTreeSet<&str> = p
+        .console
+        .lines()
+        .filter_map(|l| {
+            let rest = &l[l.find("vmxnet3 ")? + "vmxnet3 ".len()..];
+            let mut words = rest.split_whitespace();
+            let _pci = words.next()?;
+            words.next()?.strip_suffix(':')
+        })
+        .collect();
+    let card = p.console.lines().find_map(|l| {
+        let rest = l.trim_end().strip_suffix(PROOF_MAC)?;
+        rest[rest.find("VEREDAS-CARD ")? + "VEREDAS-CARD ".len()..].split_whitespace().next()
+    });
+    match card {
+        None => out.push(format!("the guest named no card with the proof's address {PROOF_MAC}")),
+        Some(n) if !vmxnet3.contains(n) => out.push(format!("the proof's card {n} is not one vmxnet3 drives (the kernel names {vmxnet3:?})")),
+        Some(_) => {}
     }
     out.extend(crate::together::plant_faults(&p.plant));
     if p.page_share < PAGE_SHARE {
