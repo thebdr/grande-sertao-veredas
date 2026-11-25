@@ -801,6 +801,19 @@ and its time left; the event is named "the edit failed", not a controller fault.
 **Taken meanwhile**: no live takeover is built before the specification. The previous version can
 always be put back for the next start.
 
+**Ruled in part** 2026-11-25, by the architect:
+
+- The criterion. Asked "Live takeover (you ruled: \"live fallback shall be enabled only when
+  feasible. we need to build the specification for what disqualifies the edits for auto takeover\"):
+  is this the first criterion? The watching version keeps its right to take over only while the
+  comparison has shown no difference between its outputs and the driven ones since the swap.",
+  "Write the specification first": controlador writes the whole specification as a proposal, and the
+  architect rules on it as a document. The candidate criterion is neither taken nor refused.
+
+- A failed edit. Asked "Does an edit that failed (the old version took over, or the edit was put
+  back) leave a fault record, the event being named \"the edit failed\" and not a controller
+  fault?", "A record, named \"the edit failed\"".
+
 ## Q33 - Where is controlador's execution model written, and what does it say?
 
 **Raised** 2026-11-15, by the review's entry 13; the architect chose the smaller first release
@@ -1121,6 +1134,47 @@ Not ruled, each with the assistant's reading or proposal:
   value back. Out would be the 32-bit ARM boards (BeagleBone Black, i.MX 6, STM32MP1, early
   Raspberry Pi).", "Yes, the system too (Recommended)".
 
+**Ruled in part** 2026-11-25, by the architect, four more points:
+
+- When NTP counts as silent. Asked "Only after a waiting time without an answer (at power-on, the
+  start-up time), the request being not urgent until then? Otherwise every power-on with a dead
+  clock battery sends an urgent request for a few seconds.", "After a waiting time (Recommended)".
+
+- Urgency. Asked "A maintenance request's urgency: does it follow the present situation (back to not
+  urgent when NTP returns), while the request itself stays until cleared in Oficina or by a restart,
+  by the rule of 14 November?", "Urgency follows, request stays (Recommended)".
+
+- One reason or two. Asked "The clock battery and NTP: one maintenance reason for both, or two? A
+  board with no clock chip counts as a dead battery, and the \"ignore\" setting is what such a board
+  needs.", "Two reasons": one for the clock chip that lost its time, one for NTP silent or not set.
+
+- The mark of an unconfirmed date. Asked "Which records carry it? Fault records and the state
+  history are controlador's; the store's samples are portal's, whose file format would have to
+  change.", "Controller's records and the store": fault records, the state history and every sample
+  in the embedded portal's store; portal's store format gains the mark by a new version.
+
+**Ruled in part** 2026-11-25, by the architect, the last four points; with them every point of this
+entry is ruled:
+
+- The state text. Asked "While the controller's date is unconfirmed, does the state text show it as
+  a condition term?", "Yes, a condition term". The term joins core's table of the state text.
+
+- Missed starts. Asked "It is ruled that a time-of-day block whose moment passed while the date was
+  unconfirmed never runs. By the same reasoning, does a start that fell while the controller was
+  powered off also not run at the next start?", "It does not run (Recommended)".
+
+- The certificates. Asked "The maintenance request a year before any certificate expires is ruled.
+  Does \"its certificates\" mean every certificate in the controller's store, its own and its
+  peers'?", "Its own and its peers' (Recommended)".
+
+- The cycle-time rule. Asked "The warning cycle time raises a maintenance request, not urgent, with
+  a reason of its own beside `overruns`, and the maximum gives a free-running main block its limit.
+  Does the controller also record each task's longest cycle per day, so the drift shows before the
+  warning?", "Request, and the daily longest cycle".
+
+Left for the security round (Q43): the certificates' end date after 2038, and what a secured link
+does while the date is unconfirmed.
+
 ## Q40 - The retained save: the details the rulings left
 
 **Raised** 2026-11-16, in the robustness round (`docs/robustness.md`, "Retained variables, by what
@@ -1151,6 +1205,53 @@ saved at once, held to a shortest gap. Not ruled, each the assistant's reading o
   urgent when none can, since the next power cut would then reset the retained variables.
 
 **Taken meanwhile**: the readings above, as readings.
+
+**Ruled in part** 2026-11-25, by the architect, point by point:
+
+- What a save holds. Asked "Does a save hold the retained variables as they stood at the end of ONE
+  successful cycle, never a mix of two?", "One cycle's end, never a mix (Recommended)".
+
+- How it is stored. Asked "Two copies, each with its hash, written one after the other (so one whole
+  copy is left when power is cut during a save). With both unreadable at start, the retained
+  variables reset and the request `retain_reset` is raised. Is that it?", "Two copies, reset if both
+  lost (Recommended)", against a FAULT when both are lost.
+
+- The flag. Asked "The flag \"started from the last save\" (on a target that cannot save at power
+  loss): is it raised only when cycles ran after the last save, a power cut while the controller
+  sits in STOP raising none?", "Only if cycles ran since (Recommended)".
+
+- No request. Asked "A start from the last save: a power cut being such a target's normal case, does
+  it raise no maintenance request, the state text showing it as a condition instead?", "No request,
+  a condition (Recommended)"; the term's spelling is core's to propose.
+
+- Who says what a target can do: the target's hardware description, ruled with Q226 the same day
+  ("Accept all (Recommended)").
+
+**Ruled in part** 2026-11-25, by the architect, four more points:
+
+- Nothing changed, nothing written. Asked "Is a save skipped when its content equals the last one
+  (nothing changed, nothing written), to spare the drive?", "Yes, skipped (Recommended)".
+
+- The period. Asked "Is it the engineer's and never refused, with Oficina showing the years the
+  drive has left at that period where the drive reports its wear?", "Engineer's, never refused
+  (Recommended)", against refusing a period below a floor.
+
+- The shortest gap. Asked "The shortest gap between saves (ruled for writes from outside): is it the
+  engineer's setting with a default, a write that arrives inside the gap being applied at once and
+  saved when the gap ends, and Oficina showing the drive's shortest life at that gap?", "Yes, as
+  proposed (Recommended)".
+
+- A save on the program's request. Asked "May the program itself ask for a save of the retained
+  variables, for example at the end of a batch?", "Yes, held to the shortest gap", against a save at
+  once whatever the gap, and against none.
+
+**Ruled in part** 2026-11-25, by the architect, the last point; with it every point of this entry is
+ruled:
+
+- The save failing while the machine runs. Asked "RUN goes on, the values being in memory. Is the
+  maintenance request not urgent while one copy can still be written, and urgent when none can (the
+  next power cut would then reset the retained variables)?", "Not urgent, then urgent
+  (Recommended)", against urgent at the first failure and against a FAULT when none can be written.
 
 ## Q41 - Wear and filling: what gives way at a limit, and the proposals not ruled
 
@@ -1282,6 +1383,18 @@ ruled: on hardware we do not choose, each cycle's data can be made consistent ev
 reaches the drive only at set moments.
 
 **Taken meanwhile**: nothing. The round resumes with the architect.
+
+**Ruled in part** 2026-11-25, by the architect:
+
+- Which other components count as critical. Asked "Which other components count as critical, bound
+  by the robustness round beside controlador and the portal embedded in it? Choose all that apply
+  (others in the note).", with supervisão and its portal, comissionador and Oficina offered: "None
+  beyond the controller". The round binds the controller and its embedded portal alone.
+
+The Linux study is written and its choices ruled (Q226). Still not opened, each waiting for a
+proposal before it can be put: running unattended beyond what is ruled (memory errors, slow leaks),
+an old controller and a new Oficina, replacing the hardware, and how each rule is proven by
+injecting faults on the bench.
 
 ## Q43 - The security round: the positions going in, and its list
 
