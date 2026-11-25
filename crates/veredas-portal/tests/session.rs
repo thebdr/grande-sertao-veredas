@@ -1108,8 +1108,9 @@ fn a_file_held_from_a_past_start_says_read_only_of_its_own_history() {
 /// rows before its history is read loses part of the history: that log never says it read. A
 /// family read from a start in the past whose backfill takes over three seconds (twelve empty
 /// members, each a drain's grace) under a window of one second never says read; the same family
-/// under a window of an hour says read with all 20 100 rows. A history said read before the
-/// window lets go of anything stays said while the window lets go of its rows.
+/// under a window of an hour says read with all 20 100 rows; one ending about when its oldest row
+/// leaves the window says read, if at all, with nothing of it let go. A history said read before
+/// the window lets go of anything stays said while the window lets go of its rows.
 #[test]
 fn a_window_that_lets_go_of_a_history_before_it_is_read_never_says_it_read() {
     let dir = tempfile::tempdir().unwrap();
@@ -1142,6 +1143,40 @@ fn a_window_that_lets_go_of_a_history_before_it_is_read_never_says_it_read() {
         }
         for (id, r) in session.stop() {
             r.unwrap_or_else(|e| panic!("{id}: {e}"));
+        }
+    }
+
+    // A backfill ending about when its oldest row leaves the window (one to three empty members,
+    // each a drain's grace): the flag, when it comes, comes with nothing of the history let go,
+    // the counters published with it showing no row evicted; else it never comes.
+    for empty in 1..=3u32 {
+        for trial in 0..2 {
+            let fam = dir.path().join(format!("edge_{empty}_{trial}"));
+            std::fs::create_dir_all(&fam).unwrap();
+            write_history(&fam.join("plant_1.log"), 0..20_000);
+            for i in 2..2 + empty {
+                std::fs::write(fam.join(format!("plant_{i}.log")), "").unwrap();
+            }
+            write_history(&fam.join(format!("plant_{}.log", 2 + empty)), 20_000..20_100);
+            let mut cfg = SessionConfig::new("window-edge");
+            cfg.start = Some(midnight());
+            cfg.store_window = Some(Duration::from_secs(1));
+            cfg.logs.push(family("fam", &fam, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest));
+            cfg.rules.push(readings_rule(None));
+            let session = Session::start(cfg).unwrap();
+            let live = session.live();
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(5) {
+                if live.health.read().unwrap().get("fam").is_some_and(|h| h.history_read) {
+                    let evicted = live.counters.read().unwrap().evicted;
+                    assert_eq!(evicted, 0, "{empty} empty, trial {trial}: said read with rows of the history let go");
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            for (id, r) in session.stop() {
+                r.unwrap_or_else(|e| panic!("{id}: {e}"));
+            }
         }
     }
 

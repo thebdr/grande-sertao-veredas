@@ -451,6 +451,8 @@ struct Stats {
     /// stored: what a window lets go of first.
     pending_first_ms: Option<i64>,
     first_stored_ms: Option<i64>,
+    /// The history said read in the health the session publishes: what a reader has seen.
+    said: bool,
 }
 
 struct Inner {
@@ -573,6 +575,20 @@ fn settle_lines(stats: &mut BTreeMap<String, Stats>, history_read: &HashMap<Stri
         st.pending_first_ms = None;
         st.stored += st.pending;
         st.pending = 0;
+    }
+}
+
+/// Before a window pass lets go of what arrived before `cutoff`: a log whose history is not yet
+/// said read in the published health loses its oldest stored rows now, so its history is not whole
+/// in the store and it never says it read (C-096). Not said, not merely counted: the pump counts a
+/// history read before its refresh publishes the flag, and a pass between the two would delete
+/// rows of a history the flag then calls whole. After the flag the window lets go of the
+/// history's rows like any others.
+fn window_marks(stats: &mut BTreeMap<String, Stats>, cutoff: i64) {
+    for st in stats.values_mut() {
+        if st.first_stored_ms.is_some_and(|t| t < cutoff) && !st.said {
+            st.history_lost = true;
+        }
     }
 }
 
@@ -877,7 +893,7 @@ impl Session {
                 return Err(SessionError::Spawn { id, source: e });
             }
             time_formats.insert(SourceId::new(&id), formats);
-            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None });
+            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None, said: false });
             sources.push(SourceInfo { id, display_name: display, kind: "log", has_timestamp: has_ts });
         }
 
@@ -895,7 +911,7 @@ impl Session {
                     return Err(SessionError::Spawn { id: spec.source_id.clone(), source: e });
                 }
             };
-            stats.insert(spec.source_id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None });
+            stats.insert(spec.source_id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None, said: false });
             sources.push(SourceInfo { id: spec.source_id.clone(), display_name: spec.display_name.clone(), kind: "opc", has_timestamp: false });
             opc_handles.push(worker.writer.clone());
             opc_runtimes.push(OpcRuntime { handle: worker.handle, spec, base, seq: 0, state: ConnState::Connecting, dedup: DedupState::default() });
@@ -920,7 +936,7 @@ impl Session {
                     return Err(SessionError::Channel(e));
                 }
             };
-            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None });
+            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None, said: false });
             sources.push(SourceInfo { id, display_name: display, kind: "channel", has_timestamp: false });
             channel_handles.push(worker.writer.clone());
             channel_runtimes.push(ChannelRuntime { handle: worker.handle, writer: worker.writer, tables, state: LinkState::Waiting });
@@ -934,7 +950,7 @@ impl Session {
                 let closed = Arc::new(Mutex::new(false));
                 let id = c.source_id.trim().to_string();
                 let display = if c.display_name.trim().is_empty() { id.clone() } else { c.display_name.trim().to_string() };
-                stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None });
+                stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None, said: false });
                 sources.push(SourceInfo { id: id.clone(), display_name: display, kind: "controller", has_timestamp: false });
                 let runtime = ControllerRuntime {
                     source: SourceId::new(&id),
@@ -1507,7 +1523,7 @@ impl Inner {
             }
         }
         let mut health = BTreeMap::new();
-        for (id, st) in &self.stats {
+        for (id, st) in self.stats.iter_mut() {
             let state = match reports.get(id) {
                 Some((true, Some(e))) => HealthState::Failed(e.clone()),
                 Some((true, None)) | None => HealthState::Ended,
@@ -1524,6 +1540,7 @@ impl Inner {
             // counted when the flush holding it landed), never when a store error lost part of
             // it; a source with no history to read is read from its start.
             let history_read = history_is_read(self.history_read.get(id), st);
+            st.said |= history_read;
             health.insert(id.clone(), SourceHealth { state, count: st.count, last_arrival_ms: st.last_arrival_ms, last_ts: st.last_ts, history_read });
         }
         if let Ok(mut h) = live.health.write() {
@@ -1614,14 +1631,7 @@ impl Inner {
         }
         self.evicted_at = Some(Instant::now());
         let cutoff = now_unix_ms().saturating_sub(span);
-        // A log whose history is not read yet loses its oldest stored rows now: its history is
-        // not whole in the store, and it never says it read (C-096). After the flag the window
-        // lets go of the history's rows like any others.
-        for (id, st) in self.stats.iter_mut() {
-            if st.first_stored_ms.is_some_and(|t| t < cutoff) && !history_is_read(self.history_read.get(id), st) {
-                st.history_lost = true;
-            }
-        }
+        window_marks(&mut self.stats, cutoff);
         match live.store.evict_before(cutoff) {
             Ok(n) => self.counters.evicted += n,
             Err(e) => {

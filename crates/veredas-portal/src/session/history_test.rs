@@ -6,10 +6,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use super::{Stats, history_is_read, settle_lines};
+use super::{Stats, history_is_read, settle_lines, window_marks};
 
 fn stats(pending: u64, stored: u64) -> Stats {
-    Stats { count: pending + stored, last_arrival_ms: 0, last_ts: None, pending, stored, history_lost: false, pending_first_ms: None, first_stored_ms: None }
+    Stats { count: pending + stored, last_arrival_ms: 0, last_ts: None, pending, stored, history_lost: false, pending_first_ms: None, first_stored_ms: None, said: false }
 }
 
 #[test]
@@ -33,4 +33,27 @@ fn a_failed_flush_loses_an_unread_history_for_good_and_never_a_read_one() {
     // A source with no history to read reads as read; a log not read in yet does not.
     assert!(history_is_read(None, &all["plc"]));
     assert!(!history_is_read(Some(&Arc::new(AtomicU64::new(u64::MAX))), &stats(0, 500)));
+}
+
+/// A window pass lets go of a history only once its flag is published (C-096's eighth refute
+/// round): a log whose lines are all stored, counted read by the pump but not yet said in the
+/// health, loses its history to a pass that reaches its oldest row, and never says it read; one
+/// already said keeps it, the window letting go of its rows like any others; one whose oldest row
+/// is within the window loses nothing.
+#[test]
+fn a_window_lets_go_of_a_history_only_once_it_is_said() {
+    let at = Arc::new(AtomicU64::new(100));
+    let marks: HashMap<String, Arc<AtomicU64>> = ["counted", "said", "young"].iter().map(|id| (id.to_string(), Arc::clone(&at))).collect();
+    let mut all: BTreeMap<String, Stats> = ["counted", "said", "young"].iter().map(|id| (id.to_string(), stats(100, 0))).collect();
+    for st in all.values_mut() {
+        st.pending_first_ms = Some(1_000);
+    }
+    all.get_mut("young").unwrap().pending_first_ms = Some(5_000);
+    settle_lines(&mut all, &marks, false);
+    assert!(all.iter().all(|(id, st)| history_is_read(marks.get(id), st)), "every history counted read");
+    all.get_mut("said").unwrap().said = true;
+    window_marks(&mut all, 2_000);
+    assert!(!history_is_read(marks.get("counted"), &all["counted"]), "counted, not said: lost to the pass");
+    assert!(history_is_read(marks.get("said"), &all["said"]), "said: kept");
+    assert!(history_is_read(marks.get("young"), &all["young"]), "nothing of it let go");
 }
