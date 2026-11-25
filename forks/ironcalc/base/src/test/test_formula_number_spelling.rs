@@ -77,3 +77,31 @@ fn a_formula_s_spelling_reads_back_as_the_same_formula() {
         assert_eq!(model.get_cell_formula(0, 1, 1).unwrap().unwrap(), spelled, "{typed}");
     }
 }
+
+/// Veredas fork change 30, refined: `@` and `#` take a primary, so an operation under them is
+/// bracketed, and the formula reads back as itself, its value Excel's.
+#[test]
+fn an_operation_under_an_implicit_intersection_keeps_its_bracket() {
+    let mut model = new_empty_model();
+    for r in 1..=3 {
+        model.set_user_input(0, r, 1, r.to_string()).unwrap();
+        model.set_user_input(0, r, 2, (r * 10).to_string()).unwrap();
+        model.set_user_input(0, r, 3, (r * 100).to_string()).unwrap();
+    }
+    for (typed, spelled, value) in [
+        ("=@(A1:A3*B1)", "=@(A1:A3*B1)", "10"),
+        ("=@(B1:B3*C1)", "=@(B1:B3*C1)", "1000"),
+        ("=@A1:A3*B1", "=@A1:A3*B1", "20"),
+        ("=@(A1:A3%)", "=@(A1:A3%)", "0.01"),
+        // (its value is the engine's own gap: `:` takes INDEX's value, not the cell it names)
+        ("=@(A1:INDEX(A1:A3,3))", "=@(A1:INDEX(A1:A3,3))", ""),
+    ] {
+        model.set_user_input(0, 2, 6, typed.to_string()).unwrap();
+        model.evaluate();
+        assert_eq!(model.get_cell_formula(0, 2, 6).unwrap().unwrap(), spelled, "{typed}");
+        if !value.is_empty() {
+            assert_eq!(model.get_formatted_cell_value(0, 2, 6).unwrap(), value, "{typed}");
+        }
+        assert_eq!(model.formulas_reading_back_otherwise(), Vec::<(u32, i32, i32)>::new(), "{typed}");
+    }
+}

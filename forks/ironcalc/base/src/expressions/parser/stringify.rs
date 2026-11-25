@@ -1322,17 +1322,13 @@ fn stringify(
                     )
                 );
             };
-            format!(
-                "{}#",
-                stringify(
-                    child,
-                    context,
-                    displace_data,
-                    export_to_excel,
-                    locale,
-                    language
-                )
-            )
+            // `#` follows a primary: an operation before it is bracketed (fork change 30, refined)
+            let x = stringify(child, context, displace_data, export_to_excel, locale, language);
+            if is_primary(child) {
+                format!("{x}#")
+            } else {
+                format!("({x})#")
+            }
         }
         LambdaDefKind { parameters, body } => {
             let lambda_name = if export_to_excel {
@@ -1417,19 +1413,40 @@ fn stringify(
                     )
                 );
             }
-            format!(
-                "@{}",
-                stringify(
-                    child,
-                    context,
-                    displace_data,
-                    export_to_excel,
-                    locale,
-                    language
-                )
-            )
+            // `@` takes the primary after it: an operation under it is bracketed, `@(A1:A3*B1)`,
+            // which `@A1:A3*B1` is not (Veredas fork change 30, refined)
+            let x = stringify(child, context, displace_data, export_to_excel, locale, language);
+            if is_primary(child) {
+                format!("@{x}")
+            } else {
+                format!("@({x})")
+            }
         }
     }
+}
+
+/// Whether the parser reads `node`'s spelling as a primary, one operand with no bracket around it:
+/// what `@` and `#` take (Veredas fork change 30, refined).
+fn is_primary(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::BooleanKind(_)
+            | Node::NumberKind(_)
+            | Node::StringKind(_)
+            | Node::ErrorKind(_)
+            | Node::ReferenceKind { .. }
+            | Node::RangeKind { .. }
+            | Node::WrongReferenceKind { .. }
+            | Node::WrongRangeKind { .. }
+            | Node::ExternalReferenceKind { .. }
+            | Node::ExternalRangeKind { .. }
+            | Node::DefinedNameKind { .. }
+            | Node::TableNameKind(_)
+            | Node::NamedVariableKind { .. }
+            | Node::FunctionKind { .. }
+            | Node::NamedFunctionKind { .. }
+            | Node::ArrayKind(_)
+    )
 }
 
 pub(crate) fn rename_sheet_in_node(node: &mut Node, sheet_index: u32, new_name: &str) {
