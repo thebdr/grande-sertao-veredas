@@ -680,6 +680,14 @@ It is P-022's update, the release C-290 states and C-291 cuts.
 - **Evidence:** .zen/evidence/C-145.md
 - **Status:** pending verification
 
+## C-146: The scan file: `veredas-scan`, read back whole, its witnesses naming its capture's frames
+- **Date:** 2026-11-25
+- **Source:** user (docs/aranha-plan.md "Scope", scan files: a scan written as a versioned TOML file, `veredas-scan` under law L7, beside the capture of its frames, read back whole, its schema document landing with it; "Rules": configured, not programmed, a misspelled key refused; phase 6; Veredas 1's `snapshot.rs`, absorbed)
+- **Description:** `scan::Scan` holds what a listening found: the stamp (format `veredas-scan`, version 1), the tool and its version, when it was taken, the capture of its frames beside it when one is written (its file, the number of its first record, how many it holds), the listener's counts (C-142), the devices by MAC with every field's values and their witnesses (C-141), their conflicts, and the topology (C-145), each as its type holds it (a field as the list of its values, first heard first). `Scan::to_toml` writes it, refusing a scan holding a number past TOML's integers (64 bits, signed: a stamp from 2262 on) rather than writing what another reader would refuse. `Scan::read` reads a file's header by core's reader first (another format, an unknown version, a missing or mistyped stamp refused by name with core's texts), then its body whole, refusing a key nothing took (naming each, at the top or nested) and a key missing or of the wrong kind. A scan read back equals the one written; its devices give the fusion again; a witness's frame number, less the capture's first, is the capture's record that says the value. `docs/scan-schema.md` says what each key holds; its example is the file of the test's sample scan, to the character.
+- **Verification:** automated → crates/veredas-aranha/tests/scan.rs | the sample: four frames (a Hello, its port's LLDP, its ARP, a second device's Hello of the same name) replayed through a listener as an interface, its topology, a capture named: its file is docs/scan-schema.md's example to the character, begins with its stamp and reads back equal; written to a file with its capture beside and read back equal: two devices, the one conflict, the heard count, the cable to the interface, every name's first and last witness, every ARP address's and chassis's first, a record of the capture that says it; refused: another format, version 2, no format, no TOML, each with core's text; a key at the top, in a device and in a witness, each named; a value of the wrong kind, a key missing; a stamp of u64::MAX refused when written
+- **Evidence:** .zen/evidence/C-146.md
+- **Status:** pending verification
+
 ## C-220: veredas-abaco — the engineering spreadsheet
 - **Date:** 2026-11-22
 - **Source:** user (docs/veredas-plan.md "veredas-abaco: the engineering spreadsheet"; decision 4; P-007)

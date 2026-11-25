@@ -523,8 +523,12 @@ fn proc_macros_used(meta: &Value, root: &str) -> Vec<String> {
 #[test]
 fn the_proc_macros_its_builds_and_tests_use_are_named() {
     // A proc macro reads what it likes at compile time, outside the dep-info proof: the ones
-    // aranha's builds and tests use are these, so a new one is seen and weighed.
-    let manifest = manifest_dir().join("Cargo.toml");
+    // aranha's builds and tests use are these, so a new one is seen and weighed. They are read
+    // from the split, whose manifest is aranha's (the split test holds it so): there core is
+    // resolved as aranha takes it, without its plant-facing layers, where the workspace's own
+    // resolve gives core the features every member asks of it together.
+    let split = Split::plant_at("proc-macros", &[]);
+    let manifest = split.base.join("ws/rest/Cargo.toml");
     let meta = metadata(&manifest, &["--all-features", "--offline"]);
     assert_eq!(
         proc_macros_used(&meta, &root_id(&meta, &manifest)),
@@ -694,7 +698,12 @@ struct Split {
 
 impl Split {
     fn plant(poisons: &[(&str, &str)]) -> Split {
-        let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("codecs-alone");
+        Split::plant_at("codecs-alone", poisons)
+    }
+
+    /// The split under a folder of this name, so two tests do not plant one folder at once.
+    fn plant_at(name: &str, poisons: &[(&str, &str)]) -> Split {
+        let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
         let ws = base.join("ws");
         let _ = std::fs::remove_dir_all(&ws);
         let src = manifest_dir().join("src");
@@ -714,7 +723,9 @@ impl Split {
         // the codecs taken from the other crate.
         write(
             ws.join("rest/Cargo.toml"),
-            "[package]\nname = \"veredas-aranha\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\ncodecs-alone = { path = \"../codecs\" }\nserde = { version = \"1\", features = [\"derive\"] }\nthiserror = \"2\"\n\n[target.'cfg(target_os = \"linux\")'.dependencies]\nlibc = \"0.2\"\n\n[dev-dependencies]\nicu_normalizer = { version = \"2\", default-features = false, features = [\"compiled_data\"] }\nicu_properties = { version = \"2\", default-features = false, features = [\"compiled_data\"] }\nserde_json = \"1\"\n",
+            &format!("[package]\nname = \"veredas-aranha\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\ncodecs-alone = {{ path = \"../codecs\" }}\nserde = {{ version = \"1\", features = [\"derive\"] }}\nthiserror = \"2\"\nveredas-core = {{ path = {:?}, default-features = false }}\ntoml = \"1\"\nserde_ignored = \"0.1\"\n\n[target.'cfg(target_os = \"linux\")'.dependencies]\nlibc = \"0.2\"\n\n[dev-dependencies]\nicu_normalizer = {{ version = \"2\", default-features = false, features = [\"compiled_data\"] }}\nicu_properties = {{ version = \"2\", default-features = false, features = [\"compiled_data\"] }}\nserde_json = \"1\"\n",
+                repo_root().join("crates/veredas-core").display().to_string()
+            ),
         );
         copy_tree(&src, &ws.join("rest/src"), Some(&src.join("profinet")));
         copy_tree(&manifest_dir().join("tests"), &ws.join("rest/tests"), None);

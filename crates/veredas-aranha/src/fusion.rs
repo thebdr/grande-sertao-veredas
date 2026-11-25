@@ -30,8 +30,9 @@ pub struct Candidate<T> {
 }
 
 /// A field with its provenance: its candidates in the order first heard (by their first witness's
-/// time, whatever order they were applied in).
+/// time, whatever order they were applied in). A scan file holds it as the list of its candidates.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Field<T> {
     pub candidates: Vec<Candidate<T>>,
 }

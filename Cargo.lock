@@ -4615,8 +4615,11 @@ dependencies = [
  "icu_properties",
  "libc",
  "serde",
+ "serde_ignored",
  "serde_json",
  "thiserror 2.0.21",
+ "toml",
+ "veredas-core",
 ]
 
 [[package]]

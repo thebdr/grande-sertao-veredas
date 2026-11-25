@@ -15,6 +15,12 @@ description = "The network scanner of Veredas 2: who is on an industrial Etherne
 # The codecs' values (a MAC, a block, a PDU) serialise as the scan file will hold them.
 serde = { workspace = true }
 thiserror = { workspace = true }
+# The scan file (`veredas-scan`, law L7): the suite's one header reader, core without its
+# plant-facing layers (serde, toml and thiserror alone); TOML itself; and every key a reader did
+# not take, so a misspelled one is refused, never ignored.
+veredas-core = { path = "../veredas-core", default-features = false }
+toml = { workspace = true }
+serde_ignored = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The raw link (an AF_PACKET socket, its memberships, the interface's MAC) and the private network
