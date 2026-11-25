@@ -13,15 +13,15 @@
     "tree"
   ],
   "exitCode": 0,
-  "outputSha": "a4fde0bee9411a9018e115a4a4fbd5be16d8345abda37884b9300830a73f4f15",
-  "outputTail": "    Blocking waiting for file lock on package cache\n   Compiling veredas-oficina v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/oficina-98b1d6/crates/veredas-oficina)\nwarning: veredas-oficina@2.0.0-alpha.1: Neither mold, lld, nor gold linkers were found. Linking with GNU ld.bfd will likely fail.\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.70s\n────────────\n Nextest run ID c4872995-f295-4f88-bae5-bf2872fc72d2 with nextest profile: default\n    Starting 5 tests across 1 binary (1 test skipped)\n        PASS [   0.019s] (1/5) veredas-oficina::tree only_the_refresh_button_refreshes\n        PASS [   1.074s] (2/5) veredas-oficina::tree the_project_folder_is_drawn_row_for_row_folders_first_each_toml_file_named_by_its_stamp\n        PASS [   1.075s] (3/5) veredas-oficina::tree names_fold_their_case_past_ascii_an_option_comes_first_and_the_limit_is_read\n        PASS [   3.058s] (4/5) veredas-oficina::tree a_refresh_keeps_the_open_folders_and_the_selection\n        PASS [   3.084s] (5/5) veredas-oficina::tree a_folder_is_read_when_it_opens_and_again_only_when_refreshed\n────────────\n     Summary [   3.084s] 5 tests run: 5 passed, 1 skipped",
-  "ranAt": "2026-11-25T01:29:03.030Z",
-  "headCommit": "0acf6ccf93150a3f5477696ad39e00be502dff13",
+  "outputSha": "6a64c51fd03e3dae3af02dd12b316f543dcd28812a19237d21be0fe484d4be1c",
+  "outputTail": "   Compiling veredas-oficina v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/oficina-98b1d6/crates/veredas-oficina)\nwarning: veredas-oficina@2.0.0-alpha.1: Neither mold, lld, nor gold linkers were found. Linking with GNU ld.bfd will likely fail.\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.20s\n────────────\n Nextest run ID fe42e08b-b87a-4f5a-a1de-ec6c62d3ccfb with nextest profile: default\n    Starting 5 tests across 1 binary (1 test skipped)\n        PASS [   0.063s] (1/5) veredas-oficina::tree only_the_refresh_button_reads_again\n        PASS [   1.216s] (2/5) veredas-oficina::tree the_project_folder_is_drawn_row_for_row_folders_first_each_toml_file_named_by_its_stamp\n        PASS [   1.257s] (3/5) veredas-oficina::tree names_fold_their_case_past_ascii_an_option_comes_first_and_the_limit_is_read\n        PASS [   2.188s] (4/5) veredas-oficina::tree a_refresh_keeps_the_open_folders_and_the_selection\n        PASS [   3.191s] (5/5) veredas-oficina::tree a_folder_is_read_when_it_opens_and_again_only_when_refreshed\n────────────\n     Summary [   3.192s] 5 tests run: 5 passed, 1 skipped",
+  "ranAt": "2026-11-25T01:41:10.282Z",
+  "headCommit": "364bf0dbb457b756b3ba4953d5fc84fe6b6c8ead",
   "tests": [
     {
       "name": "crates/veredas-oficina/tests/tree.rs",
       "file": "crates/veredas-oficina/tests/tree.rs",
-      "fileSha": "7afdbff6006198dafdf64712695a488325da728dc35d8297f0883fc45cf23db8"
+      "fileSha": "47b600866d416a43ac046702e7e1e25f189785e4f16e6ca149f6b384a050a2b7"
     }
   ]
 }
