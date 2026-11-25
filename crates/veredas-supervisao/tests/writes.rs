@@ -1083,10 +1083,55 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
             page.wait_for(&format!(r#"(document.querySelector('.side .write-note [data-action="{label}"]')?.textContent ?? "").startsWith("{label}: written") || null"#), Duration::from_secs(10));
             let freed = page.wait_for(&format!(r#"(() => {{ const b = document.querySelector('.side .actions button[data-action="{label}"]'); return b && b.dataset.busy === undefined && !b.disabled ? true : null; }})()"#), Duration::from_secs(10));
             assert_eq!(freed, json!(true), "{id} pressed by {way}: its button freed once its answer came");
+            // And a second press held out the same way, its object selected again by every way, each
+            // after another (its panel built anew each time), its answer coming while it is shown:
+            // the button there (the panel's own, not the one pressed) read at the answer's own
+            // moment, off with its busy cleared, for the next status to free.
+            page.eval(r#"(() => { const f = window.__plainFetch; window.fetch = (...a) => String(a[0]).includes("/api/opc/write") ? new Promise((ok, no) => { window.__letGo = () => f(...a).then(ok, no); }) : f(...a); window.__letGo = null; window.answer = true; window.asked = []; return true; })()"#);
+            page.eval(&format!(r#"(() => {{ document.querySelector('.side .write-note').textContent = ''; document.querySelector('.side .actions button[data-action="{label}"]').click(); return true; }})()"#));
+            page.wait_for("window.__letGo ? true : null", Duration::from_secs(10));
+            parcels(&mut page);
+            for (_, reselect, rekey) in selections(&mut page, &id) {
+                page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+                page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
+                page.eval(&format!("(() => {{ {reselect}; return true; }})()"));
+                page.wait_for(&chosen(&id, &rekey), Duration::from_secs(10));
+            }
+            // (Its answer's moment: the shown button's busy mark cleared, which the answer alone does;
+            // the panel says the object's kept answer from the first press meanwhile.)
+            page.eval(&format!(r#"(() => {{ window.__atAnswer = null; const o = new MutationObserver(() => {{ const b = document.querySelector('.side .actions button[data-action="{label}"]'); if (window.__atAnswer === null && b && b.dataset.busy === undefined) {{ window.__atAnswer = [b.disabled, b.dataset.busy ?? null, (document.querySelector('.side .write-note [data-action="{label}"]')?.textContent ?? "").startsWith("{label}: written")]; o.disconnect(); }} }}); o.observe(document.querySelector(".side"), {{ childList: true, subtree: true, attributes: true, attributeFilter: ["data-busy", "disabled"] }}); window.__letGo(); return true; }})()"#));
+            page.wait_for("window.__atAnswer || null", Duration::from_secs(10));
+            assert_eq!(page.eval("window.__atAnswer"), json!([true, null, true]), "{id} pressed by {way}, its panel built anew while out: the button shown off at its answer, its busy cleared, for the next status to free");
+            let freed = page.wait_for(&format!(r#"(() => {{ const b = document.querySelector('.side .actions button[data-action="{label}"]'); return b && b.dataset.busy === undefined && !b.disabled ? true : null; }})()"#), Duration::from_secs(10));
+            assert_eq!(freed, json!(true), "{id} pressed by {way}, its panel built anew: freed at the next status");
             page.eval("window.fetch = window.__plainFetch; true");
         }
     }
     assert_eq!(answered_under, BTreeSet::from(["a key", "the attention list", "its element"]), "an answer come while another object is selected by every way the page selects one");
+    // The switch turned off while each object offering writes is shown, by every way the page
+    // selects it (its element, its line, each key): at the next status the gate note says off and
+    // every button is off; then on again.
+    let mut off_by = BTreeSet::new();
+    for id in ["\"aux-only\"", "\"tracked\"", "\"outlet-2\""] {
+        parcels(&mut page);
+        for (way, select, key) in selections(&mut page, id) {
+            if key.is_some() {
+                parcels(&mut page);
+            }
+            page.eval(&format!("(() => {{ {select}; return true; }})()"));
+            page.wait_for(&chosen(id, &key), Duration::from_secs(10));
+            page.wait_for(r#"(() => { const b = [...document.querySelectorAll('.side .actions button')]; return b.length && b.every((x) => !x.disabled) ? true : null; })()"#, Duration::from_secs(10));
+            host.session("loop").unwrap().set_writes_armed(false);
+            page.wait_for(r#"(document.querySelector('.side .gate-note')?.textContent ?? "").endsWith("is off.") || null"#, Duration::from_secs(10));
+            let by = format!("{way}{}", key.as_ref().map(|k| format!(" {k}")).unwrap_or_default());
+            assert_eq!(page.eval(r#"[...document.querySelectorAll('.side .actions button')].map((b) => [b.dataset.action, b.disabled])"#).as_array().unwrap().iter().all(|b| b[1] == json!(true)), true, "{id} shown by {by}: every button off once the switch is off");
+            off_by.insert(way);
+            host.session("loop").unwrap().set_writes_armed(true);
+            assert!(wait(Duration::from_secs(10), || get(addr, "/s/loop/objects.json").1["session"]["writes_armed"] == json!(true)));
+            page.wait_for(r#"(document.querySelector('.side .gate-note')?.textContent ?? "").endsWith("is on.") || null"#, Duration::from_secs(10));
+        }
+    }
+    assert_eq!(off_by, BTreeSet::from(["its element", "the attention list", "a key"]), "the switch turned off under every way the page selects an object");
     // Each object pressed, selected again, says the last answer of each of its actions pressed, one
     // line each in its actions' order, whatever was pressed since.
     for (id, said) in &last_said {
