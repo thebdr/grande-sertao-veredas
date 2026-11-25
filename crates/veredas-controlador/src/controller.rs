@@ -5,7 +5,8 @@
 //! FAULT takes an acknowledge to STOP, then a start; the whole controller faults and every output takes its safe
 //! value while the plant's exchange goes on; after a power cycle RUN returns as RUN and STOP, HOLD and FAULT as STOP
 //! with the reason saying what it was; a production target refused real-time scheduling stays in STOP. Where the
-//! plan is silent the readings are `docs/questions.md` Q228's, each marked DECISION PENDING below.
+//! plan is silent the readings are `docs/questions.md` Q228's, accepted by the architect on 2026-11-25, each named
+//! below by its point.
 use std::fmt;
 use std::time::Duration;
 
@@ -16,7 +17,8 @@ use veredas_core::state::{
 };
 
 /// The commissioning switch: a file on the controller's own operating system, never set over the network
-/// (2026-11-15). The controller only asks whether it is armed; its form on the target is Q224's.
+/// (2026-11-15). The controller only asks whether it is armed; on the target it is a file whose presence arms it,
+/// so a lost switch reads as off (`docs/controlador/files.md`, Q224).
 pub trait Switch {
     fn armed(&self) -> bool;
 }
@@ -159,18 +161,18 @@ impl<P: Program + Default> Controller<P> {
             last_exchange: None,
         };
         match restart {
-            // DECISION PENDING (Q228): a controller that never ran comes up in STOP with no reason.
+            // Q228, point 2: a controller that never ran comes up in STOP with no reason.
             Restart::First => {}
-            // RUN returns as RUN through a warm start; DECISION PENDING (Q228): so does a start-up a power cut
-            // interrupted, its aim having been RUN. STOP, HOLD and FAULT return as STOP, the reason naming them.
+            // RUN returns as RUN through a warm start; so does a start-up a power cut interrupted, its aim having
+            // been RUN (Q228, point 3). STOP, HOLD and FAULT return as STOP, the reason naming them.
             Restart::PowerCycle { was: StateWord::Run | StateWord::Startup } => {
                 controller.begin(StartupReason::Warm);
             }
             Restart::PowerCycle { was } => {
                 controller.state.state = State::Stop(Some(StopReason::PowerOn { was }));
             }
-            // DECISION PENDING (Q228, the briefing's K7 reading): the runtime restarting while the machine did not
-            // is its own failure, and it comes up in FAULT, which stops a crash loop.
+            // Q228, point 8 (the briefing's K7 reading): the runtime restarting while the machine did not is its
+            // own failure, and it comes up in FAULT, which stops a crash loop.
             Restart::Crash => controller.state.state = State::Fault(Some(FaultReason::Internal)),
         }
         Ok(controller)
@@ -204,11 +206,11 @@ impl<P: Program + Default> Controller<P> {
         }
     }
 
-    /// A stop, from RUN or STARTUP: free, from a person or from the program itself.
+    /// A stop, from RUN or STARTUP (Q228, point 9): free, from a person or from the program itself.
     pub fn stop(&mut self, source: CommandSource) -> Result<(), Refusal> {
         let word = self.state.state.word();
         if !matches!(word, StateWord::Run | StateWord::Startup) {
-            // DECISION PENDING (Q228): a command that would change nothing is refused, naming the state.
+            // Q228, point 7: a command that would change nothing is refused, naming the state.
             return Err(Refusal::State { command: Command::Stop, state: word });
         }
         self.halt(State::Stop(Some(StopReason::Command { source })));
@@ -250,7 +252,7 @@ impl<P: Program + Default> Controller<P> {
                 let mut plant = TargetIo { plant: io, origin: self.origin };
                 let report = task.step(&mut plant, &mut program_clock);
                 self.last_exchange = Some(self.origin.saturating_add(report.scan.now));
-                // DECISION PENDING (Q228): the condition `overruns` counts the time errors since the last start.
+                // Q228, point 6: the condition `overruns` counts the time errors since the last start.
                 self.state.conditions.overruns = u32::try_from(task.stats().overruns).unwrap_or(u32::MAX);
                 if let (RunState::Faulted { fault: Fault::Watchdog { .. }, .. }, StateWord::Run) =
                     (task.state(), self.state.state.word())
@@ -269,7 +271,7 @@ impl<P: Program + Default> Controller<P> {
                 let now = clock.now();
                 let _ = io.read_inputs(now);
                 self.last_exchange = Some(now);
-                // DECISION PENDING (Q228): in STOP every output takes its safe value, as in FAULT.
+                // Q228, point 1: in STOP every output takes its safe value, as in FAULT.
                 io.write_outputs(clock.now(), &self.idle.safe_outputs());
                 self.idle_cycle = self.idle_cycle.saturating_add(1);
             }
@@ -288,9 +290,9 @@ impl<P: Program + Default> Controller<P> {
         true
     }
 
-    /// Load, restore, handler, devices, then RUN, the program's clock starting `now`. DECISION PENDING (Q228):
-    /// with no retained variable that ORCL can mark yet, a warm start and a cold one both start the program from
-    /// its initial values; with no start-up handler and no device, the phases pass at once.
+    /// Load, restore, handler, devices, then RUN, the program's clock starting `now`. With no retained variable that
+    /// ORCL can mark yet, a warm start and a cold one both start the program from its initial values; with no
+    /// start-up handler and no device, the phases pass at once (Q228, points 4 and 5).
     fn finish_startup(&mut self, now: Duration) {
         self.task = Task::new(self.config.clone(), P::default()).ok();
         self.origin = now;
