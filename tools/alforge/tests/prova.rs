@@ -170,6 +170,31 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
     ] {
         assert!(s.lines().any(|l| l == line), "{line}");
     }
+    // Each service started again however its executable ends (a clean exit, a tester's kill;
+    // measured in the machine by C-293's proof, which kills the bench).
+    for service in ["veredas-bancada", "veredas-supervisao"] {
+        let unit = &s[s.find(&format!("cat > /etc/systemd/system/{service}.service")).unwrap()..];
+        let unit = &unit[..unit.find("\nUNIT\n").unwrap()];
+        assert!(unit.lines().any(|l| l == "Restart=always") && unit.lines().any(|l| l == "RestartSec=3"), "{unit}");
+    }
+    // The boot's check run in the release `current` names, and saying the command is there only
+    // when Python reads TOML.
+    assert!(s.lines().any(|l| l == "cd /opt/veredas/current"));
+    assert!(s.lines().any(|l| l == "if [ -x /usr/local/sbin/veredas-atualizar ] && python3 -c 'import tomllib, tarfile' 2>/dev/null; then echo \"VEREDAS-ATUALIZAR ok\"; else echo \"VEREDAS-ATUALIZAR missing\"; fi"));
+    // The update command and the guide's section, written by their heredocs as the shell writes
+    // them: the provisioning's own lines run here into a folder of the test's.
+    let here = tempfile::tempdir().unwrap();
+    for (start, end, file) in [("cat > /usr/local/sbin/veredas-atualizar <<'ATUALIZAR'", "ATUALIZAR", "veredas-atualizar"), ("cat >> /home/veredas/README-veredas.md <<'GUIDE'", "GUIDE", "README-veredas.md")] {
+        let from = s.find(start).unwrap();
+        let rest = &s[from..];
+        let to = rest.find(&format!("\n{end}\n")).unwrap() + end.len() + 2;
+        let fragment = rest[..to].replacen(start.split(" <<").next().unwrap().trim_start_matches("cat > ").trim_start_matches("cat >> "), &here.path().join(file).display().to_string(), 1);
+        let ran = std::process::Command::new("sh").arg("-c").arg(&fragment).output().unwrap();
+        assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    }
+    assert_eq!(std::fs::read_to_string(here.path().join("veredas-atualizar")).unwrap(), maquina::ATUALIZAR, "the command byte for byte");
+    let guide = std::fs::read_to_string(here.path().join("README-veredas.md")).unwrap();
+    assert!(guide.starts_with("\n## Updating to a newer release\n") && guide.ends_with("restart both services.\n"), "{guide}");
     // The update command installed as it ships, byte for byte, and Python 3, which it runs on, a
     // package of the recipe's.
     let installed = &s[s.find("cat > /usr/local/sbin/veredas-atualizar <<'ATUALIZAR'\n").unwrap() + "cat > /usr/local/sbin/veredas-atualizar <<'ATUALIZAR'\n".len()..];

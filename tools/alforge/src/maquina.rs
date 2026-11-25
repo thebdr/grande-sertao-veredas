@@ -11,7 +11,7 @@ use crate::machine::Recipe;
 use crate::vm::{self, DataDisk, Hardware, Spec, Vm, VmError};
 
 /// Bumped when what the provisioning does changes.
-pub const PROVISIONING: u32 = 3;
+pub const PROVISIONING: u32 = 4;
 
 /// The machine's update command (docs/questions.md Q437, ruled "Update command"), installed by the
 /// provisioning as `/usr/local/sbin/veredas-atualizar`: a newer release's bundle, given by path,
@@ -83,7 +83,8 @@ WorkingDirectory=/home/{u}/planta
 # main process (bash's `exec`, the pipe by process substitution), so its exit ends the service and
 # systemd starts it again; a shell's pipeline would wait on the sleep and hide the exit.
 ExecStart=/bin/bash -c 'exec /opt/veredas/current/bin/veredas-maquinar bench.toml < <(exec sleep infinity)'
-Restart=on-failure
+# Started again however it ends (a clean exit, a tester's kill); `systemctl stop` stops it.
+Restart=always
 RestartSec=3
 
 [Install]
@@ -99,7 +100,8 @@ Wants=veredas-bancada.service
 User={u}
 WorkingDirectory=/home/{u}/planta
 ExecStart=/bin/bash -c 'exec /opt/veredas/current/bin/veredas-supervisao supervisao.toml < <(exec sleep infinity)'
-Restart=on-failure
+# Started again however it ends (a clean exit, a tester's kill); `systemctl stop` stops it.
+Restart=always
 RestartSec=3
 
 [Install]
@@ -962,6 +964,9 @@ pub fn prove_update(r: &Recipe, vmdk: &Path, newer: &Path, work: &Path) -> Resul
         "echo \"ALFORGE-\"\"CURRENT $(readlink /opt/veredas/current)\"; echo \"ALFORGE-\"\"RELEASES $(ls /opt/veredas | tr '\\n' ' ')\"".to_string(),
         "for p in $(pgrep -f 'bin/veredas-(maquinar|supervisao) '); do e=$(readlink /proc/$p/exe); case $e in /opt/veredas/*) echo \"ALFORGE-\"\"EXE $e\";; esac; done".to_string(),
         format!("{sudo} /usr/local/libexec/veredas-verifica | sed 's/^/ALFORGE-CHECK /'; echo \"ALFORGE-\"\"PLANT-AFTER {plant_sum}\""),
+        // The bench killed as a tester kills it (SIGTERM, which it answers with exit 0): systemd
+        // starts it again (C-292's services).
+        "old=$(systemctl show -p MainPID --value veredas-bancada); kill $old; sleep 8; echo \"ALFORGE-\"\"RESTARTED $old $(systemctl show -p MainPID --value veredas-bancada) $(systemctl show -p ActiveState --value veredas-bancada)\"".to_string(),
         format!("{sudo} veredas-atualizar /tmp/{name}; echo \"ALFORGE-\"\"AGAIN-EXIT $?\""),
     ] {
         m.type_line(&line)?;
@@ -1026,6 +1031,11 @@ pub fn update_faults(p: &UpdateProof, release: &str, newer: &str, target: &str) 
     match (one("PLANT-BEFORE"), one("PLANT-AFTER")) {
         (Some(b), Some(a)) if b == a && b.len() == 64 => {}
         (b, a) => out.push(format!("the plant's files changed or were not read ({} before, {} after)", b.unwrap_or_default(), a.unwrap_or_default())),
+    }
+    // The bench, killed, started again by systemd: another main process, active.
+    match one("RESTARTED").map(|l| l.split_whitespace().map(str::to_string).collect::<Vec<_>>()).as_deref() {
+        Some([old, new, state]) if old != new && new != "0" && state == "active" => {}
+        other => out.push(format!("the bench, killed, was not started again by systemd ({other:?})")),
     }
     if one("AGAIN-EXIT").as_deref() != Some("2") {
         out.push(format!("the same bundle was not refused a second time (it exited {})", one("AGAIN-EXIT").unwrap_or_else(|| "with nothing said".into())));

@@ -471,7 +471,7 @@ fn the_update_inside_the_machine_is_judged_by_what_its_console_and_the_host_say(
          \u{1b}[?2004lALFORGE-CURRENT {new}\nALFORGE-RELEASES current {old} {new} \n\
          \u{1b}[?2004lALFORGE-EXE /opt/veredas/{new}/bin/veredas-maquinar\nALFORGE-EXE /opt/veredas/{new}/bin/veredas-supervisao\n\
          \u{1b}[?2004lALFORGE-CHECK VEREDAS-SUMS-OK 1.1.0\nALFORGE-CHECK VEREDAS-ON-PATH ok\nALFORGE-CHECK VEREDAS-ATUALIZAR ok\n\
-         ALFORGE-PLANT-AFTER {sum}\nveredas-atualizar: not installed, the machine is as it was:\nALFORGE-AGAIN-EXIT 2\n"
+         ALFORGE-PLANT-AFTER {sum}\n\u{1b}[?2004lALFORGE-RESTARTED 812 1204 active\nveredas-atualizar: not installed, the machine is as it was:\nALFORGE-AGAIN-EXIT 2\n"
     );
     let reboot = format!("[   9.1] VEREDAS-SUMS-OK 1.1.0\nVEREDAS-BUNDLE {}\nVEREDAS-ON-PATH ok\nVEREDAS-ATUALIZAR ok\n", "e".repeat(64));
     let full = |console: &str, page: u16, again: &str, again_page: u16, after: &str| maquina::UpdateProof {
@@ -502,6 +502,8 @@ fn the_update_inside_the_machine_is_judged_by_what_its_console_and_the_host_say(
         ("ALFORGE-CHECK VEREDAS-ON-PATH ok", "ALFORGE-CHECK VEREDAS-ON-PATH missing veredas-novo", vec!["the boot's check on the new release does not say `VEREDAS-ON-PATH ok`".to_string()]),
         (&format!("ALFORGE-PLANT-AFTER {sum}"), &format!("ALFORGE-PLANT-AFTER {}", "d".repeat(64)), vec![format!("the plant's files changed or were not read ({sum} before, {} after)", "d".repeat(64))]),
         ("ALFORGE-AGAIN-EXIT 2", "ALFORGE-AGAIN-EXIT 0", vec!["the same bundle was not refused a second time (it exited 0)".to_string()]),
+        ("ALFORGE-RESTARTED 812 1204 active", "ALFORGE-RESTARTED 812 812 active", vec!["the bench, killed, was not started again by systemd (Some([\"812\", \"812\", \"active\"]))".to_string()]),
+        ("ALFORGE-RESTARTED 812 1204 active", "ALFORGE-RESTARTED 812 0 inactive", vec!["the bench, killed, was not started again by systemd (Some([\"812\", \"0\", \"inactive\"]))".to_string()]),
         ("ALFORGE-UPDATE-EXIT 0\n", "", vec!["the update command did not install the bundle (it exited with nothing said)".to_string()]),
     ] {
         assert_eq!(faults(&good.replace(from, to)), want, "{from}");
