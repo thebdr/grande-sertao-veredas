@@ -139,10 +139,12 @@ pub fn script(r: &Recipe, builds: &[Build]) -> String {
     )
 }
 
-/// The builder script's line run after the builds: a name under `/build` holding a control
-/// character (a newline among them, which a build script may write) fails it, since cargo reads
-/// rustc's dep-info only to such a name and would hide every read after it.
-pub const CONTROL_CHECK: &str = "if [ -n \"$(LC_ALL=C find /build -name \"$(printf '*[\\001-\\037\\177]*')\" -print -quit)\" ]; then echo ALFORGE-CONTROL-NAME; exit 1; fi";
+/// The builder script's line run after the builds: a name under `/build` that cargo's reading of
+/// rustc's dep-info misreads fails it. That is a control character, C1's included (a newline,
+/// which a build script may write, ends the reading), a backslash (a name ending in one joins the
+/// next path), or a whitespace other than a space (Unicode's, U+00A0 among them, splits a name).
+/// Each is matched as UTF-8's bytes.
+pub const CONTROL_CHECK: &str = "if [ -n \"$(LC_ALL=C find /build \\( -name \"$(printf '*[\\001-\\037\\177]*')\" -o -name '*\\\\*' -o -name \"$(printf '*\\302[\\200-\\240]*')\" -o -name \"$(printf '*\\341\\232\\200*')\" -o -name \"$(printf '*\\342\\200[\\200-\\212\\250\\251\\257]*')\" -o -name \"$(printf '*\\342\\201\\237*')\" -o -name \"$(printf '*\\343\\200\\200*')\" \\) -print -quit)\" ]; then echo ALFORGE-CONTROL-NAME; exit 1; fi";
 
 /// What a build's [`script`] log (brought back on the output disk, at `log_path`) and the builder's
 /// console say: every bin cargo did not build refused by name; a build that did not finish (no
@@ -153,7 +155,7 @@ pub fn outcome(log: &str, console: &str, unpacked: bool, log_path: &Path) -> Res
         return Err(VmError::Failed {
             program: "the build in the builder machine".into(),
             status: "refused".into(),
-            stderr: "a name under /build holds a control character after the build: cargo's dep-info would end at it and hide every read after it".into(),
+            stderr: "a name under /build holds a control character, a backslash or a whitespace other than a space after the build: cargo's dep-info would misread it and hide reads after it".into(),
         });
     }
     let missing: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("ALFORGE-MISSING ")).collect();

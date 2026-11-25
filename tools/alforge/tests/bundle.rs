@@ -880,19 +880,20 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         assert!(arms.lines().any(|l| l == line), "{line}\n{arms}");
     }
     let script = builder::script(&r, &builds);
+    let control = builder::CONTROL_CHECK;
     assert_eq!(
         script,
-        "set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
+        format!("set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
          cd /build/src\nmkdir -p /build/out/bin /build/out/deps\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
          cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\n\
          cargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\n\
          cargo build --release --locked --offline --jobs 4 -p veredas-portal --bins\n\
-         if [ -n \"$(LC_ALL=C find /build -name \"$(printf '*[\\001-\\037\\177]*')\" -print -quit)\" ]; then echo ALFORGE-CONTROL-NAME; exit 1; fi\nmissing=\n\
+         {control}\nmissing=\n\
          cp target/release/libveredas_aranha.d /build/out/deps/\n\
          if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; cp target/release/veredas-bancada.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-bancada\"; missing=1; fi\n\
          if [ -f target/release/veredas-portal ]; then cp target/release/veredas-portal /build/out/bin/; cp target/release/veredas-portal.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-portal\"; missing=1; fi\n\
          if [ -f target/release/porteiro ]; then cp target/release/porteiro /build/out/bin/; cp target/release/porteiro.d /build/out/deps/; fi\n\
-         [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n"
+         [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n")
     );
     // The script run here as the builder runs it (its `/build` a folder of the test's, stand-ins
     // for `cargo` and `rustc` first on its PATH), once with every bin built and once with one not.
@@ -957,7 +958,25 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
     // A build that leaves a name holding a control character under `/build` (a build script's
     // `gen\nx.rs`, a tab, DEL), in the tree, the output or the vendored sources: the script fails
     // before copying anything, and the build is refused by that reason. A name without one passes.
-    for (made, fails) in [("src/target/release/build/x/0123456789abcdef/out/gen\nx.rs", true), ("src/crates/a\tb.rs", true), ("vendor/c-1.0.0/d\u{7f}.rs", true), ("src/target/release/build/x/0123456789abcdef/out/gen x.rs", false)] {
+    // C1's controls, a backslash and Unicode's whitespace too, which cargo's reading of rustc's
+    // dep-info misreads; a space and other non-ASCII letters pass.
+    for (made, fails) in [
+        ("src/target/release/build/x/0123456789abcdef/out/gen\nx.rs", true),
+        ("src/crates/a\tb.rs", true),
+        ("vendor/c-1.0.0/d\u{7f}.rs", true),
+        ("src/a/gen\u{85}x.rs", true),
+        ("src/a/gen\u{9b}x.rs", true),
+        ("src/a/gen\u{a0}x.rs", true),
+        ("src/a/gen\u{2028}x.rs", true),
+        ("src/a/x\u{1680}y", true),
+        ("src/a/x\u{2000}y", true),
+        ("src/a/x\u{202f}y", true),
+        ("src/a/x\u{205f}y", true),
+        ("src/a/x\u{3000}y", true),
+        ("src/crates/veredas-core/src/a\\", true),
+        ("src/target/release/build/x/0123456789abcdef/out/gen x.rs", false),
+        ("src/a/ação€¡.rs", false),
+    ] {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("build");
         let file = root.join(made);
@@ -975,7 +994,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
             (
                 "the build in the builder machine",
                 "refused",
-                "a name under /build holds a control character after the build: cargo's dep-info would end at it and hide every read after it"
+                "a name under /build holds a control character, a backslash or a whitespace other than a space after the build: cargo's dep-info would misread it and hide reads after it"
             )
         ),
         other => panic!("not refused: {other:?}"),
@@ -1630,3 +1649,40 @@ fn round_seventeen_a_build_scripts_output_is_its_own_as_cargo_writes_it() {
     assert_eq!(alforge::inputs::read_outside(&info, &src, &scratch.path().join("vendor").display().to_string(), &inputs, &other), [generated]);
 }
 
+
+#[test]
+fn round_eighteen_names_cargos_dep_info_misreads_are_refused_and_its_words_read_as_cargo_writes_them() {
+    // A tree's name ending in `\` (it joins the path rustc writes after it, a relative one too),
+    // one holding a whitespace other than a space (cargo splits a word at U+00A0), and one named as
+    // a build input names a lock file's entry: each commit refused by that path.
+    for (name, why) in [
+        ("crates/veredas-core/src/a\\", "holds a backslash or a whitespace other than a space: cargo's dep-info would misread it, and a release's tree names its files without one"),
+        ("crates/veredas-core/src/z\u{a0}/x.rs", "holds a backslash or a whitespace other than a space: cargo's dep-info would misread it, and a release's tree names its files without one"),
+        ("Cargo.lock: foo 1.0.0", "is named as a build input names a lock file's entry"),
+    ] {
+        let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", None);
+        r.write(name, "\n");
+        let c = r.commit("an odd name");
+        let mut refusals = Vec::new();
+        alforge::manifest::components_at(r.dir.path(), &c, &mut refusals).unwrap();
+        assert_eq!(refusals, [format!("commit {c}: the path {name:?} {why}")], "{name:?}");
+    }
+    let inputs = alforge::inputs::Inputs(
+        [("crates/veredas-core/", "1"), ("Cargo.lock: foo 1.0.0", "2"), ("Cargo.toml", "3")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+    );
+    let packages = alforge::inputs::Packages { names: ["veredas-core".to_string(), "x".to_string()].into_iter().collect(), vendored: Default::default() };
+    let judged = |info: &str| alforge::inputs::read_outside(info, builder::SRC, builder::VENDOR, &inputs, &packages);
+    // Words apart by a space alone, as cargo writes them: a U+00A0 inside one is the name's own.
+    assert_eq!(judged("/build/src/target/release/x: /build/src/docs/a\u{a0}b.rs\n"), ["docs/a\u{a0}b.rs"]);
+    // A file of the tree named like a lock entry is no lock entry; a folder given by its own path
+    // (`rerun-if-changed=.`, as cargo writes it) is that folder; a folder above it is not.
+    assert_eq!(judged("/build/src/target/release/x: /build/src/Cargo.lock:\\ foo\\ 1.0.0\n"), ["Cargo.lock: foo 1.0.0"]);
+    assert_eq!(judged("/build/src/target/release/x: /build/src/crates/veredas-core/. /build/src/crates/veredas-core\n"), Vec::<String>::new());
+    assert_eq!(judged("/build/src/target/release/x: /build/src/crates\n"), ["crates"]);
+    // The earlier layout's folder is the package's only with a hash of its own after the name
+    // (`foo` never owns `foo-bar-<hash>`).
+    assert_eq!(
+        judged("/build/src/target/release/x: /build/src/target/release/build/x-y-0123456789abcdef/out/a.rs /build/src/target/release/build/x-0123456789abcdef/out/b.rs\n"),
+        ["target/release/build/x-y-0123456789abcdef/out/a.rs"]
+    );
+}

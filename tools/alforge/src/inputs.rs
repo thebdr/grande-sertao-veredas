@@ -36,7 +36,10 @@ impl Inputs {
     /// Whether a file of the tree (its path from the root) is one of these inputs or lies in one of
     /// their folders.
     pub fn covers(&self, path: &str) -> bool {
-        self.0.contains_key(path) || self.0.keys().any(|k| k.ends_with('/') && path.starts_with(k.as_str()))
+        // A lock file's entry (`Cargo.lock: <name> <version>`) is no file of the tree; a folder
+        // given by its own path (a build script's `rerun-if-changed=.`) is that folder.
+        let file = !path.starts_with("Cargo.lock: ") && self.0.contains_key(path);
+        file || self.0.keys().any(|k| k.ends_with('/') && (path.starts_with(k.as_str()) || k.strip_suffix('/') == Some(path)))
     }
 }
 
@@ -820,7 +823,8 @@ fn dep_info_paths(text: &str) -> Vec<String> {
         while let Some(c) = chars.next() {
             match c {
                 '\\' if chars.peek() == Some(&' ') => word.push(chars.next().unwrap_or(' ')),
-                c if c.is_whitespace() => {
+                // Cargo writes the paths apart by a space, and nothing else.
+                ' ' => {
                     if !word.is_empty() {
                         out.push(std::mem::take(&mut word));
                     }
