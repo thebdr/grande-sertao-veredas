@@ -1255,8 +1255,14 @@ mod round_4 {
         let plant = Bench::start(spec).unwrap();
         std::thread::sleep(Duration::from_secs(1));
         let models = plant.reflexo("r").unwrap();
-        // 250 a second at 4 ms is 1 a step: the speed counts the steps.
-        let (steps, speed) = (models.status().steps, models.speed("d").unwrap());
+        // 250 a second at 4 ms is 1 a step: the speed counts the steps. Two reads under two locks:
+        // read again till no step came between them.
+        let (steps, speed) = loop {
+            let (before, speed, after) = (models.status().steps, models.speed("d").unwrap(), models.status().steps);
+            if before == after {
+                break (before, speed);
+            }
+        };
         let due = begun.elapsed().as_nanos() / 4_000_000;
         plant.stop();
         std::fs::remove_dir_all(&dir).unwrap();
