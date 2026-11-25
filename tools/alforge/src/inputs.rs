@@ -208,17 +208,36 @@ impl Workspace<'_> {
             let lock = lock.as_ref().expect("a package was resolved in it");
             let l = &lock[at];
             if l.source.is_none() {
-                return Err(format!("its Cargo.lock's {} {} has no source and is no member a release builds from its folder", l.name, l.version));
+                // A package by path the workspace knows (a member, or a fork one uses by path, as
+                // a `[patch]` may name it too): its folder, and its workspace's manifest.
+                let Some(known) = self.members.iter().find(|m| m.name == l.name && m.version == l.version) else {
+                    return Err(format!("its Cargo.lock's {} {} has no source and is no member a release builds from its folder", l.name, l.version));
+                };
+                named.insert(format!("{}/", known.dir), self.object(&known.dir)?);
+                if !known.workspace.is_empty() {
+                    let f = format!("{}/Cargo.toml", known.workspace);
+                    let id = self.object(&f)?;
+                    named.insert(f, id);
+                }
+                for d in &l.dependencies {
+                    queue.push(resolve(lock, d)?);
+                }
+                continue;
             }
             named.insert(l.named(), l.checksum.clone().unwrap_or_default());
             for d in &l.dependencies {
                 queue.push(resolve(lock, d)?);
             }
             // A `[replace]` builds another package in its place: the one without a source.
+            // (By path: the one of that name and version without a source; else as cargo names it.)
             if let Some(r) = &l.replace {
-                let (n, v) = r.split_once(' ').unwrap_or((r.as_str(), ""));
-                let at = lock.iter().position(|x| x.name == n && x.version == v && x.source.is_none()).ok_or_else(|| format!("its Cargo.lock replaces {} {} by `{r}`, which it does not pin", l.name, l.version))?;
-                queue.push(at);
+                let at = if r.contains(" (") {
+                    resolve(lock, r).ok()
+                } else {
+                    let (n, v) = r.split_once(' ').unwrap_or((r.as_str(), ""));
+                    lock.iter().position(|x| x.name == n && x.version == v && x.source.is_none())
+                };
+                queue.push(at.ok_or_else(|| format!("its Cargo.lock replaces {} {} by `{r}`, which it does not pin", l.name, l.version))?);
             }
         }
         Ok(Inputs(named))
@@ -254,14 +273,14 @@ impl Workspace<'_> {
             i += 1;
             let Ok(text) = std::fs::read_to_string(self.tree.join(&file)) else { continue };
             let from = Path::new(&file).parent().unwrap_or(Path::new(""));
-            for lit in literals(&text) {
+            for (lit, rust) in named(&text) {
                 let path = normal(&from.join(&lit)).ok_or_else(|| format!("{file} names `{lit}`, outside the commit's tree"))?;
                 if !folders.iter().any(|f| path.starts_with(f.as_str())) {
                     out.insert(path.clone());
                 }
-                // Read in turn, whatever its name ends with (`include!("x.in")` is Rust too); a
-                // text that is not Rust names nothing or one more input, never one less.
-                if self.tree.join(&path).is_file() && scanned.insert(path.clone()) {
+                // Read in turn when rustc reads it as Rust, whatever its name ends with
+                // (`include!("x.in")`); a file of data (`include_str!`) names nothing.
+                if rust && self.tree.join(&path).is_file() && scanned.insert(path.clone()) {
                     files.push(path);
                 }
             }
@@ -280,7 +299,12 @@ fn resolve(lock: &[Locked], d: &str) -> Result<usize, String> {
     let found: Vec<usize> = lock
         .iter()
         .enumerate()
-        .filter(|(_, l)| l.name == name && version.is_none_or(|v| l.version == v) && source.is_none_or(|s| l.source.as_deref() == Some(s)))
+        // Cargo writes a git source in a dependency string without its `#<commit>`.
+        .filter(|(_, l)| {
+            l.name == name
+                && version.is_none_or(|v| l.version == v)
+                && source.is_none_or(|s| l.source.as_deref().is_some_and(|ls| ls == s || ls.split_once('#').is_some_and(|(base, _)| base == s)))
+        })
         .map(|(i, _)| i)
         .collect();
     match found[..] {
@@ -318,15 +342,100 @@ fn walk(tree: &Path, dir: &str, out: &mut Vec<String>) -> std::io::Result<()> {
 /// one literal (a raw one included). Read as text, comments too: a path a comment names is one more
 /// input, never one less.
 pub fn literals(text: &str) -> Vec<String> {
-    // Tokens may stand apart by spaces or comments (`# [path = /* c */ "x"]`): read over the text
-    // as written and over a copy with its comments blanked, every path either names kept.
-    let mut out = literals_in(text);
-    for l in literals_in(&uncommented(text)) {
-        if !out.contains(&l) {
-            out.push(l);
+    named(text).into_iter().map(|(p, _)| p).collect()
+}
+
+/// The files a Rust source names, in its order, each with whether rustc reads it as Rust (a
+/// `#[path]` module or an `include!`; `include_str!` and `include_bytes!` read data). Read from the
+/// tokens as rustc lexes them (proc-macro2's lexer, the line endings made LF first, as rustc does):
+/// a char literal `'"'`, a raw string, nested comments and tokens apart by comments are rustc's.
+/// A text that does not lex as Rust is read for the same forms as text instead.
+pub fn named(text: &str) -> Vec<(String, bool)> {
+    let lf = text.replace("\r\n", "\n");
+    match lf.parse::<proc_macro2::TokenStream>() {
+        Ok(ts) => {
+            let mut all = Vec::new();
+            tokens(ts, &mut all);
+            // An attribute's group is read as an attribute and as a group: each name once.
+            let mut out: Vec<(String, bool)> = Vec::new();
+            for n in all {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+            out
+        }
+        Err(_) => {
+            let mut out: Vec<(String, bool)> = literals_in(&lf).into_iter().map(|p| (p, true)).collect();
+            for l in literals_in(&uncommented(&lf)) {
+                if !out.iter().any(|(p, _)| *p == l) {
+                    out.push((l, true));
+                }
+            }
+            out
         }
     }
-    out
+}
+
+/// The string a literal token holds, if it is a string literal (`"…"` or a raw one).
+fn string_of(lit: &proc_macro2::Literal) -> Option<String> {
+    literal(&lit.to_string())
+}
+
+fn tokens(ts: proc_macro2::TokenStream, out: &mut Vec<(String, bool)>) {
+    use proc_macro2::{Delimiter, TokenTree};
+    let tts: Vec<TokenTree> = ts.into_iter().collect();
+    for (i, tt) in tts.iter().enumerate() {
+        match tt {
+            TokenTree::Punct(p) if p.as_char() == '#' => {
+                let at = if matches!(tts.get(i + 1), Some(TokenTree::Punct(q)) if q.as_char() == '!') { i + 2 } else { i + 1 };
+                if let Some(TokenTree::Group(g)) = tts.get(at)
+                    && g.delimiter() == Delimiter::Bracket
+                {
+                    attribute(g.stream(), out);
+                }
+            }
+            TokenTree::Ident(id) if ["include_str", "include_bytes", "include"].contains(&id.to_string().as_str()) => {
+                if let (Some(TokenTree::Punct(bang)), Some(TokenTree::Group(g))) = (tts.get(i + 1), tts.get(i + 2))
+                    && bang.as_char() == '!'
+                    && let Some(TokenTree::Literal(lit)) = g.stream().into_iter().next()
+                    && let Some(s) = string_of(&lit)
+                {
+                    out.push((s, id == "include"));
+                }
+            }
+            TokenTree::Group(g) => tokens(g.stream(), out),
+            _ => {}
+        }
+    }
+}
+
+/// An attribute's tokens: `path = "…"`, a `cfg_attr(<predicate>, …)` whose attributes are read in
+/// turn, and whatever else it holds read for the macros that name files (`doc = include_str!(…)`).
+fn attribute(ts: proc_macro2::TokenStream, out: &mut Vec<(String, bool)>) {
+    use proc_macro2::{Delimiter, TokenTree};
+    let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
+    match tts.as_slice() {
+        [TokenTree::Ident(id), TokenTree::Punct(eq), TokenTree::Literal(lit), ..] if id == "path" && eq.as_char() == '=' => {
+            if let Some(s) = string_of(lit) {
+                out.push((s, true));
+            }
+        }
+        [TokenTree::Ident(id), TokenTree::Group(g), ..] if id == "cfg_attr" && g.delimiter() == Delimiter::Parenthesis => {
+            // The predicate, then attributes apart by commas at the top.
+            let mut parts: Vec<Vec<TokenTree>> = vec![vec![]];
+            for t in g.stream() {
+                match &t {
+                    TokenTree::Punct(c) if c.as_char() == ',' => parts.push(vec![]),
+                    _ => parts.last_mut().expect("one part at least").push(t),
+                }
+            }
+            for part in parts.into_iter().skip(1) {
+                attribute(part.into_iter().collect(), out);
+            }
+        }
+        _ => tokens(ts, out),
+    }
 }
 
 /// `text` with every comment (`//…`, `/*…*/`, nested) replaced by spaces, strings kept whole.

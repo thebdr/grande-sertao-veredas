@@ -1188,45 +1188,28 @@ fn build_inputs_that_do_not_read_are_refused_where_a_version_is_pinned_twice() {
 
 #[test]
 fn a_source_names_files_by_literal_paths_alone() {
-    let src = r##"
-#[path = "a.rs"]
-mod a;
-#[path="b/c.rs"] mod c;
-const C: &str = include_str!("c.txt");
-const D: &[u8] = include_bytes! ( "d.bin" );
-include!(r"e.rs");
-include!(r#"f "q".rs"#);
-const G: &str = include_str!["g.txt"];
-const H: &str = include_str!(concat!(env!("OUT_DIR"), "/h.rs"));
-const I: &str = include_str!("i\\j \"k\".txt");
-// include_str!("in-a-comment.txt")
-#[cfg_attr(unix, path = "unix.rs")]
-#[cfg_attr(all(windows, feature = "xpath"), path = "win.rs", allow(dead_code))]
-mod plat;
-#[cfg_attr(feature = ")", path = "paren.rs")]
-mod paren;
-#[ path = "spaced.rs" ]
-mod spaced;
-const J: &str = include_str!("esc\x2Fape\u{2E}txt");
-const K: &str = include_str!("line\
-    two.txt");
-# [path = "hash-apart.rs"] mod l;
-#[path = /* c */ "commented.rs"] mod m;
-const N: &str = include_str ! ("bang-apart.txt");
-const O: &str = include_str!(/* d */ "commented.txt");
-#[cfg_attr(unix, path = /* e */ "cfg-commented.rs")] mod q;
-const P: &str = my_include_str!("not-a-macro-of-rust.txt");
-"##;
+    // Read from rustc's tokens: what lexes as one literal is one, whatever quotes a char literal or
+    // a raw string holds, and comments between tokens are no tokens.
+    let src = "#[path = \"a.rs\"]\nmod a;\n#[path=\"b/c.rs\"] mod c;\nconst Q: char = '\"';\nconst R: &str = r#\"say \"hi\"#;\nconst W: &str = r\"C:\\\";\n\
+        const C: &str = include_str!(\"c.txt\");\nconst D: &[u8] = include_bytes! ( \"d.bin\" );\ninclude!(r\"e.rs\");\ninclude!(r#\"f \"q\".rs\"#);\n\
+        const G: &str = include_str![\"g.txt\"];\nconst H: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/h.rs\"));\nconst I: &str = include_str!(\"i\\\\j \\\"k\\\".txt\");\n\
+        // include_str!(\"in-a-comment.txt\")\n#[cfg_attr(unix, path = \"unix.rs\")]\nmod plat;\n#[cfg_attr(all(windows, feature = \"x)path\"), path = \"win.rs\", allow(dead_code))]\nmod win;\n\
+        #[cfg_attr(a, cfg_attr(b, path = \"nested-cfg.rs\"))]\nmod n;\n# [ path = \"spaced.rs\" ]\nmod spaced;\nconst J: &str = include_str!(\"esc\\x2Fape\\u{2E}t\\txt\");\n\
+        const K: &str = include_str!(\"line\\\r\n    two.txt\");\n#[path = /* c /* nested */ */ \"commented.rs\"] mod m;\nconst N: &str = include_str ! // a line comment\n    (\"bang-apart.txt\");\n\
+        #[doc = include_str!(\"doc.md\")]\nmod documented {}\nconst P: &str = my_include_str!(\"not-rusts.txt\");\n";
     assert_eq!(
         alforge::inputs::literals(src),
         [
-            "unix.rs", "win.rs", "paren.rs", "a.rs", "b/c.rs", "spaced.rs", "hash-apart.rs", "c.txt", "g.txt", "i\\j \"k\".txt", "in-a-comment.txt", "esc/ape.txt", "linetwo.txt",
-            "bang-apart.txt", "d.bin", "e.rs", "f \"q\".rs",
-            // Found once the comments between the tokens are blanked.
-            "cfg-commented.rs", "commented.rs", "commented.txt",
+            "a.rs", "b/c.rs", "c.txt", "d.bin", "e.rs", "f \"q\".rs", "g.txt", "i\\j \"k\".txt", "unix.rs", "win.rs", "nested-cfg.rs", "spaced.rs", "esc/ape.t\txt", "linetwo.txt",
+            "commented.rs", "bang-apart.txt", "doc.md",
         ],
-        "an identifier ending in `include_str` is no macro of Rust's"
+        "a comment, `concat!` and an identifier ending in `include_str` name nothing"
     );
+    // Which of them rustc reads as Rust, and so are read in turn: modules and `include!`.
+    let rust: Vec<String> = alforge::inputs::named(src).into_iter().filter(|(_, r)| *r).map(|(p, _)| p).collect();
+    assert_eq!(rust, ["a.rs", "b/c.rs", "e.rs", "f \"q\".rs", "unix.rs", "win.rs", "nested-cfg.rs", "spaced.rs", "commented.rs"]);
+    // A text that does not lex as Rust is read for the same forms as text.
+    assert_eq!(alforge::inputs::literals("include_str!(\"x.txt\") ) unbalanced"), ["x.txt"]);
 }
 
 #[test]
@@ -1495,6 +1478,10 @@ fn other_crate_types_and_a_git_dependency_are_named_as_inputs() {
     r.write("crates/veredas-macro/Cargo.toml", "[package]\nname = \"veredas-macro\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\npath = \"../../docs/macro.rs\"\n");
     r.write("crates/veredas-git/Cargo.toml", "[package]\nname = \"veredas-git\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\ngitdep = { git = \"https://example.invalid/gitdep\" }\n");
     r.write("crates/veredas-git/src/lib.rs", "\n");
+    for (name, kind) in [("veredas-st", "staticlib"), ("veredas-dy", "dylib"), ("veredas-rl", "rlib")] {
+        r.write(&format!("crates/{name}/Cargo.toml"), &format!("[package]\nname = \"{name}\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[lib]\ncrate-type = [\"{kind}\"]\npath = \"../../docs/{kind}.rs\"\n"));
+        r.write(&format!("docs/{kind}.rs"), "\n");
+    }
     r.write("docs/plug.rs", "\n");
     r.write("docs/macro.rs", "\n");
     let c = r.commit("other crate types, a git dependency");
@@ -1503,6 +1490,76 @@ fn other_crate_types_and_a_git_dependency_are_named_as_inputs() {
     assert_eq!(refusals, Vec::<String>::new());
     let has = |n: &str, k: &str| held[n].inputs.as_ref().unwrap().0.contains_key(k);
     assert!(has("veredas-plug", "docs/plug.rs") && has("veredas-macro", "docs/macro.rs"));
+    assert!(has("veredas-st", "docs/staticlib.rs") && has("veredas-dy", "docs/dylib.rs") && has("veredas-rl", "docs/rlib.rs"));
     assert_eq!(held["veredas-plug"].lib.as_deref(), Some("veredas_plug"), "a cdylib is the library the cut builds");
     assert!(has("veredas-git", &format!("Cargo.lock: gitdep 0.1.0 ({git})")), "{:?}", held["veredas-git"].inputs);
 }
+
+#[test]
+fn the_lock_file_is_read_as_cargo_writes_it() {
+    // Two git packages of one name and version (cargo's dependency strings name their sources
+    // without the commit), a registry package `[replace]`d by a git one, and a fork one component
+    // uses by path that a `[patch]` also puts in place of the registry's, for a crate it uses.
+    let r = Repo::new();
+    r.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"forks\"]\n\n[patch.crates-io]\nitoa = { path = \"forks/itoa\" }\n",
+    );
+    let reg = "registry+https://github.com/rust-lang/crates.io-index";
+    let (a, b, ryu) = ("git+https://example.invalid/A", "git+https://example.invalid/B", "git+https://example.invalid/ryu");
+    let _ = &ryu;
+    let (ca, cb, cr) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
+    let lock = format!(
+        "version = 4\n\n[[package]]\nname = \"gitdep\"\nversion = \"0.1.0\"\nsource = \"{a}#{ca}\"\n\n[[package]]\nname = \"gitdep\"\nversion = \"0.1.0\"\nsource = \"{b}#{cb}\"\n\n\
+         [[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\n\n[[package]]\nname = \"ryu\"\nversion = \"1.0.0\"\nsource = \"{reg}\"\nchecksum = \"7777\"\nreplace = \"ryu 1.0.0 ({ryu})\"\n\n\
+         [[package]]\nname = \"ryu\"\nversion = \"1.0.0\"\nsource = \"{ryu}#{cr}\"\n\n[[package]]\nname = \"serde_json\"\nversion = \"1.0.154\"\nsource = \"{reg}\"\nchecksum = \"8888\"\ndependencies = [\n \"itoa\",\n]\n\n\
+         [[package]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\ndependencies = [\n \"gitdep 0.1.0 ({a})\",\n]\n\n[[package]]\nname = \"veredas-b\"\nversion = \"2.0.0\"\ndependencies = [\n \"gitdep 0.1.0 ({b})\",\n]\n\n\
+         [[package]]\nname = \"veredas-c\"\nversion = \"2.0.0\"\ndependencies = [\n \"ryu 1.0.0 ({reg})\",\n]\n\n[[package]]\nname = \"veredas-d\"\nversion = \"2.0.0\"\ndependencies = [\n \"itoa\",\n \"serde_json\",\n]\n"
+    );
+    r.write("Cargo.lock", &lock);
+    for (name, deps) in [
+        ("veredas-a", "gitdep = { git = \"https://example.invalid/A\" }"),
+        ("veredas-b", "gitdep = { git = \"https://example.invalid/B\" }"),
+        ("veredas-d", "itoa = { path = \"../../forks/itoa\" }\nserde_json = \"=1.0.154\""),
+    ] {
+        r.write(&format!("crates/{name}/Cargo.toml"), &format!("[package]\nname = \"{name}\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\n{deps}\n"));
+        r.write(&format!("crates/{name}/src/lib.rs"), "\n");
+    }
+    r.write("forks/itoa/Cargo.toml", "[workspace]\n\n[package]\nname = \"itoa\"\nversion = \"1.0.18\"\nedition = \"2024\"\n");
+    r.write("forks/itoa/src/lib.rs", "\n");
+    let c = r.commit("the lock's spellings");
+    let mut refusals = Vec::new();
+    let held = manifest::components_at(r.path(), &c, &mut refusals).unwrap();
+    assert_eq!(refusals, Vec::<String>::new());
+    let keys = |n: &str| -> Vec<String> { held[n].inputs.as_ref().unwrap_or_else(|e| panic!("{n}: {e}")).0.keys().filter(|k| k.starts_with("Cargo.lock") || k.starts_with("forks")).cloned().collect() };
+    assert_eq!(keys("veredas-a"), [format!("Cargo.lock: gitdep 0.1.0 ({a}#{ca})")]);
+    assert_eq!(keys("veredas-b"), [format!("Cargo.lock: gitdep 0.1.0 ({b}#{cb})")]);
+    assert_eq!(keys("veredas-d"), ["Cargo.lock: serde_json 1.0.154", "forks/itoa/", "forks/itoa/Cargo.toml"], "the fork is a workspace of its own: its manifest is its workspace's");
+    // Cargo takes `[replace]` and `[patch]` apart: the git replacement in a workspace of its own,
+    // then one the lock does not pin, refused by its reason.
+    let q = Repo::new();
+    q.write("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n\n[replace]\n\"ryu:1.0.0\" = { git = \"https://example.invalid/ryu\" }\n");
+    q.write("crates/veredas-c/Cargo.toml", "[package]\nname = \"veredas-c\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nryu = \"1\"\n");
+    q.write("crates/veredas-c/src/lib.rs", "\n");
+    let qlock = |replace: &str| {
+        format!(
+            "version = 4\n\n[[package]]\nname = \"ryu\"\nversion = \"1.0.0\"\nsource = \"{reg}\"\nchecksum = \"7777\"\nreplace = \"{replace}\"\n\n\
+             [[package]]\nname = \"ryu\"\nversion = \"1.0.0\"\nsource = \"{ryu}#{cr}\"\n\n[[package]]\nname = \"veredas-c\"\nversion = \"2.0.0\"\ndependencies = [\n \"ryu 1.0.0 ({reg})\",\n]\n"
+        )
+    };
+    q.write("Cargo.lock", &qlock(&format!("ryu 1.0.0 ({ryu})")));
+    let qc = q.commit("a git replacement");
+    let held_q = manifest::components_at(q.path(), &qc, &mut Vec::new()).unwrap();
+    let qkeys: Vec<String> = held_q["veredas-c"].inputs.as_ref().unwrap().0.keys().filter(|k| k.starts_with("Cargo.lock")).cloned().collect();
+    assert_eq!(qkeys, ["Cargo.lock: ryu 1.0.0".to_string(), format!("Cargo.lock: ryu 1.0.0 ({ryu}#{cr})")]);
+    q.write("Cargo.lock", &qlock("ryu 1.0.0 (git+https://example.invalid/nope)"));
+    let qc2 = q.commit("a replacement not pinned");
+    let held_q = manifest::components_at(q.path(), &qc2, &mut Vec::new()).unwrap();
+    assert_eq!(held_q["veredas-c"].inputs, Err("its Cargo.lock replaces ryu 1.0.0 by `ryu 1.0.0 (git+https://example.invalid/nope)`, which it does not pin".to_string()));
+    // A cargo configuration without its extension overriding by `paths`: refused by its reason.
+    r.write(".cargo/config", "paths = [\"forks/itoa\"]\n");
+    let c3 = r.commit("a paths override without its extension");
+    let held = manifest::components_at(r.path(), &c3, &mut Vec::new()).unwrap();
+    assert_eq!(held["veredas-a"].inputs, Err("its .cargo/config overrides packages by `paths` (or does not read), which a release does not follow".to_string()));
+}
+

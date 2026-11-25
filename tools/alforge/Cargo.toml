@@ -25,6 +25,9 @@ sha2 = { workspace = true }
 tempfile = { workspace = true }
 # The OVA's descriptor read as XML, each value inside its own element (the proof, C-292).
 roxmltree = { workspace = true }
+# A component's sources read as rustc lexes them, for the files they name (C-290's inputs): char,
+# raw and byte literals, nested comments, tokens apart.
+proc-macro2 = { workspace = true }
 
 [dev-dependencies]
 # Throwaway repositories for the manifest's check against history, removed when a test ends.
