@@ -1604,7 +1604,7 @@ fn round_nineteen_the_lock_by_requirement_a_package_by_path_through_the_lock_and
     r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-portal\", \"tools/itoa\"]\n\n[patch.crates-io]\nitoa = { path = \"tools/itoa\" }\n");
     r.write(
         "crates/veredas-portal/Cargo.toml",
-        "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nserde_json = \"1\"\nryu = \"1\"\n\n[dev-dependencies]\nryu_old = { package = \"ryu\", version = \"0.2\" }\n",
+        "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nitoa = \"1\"\nserde_json = \"1\"\nryu = \"1\"\n\n[dev-dependencies]\nryu_old = { package = \"ryu\", version = \"0.2\" }\n",
     );
     r.write("crates/veredas-portal/src/lib.rs", "\n");
     r.write("tools/itoa/Cargo.toml", "[package]\nname = \"itoa\"\nversion = \"1.0.18\"\nedition = \"2024\"\n");
@@ -1613,7 +1613,7 @@ fn round_nineteen_the_lock_by_requirement_a_package_by_path_through_the_lock_and
         format!(
             "version = 4\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\n\n[[package]]\nname = \"ryu\"\nversion = \"0.2.8\"\nsource = \"{reg}\"\nchecksum = \"{old_ryu}\"\n\n\
              [[package]]\nname = \"ryu\"\nversion = \"1.0.20\"\nsource = \"{reg}\"\nchecksum = \"6666\"\n\n[[package]]\nname = \"serde_json\"\nversion = \"1.0.140\"\nsource = \"{reg}\"\nchecksum = \"5555\"\ndependencies = [\n \"itoa\",\n]\n\n\
-             [[package]]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\ndependencies = [\n \"ryu 0.2.8\",\n \"ryu 1.0.20\",\n \"serde_json\",\n]\n"
+             [[package]]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\ndependencies = [\n \"itoa\",\n \"ryu 0.2.8\",\n \"ryu 1.0.20\",\n \"serde_json\",\n]\n"
         )
     };
     r.write("Cargo.lock", &lock("7777"));
@@ -1760,16 +1760,20 @@ fn round_twenty_a_shebang_and_raw_identifiers_as_rustc_reads_them() {
 fn round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_path() {
     // `foo`, a crate of crates.io patched to the member `tools/foo`, which includes a file outside
     // its folder and uses `baz` (and, for its tests alone, `qux`); and `itoa`, patched to a fork
-    // in its own workspace that veredas-b uses by path. veredas-a reaches both only through crates
-    // of the registry (`bar`, `serde_json`), as cargo builds it, and no dep-info of its own names
-    // them: its version names them all.
+    // in its own workspace that veredas-b uses by path. veredas-a uses both as crates of crates.io,
+    // the patch putting the packages by path in their place: read as packages reached by path. Cargo's
+    // dep-info follows a package by path from another: the cut holds what they read too. veredas-c
+    // reaches `foo` only behind `bar`, a crate of the registry, where cargo's dep-info does not
+    // follow it: refused, its build's reads beyond the scan judged by no one.
     let reg = "registry+https://github.com/rust-lang/crates.io-index";
     let r = Repo::new();
     r.write(
         "Cargo.toml",
         "[workspace]\nmembers = [\"crates/*\", \"tools/foo\"]\nexclude = [\"forks\"]\n\n[patch.crates-io]\nfoo = { path = \"tools/foo\" }\nitoa = { path = \"forks/itoa\" }\n",
     );
-    r.write("crates/veredas-a/Cargo.toml", "[package]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nbar = \"1\"\nserde_json = \"1\"\n");
+    r.write("crates/veredas-a/Cargo.toml", "[package]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nfoo = \"1\"\nitoa = \"1\"\n");
+    r.write("crates/veredas-c/Cargo.toml", "[package]\nname = \"veredas-c\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nbar = \"1\"\nserde_json = \"1\"\n");
+    r.write("crates/veredas-c/src/lib.rs", "\n");
     r.write("crates/veredas-a/src/main.rs", "fn main() {}\n");
     r.write("crates/veredas-b/Cargo.toml", "[package]\nname = \"veredas-b\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nitoa = { path = \"../../forks/itoa\" }\n");
     r.write("crates/veredas-b/src/lib.rs", "\n");
@@ -1785,7 +1789,8 @@ fn round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_pa
              [[package]]\nname = \"foo\"\nversion = \"1.0.0\"\ndependencies = [\n \"baz\",\n \"qux\",\n]\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\n\n\
              [[package]]\nname = \"qux\"\nversion = \"{qux}\"\nsource = \"{reg}\"\nchecksum = \"3333{qux}\"\n\n\
              [[package]]\nname = \"serde_json\"\nversion = \"1.0.140\"\nsource = \"{reg}\"\nchecksum = \"5555\"\ndependencies = [\n \"itoa\",\n]\n\n\
-             [[package]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\ndependencies = [\n \"bar\",\n \"serde_json\",\n]\n\n[[package]]\nname = \"veredas-b\"\nversion = \"2.0.0\"\ndependencies = [\n \"itoa\",\n]\n"
+             [[package]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\ndependencies = [\n \"foo\",\n \"itoa\",\n]\n\n[[package]]\nname = \"veredas-b\"\nversion = \"2.0.0\"\ndependencies = [\n \"itoa\",\n]\n\n\
+             [[package]]\nname = \"veredas-c\"\nversion = \"2.0.0\"\ndependencies = [\n \"bar\",\n \"serde_json\",\n]\n"
         )
     };
     r.write("Cargo.lock", &lock("1.0.0", "1.0.0"));
@@ -1798,9 +1803,7 @@ fn round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_pa
     assert_eq!(
         keys,
         [
-            "Cargo.lock: bar 1.0.0",
             "Cargo.lock: baz 1.0.0",
-            "Cargo.lock: serde_json 1.0.140",
             "crates/veredas-a/",
             "docs/foo.txt",
             "forks/itoa/",
@@ -1809,8 +1812,13 @@ fn round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_pa
         ],
         "the patched member's own dependency and outside file, the fork and its workspace's manifest; never the member's test-only `qux`"
     );
-    assert_eq!(packages.vendored.iter().collect::<Vec<_>>(), ["bar-1.0.0", "baz-1.0.0", "serde_json-1.0.140"]);
-    assert!(packages.names.contains("foo") && packages.names.contains("itoa") && !packages.names.contains("qux"), "{packages:?}");
+    assert_eq!(packages.vendored.iter().collect::<Vec<_>>(), ["baz-1.0.0"]);
+    assert_eq!(packages.names.iter().collect::<Vec<_>>(), ["baz", "foo", "itoa", "veredas-a"], "the locked crate among them, never the test-only `qux`");
+    assert_eq!(
+        held["veredas-c"].inputs,
+        Err("its Cargo.lock reaches a package by path only through a crate of the registry or git (itoa 1.0.18 through serde_json 1.0.140, foo 1.0.0 through bar 1.0.0): cargo's dep-info does not follow it there, so its build's reads would go unjudged".to_string()),
+        "each named"
+    );
     let pin = |release: &str, commit: &str| -> (PathBuf, Manifest) {
         let text = format!(
             "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
@@ -1867,4 +1875,35 @@ fn round_twenty_one_rustcs_whitespace_its_escapes_and_a_debugger_visualizer() {
         named("#![debugger_visualizer(gdb_script_file = \"../../docs/pretty.py\")]\n#![debugger_visualizer(natvis_file = \"v.natvis\")]\n"),
         [("../../docs/pretty.py".to_string(), false), ("v.natvis".to_string(), false)]
     );
+}
+
+#[test]
+fn round_twenty_two_an_empty_required_features_a_blank_continued_line_and_a_lock_of_another_version() {
+    use alforge::inputs::literals;
+    // U+2028 between `#!` and `[`: an inner attribute, as rustc reads it. A line continued over a
+    // blank line: rustc skips the newlines too.
+    assert_eq!(literals("#!\u{2028}[doc = include_str!(\"w.md\")]\n"), ["w.md"]);
+    assert_eq!(literals("const A: &str = include_str!(\"a\\\n\n  b.md\");\n"), ["ab.md"]);
+    // `required-features = []` requires nothing: a bin cargo always builds, never an optional one.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/*\", \"tools/foo\"]\n\n[patch.crates-io]\nfoo = { path = \"tools/foo\" }\n");
+    r.write(
+        "crates/veredas-a/Cargo.toml",
+        "[package]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"sempre\"\npath = \"src/main.rs\"\nrequired-features = []\n",
+    );
+    r.write("crates/veredas-a/src/main.rs", "fn main() {}\n");
+    // A component using `foo`, patched to the member at 1.0.1, where the lock pins a `foo` 1.0.0
+    // by path: a stale lock, no package a release builds.
+    r.write("crates/veredas-b/Cargo.toml", "[package]\nname = \"veredas-b\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nfoo = \"1\"\n");
+    r.write("crates/veredas-b/src/lib.rs", "\n");
+    r.write("tools/foo/Cargo.toml", "[package]\nname = \"foo\"\nversion = \"1.0.1\"\nedition = \"2024\"\n");
+    r.write("tools/foo/src/lib.rs", "\n");
+    r.write(
+        "Cargo.lock",
+        "version = 4\n\n[[package]]\nname = \"foo\"\nversion = \"1.0.0\"\n\n[[package]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\n\n[[package]]\nname = \"veredas-b\"\nversion = \"2.0.0\"\ndependencies = [\n \"foo\",\n]\n",
+    );
+    let c = r.commit("an empty required-features, a stale lock");
+    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    assert_eq!((held["veredas-a"].bins.iter().map(String::as_str).collect::<Vec<_>>(), held["veredas-a"].optional.len()), (vec!["sempre"], 0));
+    assert_eq!(held["veredas-b"].inputs, Err("its Cargo.lock's foo 1.0.0 has no source and is no member a release builds from its folder".to_string()));
 }

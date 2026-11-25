@@ -169,8 +169,13 @@ impl Workspace<'_> {
         let start = self.members.iter().find(|m| m.name == name).ok_or_else(|| format!("{name} is no member"))?;
         let mut used: Vec<&Member> = vec![start];
         let mut seen: BTreeSet<&str> = BTreeSet::from([start.dir.as_str()]);
-        let mut queue: Vec<usize> = Vec::new();
+        // Each lock entry to read, with the crate of the registry or git it was reached through
+        // (none for one a package by path names itself).
+        let mut queue: Vec<(usize, Option<String>)> = Vec::new();
         let mut taken: BTreeSet<usize> = BTreeSet::new();
+        // The packages by path reached only behind a crate of the registry or git, so far: their
+        // folder, their name and version, and that crate.
+        let mut behind: BTreeMap<&str, (String, String)> = BTreeMap::new();
         let mut i = 0;
         loop {
             if i < used.len() {
@@ -209,23 +214,31 @@ impl Workspace<'_> {
                         _ => true,
                     };
                     if wanted_by.iter().any(|(n, req)| *n == l.name && meets(req)) {
-                        queue.push(at);
+                        queue.push((at, None));
                     }
                 }
                 continue;
             }
-            let Some(at) = queue.pop() else { break };
-            if !taken.insert(at) {
-                continue;
-            }
+            let Some((at, through)) = queue.pop() else { break };
             let lock = lock.as_ref().expect("a package was resolved in it");
             let l = &lock[at];
+            if l.source.is_some() && !taken.insert(at) {
+                continue;
+            }
             if l.source.is_none() {
                 // A package by path the workspace knows (a member, or a fork one uses by path, as
                 // a `[patch]` may name it too): used as one reached by path.
                 let Some(known) = self.members.iter().find(|m| m.name == l.name && m.version == l.version) else {
                     return Err(format!("its Cargo.lock's {} {} has no source and is no member a release builds from its folder", l.name, l.version));
                 };
+                // Behind a crate of the registry or git (a `[patch]` of a crate that one uses), cargo's
+                // dep-info does not follow it: what its build reads beyond what its sources name (a
+                // build script's reads, an include by `concat!`) would be judged by no one, unless a
+                // package by path uses it too. Judged once the walk is done.
+                if let Some(via) = through {
+                    behind.entry(known.dir.as_str()).or_insert((format!("{} {}", l.name, l.version), via));
+                    continue;
+                }
                 if seen.insert(known.dir.as_str()) {
                     used.push(known);
                 }
@@ -233,7 +246,7 @@ impl Workspace<'_> {
             }
             named.insert(l.named(), l.checksum.clone().unwrap_or_default());
             for d in &l.dependencies {
-                queue.push(resolve(lock, d)?);
+                queue.push((resolve(lock, d)?, Some(format!("{} {}", l.name, l.version))));
             }
             // A `[replace]` builds another package in its place: the one without a source.
             // (By path: the one of that name and version without a source; else as cargo names it.)
@@ -244,8 +257,16 @@ impl Workspace<'_> {
                     let (n, v) = r.split_once(' ').unwrap_or((r.as_str(), ""));
                     lock.iter().position(|x| x.name == n && x.version == v && x.source.is_none())
                 };
-                queue.push(at.ok_or_else(|| format!("its Cargo.lock replaces {} {} by `{r}`, which it does not pin", l.name, l.version))?);
+                // In that package's place, reached as it was.
+                queue.push((at.ok_or_else(|| format!("its Cargo.lock replaces {} {} by `{r}`, which it does not pin", l.name, l.version))?, through.clone()));
             }
+        }
+        let unfollowed: Vec<String> = behind.iter().filter(|(dir, _)| !seen.contains(*dir)).map(|(_, (what, via))| format!("{what} through {via}")).collect();
+        if !unfollowed.is_empty() {
+            return Err(format!(
+                "its Cargo.lock reaches a package by path only through a crate of the registry or git ({}): cargo's dep-info does not follow it there, so its build's reads would go unjudged",
+                unfollowed.join(", ")
+            ));
         }
         for m in &used {
             named.insert(format!("{}/", m.dir), self.object(&m.dir)?);
