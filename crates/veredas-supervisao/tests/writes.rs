@@ -963,14 +963,24 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     // Every object of the served binding, selected by every way the page offers other than its
     // element (its line in the attention list, each key of a keyed marker), each of its writes
     // pressed there: the question its own, one post of its own body, its value landing at its own
-    // tag, its answer said under that selection and again once selected that way after another
-    // object.
+    // tag, its answer said under that selection and again once selected by every way the page
+    // offers (its element, its line, each key) after another object.
+    // (The parcels logged again before a key is selected: the feed forgets a key 10 s after its
+    // last sample, `KEY_FORGET_MS`, and a marker draws the keys its series holds now.)
+    let parcels = |page: &mut Browser| {
+        let now = store_now();
+        append(&dir.path().join("loop/sorts.log"), &[format!("{} POS item=A1 at=12", stamp(now)), format!("{} POS item=B2 at=52", stamp(now))]);
+        page.wait_for(r#"document.querySelectorAll('svg.plant [data-object="tracked"][data-key]').length === 2 || null"#, Duration::from_secs(20));
+    };
+    // The object `id` shown selected by the way of `key`.
+    let chosen = |id: &str, key: &Option<String>| format!("(() => {{ const t = document.querySelector('.side .sel-title'); const s = t?.querySelector('strong')?.textContent ?? ''; const k = {}; return t?.dataset.id === {id} && (k === null ? !s.includes(' · ') : s.endsWith(' · ' + k)) || null; }})()", serde_json::to_string(key).unwrap());
     let mut pressed_by = BTreeSet::new();
     for o in bound["objects"].as_array().unwrap() {
         let id = serde_json::to_string(o["id"].as_str().unwrap()).unwrap();
         let acts = o["actions"].as_array().unwrap().clone();
+        parcels(&mut page);
         for (way, select, key) in selections(&mut page, &id).into_iter().filter(|(w, _, _)| *w != "its element") {
-            let chosen = format!("(() => {{ const t = document.querySelector('.side .sel-title'); return t?.dataset.id === {id} && (t.querySelector('strong')?.textContent ?? '').endsWith({}) || null; }})()", serde_json::to_string(&key.as_ref().map(|k| format!(" · {k}")).unwrap_or_default()).unwrap());
+            let chosen_here = chosen(&id, &key);
             for (n, a) in acts.iter().enumerate() {
                 pressed_by.insert(way);
                 let (label, source, tag, value) = (a["label"].as_str().unwrap(), a["source"].as_str().unwrap(), a["tag"].as_str().unwrap(), a["value"].as_str().unwrap());
@@ -978,8 +988,11 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
                 bench.server("aux").unwrap().set("hold3", 0);
                 assert!(wait(Duration::from_secs(10), || release(&bench) == "0" && hold(&bench) == "0"));
                 page.eval("window.asked = []; window.answer = true; true");
+                if key.is_some() {
+                    parcels(&mut page);
+                }
                 page.eval(&format!("(() => {{ {select}; return true; }})()"));
-                page.wait_for(&chosen, Duration::from_secs(10));
+                page.wait_for(&chosen_here, Duration::from_secs(10));
                 page.wait_for(&format!("(() => {{ const b = document.querySelectorAll('.side .actions button')[{n}]; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
                 let before = page.posts().len();
                 page.eval(&format!("document.querySelector('.side .write-note').textContent = ''; document.querySelectorAll('.side .actions button')[{n}].click(); true"));
@@ -992,41 +1005,56 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
                 assert_eq!(serde_json::from_str::<serde_json::Value>(&sent.last().unwrap().1).unwrap(), json!({ "source": source, "tag": tag, "value": value }), "{id} by {way} {label}: the body its own");
                 let landed = || if source == "plc" { release(&bench) == value && hold(&bench) == "0" } else { hold(&bench) == value && release(&bench) == "0" };
                 assert!(wait(Duration::from_secs(10), landed), "{id} by {way} {label}: its value at its own tag alone: release {} hold {}", release(&bench), hold(&bench));
-                page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
-                page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
-                page.eval(&format!("(() => {{ {select}; return true; }})()"));
-                page.wait_for(&chosen, Duration::from_secs(10));
-                assert_eq!(page.wait_for(&said, Duration::from_secs(10)), note, "{id} selected again by {way}: its answer said again");
+                parcels(&mut page);
+                for (again, reselect, rekey) in selections(&mut page, &id) {
+                    page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+                    page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
+                    page.eval(&format!("(() => {{ {reselect}; return true; }})()"));
+                    page.wait_for(&chosen(&id, &rekey), Duration::from_secs(10));
+                    let by = format!("{again}{}", rekey.as_ref().map(|k| format!(" {k}")).unwrap_or_default());
+                    assert_eq!(page.wait_for(&said, Duration::from_secs(10)), note, "{id} pressed by {way}, selected again by {by}: its answer said again");
+                }
             }
         }
     }
     assert_eq!(pressed_by, BTreeSet::from(["the attention list", "a key"]), "a write pressed by every way the page selects an object but its element");
-    // And by each of those ways, a press held out (its post answered a second and a half late) while
-    // the object is selected again, by another object and back that way: its button busy and off
-    // while the post is out, freed once its answer comes.
-    // (The parcels logged again first: a marker draws the keys its series holds now.)
-    let now = store_now();
-    append(&dir.path().join("loop/sorts.log"), &[format!("{} POS item=A1 at=12", stamp(now)), format!("{} POS item=B2 at=52", stamp(now))]);
-    page.wait_for(r#"document.querySelectorAll('svg.plant [data-object="tracked"][data-key]').length === 2 || null"#, Duration::from_secs(20));
-    for (id, label, select) in [
-        ("aux-only", "Nudge", r#"document.querySelector('.side li[data-id="aux-only"]').click()"#),
-        ("tracked", "Mark", r#"document.querySelector('svg.plant [data-object="tracked"][data-key="A1"]').dispatchEvent(new MouseEvent("click", { bubbles: true }))"#),
-    ] {
-        page.eval(r#"(() => { window.__plainFetch = window.__plainFetch ?? window.fetch; const f = window.__plainFetch; window.fetch = (...a) => String(a[0]).includes("/api/opc/write") ? new Promise((ok, no) => setTimeout(() => f(...a).then(ok, no), 1500)) : f(...a); window.answer = true; return true; })()"#);
-        page.eval(&format!("(() => {{ {select}; return true; }})()"));
-        page.wait_for(&format!("document.querySelector('.side .sel-title')?.dataset.id === '{id}' || null"), Duration::from_secs(10));
-        page.wait_for(&format!(r#"(() => {{ const b = document.querySelector('.side .actions button[data-action="{label}"]'); return b && !b.disabled ? true : null; }})()"#), Duration::from_secs(10));
-        page.eval(&format!(r#"(() => {{ document.querySelector('.side .write-note').textContent = ''; document.querySelector('.side .actions button[data-action="{label}"]').click(); return true; }})()"#));
-        page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
-        page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
-        page.eval(&format!("(() => {{ {select}; return true; }})()"));
-        page.wait_for(&format!("document.querySelector('.side .sel-title')?.dataset.id === '{id}' || null"), Duration::from_secs(10));
-        let out = page.eval(&format!(r#"(() => {{ const b = document.querySelector('.side .actions button[data-action="{label}"]'); return [b.dataset.busy ?? null, b.disabled]; }})()"#));
-        assert_eq!(out, json!(["1", true]), "{id}: its press out, the panel built again: busy and off");
-        page.wait_for(&format!(r#"(document.querySelector('.side .write-note [data-action="{label}"]')?.textContent ?? "").startsWith("{label}: written") || null"#), Duration::from_secs(10));
-        let freed = page.wait_for(&format!(r#"(() => {{ const b = document.querySelector('.side .actions button[data-action="{label}"]'); return b && b.dataset.busy === undefined && !b.disabled ? true : null; }})()"#), Duration::from_secs(10));
-        assert_eq!(freed, json!(true), "{id}: its button freed once its answer came");
-        page.eval("window.fetch = window.__plainFetch; true");
+    // And by each of those ways, a press held out (its post held until the test lets it go) while
+    // the object is selected again by every way the page offers (its element, its line, each key),
+    // each after another object: its button busy and off there while the post is out, a click
+    // forced on it (the button enabled by hand) asking nothing and posting nothing; freed once its
+    // answer comes.
+    for (id, label) in [("aux-only", "Nudge"), ("tracked", "Mark")] {
+        let id = serde_json::to_string(id).unwrap();
+        parcels(&mut page);
+        for (way, select, key) in selections(&mut page, &id).into_iter().filter(|(w, _, _)| *w != "its element") {
+            page.eval(r#"(() => { window.__plainFetch = window.__plainFetch ?? window.fetch; const f = window.__plainFetch; window.fetch = (...a) => String(a[0]).includes("/api/opc/write") ? new Promise((ok, no) => { window.__letGo = () => f(...a).then(ok, no); }) : f(...a); window.__letGo = null; window.answer = true; window.asked = []; return true; })()"#);
+            if key.is_some() {
+                parcels(&mut page);
+            }
+            page.eval(&format!("(() => {{ {select}; return true; }})()"));
+            page.wait_for(&chosen(&id, &key), Duration::from_secs(10));
+            page.wait_for(&format!(r#"(() => {{ const b = document.querySelector('.side .actions button[data-action="{label}"]'); return b && !b.disabled ? true : null; }})()"#), Duration::from_secs(10));
+            page.eval(&format!(r#"(() => {{ document.querySelector('.side .write-note').textContent = ''; document.querySelector('.side .actions button[data-action="{label}"]').click(); return true; }})()"#));
+            page.wait_for("window.__letGo ? true : null", Duration::from_secs(10));
+            let posted = page.posts().len();
+            parcels(&mut page);
+            for (again, reselect, rekey) in selections(&mut page, &id) {
+                let by = format!("{again}{}", rekey.as_ref().map(|k| format!(" {k}")).unwrap_or_default());
+                page.eval(r#"document.getElementById("outlet-3").dispatchEvent(new MouseEvent("click", { bubbles: true })); true"#);
+                page.wait_for(r#"document.querySelector('.side .sel-title')?.dataset.id === "outlet-3" || null"#, Duration::from_secs(10));
+                page.eval(&format!("(() => {{ {reselect}; return true; }})()"));
+                page.wait_for(&chosen(&id, &rekey), Duration::from_secs(10));
+                let out = page.eval(&format!(r#"(() => {{ const b = document.querySelector('.side .actions button[data-action="{label}"]'); const read = [b.dataset.busy ?? null, b.disabled]; const asked = window.asked.length; b.disabled = false; b.click(); return [read, window.asked.length - asked]; }})()"#));
+                assert_eq!(out, json!([["1", true], 0]), "{id} pressed by {way}, its press out, selected again by {by}: busy and off, a forced click asking nothing");
+            }
+            std::thread::sleep(Duration::from_millis(500));
+            assert_eq!(page.posts().len(), posted, "{id} pressed by {way}: nothing posted while its press is out");
+            page.eval("window.__letGo(); true");
+            page.wait_for(&format!(r#"(document.querySelector('.side .write-note [data-action="{label}"]')?.textContent ?? "").startsWith("{label}: written") || null"#), Duration::from_secs(10));
+            let freed = page.wait_for(&format!(r#"(() => {{ const b = document.querySelector('.side .actions button[data-action="{label}"]'); return b && b.dataset.busy === undefined && !b.disabled ? true : null; }})()"#), Duration::from_secs(10));
+            assert_eq!(freed, json!(true), "{id} pressed by {way}: its button freed once its answer came");
+            page.eval("window.fetch = window.__plainFetch; true");
+        }
     }
     // Each object pressed, selected again, says the last answer of each of its actions pressed, one
     // line each in its actions' order, whatever was pressed since.
