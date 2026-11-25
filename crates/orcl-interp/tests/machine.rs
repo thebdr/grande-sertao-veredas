@@ -3,6 +3,7 @@
 //! step, and a run stopped at any step going on to the same end.
 mod common;
 use common::*;
+use core::time::Duration;
 use orcl_interp::*;
 
 /// `fn sum(n: u32) -> u32 { let (mut s, mut i) = (0, 0); while i < n { i += 1; s += i; } s }`, with the checked
@@ -1208,5 +1209,248 @@ fn a_return_value_is_unwritten_at_every_start_and_every_call() {
         let got = m.call(entry, &[]).map(|r| r.to_vec());
         assert!(matches!(got, Err(CallError::Program(ProgramError { kind: ErrorKind::Uninit, function, .. })) if function == f), "{got:?}");
         m.abort();
+    }
+}
+
+// Round 7's shapes (the critic's probe, kept): what real MIR has, each with the exact slots a program gets.
+
+fn dur(d: Duration) -> Vec<Scalar> {
+    vec![int(Int::U64, d.as_secs() as i128), int(Int::U32, d.subsec_nanos() as i128)]
+}
+
+/// `enum E { A, B(u8, S) }`, `struct S { d: Duration, c: [(u8, u16); 3] }`: an array inside a structure inside a
+/// variant that is not the last; `enum F { P(u8, u16), Q(Duration) }`: a variant of two fields before the last.
+#[test]
+fn an_index_into_an_array_inside_a_structure_inside_a_variant_reads_and_writes_its_own_slots() {
+    let mut b = Build::default();
+    let (u8t, u16t, usize_t, d) = (b.int(Int::U8), b.int(Int::U16), b.int(Int::Usize), b.ty(Type::Duration));
+    let pair = b.tuple(&[u8t, u16t]);
+    let arr = b.ty(Type::Array { element: pair, len: 3 });
+    let s = b.ty(Type::Struct { name: "S".into(), fields: vec![Field { name: "d".into(), ty: d }, Field { name: "c".into(), ty: arr }] });
+    let e = b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::Isize,
+        variants: vec![
+            Variant { name: "A".into(), discriminant: 0, fields: vec![] },
+            Variant { name: "B".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: u8t }, Field { name: "1".into(), ty: s }] },
+            Variant { name: "C".into(), discriminant: 2, fields: vec![Field { name: "0".into(), ty: u16t }] },
+        ],
+    });
+    let rpair = b.reference(pair, true);
+    let spair = b.reference(pair, false);
+    let unit = b.unit();
+    let out = b.tuple(&[e, u16t, u16t]);
+    // fn set(p: &mut (u8, u16)) { (*p).1 = (*p).1 + 100 }
+    let set = b.function(Function {
+        name: "set".into(),
+        params: 1,
+        locals: locals(&[unit, rpair]),
+        blocks: vec![block(
+            vec![assign(
+                proj(1, vec![Projection::Deref, Projection::Field(1)]),
+                Value::Binary(BinOp::Add, copy_at(proj(1, vec![Projection::Deref, Projection::Field(1)])), konst(u16t, vec![int(Int::U16, 100)])),
+                1,
+            )],
+            ret(),
+        )],
+    });
+    // fn f(e: E, i: usize) -> (E, u16, u16) {
+    //   let x = ((e as B).1.c[i]).1; ((e as B).1.c[i]).1 = 7; set(&mut (e as B).1.c[2]); let r = &(e as B).1.c[i];
+    //   (e, x, (*r).1) }
+    let path = |last: Vec<Projection>| {
+        let mut p = vec![Projection::Downcast(1), Projection::Field(1), Projection::Field(1)];
+        p.extend(last);
+        proj(1, p)
+    };
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 2,
+        locals: locals(&[out, e, usize_t, u16t, rpair, unit, spair, u16t]),
+        blocks: vec![
+            block(
+                vec![
+                    assign(place(3), Value::Use(copy_at(path(vec![Projection::Index(Local(2)), Projection::Field(1)]))), 1),
+                    assign(path(vec![Projection::Index(Local(2)), Projection::Field(1)]), Value::Use(konst(u16t, vec![int(Int::U16, 7)])), 2),
+                    assign(place(4), Value::Ref(path(vec![Projection::ConstantIndex(2)]), true), 3),
+                ],
+                Terminator::Call { callee: Callee::Function(set), args: vec![copy(4)], dest: place(5), next: BlockId(1), at: at(3) },
+            ),
+            block(
+                vec![
+                    assign(place(6), Value::Ref(path(vec![Projection::Index(Local(2))]), false), 4),
+                    assign(place(7), Value::Use(copy_at(proj(6, vec![Projection::Deref, Projection::Field(1)]))), 4),
+                    assign(place(0), Value::Aggregate(out, None, vec![copy(1), copy(3), copy(7)]), 5),
+                ],
+                ret(),
+            ),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let (a, c) = (|v| int(Int::U8, v), |v| int(Int::U16, v));
+    // E::B(9, S { d: 3.5 s, c: [(1, 2), (3, 4), (5, 6)] }): discriminant, u8, d's two slots, six slots of c
+    let mut e_b = vec![int(Int::Isize, 1), a(9)];
+    e_b.extend(dur(Duration::from_millis(3500)));
+    e_b.extend([a(1), c(2), a(3), c(4), a(5), c(6)]);
+    for i in 0..3i128 {
+        let got = m.call(f, &[Arg::Value(&e_b), Arg::Value(&[int(Int::Usize, i)])]).unwrap().to_vec();
+        let mut want_e = e_b.clone();
+        let x = [2, 4, 6][i as usize];
+        want_e[5 + 2 * i as usize] = c(7);
+        let last = want_e[9];
+        let Scalar::Int(_, l) = last else { panic!() };
+        want_e[9] = c(l + 100);
+        let mut want = want_e.clone();
+        want.extend([c(x), want_e[5 + 2 * i as usize]]);
+        assert_eq!(got, want, "i = {i}");
+    }
+}
+
+/// `enum F { P(u8, u16), Q(Duration) }`: P is not the last variant and its second field sits at slot 2.
+#[test]
+fn a_variant_before_the_last_reads_its_second_field_where_it_was_written() {
+    let mut b = Build::default();
+    let (u8t, u16t, d) = (b.int(Int::U8), b.int(Int::U16), b.ty(Type::Duration));
+    let fty = b.ty(Type::Enum {
+        name: "F".into(),
+        discriminant: Int::Isize,
+        variants: vec![
+            Variant { name: "P".into(), discriminant: 0, fields: vec![Field { name: "0".into(), ty: u8t }, Field { name: "1".into(), ty: u16t }] },
+            Variant { name: "Q".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: d }] },
+        ],
+    });
+    // fn g(x: F) -> u16 { (x as P).1 }
+    let g = b.function(Function {
+        name: "g".into(),
+        params: 1,
+        locals: locals(&[u16t, fty]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Downcast(0), Projection::Field(1)]))), 1)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let arg = [int(Int::Isize, 0), int(Int::U8, 5), int(Int::U16, 600)];
+    assert_eq!(m.call(g, &[Arg::Value(&arg)]).unwrap(), &[int(Int::U16, 600)]);
+}
+
+/// `p = (p.1, p.0)`, `a = [a[2], a[1], a[0]]` and `*r = ((*r).1, (*r).0)`: a value built from the place it is written to.
+#[test]
+fn an_assignment_whose_value_reads_its_own_place_writes_the_value_read_before() {
+    let mut b = Build::default();
+    let u16t = b.int(Int::U16);
+    let pair = b.tuple(&[u16t, u16t]);
+    let arr = b.ty(Type::Array { element: pair, len: 3 });
+    let rpair = b.reference(pair, true);
+    let unit = b.unit();
+    let out = b.tuple(&[pair, arr]);
+    let swap = b.function(Function {
+        name: "swap".into(),
+        params: 1,
+        locals: locals(&[unit, rpair]),
+        blocks: vec![block(
+            vec![assign(
+                proj(1, vec![Projection::Deref]),
+                Value::Aggregate(pair, None, vec![copy_at(proj(1, vec![Projection::Deref, Projection::Field(1)])), copy_at(proj(1, vec![Projection::Deref, Projection::Field(0)]))]),
+                1,
+            )],
+            ret(),
+        )],
+    });
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 2,
+        locals: locals(&[out, pair, arr, rpair, unit]),
+        blocks: vec![
+            block(
+                vec![
+                    assign(place(1), Value::Aggregate(pair, None, vec![copy_at(proj(1, vec![Projection::Field(1)])), copy_at(proj(1, vec![Projection::Field(0)]))]), 1),
+                    assign(
+                        place(2),
+                        Value::Aggregate(arr, None, vec![
+                            copy_at(proj(2, vec![Projection::ConstantIndex(2)])),
+                            copy_at(proj(2, vec![Projection::ConstantIndex(1)])),
+                            copy_at(proj(2, vec![Projection::ConstantIndex(0)])),
+                        ]),
+                        2,
+                    ),
+                    assign(place(3), Value::Ref(proj(2, vec![Projection::ConstantIndex(0)]), true), 3),
+                ],
+                Terminator::Call { callee: Callee::Function(swap), args: vec![copy(3)], dest: place(4), next: BlockId(1), at: at(3) },
+            ),
+            block(vec![assign(place(0), Value::Aggregate(out, None, vec![copy(1), copy(2)]), 4)], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let c = |v| int(Int::U16, v);
+    let got = m.call(f, &[Arg::Value(&[c(1), c(2)]), Arg::Value(&[c(10), c(11), c(20), c(21), c(30), c(31)])]).unwrap().to_vec();
+    assert_eq!(got, vec![c(2), c(1), c(31), c(30), c(20), c(21), c(10), c(11)]);
+}
+
+/// `fn put(a: &mut [(u8, u16); 3], i: usize, v: u16) { (*a)[i].1 = v }` called with a reference to the caller's array,
+/// and `[[u8; 3]; 2]` indexed twice, and `[Option<Duration>; 3]`'s element read as `Some`.
+#[test]
+fn a_callee_writes_the_caller_s_array_through_a_reference_and_nested_indices_reach_their_slots() {
+    let mut b = Build::default();
+    let (u8t, u16t, usize_t, d) = (b.int(Int::U8), b.int(Int::U16), b.int(Int::Usize), b.ty(Type::Duration));
+    let pair = b.tuple(&[u8t, u16t]);
+    let arr = b.ty(Type::Array { element: pair, len: 3 });
+    let rarr = b.reference(arr, true);
+    let unit = b.unit();
+    let put = b.function(Function {
+        name: "put".into(),
+        params: 3,
+        locals: locals(&[unit, rarr, usize_t, u16t]),
+        blocks: vec![block(vec![assign(proj(1, vec![Projection::Deref, Projection::Index(Local(2)), Projection::Field(1)]), Value::Use(copy(3)), 1)], ret())],
+    });
+    let caller = b.function(Function {
+        name: "caller".into(),
+        params: 2,
+        locals: locals(&[arr, usize_t, u16t, arr, rarr, unit]),
+        blocks: vec![
+            block(
+                vec![
+                    assign(place(3), Value::Use(konst(arr, vec![int(Int::U8, 1), int(Int::U16, 2), int(Int::U8, 3), int(Int::U16, 4), int(Int::U8, 5), int(Int::U16, 6)])), 1),
+                    assign(place(4), Value::Ref(place(3), true), 2),
+                ],
+                Terminator::Call { callee: Callee::Function(put), args: vec![copy(4), copy(1), copy(2)], dest: place(5), next: BlockId(1), at: at(2) },
+            ),
+            block(vec![assign(place(0), Value::Use(copy(3)), 3)], ret()),
+        ],
+    });
+    let row = b.ty(Type::Array { element: u8t, len: 3 });
+    let grid = b.ty(Type::Array { element: row, len: 2 });
+    let get2 = b.function(Function {
+        name: "get2".into(),
+        params: 3,
+        locals: locals(&[u8t, grid, usize_t, usize_t]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Index(Local(2)), Projection::Index(Local(3))]))), 1)], ret())],
+    });
+    let opt = b.option(d);
+    let opts = b.ty(Type::Array { element: opt, len: 3 });
+    let some_at = b.function(Function {
+        name: "some_at".into(),
+        params: 2,
+        locals: locals(&[d, opts, usize_t]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Index(Local(2)), Projection::Downcast(1), Projection::Field(0)]))), 1)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    for i in 0..3i128 {
+        let got = m.call(caller, &[Arg::Value(&[int(Int::Usize, i)]), Arg::Value(&[int(Int::U16, 99)])]).unwrap().to_vec();
+        let mut want = vec![int(Int::U8, 1), int(Int::U16, 2), int(Int::U8, 3), int(Int::U16, 4), int(Int::U8, 5), int(Int::U16, 6)];
+        want[1 + 2 * i as usize] = int(Int::U16, 99);
+        assert_eq!(got, want, "put at {i}");
+    }
+    let g: Vec<Scalar> = (0..6).map(|v| int(Int::U8, 10 + v)).collect();
+    for i in 0..2i128 {
+        for j in 0..3i128 {
+            let got = m.call(get2, &[Arg::Value(&g), Arg::Value(&[int(Int::Usize, i)]), Arg::Value(&[int(Int::Usize, j)])]).unwrap().to_vec();
+            assert_eq!(got, vec![int(Int::U8, 10 + 3 * i + j)], "g[{i}][{j}]");
+        }
+    }
+    let mut o = vec![int(Int::Isize, 0), Scalar::Uninit, Scalar::Uninit];
+    o.extend([int(Int::Isize, 1)]);
+    o.extend(dur(Duration::new(4, 5)));
+    o.extend([int(Int::Isize, 1)]);
+    o.extend(dur(Duration::new(6, 7)));
+    for (i, want) in [(1, Duration::new(4, 5)), (2, Duration::new(6, 7))] {
+        let got = m.call(some_at, &[Arg::Value(&o), Arg::Value(&[int(Int::Usize, i)])]).unwrap().to_vec();
+        assert_eq!(got, dur(want), "(o[{i}] as Some).0");
     }
 }

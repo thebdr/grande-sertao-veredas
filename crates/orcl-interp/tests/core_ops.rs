@@ -369,3 +369,63 @@ fn get_or_insert_writes_the_option_s_own_discriminant_type() {
     m.call(f, &[Arg::Ref(RegionId(0))]).unwrap();
     assert_eq!(m.region(RegionId(0)).unwrap(), &[int(Int::U8, 1), int(Int::U8, 4)]);
 }
+
+/// `x.min(K)`, `x.max(K)`, `x.saturating_sub(K)` and `K.saturating_sub(x)` with `K` a constant `Duration` operand,
+/// as MIR passes a `const` item or `Duration::ZERO`: against core's.
+#[test]
+fn a_duration_constant_passed_to_a_core_operation_gives_what_core_gives() {
+    let mut b = Build::default();
+    let d = b.ty(Type::Duration);
+    let k = Duration::new(1, 500_000_000);
+    let kc = konst(d, dur(k));
+    let mut fns = vec![];
+    for (op, const_first) in [
+        (CoreOp::DurationMin, false),
+        (CoreOp::DurationMax, false),
+        (CoreOp::DurationSaturatingSub, false),
+        (CoreOp::DurationSaturatingSub, true),
+    ] {
+        let args = if const_first { vec![kc.clone(), copy(1)] } else { vec![copy(1), kc.clone()] };
+        let f = b.function(Function {
+            name: format!("{op:?}{const_first}"),
+            params: 1,
+            locals: locals(&[d, d]),
+            blocks: vec![
+                block(vec![], Terminator::Call { callee: Callee::Core(op), args, dest: place(0), next: BlockId(1), at: at(1) }),
+                block(vec![], ret()),
+            ],
+        });
+        fns.push((op, const_first, f));
+    }
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    for x in [Duration::ZERO, Duration::from_millis(700), k, Duration::new(1, 500_000_001), Duration::new(9, 1)] {
+        for (op, const_first, f) in &fns {
+            let want = match (op, const_first) {
+                (CoreOp::DurationMin, _) => x.min(k),
+                (CoreOp::DurationMax, _) => x.max(k),
+                (_, false) => x.saturating_sub(k),
+                _ => k.saturating_sub(x),
+            };
+            let got = m.call(*f, &[Arg::Value(&dur(x))]).map(|r| r.to_vec());
+            assert_eq!(got, Ok(dur(want)), "{op:?} const_first={const_first} x={x:?}");
+        }
+    }
+}
+
+#[test]
+fn a_checked_shift_into_an_option_whose_discriminant_is_a_u8_writes_a_u8() {
+    let mut b = Build::default();
+    let (u8t, u32t) = (b.int(Int::U8), b.int(Int::U32));
+    let opt = b.ty(Type::Enum {
+        name: "Option".into(),
+        discriminant: Int::U8,
+        variants: vec![
+            Variant { name: "None".into(), discriminant: 0, fields: vec![] },
+            Variant { name: "Some".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: u8t }] },
+        ],
+    });
+    let f = caller(&mut b, CoreOp::CheckedShl(Int::U8), opt, &[u8t, u32t]);
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    assert_eq!(call(&mut m, f, &[vec![int(Int::U8, 3)], vec![int(Int::U32, 2)]]), vec![int(Int::U8, 1), int(Int::U8, 12)]);
+    assert_eq!(call(&mut m, f, &[vec![int(Int::U8, 3)], vec![int(Int::U32, 8)]]), vec![int(Int::U8, 0), Scalar::Uninit]);
+}
