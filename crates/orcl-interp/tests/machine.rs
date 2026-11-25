@@ -1794,3 +1794,183 @@ fn a_checked_result_into_a_structure_of_three_fields_is_refused() {
         Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a checked result into what is no (value, bool)" })
     );
 }
+
+// Round 11's (the critic's kill-tests, kept): every scalar kind listed twice at every typed place, an array's first
+// and middle element, every argument of a start, a later call argument and aggregate part.
+
+fn func(name: &str, params: u32, types: &[TypeId], blocks: Vec<Block>) -> Function {
+    Function { name: name.into(), params, locals: locals(types), blocks }
+}
+
+fn push(p: &mut Program, ty: Type) -> TypeId {
+    p.types.push(ty);
+    TypeId(p.types.len() as u32 - 1)
+}
+
+#[test]
+fn every_scalar_kind_listed_twice_is_one_type_at_every_typed_place() {
+    let mut p = Program::default();
+    let (u8a, u8b) = (push(&mut p, Type::Int(Int::U8)), push(&mut p, Type::Int(Int::U8)));
+    let (ba, bb) = (push(&mut p, Type::Bool), push(&mut p, Type::Bool));
+    let (fa, fb) = (push(&mut p, Type::F32), push(&mut p, Type::F32));
+    let (ga, gb) = (push(&mut p, Type::F64), push(&mut p, Type::F64));
+    let (da, db) = (push(&mut p, Type::Duration), push(&mut p, Type::Duration));
+    let opt = push(
+        &mut p,
+        Type::Enum {
+            name: "Option".into(),
+            discriminant: Int::Isize,
+            variants: vec![
+                Variant { name: "None".into(), discriminant: 0, fields: vec![] },
+                Variant { name: "Some".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: da }] },
+            ],
+        },
+    );
+    let ropt = push(&mut p, Type::Ref { to: opt, mutable: true });
+    let rdb = push(&mut p, Type::Ref { to: db, mutable: true });
+    let pair = push(&mut p, Type::Struct { name: "(..)".into(), fields: vec![Field { name: "0".into(), ty: u8a }, Field { name: "1".into(), ty: ba }] });
+    let ru8a = push(&mut p, Type::Ref { to: u8a, mutable: false });
+    let s = push(&mut p, Type::Struct { name: "S".into(), fields: vec![Field { name: "a".into(), ty: u8a }] });
+    let one = |v: Value| vec![block(vec![assign(place(0), v, 1)], ret())];
+    let two = |a, b, op| Value::Binary(op, copy(a), copy(b));
+    p.functions.push(func("g", 1, &[u8a, u8a], one(Value::Use(copy(1))))); // 0
+    p.functions.push(func(
+        "call_g", // 1: an argument of the second u8 to a parameter of the first, its result into the second
+        1,
+        &[u8b, u8b, u8b],
+        vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(FunctionId(0)), args: vec![copy(1)], dest: place(2), next: BlockId(1), at: at(1) }),
+            block(vec![assign(place(0), Value::Use(copy(2)), 2)], ret()),
+        ],
+    ));
+    p.functions.push(func("add", 2, &[u8b, u8a, u8b], one(two(1, 2, BinOp::Add)))); // 2
+    p.functions.push(func("and", 2, &[u8a, u8a, u8b], one(two(1, 2, BinOp::BitAnd)))); // 3
+    p.functions.push(func("lt", 2, &[bb, u8a, u8b], one(two(1, 2, BinOp::Lt)))); // 4
+    p.functions.push(func("checked", 2, &[pair, u8b, u8a], one(Value::Checked(BinOp::Add, copy(1), copy(2))))); // 5
+    p.functions.push(func("not", 1, &[u8b, u8a], one(Value::Unary(UnOp::Not, copy(1))))); // 6
+    p.functions.push(func("cast", 1, &[u8a, u8a], one(Value::Cast(copy(1), u8b)))); // 7
+    p.functions.push(func("agg", 1, &[s, u8b], one(Value::Aggregate(s, None, vec![copy(1)])))); // 8
+    p.functions.push(func(
+        "refer", // 9
+        1,
+        &[u8a, u8b, ru8a],
+        vec![block(
+            vec![assign(place(2), Value::Ref(place(1), false), 1), assign(place(0), Value::Use(copy_at(proj(2, vec![Projection::Deref]))), 2)],
+            ret(),
+        )],
+    ));
+    p.functions.push(func(
+        "fill", // 10: o.get_or_insert(v) with v of the second Duration, the Option's payload of the first
+        2,
+        &[db, ropt, db, rdb],
+        vec![
+            block(vec![], Terminator::Call { callee: Callee::Core(CoreOp::OptionGetOrInsert), args: vec![copy(1), copy(2)], dest: place(3), next: BlockId(1), at: at(1) }),
+            block(vec![assign(place(0), Value::Use(copy_at(proj(3, vec![Projection::Deref]))), 2)], ret()),
+        ],
+    ));
+    p.functions.push(func("xor", 2, &[ba, ba, bb], one(two(1, 2, BinOp::BitXor)))); // 11
+    p.functions.push(func("fadd", 2, &[fa, fa, fb], one(two(1, 2, BinOp::Add)))); // 12
+    p.functions.push(func("gadd", 2, &[ga, ga, gb], one(two(1, 2, BinOp::Add)))); // 13
+    let mut m = Machine::load(p, &[opt]).expect("a program listing every scalar kind twice loads");
+    let u = |v| vec![int(Int::U8, v)];
+    let cases: Vec<(u32, Vec<Vec<Scalar>>, Vec<Scalar>)> = vec![
+        (1, vec![u(7)], u(7)),
+        (2, vec![u(200), u(100)], u(44)),
+        (3, vec![u(12), u(10)], u(8)),
+        (4, vec![u(3), u(5)], vec![Scalar::Bool(true)]),
+        (5, vec![u(250), u(10)], vec![int(Int::U8, 4), Scalar::Bool(true)]),
+        (6, vec![u(5)], u(250)),
+        (7, vec![u(7)], u(7)),
+        (8, vec![u(9)], u(9)),
+        (9, vec![u(11)], u(11)),
+        (11, vec![vec![Scalar::Bool(true)], vec![Scalar::Bool(false)]], vec![Scalar::Bool(true)]),
+        (12, vec![vec![Scalar::F32(1.5)], vec![Scalar::F32(2.25)]], vec![Scalar::F32(3.75)]),
+        (13, vec![vec![Scalar::F64(1.5)], vec![Scalar::F64(2.25)]], vec![Scalar::F64(3.75)]),
+    ];
+    for (f, args, want) in cases {
+        let args: Vec<Arg> = args.iter().map(|a| Arg::Value(a)).collect();
+        assert_eq!(m.call(FunctionId(f), &args).map(|r| r.to_vec()), Ok(want), "function {f}");
+    }
+    m.set_region(RegionId(0), &[int(Int::Isize, 0), Scalar::Uninit, Scalar::Uninit]).unwrap();
+    let v = dur(Duration::new(3, 5));
+    assert_eq!(m.call(FunctionId(10), &[Arg::Ref(RegionId(0)), Arg::Value(&v)]).map(|r| r.to_vec()), Ok(v.clone()));
+    let mut filled = vec![int(Int::Isize, 1)];
+    filled.extend(v);
+    assert_eq!(m.region(RegionId(0)).unwrap(), filled.as_slice());
+}
+
+#[test]
+fn an_array_whose_first_or_middle_element_is_not_of_its_type_is_refused_as_a_region_an_argument_and_a_constant() {
+    let mut b = Build::default();
+    let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
+    let pair = b.tuple(&[u8t, u16t]);
+    let arr = b.ty(Type::Array { element: pair, len: 3 });
+    let g = b.function(Function { name: "g".into(), params: 1, locals: locals(&[arr, arr]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
+    let program = b.program;
+    let (a, c) = (|v| int(Int::U8, v), |v| int(Int::U16, v));
+    let good = vec![a(1), c(2), a(3), c(4), a(5), c(6)];
+    let mut m = Machine::load(program.clone(), &[arr]).unwrap();
+    assert_eq!(m.set_region(RegionId(0), &good), Ok(()));
+    for (name, wrong) in [("the first", vec![a(1), a(2), a(3), c(4), a(5), c(6)]), ("the middle", vec![a(1), c(2), a(3), a(4), a(5), c(6)])] {
+        assert_eq!(m.set_region(RegionId(0), &wrong), Err(HostError::Slots), "{name} element's u16 a u8, as a region");
+        assert_eq!(m.region(RegionId(0)).unwrap(), good.as_slice(), "{name}: the region keeps its value");
+        assert_eq!(m.start(g, &[Arg::Value(&wrong)]), Err(HostError::Arguments), "{name}, as an argument");
+        let mut p = program.clone();
+        p.functions.push(Function { name: "k".into(), params: 0, locals: locals(&[arr]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(arr, wrong.clone())), 1)], ret())] });
+        assert_eq!(
+            Machine::load(p, &[]).map(|_| ()),
+            Err(LoadError::Instruction { function: "k".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" }),
+            "{name}, as a constant"
+        );
+    }
+}
+
+#[test]
+fn every_argument_of_a_start_is_checked_not_the_first_alone() {
+    // fn f(a: u8, r: &u16, b: u8, s: &u16) -> u8 { a }
+    let mut b = Build::default();
+    let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
+    let r16 = b.reference(u16t, false);
+    let f = b.function(Function { name: "f".into(), params: 4, locals: locals(&[u8t, u8t, r16, u8t, r16]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
+    let mut m = Machine::load(b.program, &[u16t, u8t]).unwrap();
+    let (x, y, wide, two) = ([int(Int::U8, 1)], [int(Int::U8, 2)], [int(Int::U16, 2)], [int(Int::U8, 2), int(Int::U8, 3)]);
+    assert_eq!(m.start(f, &[Arg::Value(&x), Arg::Ref(RegionId(0)), Arg::Value(&y), Arg::Ref(RegionId(0))]), Ok(()));
+    m.abort();
+    let cases: [(&str, [Arg; 4]); 3] = [
+        ("a later value of another type", [Arg::Value(&x), Arg::Ref(RegionId(0)), Arg::Value(&wide), Arg::Ref(RegionId(0))]),
+        ("a later value of two slots", [Arg::Value(&x), Arg::Ref(RegionId(0)), Arg::Value(&two), Arg::Ref(RegionId(0))]),
+        ("a later region of another type", [Arg::Value(&x), Arg::Ref(RegionId(0)), Arg::Value(&y), Arg::Ref(RegionId(1))]),
+    ];
+    for (name, args) in cases {
+        assert_eq!(m.start(f, &args), Err(HostError::Arguments), "{name}");
+        assert!(!m.running(), "{name}: nothing started");
+    }
+}
+
+#[test]
+fn a_later_call_argument_and_a_later_aggregate_part_of_another_type_are_refused() {
+    let mut b = Build::default();
+    let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
+    let s = b.tuple(&[u8t, u8t]);
+    b.function(Function { name: "h".into(), params: 2, locals: locals(&[u8t, u8t, u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
+    let mut call = Build { program: b.program.clone() };
+    call.function(Function {
+        name: "f".into(),
+        params: 2,
+        locals: locals(&[u8t, u8t, u16t]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(FunctionId(0)), args: vec![copy(1), copy(2)], dest: place(0), next: BlockId(1), at: at(1) }),
+            block(vec![], ret()),
+        ],
+    });
+    assert_eq!(
+        Machine::load(call.program, &[]).map(|_| ()),
+        Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "an argument of another type than its parameter" })
+    );
+    let mut agg = Build { program: b.program };
+    agg.function(Function { name: "f".into(), params: 2, locals: locals(&[s, u8t, u16t]), blocks: vec![block(vec![assign(place(0), Value::Aggregate(s, None, vec![copy(1), copy(2)]), 1)], ret())] });
+    assert_eq!(
+        Machine::load(agg.program, &[]).map(|_| ()),
+        Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a part of another type than its place" })
+    );
+}
