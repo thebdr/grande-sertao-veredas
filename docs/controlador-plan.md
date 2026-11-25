@@ -1,9 +1,10 @@
 # veredas-controlador: the plan
 
 The soft PLC of Veredas 2. `docs/veredas-plan.md` ("veredas-controlador: the softPLC") wins on
-intent; `.zen/contract.md` (P-003) wins on status. Built so far (2026-11-22): ORCL's standard library
-carried from Veredas 1 (`orcl-std`, C-150), the engine of a scan (`orcl-runtime`, C-151) and the
-controller's states and commands over one cyclic task (C-152). This
+intent; `.zen/contract.md` (P-003) wins on status. Built so far: ORCL's standard library carried
+from Veredas 1 (`orcl-std`, C-150), the engine of a scan (`orcl-runtime`, C-151), the controller's
+states and commands over one cyclic task (C-152), and the interpreter's machine on programs built
+by hand (`orcl-interp`, C-153, 2026-11-25). This
 file holds what the architect decided in the briefing of 13 to 16 November 2026, in the rulings of
 15 November on its adversarial review, in the robustness round begun on 16 November
 (`docs/robustness.md`), and in the rulings of 25 November on the questions its first build raised

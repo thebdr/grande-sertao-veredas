@@ -37,6 +37,9 @@ members = [
     # The engine of an ORCL scan: a cyclic task over a process image, its watchdog and safe outputs, with no
     # operating-system code; uses orcl-std alone (law L5: orcl-* use each other and core).
     "crates/orcl-runtime",
+    # ORCL's interpreter (docs/orcl/interpreter.md): a program in the shape of rustc's MIR, run one instruction at a
+    # time on memory laid out at load; depends on nothing (law L5: orcl-* use each other and core).
+    "crates/orcl-interp",
     # The soft PLC (docs/controlador-plan.md): an ORCL program in a deterministic scan, its states, faults and the
     # commands that move them; uses core's state text and the language's crates (law L5: controlador may use
     # portal, aranha and the orcl-* crates besides core).

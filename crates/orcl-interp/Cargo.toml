@@ -1,0 +1,12 @@
+[package]
+name = "orcl-interp"
+# ORCL's own SemVer, as orcl-std's (docs/orcl/README.md).
+version = "2.0.0-alpha.1"
+edition.workspace = true
+publish = false
+description = "ORCL's interpreter: a program in the shape of rustc's MIR, run one instruction at a time on memory laid out at load"
+
+# The interpreter depends on nothing; its tests compare it with orcl-std's native blocks (law L5: orcl-* use each
+# other and core).
+[dev-dependencies]
+orcl-std = { path = "../orcl-std" }

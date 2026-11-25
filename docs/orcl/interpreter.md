@@ -97,7 +97,9 @@ with Veredas 1's conveyor and a probe that reaches every block of `orcl-std` and
 ## Built in this order
 1. **`orcl-interp`'s program and machine**, its tests on stable with programs built by hand in Rust, as the bench's
    fixtures are (fixture first): every instruction, every place, the faults, memory laid out at load, a scan halted
-   at an instruction and resumed, and the engine of a scan running a hand-built conveyor. A clause of its own.
+   at an instruction and resumed. Built on 2026-11-25 (C-153), with `orcl-std`'s on-delay and rising edge lowered by
+   hand and run beside the native blocks. The engine of a scan running an interpreted program comes with the
+   program kind whose scan may fail ("Running"), a change to C-151.
 2. **The program file**: written and read back, its header checked, a file refused by name. A clause.
 3. **`crates/orcl-front`**: the shell on stable, the driver on the nightly lowering the conveyor and the probe. A
    clause, its run the nightly command.
