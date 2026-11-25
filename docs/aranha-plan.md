@@ -48,7 +48,7 @@ controller's hardware configuration has nothing of the suite's own to compare ag
 - **The topology** (`topology`): nodes (devices with their ports, this machine's interfaces,
   chassis named by a neighbour table and not yet identified), links with the confidence their
   evidence earns (heard on our own cable, reported by one side's neighbour table, confirmed by
-  both, inferred from a forwarding table), MRP rings, connected components.
+  both; inferred from a forwarding table with the SNMP phase), MRP rings, connected components.
 - **Scan files and the diff** (`scan`): a scan written as a versioned TOML file (`veredas-scan`,
   law L7) beside the capture of its frames, read back whole; a **baseline** is a saved scan; the
   diff of a scan against a baseline (appeared, vanished, renamed, readdressed, rewired, conflicts
