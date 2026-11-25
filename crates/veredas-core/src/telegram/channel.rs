@@ -140,7 +140,7 @@ pub struct Channel {
 
 impl Channel {
     /// Start the channel on its own thread and runtime.
-    pub fn start(cfg: ChannelConfig) -> Channel {
+    pub fn start(config: ChannelConfig) -> Channel {
         let status = Arc::new(Mutex::new(ChannelStatus {
             state: "starting".into(),
             ..Default::default()
@@ -148,7 +148,7 @@ impl Channel {
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         let worker_status = status.clone();
-        let name = cfg.name.clone();
+        let name = config.name.clone();
         let thread = std::thread::Builder::new()
             .name(format!("telegram-{name}"))
             .spawn(move || {
@@ -162,7 +162,7 @@ impl Channel {
                         return;
                     }
                 };
-                rt.block_on(run(cfg, worker_status, cmd_rx, event_tx));
+                rt.block_on(run(config, worker_status, cmd_rx, event_tx));
             })
             .ok();
         Channel { status, commands: cmd_tx, events: event_rx, thread }
@@ -478,18 +478,18 @@ fn greet(peer: &mut Peer, spec: &ChannelSpec, status: &Arc<Mutex<ChannelStatus>>
 }
 
 async fn run(
-    cfg: ChannelConfig,
+    config: ChannelConfig,
     status: Arc<Mutex<ChannelStatus>>,
     mut commands: tokio::sync::mpsc::UnboundedReceiver<ChannelCommand>,
     events: std::sync::mpsc::Sender<ChannelEvent>,
 ) {
-    let spec = &cfg.spec;
+    let spec = &config.spec;
     let mut peers: Vec<Peer> = Vec::new();
     let mut listener: Option<tokio::net::TcpListener> = None;
     let mut retry_at: Option<tokio::time::Instant> = Some(tokio::time::Instant::now());
     let mut backoff = RETRY_MIN;
 
-    if let Role::Listen { bind, port } = &cfg.role {
+    if let Role::Listen { bind, port } = &config.role {
         match tokio::net::TcpListener::bind((bind.trim(), *port)).await {
             Ok(l) => {
                 let where_ = l.local_addr().map(|a| a.to_string()).unwrap_or_else(|_| format!("{bind}:{port}"));
@@ -562,7 +562,7 @@ async fn run(
             }
             _ = tick.tick() => {
                 // Dial out when it is time to (dialling role).
-                if let Role::Connect { host, port } = &cfg.role
+                if let Role::Connect { host, port } = &config.role
                     && peers.is_empty()
                     && retry_at.is_some_and(|t| tokio::time::Instant::now() >= t)
                 {
@@ -623,7 +623,7 @@ async fn run(
                 }
                 for (id, why) in doomed {
                     drop_peer(&mut peers, id, &why, &status, &events);
-                    if matches!(cfg.role, Role::Connect { .. }) {
+                    if matches!(config.role, Role::Connect { .. }) {
                         retry_at = Some(tokio::time::Instant::now() + RETRY_MIN);
                     }
                 }
