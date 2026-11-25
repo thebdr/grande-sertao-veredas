@@ -1,0 +1,18 @@
+{
+  "clause": "C-154",
+  "verdict": "holds",
+  "ranAt": "2026-11-25T03:22:05.236Z",
+  "headCommit": "d10002cf32f45456b89fb64e5ef50613c1c970ba",
+  "tests": [
+    {
+      "name": "crates/orcl-interp/tests/file.rs",
+      "file": "crates/orcl-interp/tests/file.rs",
+      "symbolSha": "9388fceeeeb057af69de3d55aafc3ffac707a6789e465fc5a112e1674c1f7456"
+    },
+    {
+      "name": "crates/orcl-interp/tests/common/mod.rs",
+      "file": "crates/orcl-interp/tests/common/mod.rs",
+      "symbolSha": "67b661dc60e4658620c7c200216413ff8b467c22a21774fa0a88039fd50ab435"
+    }
+  ]
+}
