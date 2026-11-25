@@ -144,9 +144,10 @@ The assistant's reading, for the interpreter's plan; each point is open where it
   the driver built against it. Oficina installs both, which is Oficina's plan to carry.
 
 ## Found in passing
-- **`orcl-std` uses a closure**: `Bits::get_bit` calls `is_some_and(|v| ...)`. ORCL keeps closures out of v1 (O9);
-  whether that binds `orcl-std` too is not written down, and the closure costs the interpreter a closure value it
-  otherwise never needs. `orcl-std` can say the same without one, which its owner can do as an ordinary change.
+- **`orcl-std` used a closure**: `Bits::get_bit` called `is_some_and(|v| ...)`. ORCL keeps closures out of v1 (O9);
+  whether that binds `orcl-std` too is not written down, and the closure would cost the interpreter a closure value
+  it otherwise never needs. Since 2026-11-25 `orcl-std` says the same with a `match` (C-150), and its library code
+  holds no closure.
 - **Core has an unstable `set_bit`** on unsigned integers (feature `get_set_bit`, rust-lang/rust#147702), by
   value, returning the new integer. Were it stabilised as it is, `status.set_bit(n, v)` would resolve to core's
   method, an inherent method winning over `orcl-std`'s trait, and become a statement that changes nothing.

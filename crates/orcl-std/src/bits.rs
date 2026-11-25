@@ -25,7 +25,10 @@ macro_rules! impl_bits {
             const WIDTH: u32 = <$t>::BITS;
 
             fn get_bit(self, n: u32) -> bool {
-                self.checked_shr(n).is_some_and(|v| (v & 1) == 1)
+                match self.checked_shr(n) {
+                    Some(shifted) => (shifted & 1) == 1,
+                    None => false,
+                }
             }
 
             fn with_bit(self, n: u32, value: bool) -> Self {
