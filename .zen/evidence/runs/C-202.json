@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(live)"
   ],
   "exitCode": 0,
-  "outputSha": "df02131494138c76a04b7b181062a37369a8c26d8b841ff7feb6685bca1fd14f",
-  "outputTail": "        PASS [   2.223s] ( 5/17) veredas-comissionador::live a_gated_write_lands_and_a_wait_meets_what_it_caused\n        PASS [   2.341s] ( 6/17) veredas-comissionador::live an_event_moves_the_clock_to_its_row_and_a_read_without_a_value_is_an_error\n        PASS [   2.593s] ( 7/17) veredas-comissionador::live values_compute_and_compare_as_the_reference_says\n        PASS [   2.936s] ( 8/17) veredas-comissionador::live a_write_the_switch_or_the_plant_refuses_mid_run_ends_its_step_in_error\n        PASS [   3.291s] ( 9/17) veredas-comissionador::live an_awaited_row_s_copies_are_followed_in_any_order_and_a_name_s_tables_judged_together\n        PASS [   3.527s] (10/17) veredas-comissionador::live a_live_wait_for_a_duration_waits_until_its_bound_has_passed\n        PASS [   3.617s] (11/17) veredas-comissionador::live functions_take_typed_inputs_give_their_outputs_and_keep_their_bound\n        PASS [   3.691s] (12/17) veredas-comissionador::live awaits_over_a_view_take_each_row_of_a_stamp_once\n        PASS [   5.780s] (13/17) veredas-comissionador::live rows_sharing_a_stamp_are_judged_together_and_each_awaited\n        PASS [   6.316s] (14/17) veredas-comissionador::live a_wait_and_a_read_agree_on_a_stamp_two_keys_share\n        PASS [   6.607s] (15/17) veredas-comissionador::live the_worked_example_passes_live_against_the_machine\n        PASS [   6.738s] (16/17) veredas-comissionador::live timeouts_the_run_s_bound_and_the_tester_s_stop\n        PASS [   7.625s] (17/17) veredas-comissionador::live the_worked_example_fails_where_the_destination_is_free\n────────────\n     Summary [   7.628s] 17 tests run: 17 passed, 0 skipped",
-  "ranAt": "2026-11-24T22:32:52.064Z",
-  "headCommit": "988a22e51c18f6ba1f86998d4a88598b0d68ff01",
+  "outputSha": "4f25efbeab620e05b383344eb5626b89bb4b769bc021575b6e6f05fbdc6c899a",
+  "outputTail": "        PASS [   1.907s] ( 8/20) veredas-comissionador::live values_compute_and_compare_as_the_reference_says\n        PASS [   1.978s] ( 9/20) veredas-comissionador::live routes_retries_and_ends_take_the_run_where_the_file_says\n        PASS [   2.615s] (10/20) veredas-comissionador::live a_write_the_switch_or_the_plant_refuses_mid_run_ends_its_step_in_error\n        PASS [   2.713s] (11/20) veredas-comissionador::live functions_take_typed_inputs_give_their_outputs_and_keep_their_bound\n        PASS [   2.843s] (12/20) veredas-comissionador::live an_awaited_row_s_copies_are_followed_in_any_order_and_a_name_s_tables_judged_together\n        PASS [   2.900s] (13/20) veredas-comissionador::live a_live_wait_for_a_duration_waits_until_its_bound_has_passed\n        PASS [   2.920s] (14/20) veredas-comissionador::live awaits_over_a_view_take_each_row_of_a_stamp_once\n        PASS [   4.476s] (15/20) veredas-comissionador::live the_run_s_bound_is_the_run_s_clock_s_live_and_replayed_alike\n        PASS [   5.080s] (16/20) veredas-comissionador::live rows_sharing_a_stamp_are_judged_together_and_each_awaited\n        PASS [   5.668s] (17/20) veredas-comissionador::live a_wait_and_a_read_agree_on_a_stamp_two_keys_share\n        PASS [   6.468s] (18/20) veredas-comissionador::live the_worked_example_passes_live_against_the_machine\n        PASS [   6.994s] (19/20) veredas-comissionador::live timeouts_the_run_s_bound_and_the_tester_s_stop\n        PASS [   7.539s] (20/20) veredas-comissionador::live the_worked_example_fails_where_the_destination_is_free\n────────────\n     Summary [   7.540s] 20 tests run: 20 passed, 0 skipped",
+  "ranAt": "2026-11-25T00:15:08.751Z",
+  "headCommit": "b798e7a0ec5cf984c73a37730d8309333daccba4",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/live.rs",
       "file": "crates/veredas-comissionador/tests/live.rs",
-      "fileSha": "66d49734edd6b967d4e99d108f86cb56e51bebe74446cac5631134a6ddb810fc"
+      "fileSha": "785a30314c426e546b8e7510d2c480b036a5c649e2101d5b4bd8a2d0f4064eb9"
     }
   ]
 }
