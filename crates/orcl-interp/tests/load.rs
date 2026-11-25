@@ -869,3 +869,32 @@ fn a_nesting_past_the_limit_names_a_type_nested_past_it_wherever_the_chain_start
     let got = std::thread::Builder::new().stack_size(2 << 20).spawn(move || Machine::load(p, &[]).map(|_| ())).unwrap().join().ok();
     assert!(matches!(got, Some(Err(LoadError::Type { reason: "nested too deep", .. }))), "{got:?}");
 }
+
+#[test]
+fn a_variant_of_one_slot_beside_many_fields_of_no_slot_is_checked_by_its_one_slot() {
+    // enum E { A(bool, 100 000 x ()) }, and a constant [E; 100 000]: walked field by field, 10^10 checks
+    let mut p = Program::default();
+    p.types.push(Type::Struct { name: "()".into(), fields: vec![] });
+    p.types.push(Type::Bool);
+    let mut fields = vec![Field { name: "0".into(), ty: TypeId(1) }];
+    fields.extend((0..100_000).map(|_| Field { name: String::new(), ty: TypeId(0) }));
+    p.types.push(Type::Enum { name: "E".into(), discriminant: Int::U8, variants: vec![Variant { name: "A".into(), discriminant: 0, fields }] });
+    p.types.push(Type::Array { element: TypeId(2), len: 100_000 });
+    let mut slots = Vec::new();
+    for _ in 0..100_000 {
+        slots.push(int(Int::U8, 0));
+        slots.push(Scalar::Bool(true));
+    }
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[TypeId(3)]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(konst(TypeId(3), slots)), 1)], ret())],
+    });
+    let mut bad = p.clone();
+    if let Value::Use(Operand::Const(c)) = &mut bad.functions[0].blocks[0].statements[0].value {
+        c.slots[77_777] = int(Int::U8, 1);
+    }
+    assert_eq!(within_a_minute(move || Machine::load(p, &[]).map(|_| ())), Some(Ok(())));
+    assert_eq!(within_a_minute(move || Machine::load(bad, &[]).map(|_| ())), Some(Err(at_statement("a constant whose slots are not its type's"))), "one slot of another kind");
+}

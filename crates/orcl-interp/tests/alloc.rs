@@ -386,3 +386,42 @@ fn a_type_the_program_only_declares_asks_for_no_room_at_load() {
     assert!(asked < 1 << 20, "{asked} bytes asked for while loading");
     assert_eq!(m.unwrap().call(f, &[]).unwrap(), &[int(Int::U8, 3)]);
 }
+
+#[test]
+fn a_region_s_part_copied_whole_through_a_reference_allocates_nothing_in_a_machine_or_its_copy() {
+    // struct S { prev: [u8; 64], cur: [u8; 64] }  fn scan(s: &mut S) { s.prev = s.cur }: no local of that size;
+    // and regions u8 and [u8; 64], `*a = *b` on the second, the larger of two
+    let mut b = Build::default();
+    let (u8t, unit) = (b.int(Int::U8), b.unit());
+    let arr = b.ty(Type::Array { element: u8t, len: 64 });
+    let s = b.ty(Type::Struct { name: "S".into(), fields: vec![Field { name: "prev".into(), ty: arr }, Field { name: "cur".into(), ty: arr }] });
+    let (rs, ra, rb) = (b.reference(s, true), b.reference(arr, true), b.reference(arr, false));
+    let scan = b.function(Function {
+        name: "scan".into(),
+        params: 1,
+        locals: locals(&[unit, rs]),
+        blocks: vec![block(vec![assign(proj(1, vec![Projection::Deref, Projection::Field(0)]), Value::Use(copy_at(proj(1, vec![Projection::Deref, Projection::Field(1)]))), 1)], ret())],
+    });
+    let whole = b.function(Function {
+        name: "whole".into(),
+        params: 2,
+        locals: locals(&[unit, ra, rb]),
+        blocks: vec![block(vec![assign(proj(1, vec![Projection::Deref]), Value::Use(copy_at(proj(2, vec![Projection::Deref]))), 1)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[u8t, s, arr]).unwrap();
+    let mut slots = vec![int(Int::U8, 0); 64];
+    slots.extend((0..64).map(|i| int(Int::U8, i)));
+    m.set_region(RegionId(1), &slots).unwrap();
+    m.set_region(RegionId(2), &(0..64).map(|i| int(Int::U8, 100 + i)).collect::<Vec<_>>()).unwrap();
+    let mut copy = m.clone();
+    for (who, machine) in [("the machine", &mut m), ("its copy", &mut copy)] {
+        let (got, asked) = watching(|| {
+            let a = machine.call(scan, &[Arg::Ref(RegionId(1))]).map(|r| r.len());
+            let b = machine.call(whole, &[Arg::Ref(RegionId(2)), Arg::Ref(RegionId(2))]).map(|r| r.len());
+            (a, b)
+        });
+        assert_eq!((got, asked), ((Ok(0), Ok(0)), 0), "{who}'s first scan");
+        let region = machine.region(RegionId(1)).unwrap();
+        assert_eq!(&region[..64], &region[64..], "prev = cur in {who}");
+    }
+}

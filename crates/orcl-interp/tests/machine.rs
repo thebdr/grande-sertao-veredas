@@ -1057,3 +1057,156 @@ fn a_type_of_no_slot_given_a_slot_is_refused_as_a_constant_a_region_and_an_argum
     assert_eq!(got, Err(CallError::Host(HostError::Arguments)), "an argument");
     assert_eq!(m.call(f, &[Arg::Value(&[]), Arg::Value(&[Scalar::Bool(false)])]).unwrap(), &[Scalar::Bool(false)]);
 }
+
+#[test]
+fn an_array_of_elements_of_two_slots_is_indexed_at_its_element_s_slots_and_takes_its_values_and_no_other() {
+    // fn f(i: usize) -> ([(u8, u16); 3], (u8, u16), (u8, u16)) {
+    //     let mut a = [(1, 2), (3, 4), (5, 6)]; let x = a[i]; let y = a[1]; a[i].1 = 9; (a, x, y) }
+    let mut b = Build::default();
+    let (u8t, u16t, usize_t) = (b.int(Int::U8), b.int(Int::U16), b.int(Int::Usize));
+    let pair = b.tuple(&[u8t, u16t]);
+    let arr = b.ty(Type::Array { element: pair, len: 3 });
+    let out = b.tuple(&[arr, pair, pair]);
+    let p = |x: i128, y: i128| konst(pair, vec![int(Int::U8, x), int(Int::U16, y)]);
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[out, usize_t, arr, pair, pair]),
+        blocks: vec![block(
+            vec![
+                assign(place(2), Value::Aggregate(arr, None, vec![p(1, 2), p(3, 4), p(5, 6)]), 1),
+                assign(place(3), Value::Use(copy_at(proj(2, vec![Projection::Index(Local(1))]))), 2),
+                assign(place(4), Value::Use(copy_at(proj(2, vec![Projection::ConstantIndex(1)]))), 3),
+                assign(proj(2, vec![Projection::Index(Local(1)), Projection::Field(1)]), Value::Use(konst(u16t, vec![int(Int::U16, 9)])), 4),
+                assign(place(0), Value::Aggregate(out, None, vec![copy(2), copy(3), copy(4)]), 5),
+            ],
+            ret(),
+        )],
+    });
+    let g = b.function(Function { name: "g".into(), params: 1, locals: locals(&[arr, arr]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
+    let program = b.program;
+    let mut m = Machine::load(program.clone(), &[arr]).unwrap();
+    let (a, c) = (|v| int(Int::U8, v), |v| int(Int::U16, v));
+    for (i, x, written) in [(0, (1, 2), [(1, 9), (3, 4), (5, 6)]), (2, (5, 6), [(1, 2), (3, 4), (5, 9)])] {
+        let arg = [int(Int::Usize, i)];
+        let mut want = vec![];
+        for (u, v) in written {
+            want.extend([a(u), c(v)]);
+        }
+        want.extend([a(x.0), c(x.1), a(3), c(4)]);
+        assert_eq!(m.call(f, &[Arg::Value(&arg)]).unwrap(), want.as_slice(), "a[{i}] read, a[1] read, a[{i}].1 written");
+    }
+    // the array's values and no other, as a region, a constant and an argument
+    let good = vec![a(1), c(2), a(3), c(4), a(5), c(6)];
+    let wrong = vec![a(1), c(2), a(3), c(4), a(5), a(6)];
+    assert_eq!(m.set_region(RegionId(0), &good), Ok(()));
+    assert_eq!(m.set_region(RegionId(0), &wrong), Err(HostError::Slots), "the last element's u16 a u8");
+    assert_eq!(m.call(g, &[Arg::Value(&good)]).unwrap(), good.as_slice());
+    assert_eq!(m.start(g, &[Arg::Value(&wrong)]), Err(HostError::Arguments));
+    for (slots, fits_) in [(good, true), (wrong, false)] {
+        let mut p = program.clone();
+        p.functions.push(Function { name: "k".into(), params: 0, locals: locals(&[arr]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(arr, slots)), 1)], ret())] });
+        let got = Machine::load(p, &[]).map(|_| ());
+        assert_eq!(got.is_ok(), fits_, "a constant: {got:?}");
+    }
+}
+
+#[test]
+fn fields_of_no_slot_before_those_with_one_are_passed_by_at_their_own_offsets() {
+    // S { a: (), b: u8, c: bool }, T { a: (), b: u8, c: u8 }, enum E { A((), u8, bool) = 0 }
+    let mut b = Build::default();
+    let (unit, u8t, boolean) = (b.unit(), b.int(Int::U8), b.bool());
+    let f = |n: &str, t| Field { name: n.into(), ty: t };
+    let s = b.ty(Type::Struct { name: "S".into(), fields: vec![f("a", unit), f("b", u8t), f("c", boolean)] });
+    let t = b.ty(Type::Struct { name: "T".into(), fields: vec![f("a", unit), f("b", u8t), f("c", u8t)] });
+    let e = b.ty(Type::Enum { name: "E".into(), discriminant: Int::U8, variants: vec![Variant { name: "A".into(), discriminant: 0, fields: vec![f("0", unit), f("1", u8t), f("2", boolean)] }] });
+    let read_c = b.function(Function { name: "c".into(), params: 1, locals: locals(&[boolean, s]), blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Field(2)]))), 1)], ret())] });
+    let program = b.program;
+    let mut m = Machine::load(program.clone(), &[s, t, e]).unwrap();
+    for (name, region, slots, good) in [
+        ("S(7, true)", 0, vec![int(Int::U8, 7), Scalar::Bool(true)], true),
+        ("S(7, 8)", 0, vec![int(Int::U8, 7), int(Int::U8, 8)], false),
+        ("T(7, true)", 1, vec![int(Int::U8, 7), Scalar::Bool(true)], false),
+        ("T(7, 8)", 1, vec![int(Int::U8, 7), int(Int::U8, 8)], true),
+        ("E::A(7, true)", 2, vec![int(Int::U8, 0), int(Int::U8, 7), Scalar::Bool(true)], true),
+        ("E::A(7, 8)", 2, vec![int(Int::U8, 0), int(Int::U8, 7), int(Int::U8, 8)], false),
+    ] {
+        assert_eq!(m.set_region(RegionId(region), &slots), if good { Ok(()) } else { Err(HostError::Slots) }, "{name}");
+        let ty = [s, t, e][region as usize];
+        let mut p = program.clone();
+        p.functions.push(Function { name: "k".into(), params: 0, locals: locals(&[ty]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(ty, slots.clone())), 1)], ret())] });
+        assert_eq!(Machine::load(p, &[]).is_ok(), good, "a constant {name}");
+    }
+    let arg = [int(Int::U8, 7), Scalar::Bool(true)];
+    assert_eq!(m.call(read_c, &[Arg::Value(&arg)]).unwrap(), &[Scalar::Bool(true)], "S's field c read past its field of no slot");
+}
+
+#[test]
+fn a_duration_outside_its_integers_ranges_is_refused_as_a_region_an_argument_and_a_constant_and_a_refused_region_keeps_its_value() {
+    let bad = [
+        ("nanoseconds of -1", [int(Int::U64, 0), Scalar::Int(Int::U32, -1)]),
+        ("seconds of -1", [Scalar::Int(Int::U64, -1), int(Int::U32, 0)]),
+        ("seconds of 2^64", [Scalar::Int(Int::U64, 1 << 64), int(Int::U32, 0)]),
+        ("nanoseconds of 2^32", [int(Int::U64, 0), Scalar::Int(Int::U32, 1 << 32)]),
+    ];
+    let mut b = Build::default();
+    let (u8t, d) = (b.int(Int::U8), b.ty(Type::Duration));
+    let opt = b.option(u8t);
+    let f = b.function(Function {
+        name: "min".into(),
+        params: 2,
+        locals: locals(&[d, d, d]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Core(CoreOp::DurationMin), args: vec![copy(1), copy(2)], dest: place(0), next: BlockId(1), at: at(1) }),
+            block(vec![], ret()),
+        ],
+    });
+    let program = b.program;
+    let mut m = Machine::load(program.clone(), &[d, opt]).unwrap();
+    let kept = [int(Int::U64, 3), int(Int::U32, 5)];
+    m.set_region(RegionId(0), &kept).unwrap();
+    let one = [int(Int::U64, 1), int(Int::U32, 0)];
+    for (name, slots) in bad {
+        assert_eq!(m.set_region(RegionId(0), &slots), Err(HostError::Slots), "region: {name}");
+        assert_eq!(m.region(RegionId(0)), Some(&kept[..]), "the region keeps its value: {name}");
+        assert_eq!(m.start(f, &[Arg::Value(&slots), Arg::Value(&one)]), Err(HostError::Arguments), "argument: {name}");
+        let mut p = program.clone();
+        p.functions.push(Function { name: "k".into(), params: 0, locals: locals(&[d]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(d, slots.to_vec())), 1)], ret())] });
+        assert!(matches!(Machine::load(p, &[]), Err(LoadError::Instruction { reason: "a constant whose slots are not its type's", .. })), "constant: {name}");
+    }
+    let some = [int(Int::Isize, 1), int(Int::U8, 9)];
+    m.set_region(RegionId(1), &some).unwrap();
+    assert_eq!(m.set_region(RegionId(1), &[int(Int::Isize, 0), int(Int::U8, 5)]), Err(HostError::Slots));
+    assert_eq!(m.region(RegionId(1)), Some(&some[..]), "a None with a payload refused, the Some kept");
+}
+
+#[test]
+fn a_return_value_is_unwritten_at_every_start_and_every_call() {
+    // fn g() -> u8 { 7 }  fn f() -> u8 { _0 = _0 + 1 }  fn main() -> u8 { g(); f() }
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let g = b.function(Function { name: "g".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 7)])), 1)], ret())] });
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t]),
+        blocks: vec![block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(0), konst(u8t, vec![int(Int::U8, 1)])), 2)], ret())],
+    });
+    let main = b.function(Function {
+        name: "main".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(g), args: vec![], dest: place(1), next: BlockId(1), at: at(3) }),
+            block(vec![], Terminator::Call { callee: Callee::Function(f), args: vec![], dest: place(0), next: BlockId(2), at: at(4) }),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    assert_eq!(m.call(g, &[]).unwrap(), &[int(Int::U8, 7)]);
+    for entry in [f, main] {
+        let got = m.call(entry, &[]).map(|r| r.to_vec());
+        assert!(matches!(got, Err(CallError::Program(ProgramError { kind: ErrorKind::Uninit, function, .. })) if function == f), "{got:?}");
+        m.abort();
+    }
+}

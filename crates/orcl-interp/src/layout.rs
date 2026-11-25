@@ -497,7 +497,10 @@ pub(crate) fn fits(types: &[Type], sizes: &Sizes, ty: TypeId, slots: &[Scalar]) 
             true
         }
         (Some(Type::Int(t)), [Scalar::Int(u, v)]) => t == u && t.holds(*v),
-        (Some(Type::Duration), [Scalar::Int(Int::U64, _), Scalar::Int(Int::U32, n)]) => *n < 1_000_000_000,
+        // a duration's seconds a u64's and its nanoseconds a u32's below a second, each in its own type's range
+        (Some(Type::Duration), [Scalar::Int(Int::U64, s), Scalar::Int(Int::U32, n)]) => {
+            Int::U64.holds(*s) && Int::U32.holds(*n) && *n < 1_000_000_000
+        }
         (Some(Type::Struct { fields, .. }), _) => {
             let offsets = sizes.fields.get(ty.0 as usize);
             let slotted = sizes.slotted_fields.get(ty.0 as usize).map_or(&[][..], |s| s.as_slice());
