@@ -20,6 +20,7 @@ VEREDAS_SETTLE (default 5) the seconds it watches the services for, twice.
 """
 
 import fcntl
+import gzip
 import hashlib
 import os
 import shutil
@@ -68,22 +69,31 @@ def manifest(path):
     try:
         with open(path, "rb") as f:
             return tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError) as e:
+    except (OSError, ValueError) as e:
         raise Refused([f"{os.path.basename(path)} does not read: {e}"])
 
 
 def unpack(bundle, stage):
     """The archive extracted into `stage`: its one folder at the top, holding files and folders
     alone, every path inside it."""
+    # The whole compressed stream read first, so gzip's own CRC and length judge every byte (tarfile
+    # stops at the archive's end and never reaches them); whatever reading it raises is its refusal
+    # (a corrupt stream may raise zlib's own error from a seek tarfile does not wrap).
+    try:
+        with gzip.open(bundle, "rb") as g:
+            while g.read(1 << 20):
+                pass
+    except Exception as e:
+        raise Refused([f"the bundle is no release bundle (a gzipped tar): {e}"])
     try:
         tf = tarfile.open(bundle, "r:gz")
-    except (OSError, tarfile.TarError, EOFError) as e:
-        raise Refused([f"{bundle} is no release bundle (a gzipped tar): {e}"])
+    except Exception as e:
+        raise Refused([f"the bundle is no release bundle (a gzipped tar): {e}"])
     with tf:
         try:
             members = tf.getmembers()
-        except (OSError, tarfile.TarError, EOFError) as e:
-            raise Refused([f"{bundle} does not read to its end: {e}"])
+        except Exception as e:
+            raise Refused([f"the bundle does not read to its end: {e}"])
         problems, tops = [], set()
         for m in members:
             parts = m.name.split("/")
@@ -100,7 +110,10 @@ def unpack(bundle, stage):
         free = shutil.disk_usage(OPT).free
         if need + RESERVE > free:
             raise Refused([f"the bundle needs {need >> 20} MB under {OPT} and {RESERVE >> 20} MB left free; {free >> 20} MB are free"])
-        tf.extractall(stage, filter="data")
+        try:
+            tf.extractall(stage, filter="data")
+        except Exception as e:
+            raise Refused([f"the bundle does not read to its end: {e}"])
     return tops.pop()
 
 
@@ -111,7 +124,7 @@ def check_sums(folder):
             for line in f:
                 digest, _, name = line.rstrip("\n").partition("  ")
                 listed[name] = digest
-    except OSError as e:
+    except (OSError, ValueError) as e:
         raise Refused([f"the bundle holds no readable SHA256SUMS: {e}"])
     present = []
     for d, _, files in os.walk(folder):
@@ -184,6 +197,18 @@ def point(link, target):
         os.unlink(new)
     os.symlink(target, new)
     os.replace(new, link)
+
+
+def check_path(bins):
+    """Each executable's place on the PATH is free or a link the releases made (through
+    `current`): a file or folder of another's is never replaced."""
+    wrong = []
+    for b in bins:
+        p = os.path.join(PATH_DIR, b)
+        if os.path.lexists(p) and not (os.path.islink(p) and os.readlink(p).startswith(THROUGH)):
+            wrong.append(f"{p} is not a link a release made: an executable of the release would replace it")
+    if wrong:
+        raise Refused(wrong)
 
 
 def install(stage, top, old_top, bins):
@@ -261,30 +286,43 @@ def main(argv):
         return 1
     bundle = argv[1]
     try:
+        # One update at a time, the lock taken before anything is read: the installed release
+        # and `current` are the ones this update replaces. The release's folder itself is locked,
+        # so nothing is left behind.
+        lock = os.open(OPT, os.O_RDONLY)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("veredas-atualizar: another update is running", file=sys.stderr)
+        return 2
+    except OSError as e:
+        print(f"veredas-atualizar: {OPT}: {e.strerror}", file=sys.stderr)
+        return 2
+    try:
         installed = manifest(os.path.join(CURRENT, "release.toml"))
         old_top = os.readlink(CURRENT) if os.path.islink(CURRENT) else ""
-        with open(bundle, "rb") as f:
-            digest = hashlib.sha256(f.read()).hexdigest()
     except Refused as e:
         print("veredas-atualizar: the installed release does not read:\n" + str(e), file=sys.stderr)
         return 2
-    except OSError as e:
-        print(f"veredas-atualizar: {bundle}: {e.strerror}", file=sys.stderr)
-        return 2
-    print(f"veredas-atualizar: {bundle} (SHA-256 {digest})")
     try:
-        # One update at a time: the release's folder itself locked, so nothing is left behind.
-        lock = os.open(OPT, os.O_RDONLY)
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         stage = tempfile.mkdtemp(prefix=".atualizar-", dir=OPT)
     except PermissionError:
         print(f"veredas-atualizar: {OPT} is not writable here: run it with sudo", file=sys.stderr)
         return 2
-    except BlockingIOError:
-        print("veredas-atualizar: another update is running", file=sys.stderr)
-        return 2
     try:
-        top = unpack(bundle, stage)
+        # The bundle read once, into the staging folder: its digest and its contents are of the
+        # same bytes, whatever the file does meanwhile.
+        copy = os.path.join(stage, "bundle.tar.gz")
+        h = hashlib.sha256()
+        try:
+            with open(bundle, "rb") as src, open(copy, "wb") as dst:
+                while chunk := src.read(1 << 20):
+                    h.update(chunk)
+                    dst.write(chunk)
+        except FileNotFoundError as e:
+            print(f"veredas-atualizar: {bundle}: {e.strerror}", file=sys.stderr)
+            return 2
+        print(f"veredas-atualizar: {bundle} (SHA-256 {h.hexdigest()})")
+        top = unpack(copy, stage)
         folder = os.path.join(stage, top)
         check_sums(folder)
         m = check_manifest(folder, top, installed)
@@ -293,6 +331,7 @@ def main(argv):
             sums = hashlib.sha256(f.read()).hexdigest()
         print(f"veredas-atualizar: its SHA256SUMS {sums} (what the boot's check says as VEREDAS-BUNDLE)")
         bins = sorted(os.listdir(os.path.join(folder, "bin")))
+        check_path(bins)
         install(stage, top, old_top, bins)
     except OSError as e:
         print("veredas-atualizar: not installed, the machine is as it was:", file=sys.stderr)
@@ -302,6 +341,11 @@ def main(argv):
         print("veredas-atualizar: not installed, the machine is as it was:", file=sys.stderr)
         for r in e.reasons:
             print(f"  {r}", file=sys.stderr)
+        return 2
+    except Exception as e:
+        # Whatever else a bundle makes go wrong before it is installed is a refusal too.
+        print("veredas-atualizar: not installed, the machine is as it was:", file=sys.stderr)
+        print(f"  {type(e).__name__}: {e}", file=sys.stderr)
         return 2
     finally:
         shutil.rmtree(stage, ignore_errors=True)

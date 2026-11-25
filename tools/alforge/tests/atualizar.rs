@@ -54,10 +54,15 @@ struct Machine {
 
 impl Machine {
     fn new() -> Machine {
+        Machine::with("1.0.0")
+    }
+
+    /// [`Machine::new`] with `release` installed.
+    fn with(release: &str) -> Machine {
         let root = tempfile::tempdir().unwrap();
         let opt = root.path().join("opt/veredas");
-        release_folder(&opt, "1.0.0", TARGET, &["veredas-portal", "veredas-velho"]);
-        std::os::unix::fs::symlink(format!("veredas-1.0.0-{TARGET}"), opt.join("current")).unwrap();
+        release_folder(&opt, release, TARGET, &["veredas-portal", "veredas-velho"]);
+        std::os::unix::fs::symlink(format!("veredas-{release}-{TARGET}"), opt.join("current")).unwrap();
         let bin = root.path().join("usr/local/bin");
         std::fs::create_dir_all(&bin).unwrap();
         for b in ["veredas-portal", "veredas-velho"] {
@@ -106,17 +111,17 @@ impl Machine {
 
     /// The command run on `args` as the machine runs it: its exit code, stdout and stderr.
     fn run(&self, args: &[&Path]) -> (Option<i32>, String, String) {
+        let out = self.command(args, &[("VEREDAS_SETTLE", "0")]).output().unwrap();
+        (out.status.code(), String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
+    }
+
+    /// The command on `args` with `env` set (`VEREDAS_SETTLE` left to its default unless given).
+    fn command(&self, args: &[&Path], env: &[(&str, &str)]) -> Command {
         let script = self.stub.path().join("veredas-atualizar");
         std::fs::write(&script, maquina::ATUALIZAR).unwrap();
-        let out = Command::new("python3")
-            .arg(&script)
-            .args(args)
-            .env("VEREDAS_ROOT", self.root.path())
-            .env("VEREDAS_SETTLE", "0")
-            .env("PATH", format!("{}:/usr/bin:/bin", self.stub.path().display()))
-            .output()
-            .unwrap();
-        (out.status.code(), String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
+        let mut c = Command::new("python3");
+        c.arg(&script).args(args).env("VEREDAS_ROOT", self.root.path()).env("PATH", format!("{}:/usr/bin:/bin", self.stub.path().display())).envs(env.iter().copied());
+        c
     }
 
     fn path(&self, rel: &str) -> PathBuf {
@@ -366,7 +371,7 @@ fn every_bundle_the_command_refuses_leaves_the_machine_as_it_was() {
     let b = w.path().join("notes.tar.gz");
     std::fs::write(&b, "not an archive\n").unwrap();
     let got = refused(&b, &m);
-    assert!(got.len() == 1 && got[0].starts_with(&format!("{} is no release bundle (a gzipped tar): ", b.display())), "{got:?}");
+    assert!(got.len() == 1 && got[0].starts_with("the bundle is no release bundle (a gzipped tar): "), "{got:?}");
     let absent = w.path().join("absent.tar.gz");
     assert_eq!(refused(&absent, &m), [format!("veredas-atualizar: {}: No such file or directory", absent.display())]);
 }
@@ -387,8 +392,9 @@ fn the_command_says_how_it_was_run_wrong_and_what_it_could_not_do() {
     std::fs::set_permissions(&opt, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!((code, err), (Some(2), format!("veredas-atualizar: {} is not writable here: run it with sudo\n", opt.display())));
     assert_eq!(m.snapshot(), before);
-    // Another update running: refused at once.
+    // Another update running: refused at once, nothing left behind.
     // `flock --close`: the lock held by flock alone, never by the sleep it runs.
+    let before = m.snapshot();
     let mut holder = Command::new("flock")
         .arg("--close")
         .arg(&opt)
@@ -402,6 +408,7 @@ fn the_command_says_how_it_was_run_wrong_and_what_it_could_not_do() {
     holder.kill().unwrap();
     holder.wait().unwrap();
     assert_eq!((code, err.as_str()), (Some(2), "veredas-atualizar: another update is running\n"));
+    assert_eq!(m.snapshot(), before);
     assert_eq!(std::fs::read_link(opt.join("current")).unwrap(), PathBuf::from(format!("veredas-1.0.0-{TARGET}")));
     // The services that do not restart: installed, said, and the way back named.
     let back = format!("sudo ln -sfn veredas-1.0.0-{TARGET} /opt/veredas/current && sudo systemctl restart veredas-bancada.service veredas-supervisao.service");
@@ -492,6 +499,7 @@ fn the_update_inside_the_machine_is_judged_by_what_its_console_and_the_host_say(
         ),
         ("VEREDAS-SUMS-OK 1.1.0", "VEREDAS-SUMS-FAILED 1.1.0", vec!["the boot's check on the new release does not say `VEREDAS-SUMS-OK 1.1.0`".to_string()]),
         ("ALFORGE-CHECK VEREDAS-ATUALIZAR ok", "ALFORGE-CHECK VEREDAS-ATUALIZAR missing", vec!["the boot's check on the new release does not say `VEREDAS-ATUALIZAR ok`".to_string()]),
+        ("ALFORGE-CHECK VEREDAS-ON-PATH ok", "ALFORGE-CHECK VEREDAS-ON-PATH missing veredas-novo", vec!["the boot's check on the new release does not say `VEREDAS-ON-PATH ok`".to_string()]),
         (&format!("ALFORGE-PLANT-AFTER {sum}"), &format!("ALFORGE-PLANT-AFTER {}", "d".repeat(64)), vec![format!("the plant's files changed or were not read ({sum} before, {} after)", "d".repeat(64))]),
         ("ALFORGE-AGAIN-EXIT 2", "ALFORGE-AGAIN-EXIT 0", vec!["the same bundle was not refused a second time (it exited 0)".to_string()]),
         ("ALFORGE-UPDATE-EXIT 0\n", "", vec!["the update command did not install the bundle (it exited with nothing said)".to_string()]),
@@ -509,4 +517,166 @@ fn the_update_inside_the_machine_is_judged_by_what_its_console_and_the_host_say(
     );
     let got = maquina::update_faults(&full(&good, 200, &reboot, 500, "a"), "1.0.0", "1.1.0", TARGET);
     assert_eq!(got, alforge::together::plant_faults(&served(500)).into_iter().map(|f| format!("booted again: {f}")).collect::<Vec<_>>());
+}
+
+#[test]
+fn the_command_holds_its_lock_before_it_reads_anything_and_reads_the_bundle_once() {
+    // An update reading its bundle from a slow source (a FIFO no one writes yet) holds the lock:
+    // another started meanwhile is refused at once, and the first then installs what it read.
+    let m = Machine::new();
+    let w = tempfile::tempdir().unwrap();
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |_| {});
+    let c = bundle_of(w.path(), "1.2.0", TARGET, &["veredas-portal"], |_| {});
+    let fifo = w.path().join("slow.tar.gz");
+    assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let slow = m.command(&[&fifo], &[("VEREDAS_SETTLE", "0")]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let outside_staging = |s: BTreeMap<String, String>| -> BTreeMap<String, String> { s.into_iter().filter(|(k, _)| !k.contains(".atualizar-")).collect() };
+    let before = outside_staging(m.snapshot());
+    let (code, _, err) = m.run(&[&c]);
+    assert_eq!((code, err.as_str()), (Some(2), "veredas-atualizar: another update is running\n"));
+    assert_eq!(outside_staging(m.snapshot()), before, "the refused update changed nothing (the staging is the first one's)");
+    std::fs::write(&fifo, std::fs::read(&b).unwrap()).unwrap();
+    let out = slow.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("(SHA-256 {})", sha256_file(&b))), "the digest of the bytes it read");
+    assert_eq!(std::fs::read_link(m.path("opt/veredas/current")).unwrap(), PathBuf::from(format!("veredas-1.1.0-{TARGET}")));
+}
+
+#[test]
+fn a_damaged_or_odd_bundle_and_a_path_not_the_releases_are_refused_with_the_machine_as_it_was() {
+    let m = Machine::new();
+    let w = tempfile::tempdir().unwrap();
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |_| {});
+    let bytes = std::fs::read(&b).unwrap();
+    let before = m.snapshot();
+    // A byte changed anywhere in the compressed stream: refused (exit 2) every time, never a
+    // traceback, the machine as it was.
+    let damaged = w.path().join("damaged.tar.gz");
+    let step = ((bytes.len() - 30) / 40).max(1);
+    for at in (20..bytes.len() - 10).step_by(step) {
+        let mut d = bytes.clone();
+        d[at] ^= 0x5a;
+        std::fs::write(&damaged, &d).unwrap();
+        let (code, out, err) = m.run(&[&damaged]);
+        assert_eq!(code, Some(2), "a byte changed at {at}: {out}{err}");
+        assert!(!err.contains("Traceback"), "{err}");
+    }
+    assert_eq!(m.snapshot(), before);
+    // Entries the release never makes: a path out of its folder, a FIFO, a hard link.
+    let odd = w.path().join("odd.tar.gz");
+    let top = format!("veredas-1.1.0-{TARGET}");
+    let py = "import io, sys, tarfile\nout, top = sys.argv[1], sys.argv[2]\nwith tarfile.open(out, 'w:gz') as t:\n    \
+              for name, kind in [(top + '/../evil', tarfile.REGTYPE), (top + '/fifo', tarfile.FIFOTYPE), (top + '/hard', tarfile.LNKTYPE)]:\n        \
+              i = tarfile.TarInfo(name); i.type = kind; i.linkname = top + '/README.md' if kind == tarfile.LNKTYPE else ''\n        \
+              t.addfile(i, io.BytesIO(b'') if kind == tarfile.REGTYPE else None)\n";
+    assert!(Command::new("python3").args(["-c", py]).arg(&odd).arg(&top).status().unwrap().success());
+    let (code, _, err) = m.run(&[&odd]);
+    assert_eq!(code, Some(2));
+    assert_eq!(
+        err,
+        format!("veredas-atualizar: not installed, the machine is as it was:\n  {top}/../evil: a path outside the bundle's folder\n  {top}/fifo: neither a file nor a folder\n  {top}/hard: neither a file nor a folder\n")
+    );
+    // A file on the PATH that is no link a release made, where an executable would go.
+    std::fs::write(m.path("usr/local/bin/veredas-novo"), "#!/bin/sh\n").unwrap();
+    let n = bundle_of(w.path(), "1.2.0", TARGET, &["veredas-portal", "veredas-novo"], |_| {});
+    let before = m.snapshot();
+    let (code, _, err) = m.run(&[&n]);
+    assert_eq!(code, Some(2));
+    assert_eq!(
+        err,
+        format!(
+            "veredas-atualizar: not installed, the machine is as it was:\n  {} is not a link a release made: an executable of the release would replace it\n",
+            m.path("usr/local/bin/veredas-novo").display()
+        )
+    );
+    assert_eq!(m.snapshot(), before);
+    // A manifest without `[tested]`: refused by name, never a traceback.
+    let t = bundle_of(w.path(), "1.3.0", TARGET, &["veredas-portal"], |d| {
+        let text = std::fs::read_to_string(d.join("release.toml")).unwrap();
+        std::fs::write(d.join("release.toml"), &text[..text.find("[tested]").unwrap()]).unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    let (code, _, err) = m.run(&[&t]);
+    assert_eq!((code, err), (Some(2), "veredas-atualizar: not installed, the machine is as it was:\n  release.toml states no `tested`\n".to_string()));
+}
+
+#[test]
+fn newer_is_semvers_precedence_numbers_compared_as_numbers() {
+    for (installed, offered, newer) in [("1.0.0-alpha.9", "1.0.0-alpha.10", true), ("1.9.0", "1.10.0", true), ("1.10.0", "1.9.0", false), ("1.0.0-alpha.10", "1.0.0-alpha.9", false)] {
+        let m = Machine::with(installed);
+        let w = tempfile::tempdir().unwrap();
+        let b = bundle_of(w.path(), offered, TARGET, &["veredas-portal"], |_| {});
+        let (code, out, err) = m.run(&[&b]);
+        assert_eq!(code, Some(if newer { 0 } else { 2 }), "{installed} then {offered}: {out}{err}");
+        if !newer {
+            assert!(err.contains(&format!("release {offered} is not newer than the installed {installed}")), "{err}");
+        }
+    }
+}
+
+#[test]
+fn an_io_error_after_links_changed_puts_them_back_and_the_room_counts_the_bundle() {
+    // The links change in name order: `veredas-a` is made, then `veredas-novo`'s new link cannot
+    // be written (a folder in its way): `current`, `veredas-a` and the folder all put back.
+    let m = Machine::new();
+    let w = tempfile::tempdir().unwrap();
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-a", "veredas-novo", "veredas-portal"], |_| {});
+    std::fs::create_dir_all(m.path("usr/local/bin/veredas-novo.new/keep")).unwrap();
+    let before = m.snapshot();
+    let (code, out, err) = m.run(&[&b]);
+    assert_eq!(code, Some(2), "{out}{err}");
+    assert!(err.starts_with("veredas-atualizar: not installed, the machine is as it was:\n  "), "{err}");
+    assert_eq!(m.snapshot(), before, "current, veredas-a's link and the release's folder put back");
+    assert_eq!(m.calls(), "");
+    // The room a bundle needs: its files' size beside the reserve. A sparse file of 200 MB packs
+    // small; with the reserve just under the free room, its size is what does not fit.
+    let m = Machine::new();
+    let w2 = tempfile::tempdir().unwrap();
+    let big = bundle_of(w2.path(), "1.1.0", TARGET, &["veredas-portal"], |d| {
+        std::fs::File::create(d.join("planta/big.bin")).unwrap().set_len(200 << 20).unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    let avail = String::from_utf8(Command::new("df").args(["--output=avail", "-B1"]).arg(m.path("opt")).output().unwrap().stdout).unwrap();
+    let avail: u64 = avail.lines().nth(1).unwrap().trim().parse().unwrap();
+    let reserve = ((avail >> 20) - 40).to_string();
+    let before = m.snapshot();
+    let out = m.command(&[&big], &[("VEREDAS_SETTLE", "0"), ("VEREDAS_RESERVE_MB", &reserve)]).output().unwrap();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(err.contains("  the bundle needs 200 MB under "), "{err}");
+    assert_eq!(m.snapshot(), before);
+}
+
+#[test]
+fn the_services_are_watched_long_enough_to_see_one_restarting() {
+    // A service that keeps exiting and coming back: systemd names a new main process each second.
+    // With the command's own watch (no VEREDAS_SETTLE), it is seen: exit 3, the way back named.
+    use std::os::unix::fs::PermissionsExt;
+    let m = Machine::new();
+    let stub = m.stub.path().join("systemctl");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = show ]; then t=$(date +%s); printf 'ActiveState=active\\nExecMainStartTimestampMonotonic=1\\n\\nActiveState=active\\nExecMainStartTimestampMonotonic=%s\\n' \"$t\"; exit 0; fi\necho \"$*\" >> '{}'\n",
+            m.stub.path().join("calls").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let w = tempfile::tempdir().unwrap();
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |_| {});
+    let start = std::time::Instant::now();
+    let out = m.command(&[&b], &[]).output().unwrap();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(3), "{err}");
+    assert!(start.elapsed() >= std::time::Duration::from_secs(9), "watched twice five seconds: {:?}", start.elapsed());
+    assert!(err.contains("they did not stay active"), "{err}");
+    // systemd that cannot say the services' state: not taken as up.
+    let m = Machine::new();
+    std::fs::write(m.stub.path().join("systemctl"), "#!/bin/sh\n[ \"$1\" = show ] && exit 1\nexit 0\n").unwrap();
+    std::fs::set_permissions(m.stub.path().join("systemctl"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (code, _, err) = m.run(&[&b]);
+    assert_eq!(code, Some(3));
+    assert!(err.contains("(systemctl could not say their state)"), "{err}");
 }
