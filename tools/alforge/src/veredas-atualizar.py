@@ -15,6 +15,10 @@ Anything refused, an I/O error included, leaves the machine as it was; what the 
 remove of its own is said, and is no refusal "as it was" (exit 4). What a run killed midway left
 (its staging folder, a scratch link) is removed at the next run's start, under the lock.
 
+Interrupted (Ctrl-C, a closed terminal, a shutdown) before the install, it is a refusal, the
+machine as it was; the install itself holds an interruption until it is done; interrupted while it
+watches the services, it says the way back (exit 3).
+
 Exit 0 when installed, 2 when refused (the reasons of the first check that fails said: the
 archive, then its sums, its manifest, its executables' libraries, the PATH), 3 when installed but
 the services did not stay up on it (the way back said), 4 when a failed install could not all be
@@ -27,7 +31,9 @@ import fcntl
 import gzip
 import hashlib
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -64,6 +70,25 @@ class Alone(Exception):
 
 
 BROKEN = "not installed, and the machine could not all be put back as it was:"
+
+
+class Stopped(BaseException):
+    """The run interrupted (Ctrl-C, a closed terminal, a shutdown), as a refusal before the install
+    and as no verdict after it: a BaseException, so no reading's own `except Exception` takes it
+    for a damaged bundle."""
+
+    def __init__(self, name):
+        super().__init__(name)
+        self.name = name
+
+
+# The signals a tester's interruption sends: each a `Stopped`. The install itself (a rename and a
+# few links) holds them until it is done, so no run stops halfway through it.
+STOPS = [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]
+
+
+def stopping(signum, _frame):
+    raise Stopped(signal.Signals(signum).name)
 
 
 class Refused(Exception):
@@ -233,12 +258,14 @@ def leftovers():
     which proves no run owns it: its staging folder `/opt/veredas/.atualizar-*` and its scratch
     links `.<name>.atualizar-<pid>` beside `current` and on the PATH. Each one removed is said; one
     that cannot be is said too, and left."""
+    # Only the shapes a run makes: a staging folder as `tempfile.mkdtemp` names it (eight of its
+    # letters), and a scratch link `.<name>.atualizar-<pid>`; anything else is another's, and kept.
     found = []
     if os.path.isdir(OPT):
-        found += [os.path.join(OPT, n) for n in sorted(os.listdir(OPT)) if n.startswith(".atualizar-") and os.path.isdir(os.path.join(OPT, n)) and not os.path.islink(os.path.join(OPT, n))]
+        found += [os.path.join(OPT, n) for n in sorted(os.listdir(OPT)) if re.fullmatch(r"\.atualizar-[a-z0-9_]{8}", n) and os.path.isdir(os.path.join(OPT, n)) and not os.path.islink(os.path.join(OPT, n))]
     for d in [OPT, PATH_DIR]:
         if os.path.isdir(d):
-            found += [os.path.join(d, n) for n in sorted(os.listdir(d)) if n.startswith(".") and ".atualizar-" in n and n.rsplit(".atualizar-", 1)[1].isdigit() and os.path.islink(os.path.join(d, n))]
+            found += [os.path.join(d, n) for n in sorted(os.listdir(d)) if re.fullmatch(r"\..+\.atualizar-[0-9]+", n) and os.path.islink(os.path.join(d, n))]
     for p in found:
         left = []
         if os.path.islink(p):
@@ -401,6 +428,9 @@ def main(argv):
     stopped = None
     as_it_was = "not installed, the machine is as it was:"
     try:
+        # An interruption from here on is a refusal: the staging folder removed, nothing installed.
+        for sig in STOPS:
+            signal.signal(sig, stopping)
         # The bundle read once, into the staging folder: its digest and its contents are of the
         # same bytes, whatever the file does meanwhile.
         copy = os.path.join(stage, "bundle.tar.gz")
@@ -432,7 +462,12 @@ def main(argv):
         print(f"veredas-atualizar: its SHA256SUMS {sums} (what the boot's check says as VEREDAS-BUNDLE)")
         bins = sorted(os.listdir(os.path.join(folder, "bin")))
         check_path(bins)
+        # Held from here: the install runs whole, and what it did is judged and said, before an
+        # interruption is taken (after the services' restart, as no verdict, the way back said).
+        signal.pthread_sigmask(signal.SIG_BLOCK, STOPS)
         install(stage, top, old_top, bins)
+    except Stopped as e:
+        stopped = (2, as_it_was, [f"stopped by {e.name} before anything was installed"])
     except Alone as e:
         stopped = (2, None, e.reasons)
     except OSError as e:
@@ -471,8 +506,17 @@ def main(argv):
     print(f"veredas-atualizar: release {installed['release']} -> {m['release']} (commit {m.get('commit')})")
     print(f"veredas-atualizar: installed at {os.path.join(OPT, top)}; the old release kept at {old}")
     print("veredas-atualizar: the plant's files in the home folder left as they are; the release's own plant is in /opt/veredas/current/planta")
-    restart = subprocess.run(["systemctl", "restart", *SERVICES], capture_output=True, text=True)
-    why = (restart.stderr.strip() or f"systemctl exited {restart.returncode}") if restart.returncode != 0 else staying_up()
+    print(f"veredas-atualizar: restarting the bench and supervisão on it, and watching them for {2 * SETTLE:g} s")
+    sys.stdout.flush()
+    try:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, STOPS)
+        restart = subprocess.run(["systemctl", "restart", *SERVICES], capture_output=True, text=True)
+        why = (restart.stderr.strip() or f"systemctl exited {restart.returncode}") if restart.returncode != 0 else staying_up()
+    except Stopped as e:
+        signal.pthread_sigmask(signal.SIG_BLOCK, STOPS)
+        back = f"sudo ln -sfn {os.path.basename(old)} /opt/veredas/current && sudo systemctl restart {' '.join(SERVICES)}"
+        print(f"veredas-atualizar: installed, and stopped by {e.name} before the bench and supervisão were seen to stay up on it; to go back: {back}", file=sys.stderr)
+        return 3
     if why:
         back = f"sudo ln -sfn {os.path.basename(old)} /opt/veredas/current && sudo systemctl restart {' '.join(SERVICES)}"
         print(f"veredas-atualizar: the bench and supervisão did not stay up on it ({why}); to go back: {back}", file=sys.stderr)

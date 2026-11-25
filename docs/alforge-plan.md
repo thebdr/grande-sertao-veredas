@@ -367,7 +367,9 @@ passed on 2026-11-23.
   to its end, the services' watch included), and a restart that fails says how to point `current`
   back. What a run killed midway leaves (a reboot or a closed terminal during the read: its
   staging folder `/opt/veredas/.atualizar-*`, a scratch link) is removed and said by the next run,
-  under the lock. The boot's check names the release
+  under the lock. An interruption (Ctrl-C, a closed terminal, a shutdown) before the install is a
+  refusal; the install's few renames hold it until they are done; during the services' watch it is
+  answered with the way back. The boot's check names the release
   `current` names, and says the command is there (`VEREDAS-ATUALIZAR ok`). A trial's bundle is
   never installed. The command watches the services after the restart (active, one main process,
   at two looks): a release that refuses the kept plant exits and is restarted by systemd, and the
