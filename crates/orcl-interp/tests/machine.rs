@@ -1974,3 +1974,337 @@ fn a_later_call_argument_and_a_later_aggregate_part_of_another_type_are_refused(
         Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a part of another type than its place" })
     );
 }
+
+// Round 12's (the critic's kill-tests, kept): moved operands, every operand of an operation checked, an unsigned
+// enum's negative discriminant, every check an assertion carries, a call's own location, a variant written over a
+// larger one, and a copy's regions and last result.
+
+fn mv(local: u32) -> Operand {
+    Operand::Move(place(local))
+}
+
+fn mv_at(p: Place) -> Operand {
+    Operand::Move(p)
+}
+
+
+/// fn f(n: u32, d: Duration) -> (u32, Duration) { if n > 0 { g((n + 1, d.min(FIVE))) } else { (0, d) } }, every
+/// temporary read by `move` as rustc gives it: switchInt(move _3), assert(!move (_4.1)), _5 = move (_4.0), a core
+/// operation's Duration by move, an aggregate's parts by move, a call's argument by move, and g's `_0 = move _1`.
+#[test]
+fn moved_operands_run_as_copies_do() {
+    let mut b = Build::default();
+    let (u32t, boolean, d) = (b.int(Int::U32), b.bool(), b.ty(Type::Duration));
+    let pair = b.tuple(&[u32t, boolean]);
+    let out = b.tuple(&[u32t, d]);
+    let g = b.function(Function {
+        name: "g".into(),
+        params: 1,
+        locals: locals(&[out, out]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(mv(1)), 1)], ret())],
+    });
+    let five = konst(d, dur(Duration::from_secs(5)));
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 2,
+        locals: locals(&[out, u32t, d, boolean, pair, u32t, d, out, u32t]),
+        blocks: vec![
+            block(
+                vec![
+                    assign(place(8), Value::Use(copy(1)), 1),
+                    assign(place(3), Value::Binary(BinOp::Gt, mv(8), konst(u32t, vec![int(Int::U32, 0)])), 1),
+                ],
+                Terminator::SwitchInt { value: mv(3), targets: vec![(0, BlockId(5))], otherwise: BlockId(1), at: at(1) },
+            ),
+            block(
+                vec![assign(place(4), Value::Checked(BinOp::Add, mv(1), konst(u32t, vec![int(Int::U32, 1)])), 2)],
+                Terminator::Assert { cond: mv_at(proj(4, vec![Projection::Field(1)])), expected: false, check: Check::Overflow(BinOp::Add), next: BlockId(2), at: at(2) },
+            ),
+            block(
+                vec![assign(place(5), Value::Use(mv_at(proj(4, vec![Projection::Field(0)]))), 3)],
+                Terminator::Call { callee: Callee::Core(CoreOp::DurationMin), args: vec![mv(2), five], dest: place(6), next: BlockId(3), at: at(3) },
+            ),
+            block(
+                vec![assign(place(7), Value::Aggregate(out, None, vec![mv(5), mv(6)]), 4)],
+                Terminator::Call { callee: Callee::Function(g), args: vec![mv(7)], dest: place(0), next: BlockId(4), at: at(4) },
+            ),
+            block(vec![], ret()),
+            block(vec![assign(place(0), Value::Aggregate(out, None, vec![konst(u32t, vec![int(Int::U32, 0)]), mv(2)]), 6)], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).expect("a program of moves loads");
+    let run = |m: &mut Machine, n: i128, x: Duration| {
+        let (a, c) = ([int(Int::U32, n)], dur(x));
+        let r = m.call(f, &[Arg::Value(&a), Arg::Value(&c)]).map(|r| r.to_vec());
+        m.abort();
+        r
+    };
+    let mut want = vec![int(Int::U32, 0)];
+    want.extend(dur(Duration::from_secs(3)));
+    assert_eq!(run(&mut m, 0, Duration::from_secs(3)), Ok(want), "n = 0: (0, d)");
+    let mut want = vec![int(Int::U32, 8)];
+    want.extend(dur(Duration::from_secs(5)));
+    assert_eq!(run(&mut m, 7, Duration::from_secs(9)), Ok(want), "n = 7: (8, d.min(5 s))");
+    let mut want = vec![int(Int::U32, 8)];
+    want.extend(dur(Duration::from_millis(1500)));
+    assert_eq!(run(&mut m, 7, Duration::from_millis(1500)), Ok(want), "n = 7: (8, 1.5 s)");
+    assert_eq!(
+        run(&mut m, u32::MAX as i128, Duration::ZERO),
+        Err(CallError::Program(ProgramError { function: f, block: BlockId(1), statement: None, at: at(2), kind: ErrorKind::Check(Check::Overflow(BinOp::Add)) })),
+        "the overflow named at its assertion"
+    );
+}
+
+/// fn h(a: u8, r: &u8) -> u8 { a + *r }, the region never set: its right operand is the one never written, as in
+/// `self.total + inputs.step`.
+#[test]
+fn an_unwritten_right_operand_is_uninit() {
+    let mut b = Build::default();
+    let (u8t, f32t, boolean) = (b.int(Int::U8), b.ty(Type::F32), b.bool());
+    let (ru8, rf32) = (b.reference(u8t, false), b.reference(f32t, false));
+    let h = b.function(Function {
+        name: "h".into(),
+        params: 2,
+        locals: locals(&[u8t, u8t, ru8]),
+        blocks: vec![block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(1), copy_at(proj(2, vec![Projection::Deref]))), 7)], ret())],
+    });
+    let k = b.function(Function {
+        name: "k".into(),
+        params: 2,
+        locals: locals(&[boolean, f32t, rf32]),
+        blocks: vec![block(vec![assign(place(0), Value::Binary(BinOp::Lt, copy(1), copy_at(proj(2, vec![Projection::Deref]))), 8)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[u8t, f32t]).unwrap();
+    let one = [int(Int::U8, 1)];
+    let e = m.call(h, &[Arg::Value(&one), Arg::Ref(RegionId(0))]).map(|r| r.to_vec());
+    assert_eq!(e, Err(CallError::Program(ProgramError { function: h, block: BlockId(0), statement: Some(0), at: at(7), kind: ErrorKind::Uninit })));
+    m.abort();
+    let x = [Scalar::F32(1.0)];
+    let e = m.call(k, &[Arg::Value(&x), Arg::Ref(RegionId(1))]).map(|r| r.to_vec());
+    assert_eq!(e, Err(CallError::Program(ProgramError { function: k, block: BlockId(0), statement: Some(0), at: at(8), kind: ErrorKind::Uninit })));
+}
+
+fn one_statement(types: &[Type], locals_: &[u32], value: Value) -> LoadError {
+    let mut p = Program { types: types.to_vec(), ..Program::default() };
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&locals_.iter().map(|t| TypeId(*t)).collect::<Vec<_>>()),
+        blocks: vec![block(vec![assign(place(0), value, 1)], ret())],
+    });
+    Machine::load(p, &[]).map(|_| ()).expect_err("refused")
+}
+
+fn at_statement(reason: &'static str) -> LoadError {
+    LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason }
+}
+
+#[test]
+fn every_operand_of_a_binary_or_checked_operation_is_checked_at_load() {
+    let u8 = Type::Int(Int::U8);
+    let u16 = Type::Int(Int::U16);
+    let pair = |a: u32, b: u32| Type::Struct { name: "(..)".into(), fields: vec![Field { name: "0".into(), ty: TypeId(a) }, Field { name: "1".into(), ty: TypeId(b) }] };
+    // types: 0 u8, 1 u16, 2 bool, 3 f32, 4 (u8, bool), 5 (f32, bool), 6 (u8, u8), 7 Duration
+    let types = [u8.clone(), u16, Type::Bool, Type::F32, pair(0, 2), pair(3, 2), pair(0, 0), Type::Duration];
+    assert_eq!(one_statement(&types, &[0, 0, 2], Value::Binary(BinOp::Shl, copy(1), copy(2))), at_statement("a shift of what is no integer"), "a shift by a bool");
+    assert_eq!(one_statement(&types, &[4, 0, 1], Value::Checked(BinOp::Add, copy(1), copy(2))), at_statement("a checked operation that MIR has no checked form of"), "u8 + u16");
+    assert_eq!(one_statement(&types, &[5, 3, 3], Value::Checked(BinOp::Add, copy(1), copy(2))), at_statement("a checked operation that MIR has no checked form of"), "a float's");
+    assert_eq!(one_statement(&types, &[6, 0, 0], Value::Checked(BinOp::Add, copy(1), copy(2))), at_statement("a checked result into what is no (value, bool)"), "into (u8, u8)");
+    assert_eq!(one_statement(&types, &[2, 7, 7], Value::Binary(BinOp::Lt, copy(1), copy(2))), at_statement("a comparison of values that do not compare"), "Durations");
+    assert_eq!(one_statement(&types, &[3, 2], Value::Cast(copy(1), TypeId(3))), at_statement("a cast `as` does not make"), "bool as f32");
+    let s = Type::Struct { name: "S".into(), fields: vec![Field { name: "a".into(), ty: TypeId(0) }] };
+    let types = [u8, s];
+    assert_eq!(one_statement(&types, &[1, 0], Value::Aggregate(TypeId(1), Some(0), vec![copy(1)])), at_statement("an aggregate of what is built otherwise"), "a structure built as a variant");
+}
+
+#[test]
+fn a_negative_discriminant_of_an_unsigned_enum_and_a_switch_value_below_the_least_are_refused() {
+    let mut b = Build::default();
+    b.ty(Type::Enum { name: "E".into(), discriminant: Int::U8, variants: vec![Variant { name: "A".into(), discriminant: -1, fields: vec![] }] });
+    assert_eq!(Machine::load(b.program, &[]).map(|_| ()), Err(LoadError::Type { ty: 0, reason: "a discriminant outside its type" }));
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[u8t, u8t]),
+        blocks: vec![
+            block(vec![], Terminator::SwitchInt { value: copy(1), targets: vec![(-1, BlockId(1))], otherwise: BlockId(1), at: at(1) }),
+            block(vec![], ret()),
+        ],
+    });
+    assert_eq!(
+        Machine::load(b.program, &[]).map(|_| ()),
+        Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "a switch's value outside its operand's type" })
+    );
+}
+
+#[test]
+fn get_or_insert_through_a_shared_reference_and_a_default_of_a_structure_are_refused() {
+    let mut b = Build::default();
+    let (u8t, d) = (b.int(Int::U8), b.ty(Type::Duration));
+    let optd = b.option(d);
+    let (ropt, sopt, rd, sd) = (b.reference(optd, true), b.reference(optd, false), b.reference(d, true), b.reference(d, false));
+    let s = b.tuple(&[u8t]);
+    let call = |b: &Build, op: CoreOp, dest: TypeId, args: &[TypeId]| {
+        let mut p = Build { program: b.program.clone() };
+        let mut types = vec![dest];
+        types.extend_from_slice(args);
+        p.function(Function {
+            name: "f".into(),
+            params: args.len() as u32,
+            locals: locals(&types),
+            blocks: vec![
+                block(vec![], Terminator::Call { callee: Callee::Core(op), args: (1..=args.len() as u32).map(copy).collect(), dest: place(0), next: BlockId(1), at: at(1) }),
+                block(vec![], ret()),
+            ],
+        });
+        Machine::load(p.program, &[]).map(|_| ())
+    };
+    let refused = Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "a core operation called with types it does not take" });
+    assert_eq!(call(&b, CoreOp::OptionGetOrInsert, rd, &[ropt, d]), Ok(()), "the right shape");
+    assert_eq!(call(&b, CoreOp::OptionGetOrInsert, rd, &[sopt, d]), refused, "through a shared reference");
+    assert_eq!(call(&b, CoreOp::OptionGetOrInsert, sd, &[ropt, d]), refused, "into a shared reference");
+    assert_eq!(call(&b, CoreOp::Default, s, &[]), refused, "a structure's default");
+}
+
+/// fn f(a: u8, b: u8) -> u8 { a / b }, MIR's own check first: _3 = Eq(copy _2, const 0); assert(!move _3,
+/// "attempt to divide by zero"): the error names that check.
+#[test]
+fn an_assertion_s_error_names_the_check_it_carries() {
+    for (check, line) in [(Check::DivisionByZero, 3), (Check::RemainderByZero, 4), (Check::NegOverflow, 5)] {
+        let mut b = Build::default();
+        let (u8t, boolean) = (b.int(Int::U8), b.bool());
+        let f = b.function(Function {
+            name: "f".into(),
+            params: 1,
+            locals: locals(&[u8t, u8t, boolean]),
+            blocks: vec![
+                block(
+                    vec![assign(place(2), Value::Binary(BinOp::Eq, copy(1), konst(u8t, vec![int(Int::U8, 0)])), 1)],
+                    Terminator::Assert { cond: mv(2), expected: false, check, next: BlockId(1), at: at(line) },
+                ),
+                block(vec![assign(place(0), Value::Use(copy(1)), 2)], ret()),
+            ],
+        });
+        let mut m = Machine::load(b.program, &[]).unwrap();
+        let zero = [int(Int::U8, 0)];
+        assert_eq!(
+            m.call(f, &[Arg::Value(&zero)]).map(|r| r.to_vec()),
+            Err(CallError::Program(ProgramError { function: f, block: BlockId(0), statement: None, at: at(line), kind: ErrorKind::Check(check) }))
+        );
+    }
+}
+
+/// A call's argument past an array's end (the machine's own bounds check), named at the call; and a callee's result
+/// into a host's region through a reference, `(*_1) = g() -> bb1`.
+#[test]
+fn a_call_fails_at_its_own_location_and_writes_its_result_through_a_reference() {
+    let mut b = Build::default();
+    let (u8t, usize_t, unit) = (b.int(Int::U8), b.int(Int::Usize), b.unit());
+    let arr = b.ty(Type::Array { element: u8t, len: 2 });
+    let ru8 = b.reference(u8t, true);
+    let g = b.function(Function { name: "g".into(), params: 1, locals: locals(&[u8t, u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 2,
+        locals: locals(&[u8t, arr, usize_t]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(g), args: vec![copy_at(proj(1, vec![Projection::Index(Local(2))]))], dest: place(0), next: BlockId(1), at: at(9) }),
+            block(vec![], ret()),
+        ],
+    });
+    let w = b.function(Function {
+        name: "w".into(),
+        params: 1,
+        locals: locals(&[unit, ru8]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(g), args: vec![konst(u8t, vec![int(Int::U8, 42)])], dest: proj(1, vec![Projection::Deref]), next: BlockId(1), at: at(10) }),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[u8t]).unwrap();
+    let (a, i) = ([int(Int::U8, 1), int(Int::U8, 2)], [int(Int::Usize, 2)]);
+    assert_eq!(
+        m.call(f, &[Arg::Value(&a), Arg::Value(&i)]).map(|r| r.to_vec()),
+        Err(CallError::Program(ProgramError { function: f, block: BlockId(0), statement: None, at: at(9), kind: ErrorKind::Bounds { index: 2, len: 2 } }))
+    );
+    m.abort();
+    m.call(w, &[Arg::Ref(RegionId(0))]).unwrap();
+    assert_eq!(m.region(RegionId(0)).unwrap(), &[int(Int::U8, 42)]);
+}
+
+/// fn reset(o: &mut Option<Duration>, d: Duration) { *o = Some(d); *o = None }, a timer's reset: the None written over
+/// the Some leaves no payload, so the region the program wrote is a value of its type the host can set back.
+#[test]
+fn a_variant_written_over_a_larger_one_leaves_the_rest_unwritten() {
+    let mut b = Build::default();
+    let (d, unit) = (b.ty(Type::Duration), b.unit());
+    let opt = b.option(d);
+    let ropt = b.reference(opt, true);
+    let reset = b.function(Function {
+        name: "reset".into(),
+        params: 2,
+        locals: locals(&[unit, ropt, d]),
+        blocks: vec![block(
+            vec![
+                assign(proj(1, vec![Projection::Deref]), Value::Aggregate(opt, Some(1), vec![copy(2)]), 1),
+                assign(proj(1, vec![Projection::Deref]), Value::Aggregate(opt, Some(0), vec![]), 2),
+            ],
+            ret(),
+        )],
+    });
+    let mut m = Machine::load(b.program, &[opt]).unwrap();
+    m.call(reset, &[Arg::Ref(RegionId(0)), Arg::Value(&dur(Duration::from_millis(250)))]).unwrap();
+    let read = m.region(RegionId(0)).unwrap().to_vec();
+    assert_eq!(read, vec![int(Int::Isize, 0), Scalar::Uninit, Scalar::Uninit], "None, and no payload left");
+    assert_eq!(m.set_region(RegionId(0), &read), Ok(()), "what the program wrote is a value of the region's type");
+}
+
+/// fn bump(s: &mut u32) -> u32 { *s = *s + 1 (wrapping); *s }: a copy taken mid-run of a machine whose state region
+/// holds 41 stands where the original stood, its region included, and goes on alike.
+#[test]
+fn a_copy_stands_where_the_original_stood_in_its_regions_too() {
+    let mut b = Build::default();
+    let u32t = b.int(Int::U32);
+    let r = b.reference(u32t, true);
+    let bump = b.function(Function {
+        name: "bump".into(),
+        params: 1,
+        locals: locals(&[u32t, r]),
+        blocks: vec![block(
+            vec![
+                assign(proj(1, vec![Projection::Deref]), Value::Binary(BinOp::Add, copy_at(proj(1, vec![Projection::Deref])), konst(u32t, vec![int(Int::U32, 1)])), 1),
+                assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Deref]))), 2),
+            ],
+            ret(),
+        )],
+    });
+    let mut m = Machine::load(b.program, &[u32t]).unwrap();
+    m.set_region(RegionId(0), &[int(Int::U32, 41)]).unwrap();
+    m.start(bump, &[Arg::Ref(RegionId(0))]).unwrap();
+    let mut idle = m.clone();
+    assert_eq!(idle.region(RegionId(0)).unwrap(), &[int(Int::U32, 41)], "the copy's region");
+    assert_eq!(m.run(1), Ok(Step::Ran));
+    let mut copy = m.clone();
+    assert_eq!(copy.memory(), m.memory(), "the copy's whole memory, regions first");
+    assert_eq!(m.run(10), Ok(Step::Returned));
+    assert_eq!(copy.run(10), Ok(Step::Returned));
+    assert_eq!((copy.result(), copy.memory(), copy.steps()), (m.result(), m.memory(), m.steps()));
+    assert_eq!(m.result(), &[int(Int::U32, 42)]);
+    assert_eq!(idle.run(10), Ok(Step::Returned));
+    assert_eq!(idle.result(), &[int(Int::U32, 42)], "a copy taken at the start goes on alike");
+}
+
+/// A copy of an idle machine whose last entry returned shows that entry's result, as the original does.
+#[test]
+fn a_copy_of_an_idle_machine_shows_the_last_result() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let f = b.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 7)])), 1)], ret())] });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    m.call(f, &[]).unwrap();
+    let copy = m.clone();
+    assert_eq!((copy.result(), copy.running(), copy.steps()), (m.result(), m.running(), m.steps()));
+    assert_eq!(copy.result(), &[int(Int::U8, 7)]);
+}
