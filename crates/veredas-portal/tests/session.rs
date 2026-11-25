@@ -955,3 +955,57 @@ fn a_held_active_started_at_its_end_is_read_from_where_it_stood() {
         }
     }
 }
+
+/// C-096's fourth refute round. A file held at the first look (nobody may read it) and read from
+/// a start in the past holds the start's history: renamed away and another file made at its path,
+/// that history is unread for good, never said read, the new file read whole; renamed away with
+/// nothing at the path for a while, the same (found in its folder under its new name); deleted,
+/// nothing of it is left to read, said read with no row.
+#[cfg(unix)]
+#[test]
+fn a_file_held_from_a_past_start_says_read_only_of_its_own_history() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    for case in ["replaced", "renamed", "deleted"] {
+        let file = dir.path().join(format!("{case}.log"));
+        write_history(&file, 0..100);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let mut cfg = SessionConfig::new(case);
+        cfg.start = Some(midnight());
+        cfg.logs.push(log_source(case, &file));
+        cfg.rules.push(readings_rule(None));
+        let session = Session::start(cfg).unwrap();
+        let live = session.live();
+        let said = |live: &Live| live.health.read().unwrap().get(case).is_some_and(|h| h.history_read);
+        let away = dir.path().join(format!("{case}.log.1"));
+        match case {
+            "replaced" => {
+                std::fs::rename(&file, &away).unwrap();
+                write_history(&file, 100..110);
+            }
+            "renamed" => {
+                std::fs::rename(&file, &away).unwrap();
+                std::thread::sleep(Duration::from_millis(1500));
+                assert!(!said(&live), "renamed away: never said read");
+                write_history(&file, 100..110);
+            }
+            _ => {
+                std::fs::remove_file(&file).unwrap();
+                assert!(wait(Duration::from_secs(10), || said(&live)), "deleted: said read");
+                assert_eq!(rows(&live, "readings"), 0);
+            }
+        }
+        if case != "deleted" {
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(3) {
+                assert!(!said(&live), "`{case}`: never said read, {} rows stored", rows(&live, "readings"));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(rows(&live, "readings"), 10, "`{case}`: the new file read whole");
+            std::fs::set_permissions(&away, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        for (id, r) in session.stop() {
+            r.unwrap_or_else(|e| panic!("{id}: {e}"));
+        }
+    }
+}

@@ -168,8 +168,10 @@ fn read_range_full(
     let deadline = Instant::now() + PATIENCE;
     let mut cursor = loop {
         if stop.load(Ordering::Relaxed) {
-            return Ok(Unread::No);
+            return Ok(Unread::Stopped);
         }
+        #[cfg(test)]
+        before_open(path);
         match TailedFile::open_at(path, offset, encoding) {
             Ok(c) => break c,
             Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
@@ -182,20 +184,22 @@ fn read_range_full(
     };
     cursor.drain_stable(grace, stop, emit)?;
     cursor.flush_pending(emit);
-    Ok(Unread::No)
+    // A stop may cut the drain short: read in part, never said read.
+    Ok(if stop.load(Ordering::Relaxed) { Unread::Stopped } else { Unread::No })
 }
 
 #[cfg(test)]
 mod history_test;
 
-/// A test's hooks, each run before the fixed sweep opens its fixed path: what a rotation between
-/// the sweep's listing and its open does there (C-096's third refute round).
+/// A test's hooks, each run before the backfill opens its path (the fixed sweep's open of its
+/// fixed path, a replay's open of a member): what a rotation or a stop between a listing and an
+/// open does there (C-096's third and fourth refute rounds).
 #[cfg(test)]
-pub(crate) static BEFORE_FIXED_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
+pub(crate) static BEFORE_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
-fn before_fixed_open(path: &Path) {
-    if let Ok(mut hooks) = BEFORE_FIXED_OPEN.lock() {
+fn before_open(path: &Path) {
+    if let Ok(mut hooks) = BEFORE_OPEN.lock() {
         for (at, hook) in hooks.iter_mut() {
             if at == path {
                 hook();
@@ -204,11 +208,12 @@ fn before_fixed_open(path: &Path) {
     }
 }
 
-/// Whether a file a backfill meant to read was there and left unread.
+/// Whether a file a backfill meant to read was there and left unread, or the stop came first.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Unread {
     No,
     Held,
+    Stopped,
 }
 
 /// (key, name): the rotation-order rank. The modification time is deliberately left out: it only
@@ -526,7 +531,7 @@ fn attach_backfill(
                 // never rotated).
                 let (off, enc) = pending.unwrap_or((0, None));
                 #[cfg(test)]
-                before_fixed_open(&fixed_path);
+                before_open(&fixed_path);
                 match TailedFile::open_at(&fixed_path, off, enc) {
                     Ok(cursor) => {
                         // Invariant 2: check that nothing retired between the clean sweep and

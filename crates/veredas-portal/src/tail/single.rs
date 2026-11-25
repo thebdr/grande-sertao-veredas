@@ -86,6 +86,21 @@ pub(crate) fn is_not_found(e: &SourceError) -> bool {
     matches!(e, SourceError::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound)
 }
 
+/// Whether the file a look recorded the identity of is still in `path`'s folder, under another
+/// name: renamed away, not deleted. An identity the look could not read, or a folder that cannot
+/// be listed, cannot tell, and counts as moved (an unread history is never said read).
+fn moved_within_folder(path: &Path, identity: Option<&crate::tail::cursor::Identity>) -> bool {
+    let Some(id) = identity else { return true };
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    match std::fs::read_dir(dir) {
+        Ok(entries) => entries.flatten().any(|e| crate::tail::cursor::identity_at(&e.path()).as_ref() == Some(id)),
+        Err(_) => true,
+    }
+}
+
 /// Tell the start that the worker has looked at its path, once.
 pub(crate) fn attached(slot: &mut Option<Sender<()>>) {
     if let Some(tx) = slot.take() {
@@ -187,15 +202,37 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
                     (true, start, _) => TailedFile::open(&path, start),
                     (false, _, _) => TailedFile::open(&path, FileStart::Begin),
                 };
+                // A file held at the first look and read from its start holds the start's history.
+                let history_held = first_open && cfg.start == FileStart::Begin;
                 match opened {
                     Ok(tf) => {
+                        // The same file is read whole now; another one at the path (the held one
+                        // renamed away, which this tail does not follow) leaves that history
+                        // unread for good, as does one whose identity the look could not read.
+                        if history_held
+                            && let Some((_, identity)) = &held
+                            && !identity.as_ref().is_some_and(|id| tf.has_identity(id))
+                        {
+                            crate::tail::mark_history_lost(&history);
+                        }
                         first_open = false;
                         active = Some(tf);
                         continue; // read at once, without burning a tick
                     }
                     // Absent at attach: whatever appears later is new content. Any other failure
                     // (held, a passing error) keeps the configured start for the open that succeeds.
-                    Err(e) if is_not_found(&e) => first_open = false,
+                    Err(e) if is_not_found(&e) => {
+                        // Gone while it held the start's history: deleted, nothing of it is left
+                        // to read; still in its folder under another name, unread for good.
+                        if history_held && let Some((_, identity)) = &held {
+                            if moved_within_folder(&path, identity.as_ref()) {
+                                crate::tail::mark_history_lost(&history);
+                            } else {
+                                crate::tail::mark_history_read(&history, sent.get());
+                            }
+                        }
+                        first_open = false;
+                    }
                     Err(_) => {}
                 }
             }

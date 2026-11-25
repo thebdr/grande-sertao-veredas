@@ -283,6 +283,11 @@ impl TailedFile {
         &self.handle
     }
 
+    /// Whether the file held open is the one a look recorded the identity of.
+    pub(crate) fn has_identity(&self, id: &Identity) -> bool {
+        is_identity(&self.handle, id)
+    }
+
     /// Read everything appended since the last call, emitting completed lines. Bounded by the
     /// length observed at entry, so a fast writer cannot pin the reader in here forever.
     pub fn read_new(&mut self, emit: &mut dyn FnMut(String)) -> Result<ReadStep, SourceError> {

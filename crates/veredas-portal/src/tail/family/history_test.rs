@@ -1,6 +1,6 @@
-//! A fixed-name family's history read when a rotation renames its fixed active between the
-//! sweep's listing and its open (contract: C-096, its third refute round). In the crate: a hook
-//! before the open holds that window, which no test outside the crate can reach.
+//! A family's history read when a rotation or a stop lands between a listing and an open
+//! (contract: C-096, its third and fourth refute rounds). In the crate: a hook before the open
+//! holds that window, which no test outside the crate can reach.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use chrono::NaiveDateTime;
 
-use super::{BEFORE_FIXED_OPEN, FamilyStart, FamilyTailConfig, FamilyTailSource};
+use super::{BEFORE_OPEN, FamilyStart, FamilyTailConfig, FamilyTailSource};
 use crate::family::{ActiveMode, FamilySpec};
 use crate::source::Source;
 use crate::timestamp::TimestampSpec;
@@ -31,7 +31,7 @@ fn a_fixed_active_renamed_before_the_sweep_s_open_is_read_before_the_history_is_
     write(&fixed, 20_000..60_000);
     let (from, to) = (fixed.clone(), dir.path().join("done_2.log"));
     let mut renamed = false;
-    BEFORE_FIXED_OPEN.lock().unwrap().push((
+    BEFORE_OPEN.lock().unwrap().push((
         fixed.clone(),
         Box::new(move || {
             if !renamed {
@@ -61,5 +61,51 @@ fn a_fixed_active_renamed_before_the_sweep_s_open_is_read_before_the_history_is_
     handle.join().unwrap();
     lines += rx.try_iter().count() as u64;
     assert_eq!(lines, 60_000, "every line read once");
-    BEFORE_FIXED_OPEN.lock().unwrap().retain(|(at, _)| *at != fixed);
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| *at != fixed);
+}
+
+/// A stop that lands while the backfill waits on its planned active (there, nobody may read it)
+/// leaves the history unread: never said read, the 20 000 lines of the member before it sent and
+/// the active's 10 not (C-096's fourth refute round). The hook holds the replay's open of the
+/// active until the stop is asked.
+#[cfg(unix)]
+#[test]
+fn a_stop_during_the_planned_active_s_read_never_says_the_history_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("plant_1.log"), 0..20_000);
+    let planned = dir.path().join("plant_2.log");
+    write(&planned, 20_000..20_010);
+    let (asked_tx, asked_rx) = channel::<()>();
+    let (stopped_tx, stopped_rx) = channel::<()>();
+    let mut held = false;
+    BEFORE_OPEN.lock().unwrap().push((
+        planned.clone(),
+        Box::new(move || {
+            if !held {
+                held = true;
+                let _ = asked_tx.send(());
+                let _ = stopped_rx.recv_timeout(Duration::from_secs(30));
+            }
+        }),
+    ));
+    let spec = FamilySpec::new(dir.path(), r"plant_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let start = NaiveDateTime::parse_from_str("2026-07-19 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+    let stamps = TimestampSpec::new(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ["%Y-%m-%d %H:%M:%S"]).unwrap();
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let source = FamilyTailSource::new("plant", "plant", spec, FamilyTailConfig { start: FamilyStart::Backfill(start), ..FamilyTailConfig::default() })
+        .with_timestamps(stamps)
+        .with_history_read(Arc::clone(&history));
+    let (tx, rx) = channel();
+    let handle = Box::new(source).start(tx).unwrap();
+    // Located (the start has returned): the active shut before the replay reaches it.
+    std::fs::set_permissions(&planned, std::fs::Permissions::from_mode(0o000)).unwrap();
+    asked_rx.recv_timeout(Duration::from_secs(30)).expect("the replay never reached its active");
+    handle.request_stop();
+    stopped_tx.send(()).unwrap();
+    handle.join().unwrap();
+    assert_eq!(rx.try_iter().count(), 20_000, "the member before the active read whole");
+    assert_eq!(history.load(Ordering::SeqCst), u64::MAX, "never said read");
+    std::fs::set_permissions(&planned, std::fs::Permissions::from_mode(0o644)).unwrap();
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| *at != planned);
 }
