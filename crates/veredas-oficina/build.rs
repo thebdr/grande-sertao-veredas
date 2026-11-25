@@ -26,7 +26,9 @@ mod shell {
     pub fn build() {
         println!("cargo::rerun-if-env-changed=QMAKE");
         println!("cargo::rerun-if-env-changed=OFICINA_DEPS");
-        let driver = std::env::var_os("CARGO_FEATURE_DRIVER").is_some();
+        // The compiler's word on the feature, not the environment's: a `CARGO_FEATURE_DRIVER` a
+        // parent process left set would reach a build script that read it (refute round 2).
+        let driver = cfg!(feature = "driver");
         let windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
         let deps = std::env::var_os("OFICINA_DEPS").map(PathBuf::from).unwrap_or_else(|| home().join(".local/opt/oficina-deps"));
         let lib = deps.join("lib");

@@ -19,13 +19,21 @@ ApplicationWindow {
         anchors.fill: parent
         uniqueName: "workbench"
 
-        // The docks as they stand, for a test to read (Spix reaches items, not the docks
-        // themselves): each dock's name, open, floating, and whether its pane is drawn in this
-        // window, set by `describeDocks`.
+        // The docks as they stand, for a test to read (the tests' driver reaches items, not the
+        // docks themselves): each dock's name, open, floating, whether its pane sits inside this
+        // docking area (its parents reach it) and is drawn in this window, set by `describeDocks`.
         property string docks: ""
 
+        function inside(item, ancestor) {
+            for (let p = item; p; p = p.parent) {
+                if (p === ancestor)
+                    return true;
+            }
+            return false;
+        }
+
         function describeDocks() {
-            docks = JSON.stringify([[projectDock, projectPane]].map(([dock, pane]) => [dock.uniqueName, dock.isOpen, dock.isFloating, pane.Window.window === window]));
+            docks = JSON.stringify([[projectDock, projectPane]].map(([dock, pane]) => [dock.uniqueName, dock.isOpen, dock.isFloating, inside(pane, area), pane.Window.window === window]));
         }
 
         KDDW.DockWidget {
