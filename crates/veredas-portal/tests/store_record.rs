@@ -171,6 +171,35 @@ fn a_normal_stop_writes_the_last_batch_folds_the_log_and_lets_the_record_go() {
     assert_eq!(opened_elsewhere(&file), Ok(3_000), "the record any tool's once the session stopped");
 }
 
+/// The rows the stop's last passes take are recorded too: a log of 200 000 lines read from its
+/// start, a record written every minute, the session stopped as soon as the store holds a row, so
+/// nearly every row reaches the store in the stop's own drain; every one of them is on the drive
+/// and counted recorded, none unrecorded.
+#[test]
+fn the_rows_the_stop_s_last_passes_take_are_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("plant.log");
+    write_lines(&log, 0..200_000);
+    let file = dir.path().join("drain.record.duckdb");
+    let mut cfg = SessionConfig::new("drain");
+    cfg.start = Some(midnight());
+    cfg.logs.push(log_source("log", &log));
+    cfg.rules.push(readings_rule(None));
+    cfg.recording = Some(RecordingConfig { file: file.clone(), limit_bytes: 1 << 30, write_every: Duration::from_secs(60) });
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    assert!(wait(Duration::from_secs(30), || rows_of(&live, "readings") > 0), "no row stored");
+    let before = rows_of(&live, "readings");
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    let c = live.counters.read().unwrap().clone();
+    let st = status(&live);
+    assert!(c.rows > before, "the stop's last passes took rows: {before} before, {} after", c.rows);
+    assert_eq!((st.recorded_rows, st.unrecorded_rows, st.stopped_why.clone()), (c.rows, 0, None), "{st:?}");
+    assert_eq!(recorded(&file, "readings") as u64, c.rows, "every row the store took on the drive");
+}
+
 /// At its size limit a recording stops: what it wrote stays, nothing is deleted, the rows after
 /// are counted and never written, the store goes on taking them, and the session says why. A
 /// record already standing at its file refuses the session by name, as a store does.
