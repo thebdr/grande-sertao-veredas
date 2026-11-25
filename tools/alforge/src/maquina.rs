@@ -1114,14 +1114,23 @@ pub fn prove_update(r: &Recipe, vmdk: &Path, newer: &Path, work: &Path) -> Resul
     // The plant's files as the tester holds them: the ones the release shipped, at their place in
     // the home folder (what the bench and supervisão write beside them at run time is theirs).
     let plant_sum = "$(cd ~/planta && xargs sha256sum < /tmp/plant-files | sha256sum | cut -c1-64)";
+    // Each command typed once the one before has said it is done: a line typed ahead is echoed by
+    // the guest's terminal as it arrives, inside the output of the command still running, and
+    // would cut one of its marked lines (a real run's console showed it).
+    let mut done = 0;
+    let mut typed = |m: &mut Vm, line: &str, within: Duration| -> Result<(), VmError> {
+        done += 1;
+        m.type_line(&format!("{line}; echo \"ALFORGE-\"\"DONE {done}\""))?;
+        // Whole and at its line's end: the echo of what was typed holds the marker split by quotes.
+        m.wait_for(&format!("ALFORGE-DONE {done}\n"), within)
+    };
     for line in [
         // The kernel's messages off this console, so no line of theirs splits one of the proof's.
         format!("{sudo} dmesg -n 1; (cd /opt/veredas/current/planta && find . -type f | sort) > /tmp/plant-files; echo \"ALFORGE-\"\"PLANT-BEFORE {plant_sum}\""),
         format!("{sudo} tar -xf /dev/disk/by-id/virtio-alforge-update -C /tmp; {sudo} veredas-atualizar /tmp/{name}; echo \"ALFORGE-\"\"UPDATE-EXIT $?\""),
     ] {
-        m.type_line(&line)?;
+        typed(&mut m, &line, Duration::from_secs(300))?;
     }
-    m.wait_for("ALFORGE-UPDATE-EXIT ", Duration::from_secs(300))?;
     // The services restarted on the new release: what each running executable is, the boot's
     // check of the release `current` now names, the plant's files, and the command again.
     std::thread::sleep(Duration::from_secs(10));
@@ -1134,9 +1143,8 @@ pub fn prove_update(r: &Recipe, vmdk: &Path, newer: &Path, work: &Path) -> Resul
         "old=$(systemctl show -p MainPID --value veredas-bancada); kill $old; sleep 8; echo \"ALFORGE-\"\"RESTARTED $old $(systemctl show -p MainPID --value veredas-bancada) $(systemctl show -p ActiveState --value veredas-bancada)\"".to_string(),
         format!("{sudo} veredas-atualizar /tmp/{name}; echo \"ALFORGE-\"\"AGAIN-EXIT $?\""),
     ] {
-        m.type_line(&line)?;
+        typed(&mut m, &line, Duration::from_secs(300))?;
     }
-    m.wait_for("ALFORGE-AGAIN-EXIT ", Duration::from_secs(300))?;
     let plant = crate::together::read_plant(([127, 0, 0, 1], port).into(), Duration::from_secs(300), Duration::from_secs(2));
     // Restarted as a tester restarts it: QEMU ends on the guest's reboot (`-no-reboot`), and the
     // machine is started again on the same overlay.
