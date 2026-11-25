@@ -132,6 +132,12 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     ] {
         assert_eq!(maquina::proof_faults(&proof(&good.replace(said, instead), 0.3, "a"), "2.0.0"), vec![fault.to_string()], "{said}");
     }
+    // The plant's own faults are the proof's: `alforge prova` fails on a page not served (and
+    // whatever else the plant's check names).
+    let mut dead = proof(&good, 0.3, "a");
+    dead.plant = report(500);
+    let got = maquina::proof_faults(&dead, "2.0.0");
+    assert!(!got.is_empty() && got == alforge::together::plant_faults(&report(500)), "{got:?}");
     // The OVA's own faults are the proof's: `alforge prova` fails on an OVA VMware would refuse.
     let mut bad_ova = proof(&good, 0.3, "a");
     bad_ova.ova = vec!["the descriptor's processors are not one item of 2".to_string()];
@@ -148,6 +154,12 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
         maquina::provision_faults(&ok.replace("/: 12.9 GiB (13857087488 bytes) trimmed on /dev/vda1\n", "")),
         ["the root's free space was not trimmed (no `/: ... trimmed on` line)"]
     );
+    // fstrim's own failure line for the root is no trim; a step after the OK is no finish.
+    assert_eq!(
+        maquina::provision_faults(&ok.replace("/: 12.9 GiB (13857087488 bytes) trimmed on /dev/vda1\n", "fstrim: /: FITRIM ioctl failed: Operation not supported\n")),
+        ["the root's free space was not trimmed (no `/: ... trimmed on` line)"]
+    );
+    assert_eq!(maquina::provision_faults(&format!("{ok}ALFORGE-STEP network\n")), ["a step after ALFORGE-PROVISION-OK"]);
     // The script the machine is provisioned by: the SSH server purged, the executables linked onto
     // the PATH, cloud-init off, the identity blanked, the space trimmed, and the boot's check said
     // before a login starts on the serial console (whose agetty hangs the line up).
@@ -250,6 +262,14 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
     let unit = &s[s.find("cat > /etc/systemd/system/veredas-verifica.service").unwrap()..];
     let unit = &unit[..unit.find("\nUNIT\n").unwrap()];
     assert!(unit.lines().any(|l| l == "Before=serial-getty@ttyS0.service getty@tty1.service"), "{unit}");
+    // A oneshot service: `Before=` waits for it to finish, not only to start.
+    assert!(unit.lines().any(|l| l == "Type=oneshot"), "{unit}");
+    // The script stops at its first failing step and says OK last.
+    assert_eq!(s.lines().next(), Some("set -eu"));
+    assert_eq!(s.lines().filter(|l| !l.trim().is_empty()).last(), Some("echo ALFORGE-PROVISION-OK"));
+    // The guide at the commit copied, then the update's section appended to it.
+    let copied = s.find("cp /alforge/guide.md /home/veredas/README-veredas.md\n").expect("the guide copied");
+    assert!(copied < s.find("cat >> /home/veredas/README-veredas.md <<'GUIDE'").unwrap());
     assert!(unit.lines().any(|l| l == "StandardOutput=journal+console"), "{unit}");
     // A recipe that leaves out what it removes is refused: removal is stated, never assumed.
     let text = std::fs::read_to_string(repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();

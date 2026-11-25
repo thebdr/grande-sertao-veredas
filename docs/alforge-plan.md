@@ -186,7 +186,7 @@ Neither needs Rust, Node, git or a network beyond the machine.
   a log emitter writing the sorter's lines the project's capture rule reads
   (`tools/alforge/planta/`, copied into the user's home, where the tester edits it). Two services
   start at boot as the user, `veredas-bancada` (the bench) and `veredas-supervisao` (supervisão
-  serving the plant), and restart on failure; their output is in the journal. Each executable
+  serving the plant), and are started again however they end (`Restart=always`; `systemctl stop` stops them); their output is in the journal. Each executable
   runs until its stdin closes, so a service holds it open with a pipe and its stop ends it
   abruptly, which the bench and an in-memory store bear (a clean stop on a signal is asked of
   maquinar, portal and supervisão). The plant ships disarmed: the binding's "Release" is offered

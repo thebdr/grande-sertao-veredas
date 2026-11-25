@@ -427,8 +427,13 @@ pub fn boot(r: &Recipe, vmdk: &Path, port: u16, qmp: Option<u16>, console: &Path
 /// line for `/`). Empty when it does.
 pub fn provision_faults(console: &str) -> Vec<String> {
     let mut out = Vec::new();
-    if !console.contains("ALFORGE-PROVISION-OK") {
-        out.push("no ALFORGE-PROVISION-OK".to_string());
+    // The script stops at its first failing step (`set -eu`), so its OK, after its last step,
+    // says every step before it finished.
+    let last_step = console.rfind("ALFORGE-STEP ");
+    match console.rfind("ALFORGE-PROVISION-OK") {
+        None => out.push("no ALFORGE-PROVISION-OK".to_string()),
+        Some(ok) if last_step.is_some_and(|s| s > ok) => out.push("a step after ALFORGE-PROVISION-OK".to_string()),
+        Some(_) => {}
     }
     if !console.contains("ALFORGE-PROVISION-EXIT 0") {
         out.push("no ALFORGE-PROVISION-EXIT 0".to_string());
