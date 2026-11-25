@@ -831,6 +831,17 @@ pub fn parts(file: &AbacoFile) -> Result<Vec<(String, Vec<u8>)>, ModelError> {
         sheets.push((part.clone(), sheet_text(&file.book, i as u32, ws, &part)?.into_bytes()));
         entries.push(SheetEntry { name: ws.name.clone(), part });
     }
+    // every formula's spelling, read again as the reader reads it (a parser made from the workbook,
+    // the cell its context), is the formula the engine holds: one that reads back as another (an
+    // engine spelling that loses a bracket, a locale's array rows its lexer does not read) is
+    // refused by its address (fork change 31)
+    if let Some((sheet, row, column)) = model.formulas_reading_back_otherwise().into_iter().min() {
+        let part = names.get(sheet as usize).cloned().unwrap_or_default();
+        return Err(ModelError::Engine(format!(
+            "{part} {}: a formula whose spelling the reader would read as another formula",
+            crate::a1::Addr::new(row, column)
+        )));
+    }
     for name in file.macros.keys() {
         if !is_identifier(name) {
             return Err(ModelError::Engine(format!("macro {name:?}: letters, digits and `_`, not opening with a digit")));

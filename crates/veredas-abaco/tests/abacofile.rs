@@ -1011,6 +1011,53 @@ fn a_number_in_a_formula_reads_back_exactly() {
 }
 
 #[test]
+fn a_formula_s_brackets_and_its_array_constant_s_numbers_read_back() {
+    // the engine spells a formula so it reads back as the same formula (fork change 30): the
+    // brackets that change its meaning kept, an array constant's numbers to the last bit; each
+    // typed formula reads back to the same content and value, and writes the same bytes again
+    let typed = [
+        "=(Z1&Z2)*1", "=(2&3)+1", "=1-(2&3)", "=(Z1+Z2)%", "=2*(Z1+Z2)%", "=(Z1/Z2)%", "=IF(TRUE,(Z1/Z2)%)", "=(Z1^2)%",
+        "=\"x\"&(Z1>0)", "=(Z1>0)&\"x\"", "=(Z1<Z2)=(Z2<Z3)", "=(1=1)=(1=1)", "=0.1+(0.2+0.3)", "=-(Z1*Z2)",
+        "=SUM({0.30000000000000004})", "=SUM({-0.30000000000000004})", "=SUM({1.2345678901234567})", "=SUM({9007199254740993})",
+        "=INDEX({1.0000000000000002;2},1)-1",
+    ];
+    let mut book = Workbook::new("Brackets").unwrap();
+    for (r, v) in [(1, 3.0), (2, 4.0), (3, 5.0)] {
+        book.set_value(0, Addr::new(r, 26), &Value::Number(v)).unwrap();
+    }
+    for (i, f) in typed.iter().enumerate() {
+        book.set_formula(0, Addr::new(i as i32 + 1, 1), f).unwrap();
+    }
+    book.model_mut().set_user_array_formula(0, 1, 3, 1, 2, "={0.30000000000000004;1}").unwrap();
+    book.set_formula(0, Addr::parse("E1").unwrap(), "={0.30000000000000004}").unwrap();
+    book.recalc();
+    assert_eq!(book.value_now(0, Addr::new(1, 1)).unwrap(), Value::Number(34.0));
+    let mut file = AbacoFile::new(book);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("brackets.abaco");
+    abacofile::write(&mut file, &path).unwrap();
+    let mut back = abacofile::read(&path).unwrap();
+    assert!(differences(&file.book, &back.book).is_empty(), "{:?}", differences(&file.book, &back.book));
+    let again = dir.path().join("again.abaco");
+    abacofile::write(&mut back, &again).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), std::fs::read(&again).unwrap());
+}
+
+#[test]
+fn a_formula_a_locale_spells_unreadably_is_refused_by_the_writer() {
+    // in a locale whose decimal is a comma the engine spells an array's rows with `/`, which its
+    // own lexer does not read: the writer refuses that formula by its address, nothing written
+    let mut book = Workbook::new("Rows").unwrap();
+    book.set_formula(0, Addr::parse("B2").unwrap(), "=ROWS({1;2})").unwrap();
+    book.model_mut().set_locale("de").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.abaco");
+    let got = abacofile::write(&mut AbacoFile::new(book), &path).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(got.contains("sheets/01-Sheet1.toml B2: a formula whose spelling the reader would read as another formula"), "{got}");
+    assert!(!path.exists());
+}
+
+#[test]
 fn two_dynamic_arrays_meeting_spill_on_reading_in_the_order_the_engine_opens_a_workbook_in() {
     // a limit, pinned: which of two dynamic arrays whose spills meet spills is the engine's order
     // of evaluation, the order they were entered in while the workbook is open; the file does not
