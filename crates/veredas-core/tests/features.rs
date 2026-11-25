@@ -673,7 +673,8 @@ fn each_form_holds_the_layers_it_promises() {
 fn every_feature_gate_is_where_it_belongs() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = vec![src.clone()];
-    let mut gates: BTreeSet<String> = BTreeSet::new();
+    // A list, not a set: a gate written twice with the same key is counted twice.
+    let mut gates: Vec<String> = Vec::new();
     while let Some(path) = files.pop() {
         if path.is_dir() {
             files.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
@@ -734,7 +735,7 @@ fn every_feature_gate_is_where_it_belongs() {
                     .unwrap_or("")
                     .trim()
                     .to_string();
-                gates.insert(format!("{rel}: {squeezed} -> {item}"));
+                gates.push(format!("{rel}: {squeezed} -> {item}"));
             }
         }
     }
@@ -784,6 +785,38 @@ fn every_feature_gate_is_where_it_belongs() {
                 .chars()
                 .rev()
                 .collect();
+            // A macro that names `cfg` in its body builds a gate the audit cannot read.
+            if word == "macro_rules" {
+                let open = code[k..].iter().position(|c| matches!(c, '{' | '(' | '['));
+                if let Some(o) = open {
+                    let (opener, closer) = match code[k + o] {
+                        '{' => ('{', '}'),
+                        '(' => ('(', ')'),
+                        _ => ('[', ']'),
+                    };
+                    let mut depth = 0usize;
+                    let mut end = k + o;
+                    for (q, c) in code[k + o..].iter().enumerate() {
+                        if *c == opener {
+                            depth += 1;
+                        } else if *c == closer {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = k + o + q;
+                                break;
+                            }
+                        }
+                    }
+                    let body: String = code[k + o..=end].iter().collect();
+                    let names_cfg = body
+                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .any(|w| w == "cfg" || w == "cfg_attr");
+                    if names_cfg {
+                        let line = code[..start].iter().filter(|c| **c == '\n').count() + 1;
+                        stray.push(format!("{rel}:{line}: `macro_rules` naming cfg"));
+                    }
+                }
+            }
             let wrong = match word.as_str() {
                 "feature" => after != Some('='),
                 "doc" => !before.ends_with("#[") && !before.ends_with("!["),
@@ -802,7 +835,8 @@ fn every_feature_gate_is_where_it_belongs() {
         Vec::<String>::new(),
         "a gate's token where no gate is"
     );
-    let want: BTreeSet<String> = [
+    gates.sort();
+    let mut want: Vec<String> = [
         "fieldbus/mod.rs: #[cfg(feature=\"enip\")] -> pub mod enip",
         "fieldbus/mod.rs: #[cfg(feature=\"modbus\")] -> pub mod modbus",
         "lib.rs: #[cfg(feature=\"net\")] -> pub mod opc",
@@ -816,6 +850,7 @@ fn every_feature_gate_is_where_it_belongs() {
     .iter()
     .map(|s| s.to_string())
     .collect();
+    want.sort();
     assert_eq!(gates, want);
 }
 
