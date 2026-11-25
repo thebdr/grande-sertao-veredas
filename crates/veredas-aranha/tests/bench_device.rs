@@ -192,6 +192,7 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
             let dissected = common::dissect(&frames.iter().map(|k| k.frame.bytes.clone()).collect::<Vec<_>>());
             let mut by_class = std::collections::BTreeMap::<Class, u64>::new();
             let mut sent = std::collections::BTreeMap::<String, Vec<Class>>::new();
+            let mut ttls = std::collections::BTreeMap::<String, Vec<String>>::new();
             for (i, (k, d)) in frames.iter().zip(&dissected).enumerate() {
                 assert_eq!(d.complaints(), Vec::<String>::new(), "#{i}");
                 let class = observe::decode(&k.frame, i as u64).class;
@@ -208,9 +209,11 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
                 if k.sent {
                     assert_eq!(src, ours, "#{i}");
                     sent.entry(k.frame.iface.clone()).or_default().push(class);
-                    // The Identify asks by the name, read so by the dissectors.
+                    // The Identify asks by the name, read so by the dissectors, under the Identify
+                    // request's frame id and service.
                     if class == Class::Dcp {
                         assert_eq!(d.one("pn_dcp", "pn_dcp.suboption_device_nameofstation"), "bomba-1", "#{i}");
+                        assert_eq!((d.one("pn_rt", "pn_rt.frame_id"), d.one("pn_dcp", "pn_dcp.service_id")), ("65278".to_string(), "5".to_string()), "#{i}");
                         assert!(d.values("pn_dcp", "pn_dcp.option").iter().all(|o| o != "255"), "#{i}: no all-selector");
                     }
                 } else {
@@ -225,11 +228,30 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
                         let ip = (d.one(p, "pn_dcp.suboption_ip_ip"), d.one(p, "pn_dcp.suboption_ip_subnetmask"), d.one(p, "pn_dcp.suboption_ip_standard_gateway"));
                         assert_eq!(ip, (stated.ip.0.to_string(), stated.ip.1.to_string(), stated.ip.2.to_string()), "#{i}");
                         assert_eq!((d.one(p, "pn_dcp.suboption_device_devicevendorvalue"), d.one(p, "pn_dcp.suboption_device_role")), (stated.vendor.to_string(), "1".to_string()), "#{i}");
+                        // The device's word on its address: set, no conflict.
+                        assert_eq!(d.one(p, "pn_dcp.suboption_ip_block_info"), "1", "#{i}");
+                        // A Hello under the Hello's frame id; an answer under the answer's, to the
+                        // Identify this machine sent (its id) and to this machine alone.
+                        match d.one(p, "pn_dcp.service_id").as_str() {
+                            "6" => assert_eq!(d.one("pn_rt", "pn_rt.frame_id"), "65276", "#{i}"),
+                            "5" => {
+                                assert_eq!((d.one("pn_rt", "pn_rt.frame_id"), d.one(p, "pn_dcp.xid")), ("65279".to_string(), "24301".to_string()), "#{i}");
+                                assert_eq!(d.one("eth", "eth.dst"), ours.to_string(), "#{i}");
+                            }
+                            other => panic!("#{i}: DCP service {other} from the bench"),
+                        }
                     }
                     if class == Class::Lldp {
                         let hex: Vec<String> = "bomba-1".bytes().map(|b| format!("{b:02x}")).collect();
                         assert_eq!((d.one("lldp", "lldp.chassis.subtype"), d.one("lldp", "lldp.chassis.id")), ("7".to_string(), hex.join(":")), "#{i}");
                         assert_eq!(d.one("lldp", "lldp.port.id"), stated.port, "#{i}");
+                        // Its time to live, in order per interface; while it is not leaving, the
+                        // chassis MAC it names its device by, the MAC the test set.
+                        let ttl = d.one("lldp", "lldp.time_to_live");
+                        if ttl != "0" {
+                            assert_eq!(d.one("lldp", "lldp.profinet.cm_mac_add"), theirs.to_string(), "#{i}");
+                        }
+                        ttls.entry(k.frame.iface.clone()).or_default().push(ttl);
                     }
                 }
             }
@@ -238,6 +260,13 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
             assert_eq!(sent, std::collections::BTreeMap::from([("a0".to_string(), asked.clone()), ("a1".to_string(), asked)]));
             assert_eq!(by_class, s.stats.by_class);
             assert_eq!(s.stats.heard, frames.len() as u64 - 4);
+            // Each device's port said it was leaving, by its last LLDP frame and by no other.
+            assert_eq!(ttls.keys().cloned().collect::<Vec<_>>(), ["a0", "a1"]);
+            for (iface, seen) in &ttls {
+                let (last, before) = seen.split_last().unwrap();
+                assert_eq!(last, "0", "{iface}: {seen:?}");
+                assert!(!before.is_empty() && before.iter().all(|t| t != "0"), "{iface}: {seen:?}");
+            }
             // Nothing of this machine's own and nothing damaged, the leaving frames among them.
             assert_eq!((s.stats.own, s.stats.damaged_frames, s.stats.damage.len()), (0, 0, 0), "{:?}", s.stats.damage);
         },
