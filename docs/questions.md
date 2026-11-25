@@ -2173,6 +2173,12 @@ nothing yet records a language version.
 
 **Reversible?** Yes, until a compiled program records one.
 
+**Decided** 2026-11-25, by the architect: asked "How is ORCL versioned as a language, beside its
+crates (`orcl-std`, `orcl-runtime`, at 2.0.0-alpha.1 under law L3)? Taken meanwhile: the language's
+version is `orcl-std`'s.", "A number of its own (Recommended)", (b): ORCL 1, 2 and so on, stated by
+`orcl-std`, written in a compiled program's header and named by controlador; the crates keep their
+SemVer from 2.0.0.
+
 ## Q223 - Controlador's execution model, as proposed
 
 **Raised** 2026-11-22, by the controlador session, answering Q33 with a proposal.
@@ -2226,6 +2232,12 @@ Options: those names; English ones (`veredas-application`, `veredas-network`, `v
 
 **Reversible?** Yes, until a file of the format exists anywhere.
 
+**Decided** 2026-11-25, by the architect: asked "What are controlador's own file formats called?
+Taken meanwhile, in documents only: `veredas-aplicacao` (application), `veredas-rede` (hardware
+configuration), `veredas-alvo` (target settings), `veredas-carga` (a download's manifest), and
+`<name>.orclb` for a compiled program.", "The Portuguese names", against English names and one
+`veredas-controlador-*` prefix. What was taken stands.
+
 ## Q225 - May a `clippy.toml` sit in the repository?
 
 **Raised** 2026-11-22, by the controlador session, carrying `orcl-std` in.
@@ -2255,6 +2267,13 @@ The assistant recommends (a).
 
 **Reversible?** Yes: the file comes back as Veredas 1 had it.
 
+**Decided** 2026-11-25, by the architect: asked "May a `clippy.toml` sit in the repository? ORCL's
+rule against interior mutability is checked by a clippy list kept in that file, but law L7 demands a
+`veredas-*` stamp in every TOML file and clippy refuses unknown keys. Taken meanwhile: no
+`clippy.toml`, the rule kept by convention.", "L7 exempts it (Recommended)", (a): law L7 treats
+`clippy.toml` as a tool's file, as it treats nextest's. The law and the clause that states it
+(C-046) change together, in one commit.
+
 ## Q221 - Where does ORCL's front end build, beside a workspace on stable?
 
 **Raised** 2026-11-22, by the controlador session, in the study of the interpreter's front end
@@ -2282,6 +2301,13 @@ The assistant recommends (a).
 
 **Reversible?** Yes: nothing is built.
 
+**Decided** 2026-11-25, by the architect: asked "Where does ORCL's front end build? It is a compiler
+driver that builds only on a pinned nightly Rust, while the workspace builds on stable. Taken
+meanwhile: nothing of it is built.", "Member, driver by feature (Recommended)", (a):
+`crates/orcl-front`, a member that builds on stable as an empty shell, its driver behind a cargo
+feature only the pinned nightly turns on, its own tests run under the nightly by a command of their
+own.
+
 ## Q222 - Which nightly does ORCL pin, and when does it move?
 
 **Raised** 2026-11-22, with Q221.
@@ -2301,6 +2327,13 @@ its interpreter was proven against.
 development machine.
 
 **Reversible?** Yes, until a program file records its nightly.
+
+**Decided** 2026-11-25, by the architect: asked "Which nightly Rust does ORCL's front end pin, and
+when does it move? Each move means adapting the driver and rerunning the conformance suite. Taken
+meanwhile: `nightly-2026-11-21`, for studies only.", "As proposed (Recommended)":
+`nightly-2026-11-21`, written in the front end's toolchain file and in every program file's header,
+moved on purpose, a few times a year at most and never for a release being commissioned, each move a
+change of its own gated by the conformance suite.
 
 ## Q226 - The Linux study's choices
 
@@ -2368,6 +2401,12 @@ leaves out.
 **Taken meanwhile**: nothing is built.
 
 **Reversible?** Yes: nothing is built.
+
+**Decided** 2026-11-25, by the architect: asked "How does ORCL's interpreter handle a program's
+calls into Rust's core library (27 distinct functions in the programs studied)? Taken meanwhile:
+nothing is built.", "A closed list (Recommended)", (a): each allowed call into core is an operation
+of the interpreter, proven against the native call by the conformance suite, and a call outside the
+list is refused by name and place when the program is lowered.
 
 ## Q228 - Controlador's states: the readings its first clause takes
 
@@ -2529,6 +2568,13 @@ which none of the runtime's clocks gives. IEC 61131-3's TP gives one pulse per r
 `DECISION PENDING (Q229)`.
 
 **Reversible?** Yes: a few lines of `Tp`, or of all three timers, and the assertions that pin them.
+
+**Decided** 2026-11-25, by the architect: asked "ORCL's timers judge elapsed time against the preset
+each scan gives. So a pulse timer (TP) whose input stays on can fire again with no new rising edge
+when its preset is raised; IEC 61131-3's TP gives one pulse per rising edge. Taken meanwhile: kept
+as carried from Veredas 1.", "Pulse needs a new edge", (b): each scan's `pt` still counts, and a
+pulse that has ended stays off until the next rising edge, whatever `pt` or the time does. The
+carried `Tp` changes; the other two timers stay.
 
 ---
 
@@ -2718,3 +2764,10 @@ should hold its tests without being asked.
 ships carries no test server.
 
 **Reversible?** Yes: (b) is `default = ["shell"]` in Oficina's manifest, and Qt on the machines.
+
+**Decided** 2026-11-25, by the architect: asked "Does the suite's default build need Qt for
+Oficina's window (Qt 6.12, KDDockWidgets, and Spix and AnyRPC for its tests)? Taken meanwhile: the
+window sits behind a cargo feature, off by default.", "Built by default", (b), against the
+recommendation: the window is built by default, so every machine that builds the suite carries Qt
+6.12, KDDockWidgets, Spix and AnyRPC, GitHub's run among them. The switch waits until every member's
+build on the development machine finds them.
