@@ -10,8 +10,8 @@
 //! The answers map onto the engine's resolution strategies (`ironcalc_base::external`): the file's
 //! cache (`CachedResolver`) and the linked workbooks opened and evaluated here
 //! (`ironcalc::import::LinkedResolver`). Veredas 1 offered a third answer, Excel opening and
-//! calculating the linked workbooks over its COM host; whether that host is carried is
-//! `docs/questions.md` Q342, and meanwhile the answer is not offered.
+//! calculating the linked workbooks over its COM host; that host is not carried
+//! (`docs/questions.md` Q342, ruled 2026-11-25), and the answer is not offered.
 
 use std::path::{Path, PathBuf};
 
@@ -52,8 +52,8 @@ impl LinkPolicy {
 }
 
 /// How the links of one workbook are resolved for this opening.
-// DECISION PENDING (docs/questions.md Q342): Veredas 1's third answer, "open and calculate in
-// Excel", is not offered while the Excel host is not carried.
+// Veredas 1's third answer, "open and calculate in Excel", is not offered: the Excel host is not
+// carried (docs/questions.md Q342, ruled 2026-11-25).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkChoice {
     /// The values the file carries (Excel's behaviour with the linked book closed).

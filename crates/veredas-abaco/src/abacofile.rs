@@ -1123,8 +1123,8 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
 /// is read by the very code every other file of the suite is read by, its order and its texts.
 /// Core's layers stand behind its `net` feature now, but a workspace build unifies a package's
 /// features across members, so `veredas-core` without `net` would still bring the plant stack into
-/// Ábaco's test builds, which C-220 refuses (docs/questions.md Q345, measured 2026-11-23).
-// DECISION PENDING (Q345)
+/// Ábaco's test builds, which C-220 refuses (measured 2026-11-23): compiling it by path is the
+/// ruled way (docs/questions.md Q345, 2026-11-25).
 #[allow(dead_code)]
 #[path = "../../veredas-core/src/schema.rs"]
 mod schema;

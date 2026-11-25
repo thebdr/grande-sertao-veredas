@@ -1184,7 +1184,8 @@ fn parity(links_mode: LinksMode) {
     assert_eq!((matched, formulas, base_matched), (75_912, 76_359, 75_743));
     // the corpus's workbooks with links: three, none of whose linked workbooks is here, so the
     // linked resolution reports each unavailable and answers from its cache (C-221's tests open
-    // present ones; a plant's real linked workbooks are owed, Q344)
+    // present ones; a plant's real linked workbooks join the evidence when the architect puts them
+    // here, Q344)
     let linked: Vec<&String> = links.keys().collect();
     assert_eq!(
         linked,
