@@ -7,10 +7,10 @@
     "cargo test -p orcl-runtime --test interpreted && cargo clippy -p orcl-runtime --all-targets -- -D warnings"
   ],
   "exitCode": 0,
-  "outputSha": "915002101d5e369731f346cb031eb1d881ab81554035ab19e63f733330aa2ca2",
-  "outputTail": "test outputs_whose_default_is_no_value_of_their_type_or_reads_back_as_none_are_refused_when_made ... ok\ntest the_scan_s_time_its_cycle_and_the_output_image_reach_the_program_scan_by_scan ... ok\ntest the_scan_region_holds_the_scan_s_time_its_period_and_its_cycle_every_scan ... ok\ntest the_output_image_handed_to_a_scan_is_the_one_the_program_reads ... ok\ntest an_image_the_machine_refuses_or_outputs_that_read_back_as_none_fault_the_task_by_name ... ok\ntest the_adapter_refuses_by_name_what_does_not_fit_when_it_is_made ... ok\ntest a_scan_of_an_interpreted_program_allocates_nothing ... ok\ntest an_interpreted_program_and_its_native_twin_write_the_same_outputs_at_the_same_times ... ok\ntest a_scan_of_half_a_million_instructions_runs_to_its_return_with_no_budget ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running tests/interpreted.rs (target/debug/build/orcl-runtime/4b17c6ce58b2784b/out/interpreted-4b17c6ce58b2784b)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s",
-  "ranAt": "2026-11-25T10:10:16.297Z",
-  "headCommit": "1ec31ddd82d94fe1cc796b35e0231ef05c9553eb",
+  "outputSha": "ece43096c529fb702fd32653db1307d8c7c7c723dc4cbac20638cb4e7131cf76",
+  "outputTail": "test the_scan_s_time_its_cycle_and_the_output_image_reach_the_program_scan_by_scan ... ok\ntest the_output_image_handed_to_a_scan_is_the_one_the_program_reads ... ok\ntest outputs_whose_default_is_no_value_of_their_type_or_reads_back_as_none_are_refused_when_made ... ok\ntest a_program_error_faults_the_task_at_its_scan_s_start_and_leaves_the_machine_at_the_failed_assertion ... ok\ntest the_scan_region_holds_the_scan_s_time_its_period_and_its_cycle_every_scan ... ok\ntest the_adapter_refuses_by_name_what_does_not_fit_when_it_is_made ... ok\ntest a_scan_of_an_interpreted_program_allocates_nothing ... ok\ntest an_interpreted_program_and_its_native_twin_write_the_same_outputs_at_the_same_times ... ok\ntest a_scan_of_half_a_million_instructions_runs_to_its_return_with_no_budget ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s\n     Running tests/interpreted.rs (target/debug/build/orcl-runtime/4b17c6ce58b2784b/out/interpreted-4b17c6ce58b2784b)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s",
+  "ranAt": "2026-11-25T10:26:12.028Z",
+  "headCommit": "b82f96536623cf2e5e717cf36cfc6926bc424193",
   "tests": [
     {
       "name": "crates/orcl-runtime/tests/interpreted.rs",
