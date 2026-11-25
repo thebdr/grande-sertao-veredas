@@ -1,4 +1,5 @@
-//! Which component reads each file format of the suite, so the tree can say whose a file is.
+//! Which component reads each file format of the suite (or, for a suite release's files, the tool
+//! that cuts them), so the tree can say whose a file is.
 //!
 //! Each format belongs to the reader that states it (`docs/*-schema.md`, the plans). This table
 //! repeats what those readers say for the tree's labels only: it decides nothing about a file,
@@ -23,8 +24,9 @@ const MAQUINAR: Component = Component { nome: "maquinar", display: "Maquinar" };
 const SUPERVISAO: Component = Component { nome: "supervisao", display: "Supervisão" };
 const ABACO: Component = Component { nome: "abaco", display: "Ábaco" };
 const COMISSIONADOR: Component = Component { nome: "comissionador", display: "Comissionador" };
-/// Suite releases: no component, but the files are the suite's (docs/entrega-plan.md).
-const ENTREGA: Component = Component { nome: "entrega", display: "Entrega" };
+/// Suite releases: no component, but the tool that cuts them reads these files
+/// (`tools/alforge`, docs/alforge-plan.md), and the tree names it.
+const ALFORGE: Component = Component { nome: "alforge", display: "Alforge" };
 
 /// Every TOML format the suite's documents state today, with its reader's component.
 pub const FORMATS: &[(&str, Component)] = &[
@@ -45,8 +47,8 @@ pub const FORMATS: &[(&str, Component)] = &[
     ("veredas-abaco-records", ABACO),
     ("veredas-abaco-state", ABACO),
     ("veredas-report", COMISSIONADOR),
-    ("veredas-release", ENTREGA),
-    ("veredas-machine", ENTREGA),
+    ("veredas-release", ALFORGE),
+    ("veredas-machine", ALFORGE),
 ];
 
 /// The component whose reader states `format`, if the table knows it.

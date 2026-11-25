@@ -33,6 +33,7 @@ pub mod qobject {
         #[base = QAbstractItemModel]
         #[qproperty(QString, root_path, cxx_name = "rootPath")]
         #[qproperty(QString, error)]
+        #[qproperty(i32, reads)]
         type ProjectTree = super::ProjectTreeRust;
 
         #[cxx_override]
@@ -110,6 +111,8 @@ pub struct ProjectTreeRust {
     tree: RefCell<Option<Tree>>,
     root_path: QString,
     error: QString,
+    /// The model's count of folders read from the disk ([`Tree::reads`]), for a view or a test.
+    reads: i32,
 }
 
 /// What a node is, as the delegate words it.
@@ -133,6 +136,12 @@ fn describe(entry: &Entry) -> (&'static str, &'static str, String) {
 }
 
 impl qobject::ProjectTree {
+    /// The model's count of folder reads, published after anything that may read.
+    fn show_reads(mut self: Pin<&mut Self>) {
+        let reads = self.tree.borrow().as_ref().map_or(0, |t| i32::try_from(t.reads()).unwrap_or(i32::MAX));
+        self.as_mut().set_reads(reads);
+    }
+
     /// The node an index names: the root for an index that names none.
     fn node_of(&self, tree: &Tree, index: &QModelIndex) -> Option<NodeId> {
         if index.is_valid() { tree.get(index.internal_id()) } else { Some(tree.root()) }
@@ -220,6 +229,7 @@ impl qobject::ProjectTree {
             }
             Err(e) => self.as_mut().set_error(QString::from(e.to_string().as_str())),
         }
+        self.show_reads();
     }
 
     fn data(&self, index: &QModelIndex, role: i32) -> QVariant {
@@ -268,6 +278,7 @@ impl qobject::ProjectTree {
             self.as_mut().set_error(QString::default());
             self.as_mut().set_root_path(path.clone());
         }
+        self.as_mut().show_reads();
         ok
     }
 
@@ -288,6 +299,7 @@ impl qobject::ProjectTree {
                 pending.extend(read.rev());
             }
         }
+        self.as_mut().show_reads();
         ok
     }
 

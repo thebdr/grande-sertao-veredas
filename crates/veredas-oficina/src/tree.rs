@@ -146,6 +146,8 @@ pub enum TreeError {
 pub struct Tree {
     root: PathBuf,
     nodes: Vec<Node>,
+    /// How many times a folder was listed from the disk ([`Tree::reads`]).
+    reads: u64,
 }
 
 impl Tree {
@@ -159,13 +161,19 @@ impl Tree {
         let os_name = root.file_name().map_or_else(|| root.as_os_str().to_owned(), ToOwned::to_owned);
         let name = os_name.to_string_lossy().into_owned();
         let node = Node { hidden: false, name, parent: None, entry: Entry::Folder, contents: Contents::NotRead, os_name, gone: false };
-        let mut tree = Tree { root: root.to_path_buf(), nodes: vec![node] };
+        let mut tree = Tree { root: root.to_path_buf(), nodes: vec![node], reads: 0 };
         tree.expand(tree.root())?;
         Ok(tree)
     }
 
     pub fn root(&self) -> NodeId {
         NodeId(0)
+    }
+
+    /// How many times a folder has been listed from the disk since the tree opened, the root's
+    /// first reading among them: a folder read when it opens adds one, and nothing else reads.
+    pub fn reads(&self) -> u64 {
+        self.reads
     }
 
     pub fn node(&self, id: NodeId) -> &Node {
@@ -241,6 +249,7 @@ impl Tree {
         if self.nodes[id.0].entry != Entry::Folder {
             return Err(TreeError::NotAFolder { path: self.path(id).display().to_string() });
         }
+        self.reads += 1;
         let dir = self.path(id);
         let fail = |e: std::io::Error| (dir.display().to_string(), e.to_string());
         let listed: Result<Vec<(OsString, Entry)>, (String, String)> = (|| {

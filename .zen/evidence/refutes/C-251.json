@@ -1,0 +1,13 @@
+{
+  "clause": "C-251",
+  "verdict": "refuted",
+  "ranAt": "2026-11-25T01:25:43.578Z",
+  "headCommit": "8c03be94712e54dbcfa24cac6977887cac711c2c",
+  "tests": [
+    {
+      "name": "crates/veredas-oficina/tests/tree.rs",
+      "file": "crates/veredas-oficina/tests/tree.rs",
+      "symbolSha": "d1f357dabc59f6d709f00cc01ea4843ba9279369efada1ffd570b559c69c664e"
+    }
+  ]
+}
