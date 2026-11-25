@@ -945,9 +945,13 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
             // Shown gated: its class, and the warn colour while it is live (the design's word).
             let gated = page.eval(&format!(r#"(() => {{ const p = document.createElement("span"); p.style.color = "var(--warn)"; document.body.append(p); const warn = getComputedStyle(p).color; p.remove(); const b = document.querySelectorAll('.side .actions button')[{i}]; return [b.classList.contains("gated"), getComputedStyle(b).color === warn]; }})()"#));
             assert_eq!(gated, json!([true, true]), "{id}: its button {i} shown gated, in the warn colour");
-            page.eval(&format!("document.querySelector('.side .write-note').textContent = ''; document.querySelectorAll('.side .actions button')[{i}].click(); true"));
             let label = a["label"].as_str().unwrap();
+            // Its button read at its answer's own moment (the line said, before any task runs): off,
+            // its busy cleared, live again only at the next status the page reads (a later task).
+            page.eval(&format!(r#"(() => {{ window.__atAnswer = null; const o = new MutationObserver(() => {{ const t = document.querySelector('.side .write-note [data-action="{label}"]')?.textContent ?? ""; if (window.__atAnswer === null && t.startsWith("{label}: written")) {{ const b = document.querySelectorAll('.side .actions button')[{i}]; window.__atAnswer = [b.disabled, b.dataset.busy ?? null]; o.disconnect(); }} }}); o.observe(document.querySelector(".side"), {{ childList: true, subtree: true, characterData: true }}); return true; }})()"#));
+            page.eval(&format!("document.querySelector('.side .write-note').textContent = ''; document.querySelectorAll('.side .actions button')[{i}].click(); true"));
             let note = page.wait_for(&format!("(() => {{ const t = document.querySelector('.side .write-note [data-action=\"{label}\"]')?.textContent ?? ''; return t.startsWith({}) ? t : null; }})()", serde_json::to_string(&format!("{label}: written")).unwrap()), Duration::from_secs(10));
+            assert_eq!(page.eval("window.__atAnswer"), json!([true, null]), "{id} {label}: its button off at its answer, its busy cleared, for the next status to free");
             last_said.entry(o["id"].as_str().unwrap().to_string()).or_default().push(json!([label, note]));
             let (source, tag, value) = (a["source"].as_str().unwrap(), a["tag"].as_str().unwrap(), a["value"].as_str().unwrap());
             assert_eq!(page.eval("window.asked"), json!([format!("Write {value} to {tag} of {source}?")]), "{id} {label}: the question its own");
@@ -994,6 +998,8 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
                 page.eval(&format!("(() => {{ {select}; return true; }})()"));
                 page.wait_for(&chosen_here, Duration::from_secs(10));
                 page.wait_for(&format!("(() => {{ const b = document.querySelectorAll('.side .actions button')[{n}]; return b && !b.disabled ? true : null; }})()"), Duration::from_secs(10));
+                let gated = page.eval(&format!(r#"(() => {{ const p = document.createElement("span"); p.style.color = "var(--warn)"; document.body.append(p); const warn = getComputedStyle(p).color; p.remove(); const b = document.querySelectorAll('.side .actions button')[{n}]; return [b.classList.contains("gated"), getComputedStyle(b).color === warn]; }})()"#));
+                assert_eq!(gated, json!([true, true]), "{id} by {way} {label}: its button shown gated, in the warn colour");
                 let before = page.posts().len();
                 page.eval(&format!("document.querySelector('.side .write-note').textContent = ''; document.querySelectorAll('.side .actions button')[{n}].click(); true"));
                 let said = format!(r#"(() => {{ const t = document.querySelector('.side .write-note [data-action="{label}"]')?.textContent ?? ""; return t.startsWith("{label}: written") ? t : null; }})()"#);
@@ -1023,6 +1029,10 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
     // each after another object: its button busy and off there while the post is out, a click
     // forced on it (the button enabled by hand) asking nothing and posting nothing; freed once its
     // answer comes.
+    // Its answer comes while another object is selected, by each way in turn (a key, its line, its
+    // element): nothing said there; said on the pressed object once it is selected again.
+    let mut turn = 0;
+    let mut answered_under = BTreeSet::new();
     for (id, label) in [("aux-only", "Nudge"), ("tracked", "Mark")] {
         let id = serde_json::to_string(id).unwrap();
         parcels(&mut page);
@@ -1049,13 +1059,34 @@ fn a_write_is_refused_on_the_wire_while_the_switch_is_off_and_lands_once_it_is_a
             }
             std::thread::sleep(Duration::from_millis(500));
             assert_eq!(page.posts().len(), posted, "{id} pressed by {way}: nothing posted while its press is out");
-            page.eval("window.__letGo(); true");
+            parcels(&mut page);
+            let mut others = Vec::new();
+            for o in ["\"tracked\"", "\"aux-only\"", "\"outlet-2\""].into_iter().filter(|o| *o != id) {
+                others.extend(selections(&mut page, o).into_iter().map(|(w, s, k)| (w, s, k, o.to_string())));
+            }
+            let want = ["a key", "the attention list", "its element"][turn % 3];
+            turn += 1;
+            let (other_way, other_select, other_key, other_id) = others.iter().find(|(w, _, _, _)| *w == want).or(others.first()).cloned().unwrap();
+            answered_under.insert(other_way);
+            page.eval(&format!("(() => {{ {other_select}; return true; }})()"));
+            page.wait_for(&chosen(&other_id, &other_key), Duration::from_secs(10));
+            let there = page.eval(LINES);
+            page.eval("window.__answered = false; window.__letGo().finally(() => { window.__answered = true; }); true");
+            page.wait_for("window.__answered || null", Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(1500));
+            assert_eq!(page.eval(LINES), there, "{id} pressed by {way}, answered while {other_id} is selected by {other_way}: nothing said there");
+            if key.is_some() {
+                parcels(&mut page);
+            }
+            page.eval(&format!("(() => {{ {select}; return true; }})()"));
+            page.wait_for(&chosen(&id, &key), Duration::from_secs(10));
             page.wait_for(&format!(r#"(document.querySelector('.side .write-note [data-action="{label}"]')?.textContent ?? "").startsWith("{label}: written") || null"#), Duration::from_secs(10));
             let freed = page.wait_for(&format!(r#"(() => {{ const b = document.querySelector('.side .actions button[data-action="{label}"]'); return b && b.dataset.busy === undefined && !b.disabled ? true : null; }})()"#), Duration::from_secs(10));
             assert_eq!(freed, json!(true), "{id} pressed by {way}: its button freed once its answer came");
             page.eval("window.fetch = window.__plainFetch; true");
         }
     }
+    assert_eq!(answered_under, BTreeSet::from(["a key", "the attention list", "its element"]), "an answer come while another object is selected by every way the page selects one");
     // Each object pressed, selected again, says the last answer of each of its actions pressed, one
     // line each in its actions' order, whatever was pressed since.
     for (id, said) in &last_said {
