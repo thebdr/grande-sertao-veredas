@@ -1819,6 +1819,42 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
                 "{page} missing from the slim form"
             );
         }
+        // The slim form is those four modules and nothing beside them: its root's table holds
+        // them alone, the root no other page, line or re-export, and `fieldbus` no item.
+        let root_rows: BTreeSet<&str> = views[0]
+            .keys()
+            .filter_map(|k| k.strip_prefix("index.html#row:"))
+            .collect();
+        assert_eq!(
+            root_rows,
+            BTreeSet::from([
+                "fieldbus/index.html",
+                "rng/index.html",
+                "schema/index.html",
+                "state/index.html"
+            ]),
+            "the slim form's root (private items {private})"
+        );
+        let beside: Vec<&String> = views[0]
+            .keys()
+            .filter(|k| {
+                let (page, key) = k.split_once('#').unwrap_or((k, ""));
+                let lines = key.starts_with("row:")
+                    || key.starts_with("dt:")
+                    || key.starts_with("id:reexport");
+                (!page.contains('/') && !matches!(page, "index.html" | "all.html"))
+                    || (page == "index.html" && lines && !key.starts_with("row:"))
+                    || (page.starts_with("fieldbus/") && (page != "fieldbus/index.html" || lines))
+                    || (page.contains('/')
+                        && !["fieldbus/", "rng/", "schema/", "state/"]
+                            .iter()
+                            .any(|d| page.starts_with(d)))
+            })
+            .collect();
+        assert!(
+            beside.is_empty(),
+            "the slim form (private items {private}) holds beside its four modules: {beside:?}"
+        );
         for page in [
             "opc/index.html",
             "telegram/index.html",
