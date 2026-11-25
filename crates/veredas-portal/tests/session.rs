@@ -722,7 +722,7 @@ fn a_log_s_history_read_on_every_path_and_set_once() {
 /// history: not said read until it opens and is stored. A family read from a start in the past
 /// whose folder is not there fails its worker, never saying read; a file not there read from a
 /// start in the past says read at once. A member deleted before the backfill reaches it leaves
-/// nothing unread: said read.
+/// nothing unread: said read, the newest one (the active it would attach to) too.
 #[cfg(unix)]
 #[test]
 fn a_history_left_unread_is_never_said_read() {
@@ -781,6 +781,24 @@ fn a_history_left_unread_is_never_said_read() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
 
+    // The newest member deleted, the active the backfill would attach to: every member before it
+    // read, the history said read with their 20 100 lines, whatever is born newer being new.
+    let newest = dir.path().join("newest");
+    std::fs::create_dir_all(&newest).unwrap();
+    write_history(&newest.join("plant_1.log"), 0..20_000);
+    write_history(&newest.join("plant_2.log"), 20_000..20_100);
+    write_history(&newest.join("plant_3.log"), 20_100..20_200);
+    let mut cfg = SessionConfig::new("newest");
+    cfg.start = Some(midnight());
+    cfg.logs.push(family("newest", &newest, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    std::fs::remove_file(newest.join("plant_3.log")).unwrap();
+    assert_eq!(rows_when_history_read(&session.live(), "newest", 20_100), 20_100);
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+
     // A fixed family whose active holds history and is made unreadable: waited for.
     let fixed = dir.path().join("fixed");
     std::fs::create_dir_all(&fixed).unwrap();
@@ -821,4 +839,119 @@ fn a_history_left_unread_is_never_said_read() {
     assert!(wait(Duration::from_secs(10), || history(&live, "absent").is_some_and(|h| matches!(h.1, HealthState::Failed(_)))), "{:?}", live.health.read().unwrap());
     assert_eq!(history(&live, "absent").map(|h| h.0), Some(false));
     let _ = session.stop();
+}
+
+/// C-096's third refute round. A line is a line once ended (C-035): the history said read holds
+/// every ended line of the start, a last line its writer has not ended held until its ending
+/// comes and stored then, a file's and a family's active alike; never waited for, so a file that
+/// ends unended still says read.
+#[test]
+fn a_history_said_read_holds_every_ended_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("one.log");
+    write_history(&file, 0..100);
+    let unended = history_line(100);
+    let append = |path: &std::path::Path, text: &str| {
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(path).unwrap().write_all(text.as_bytes()).unwrap();
+    };
+    append(&file, unended.trim_end());
+    let fam = dir.path().join("fam");
+    std::fs::create_dir_all(&fam).unwrap();
+    write_history(&fam.join("plant_1.log"), 0..100);
+    write_history(&fam.join("plant_2.log"), 100..150);
+    append(&fam.join("plant_2.log"), history_line(150).trim_end());
+    for (id, path, log, ended) in [
+        ("one", file.clone(), log_source("one", &file), 100u64),
+        ("fam", fam.join("plant_2.log"), family("fam", &fam, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest), 150),
+    ] {
+        let mut cfg = SessionConfig::new(id);
+        cfg.start = Some(midnight());
+        cfg.logs.push(log);
+        cfg.rules.push(readings_rule(None));
+        let session = Session::start(cfg).unwrap();
+        let live = session.live();
+        assert_eq!(rows_when_history_read(&live, id, ended), ended);
+        std::thread::sleep(Duration::from_secs(1));
+        assert_eq!(rows(&live, "readings"), ended, "`{id}`: the unended line held");
+        append(&path, "\n");
+        assert!(wait(Duration::from_secs(10), || rows(&live, "readings") == ended + 1), "`{id}`: {} rows", rows(&live, "readings"));
+        for (id, r) in session.stop() {
+            r.unwrap_or_else(|e| panic!("{id}: {e}"));
+        }
+    }
+}
+
+/// C-096's third refute round. A family started at its end whose active is there and not
+/// readable at the first look (write alone allowed) is read from where it stood once it opens,
+/// as a file is: the lines written to it meanwhile read, its history skipped. One that retires
+/// unopened, two newer members born meanwhile, is read from where it stood once it opens,
+/// awaited till then, the generation between whole and the new active whole, held in turn.
+#[cfg(unix)]
+#[test]
+fn a_held_active_started_at_its_end_is_read_from_where_it_stood() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mode = |p: &std::path::Path, m: u32| std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap();
+    let append = |path: &std::path::Path, range: std::ops::Range<u32>| {
+        use std::io::Write;
+        let body: String = range.map(history_line).collect();
+        std::fs::OpenOptions::new().append(true).open(path).unwrap().write_all(body.as_bytes()).unwrap();
+    };
+    let same = dir.path().join("same");
+    std::fs::create_dir_all(&same).unwrap();
+    write_history(&same.join("plant_1.log"), 0..10);
+    write_history(&same.join("plant_2.log"), 10..20);
+    mode(&same.join("plant_2.log"), 0o200);
+    let retired = dir.path().join("retired");
+    std::fs::create_dir_all(&retired).unwrap();
+    write_history(&retired.join("plant_1.log"), 0..10);
+    mode(&retired.join("plant_1.log"), 0o200);
+    let file = dir.path().join("held.log");
+    write_history(&file, 0..10);
+    mode(&file, 0o200);
+    for (id, log) in [
+        ("same", family("same", &same, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest)),
+        ("retired", family("retired", &retired, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest)),
+        ("file", log_source("file", &file)),
+    ] {
+        let mut cfg = SessionConfig::new(id);
+        cfg.logs.push(log);
+        cfg.rules.push(readings_rule(None));
+        let session = Session::start(cfg).unwrap();
+        let live = session.live();
+        assert!(wait(Duration::from_secs(10), || live.health.read().unwrap().get(id).is_some_and(|h| h.history_read)), "`{id}`");
+        let expected = match id {
+            "same" => {
+                append(&same.join("plant_2.log"), 20..70);
+                mode(&same.join("plant_2.log"), 0o644);
+                50
+            }
+            "retired" => {
+                append(&retired.join("plant_1.log"), 10..40);
+                write_history(&retired.join("plant_2.log"), 40..60);
+                write_history(&retired.join("plant_3.log"), 60..65);
+                mode(&retired.join("plant_3.log"), 0o200);
+                std::thread::sleep(Duration::from_millis(1500));
+                assert_eq!(rows(&live, "readings"), 0, "the retired held active awaited");
+                mode(&retired.join("plant_1.log"), 0o644);
+                // The new active held in turn: born after the start, read whole once it opens.
+                assert!(wait(Duration::from_secs(10), || rows(&live, "readings") == 50), "{} rows", rows(&live, "readings"));
+                std::thread::sleep(Duration::from_millis(1000));
+                mode(&retired.join("plant_3.log"), 0o644);
+                55
+            }
+            _ => {
+                append(&file, 10..60);
+                mode(&file, 0o644);
+                50
+            }
+        };
+        assert!(wait(Duration::from_secs(10), || rows(&live, "readings") == expected), "`{id}`: {} rows", rows(&live, "readings"));
+        std::thread::sleep(Duration::from_millis(1000));
+        assert_eq!(rows(&live, "readings"), expected, "`{id}`: nothing of the history read");
+        for (id, r) in session.stop() {
+            r.unwrap_or_else(|e| panic!("{id}: {e}"));
+        }
+    }
 }

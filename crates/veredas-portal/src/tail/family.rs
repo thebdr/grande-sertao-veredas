@@ -185,6 +185,25 @@ fn read_range_full(
     Ok(Unread::No)
 }
 
+#[cfg(test)]
+mod history_test;
+
+/// A test's hooks, each run before the fixed sweep opens its fixed path: what a rotation between
+/// the sweep's listing and its open does there (C-096's third refute round).
+#[cfg(test)]
+pub(crate) static BEFORE_FIXED_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn before_fixed_open(path: &Path) {
+    if let Ok(mut hooks) = BEFORE_FIXED_OPEN.lock() {
+        for (at, hook) in hooks.iter_mut() {
+            if at == path {
+                hook();
+            }
+        }
+    }
+}
+
 /// Whether a file a backfill meant to read was there and left unread.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Unread {
@@ -461,8 +480,13 @@ fn attach_backfill(
                 }
                 None => {
                     // Vanished before it was reached: read any remnant, then converge on the
-                    // newest by rank.
-                    read(read_range_full(&planned.path, off, enc, cfg.drain_grace, stop, emit)?);
+                    // newest by rank. Gone (names are stable in this mode: deleted) or read to its
+                    // end, every member of the history is read; whatever is born newer is new.
+                    let unread = read_range_full(&planned.path, off, enc, cfg.drain_grace, stop, emit)?;
+                    read(unread);
+                    if unread == Unread::No {
+                        swept();
+                    }
                     match newest_catch_up(spec, cfg, (planned.key, planned.name.clone()), stop, wake_rx, emit)? {
                         None => Ok(BackfillAttach::Stopped),
                         Some((c, k, nm)) => Ok(BackfillAttach::Attached { cursor: Box::new(c), key: k, name: nm, known: consumed }),
@@ -501,6 +525,8 @@ fn attach_backfill(
                 // Clean: adopt the fixed path (the offset applies only when the planned active
                 // never rotated).
                 let (off, enc) = pending.unwrap_or((0, None));
+                #[cfg(test)]
+                before_fixed_open(&fixed_path);
                 match TailedFile::open_at(&fixed_path, off, enc) {
                     Ok(cursor) => {
                         // Invariant 2: check that nothing retired between the clean sweep and
@@ -528,9 +554,16 @@ fn attach_backfill(
                     Err(e) => {
                         // Every retiree swept and the fixed active not there: the history is
                         // read, whatever appears at the fixed path being new content. There and
-                        // not readable, it holds history: waited for, the flag not said.
+                        // not readable, it holds history: waited for, the flag not said. A
+                        // rotation may have renamed the active into a retiree between the sweep's
+                        // listing and this open; a rename is atomic, so a listing taken after the
+                        // open that found nothing shows its new name, read before the flag is.
                         if crate::tail::single::is_not_found(&e) {
-                            swept();
+                            match retry_resolve(spec, stop) {
+                                Some(fs) if fs.iter().all(|f| f.is_active || consumed.contains(&f.file_name)) => swept(),
+                                Some(_) => continue,
+                                None => {}
+                            }
                         }
                         wait_tick(wake_rx, cfg.poll_interval);
                     }
@@ -584,6 +617,12 @@ fn run_family(
     // generations replay (invariant 3).
     let mut known: HashSet<String> = HashSet::new();
     let mut preexisted: Option<bool> = None;
+    // A start at the end whose active was there and not openable at the first look: its name,
+    // length and identity then, so the open that succeeds reads it from where it stood (as a file
+    // held at its first look is, C-035), and a newer active, born after the start, whole.
+    let mut held: Option<(String, u64, Option<crate::tail::cursor::Identity>)> = None;
+    let mut looked = false;
+    let mut whole = false;
 
     // A backfill start replays history from the located point first; the cursor it returns IS
     // the seam: the same handle, the exact offset, live from here.
@@ -716,13 +755,47 @@ fn run_family(
                     // appears now is newer than the (past) start point, so read it whole.
                     FamilyStart::ActiveBegin | FamilyStart::Backfill(_) => FileStart::Begin,
                 };
-                match TailedFile::open(&active.path, start) {
+                let opened = match &held {
+                    Some((name, len, identity)) if *name == active.file_name => TailedFile::open_held(&active.path, *len, identity.as_ref()),
+                    Some((_, len, identity)) => {
+                        // The held active retired unopened: what it took after the look read
+                        // where it went (the member of its identity), awaited while it does not
+                        // open, then every generation born after it and retired since, whole, in
+                        // order, and the new active whole.
+                        let same = files.iter().find(|f| identity.is_some() && crate::tail::cursor::identity_at(&f.path) == *identity);
+                        if let Some(f) = same {
+                            let Ok(mut c) = TailedFile::open_held(&f.path, *len, identity.as_ref()) else {
+                                wait_tick(&wake_rx, cfg.poll_interval);
+                                continue;
+                            };
+                            c.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
+                            c.flush_pending(&mut emit);
+                            let mut younger: Vec<&FamilyFile> = files.iter().filter(|g| !g.is_active && rank(g) > rank(f)).collect();
+                            younger.sort_by(|x, y| rank(x).cmp(&rank(y)));
+                            for g in younger {
+                                read_full(&g.path, cfg.drain_grace, &stop, &mut emit)?;
+                            }
+                        }
+                        held = None;
+                        whole = true;
+                        TailedFile::open(&active.path, FileStart::Begin)
+                    }
+                    None if whole => TailedFile::open(&active.path, FileStart::Begin),
+                    None => TailedFile::open(&active.path, start),
+                };
+                match opened {
                     Ok(c) => {
                         known = member_names(&files);
                         break (c, active.key, active.file_name.clone());
                     }
-                    Err(_) => {
-                        // Rotated between the resolve and the open; the next round realigns.
+                    Err(e) => {
+                        if !looked && matches!(cfg.start, FamilyStart::ActiveEnd) && !crate::tail::single::is_not_found(&e) {
+                            let len = std::fs::metadata(&active.path).map(|m| m.len()).unwrap_or(0);
+                            held = Some((active.file_name.clone(), len, crate::tail::cursor::identity_at(&active.path)));
+                        }
+                        looked = true;
+                        // Rotated between the resolve and the open, or held; the next round
+                        // realigns.
                         wait_tick(&wake_rx, cfg.poll_interval);
                         continue;
                     }
