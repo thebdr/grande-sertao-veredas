@@ -1,16 +1,16 @@
 {
   "clause": "C-150",
-  "command": "sh -c cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); seen = lambda keep: sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if keep(p, t)); want = [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")]; sys.exit(seen(lambda p, t: t[\"name\"] in (\"orcl_std\", \"orcl-std\", \"blocks\")) != want or seen(lambda p, t: p[\"name\"] == \"orcl-std\") != want)' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true cargo nextest run -p orcl-std --release --test blocks --run-ignored only --no-tests fail -E 'test(=the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link)' && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none",
+  "command": "sh -c cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); seen = lambda keep: sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if keep(p, t)); want = [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")]; home = os.path.dirname(next(p[\"manifest_path\"] for p in m[\"packages\"] if p[\"name\"] == \"orcl-std\")); inside = lambda t: not os.path.relpath(t[\"src_path\"], home).startswith(\"..\"); sys.exit(seen(lambda p, t: t[\"name\"] in (\"orcl_std\", \"orcl-std\") or inside(t)) != want or seen(lambda p, t: p[\"name\"] == \"orcl-std\") != want)' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true cargo nextest run -p orcl-std --release --test blocks --run-ignored only --no-tests fail -E 'test(=the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link)' && cargo nextest run -p orcl-std --test blocks --run-ignored only --no-tests fail -E 'test(=clippy_refuses_each_type_o13_forbids_in_a_copy_of_the_crate_under_its_clippy_toml)' && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none",
   "commandArgv": [
     "sh",
     "-c",
-    "cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); seen = lambda keep: sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if keep(p, t)); want = [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")]; sys.exit(seen(lambda p, t: t[\"name\"] in (\"orcl_std\", \"orcl-std\", \"blocks\")) != want or seen(lambda p, t: p[\"name\"] == \"orcl-std\") != want)' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true cargo nextest run -p orcl-std --release --test blocks --run-ignored only --no-tests fail -E 'test(=the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link)' && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
+    "cargo metadata --no-deps --format-version 1 --offline --manifest-path crates/orcl-std/Cargo.toml | python3 -I -c 'import json, os, sys; m = json.load(sys.stdin); seen = lambda keep: sorted((p[\"name\"], t[\"name\"], t[\"kind\"], os.path.relpath(t[\"src_path\"], os.path.dirname(p[\"manifest_path\"]))) for p in m[\"packages\"] for t in p[\"targets\"] if keep(p, t)); want = [(\"orcl-std\", \"blocks\", [\"test\"], \"tests/blocks.rs\"), (\"orcl-std\", \"orcl_std\", [\"lib\"], \"src/lib.rs\")]; home = os.path.dirname(next(p[\"manifest_path\"] for p in m[\"packages\"] if p[\"name\"] == \"orcl-std\")); inside = lambda t: not os.path.relpath(t[\"src_path\"], home).startswith(\"..\"); sys.exit(seen(lambda p, t: t[\"name\"] in (\"orcl_std\", \"orcl-std\") or inside(t)) != want or seen(lambda p, t: p[\"name\"] == \"orcl-std\") != want)' && cargo test -p orcl-std --lib --test blocks && cargo test -p orcl-std --doc && CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true cargo nextest run -p orcl-std --release --test blocks --run-ignored only --no-tests fail -E 'test(=the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link)' && cargo nextest run -p orcl-std --test blocks --run-ignored only --no-tests fail -E 'test(=clippy_refuses_each_type_o13_forbids_in_a_copy_of_the_crate_under_its_clippy_toml)' && cargo clippy -p orcl-std --all-targets -- -D warnings && cargo build -p orcl-std --target x86_64-unknown-none"
   ],
   "exitCode": 0,
-  "outputSha": "54d5132b1fbaf89c5ed64e55dc469b5d7803480206dc0a7b1363b0e90f2fde5b",
-  "outputTail": "────────────\n Nextest run ID 9ebf8b80-d712-4000-a408-3635322ec6e6 with nextest profile: default\n    Starting 1 test across 1 binary (74 tests skipped)\n        PASS [   0.991s] (1/1) orcl-std::blocks the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link\n────────────\n     Summary [   0.992s] 1 test run: 1 passed, 74 skipped\n    Checking serde_core v1.0.229\n    Checking zmij v1.0.23\n    Checking itoa v1.0.18\n    Checking memchr v2.8.3\n    Checking orcl-std v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/orcl-std)\n    Checking serde_json v1.0.154\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.43s\n   Compiling orcl-std v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/orcl-std)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.36s",
-  "ranAt": "2026-11-25T00:48:27.427Z",
-  "headCommit": "56a8335d2d71de2316fda234543c8c072a99362a",
+  "outputSha": "e20545e1b62333cd87a6ce7258b536c7757ea46e2d926faf5df79fa7776c0f3c",
+  "outputTail": "────────────\n Nextest run ID 98d42504-43f1-4afb-ab59-b9a97d91090a with nextest profile: default\n    Starting 1 test across 1 binary (82 tests skipped)\n        PASS [   0.594s] (1/1) orcl-std::blocks the_counter_counts_to_its_top_and_saturates_there_on_the_build_programs_link\n────────────\n     Summary [   0.595s] 1 test run: 1 passed, 82 skipped\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n────────────\n Nextest run ID b3b287ff-f2a6-46ed-8895-f882ab53e827 with nextest profile: default\n    Starting 1 test across 1 binary (82 tests skipped)\n        PASS [   0.164s] (1/1) orcl-std::blocks clippy_refuses_each_type_o13_forbids_in_a_copy_of_the_crate_under_its_clippy_toml\n────────────\n     Summary [   0.165s] 1 test run: 1 passed, 82 skipped\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s",
+  "ranAt": "2026-11-25T07:06:07.939Z",
+  "headCommit": "8cf5424c2a801f3e33f3dee20c78c33a999ca652",
   "tests": [
     {
       "name": "crates/orcl-std/src/timers.rs",
@@ -35,7 +35,7 @@
     {
       "name": "crates/orcl-std/src/lib.rs",
       "file": "crates/orcl-std/src/lib.rs",
-      "fileSha": "563086ba6fea93b899b6c34ae27f7c2140e791a9f132731ba845a515e9f3afe3"
+      "fileSha": "b7f1dc6e1e101d8ac9c50ec9250babf361a0f356a2ec48842b5db3a714001175"
     },
     {
       "name": "crates/orcl-std/src/scan.rs",
@@ -50,7 +50,7 @@
     {
       "name": "crates/orcl-std/tests/blocks.rs",
       "file": "crates/orcl-std/tests/blocks.rs",
-      "fileSha": "704a7708c2ea0b7345b4fef34800e2792b5c911cb8b9cfd2291774f6e41e3775"
+      "fileSha": "103678a5bfb9bb2eaf9ac0a596ba3fb57396cfd28ccbc48faef7c3041b0a3677"
     }
   ]
 }
