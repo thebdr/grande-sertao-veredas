@@ -314,8 +314,6 @@ own to close in a fork change of its own:
 - **Two names that fold to one:** the engine folds a name's case both ways (fork change 34: `Kx`
   with the Kelvin sign is `kx`, `Maß` is `MASS`) and reads, sets and deletes the first of two a
   file holds. Whether Excel folds a name so is not measured.
-- **A LET's name beyond ASCII:** `LET(É,1,É+1)` does not parse; a use beyond ASCII binds by the
-  fold (`LET(ss,1,ß+1)` is 2).
 - **A LET's name that is also a defined name:** with a name `Rate`, `LET(Rate,5,Rate)` and
   `LET(rate,2,Rate*3)` evaluate `#VALUE!`, and a LET-bound function beside a defined one of its fold
   (`LET(twice,LAMBDA(v,v*3),TWICE(2))` with a name `Twice`) too: the parser reads the use as the
@@ -495,7 +493,10 @@ own to close in a fork change of its own:
   (fork change 34, a name's case folded both ways), for a defined name and a LET's or LAMBDA's
   alike (`ÁREA(A1)` is the name `ÁREA`, `Kx` with the Kelvin sign is `kx`), and the first of two a
   file holds the name the patcher reads, as the engine reads it; a bound name's every use is
-  written with its `_xlpm.` (the same change).
+  written with its `_xlpm.` (the same change). The sixteenth: a name opening with a letter beyond
+  ASCII (`Área`, `销售`) is the engine's to define, set and read (fork change 35, which also lets
+  `LET(É,1,É+1)` parse), so a move re-spells it; and a move sets in place the first name of a
+  fold alone, the second re-spelled in the file's text, so the cells keep what the engine reads.
 - **Verification runs on a copy at a short UTF-8 path** (the engine's loader takes no other): under
   the system's temporary folder, the model renamed to the destination's stem before comparing;
   the new file then goes beside the destination under a short name of its own.

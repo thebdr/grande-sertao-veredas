@@ -2799,3 +2799,91 @@ fn of_two_names_a_file_holds_that_fold_to_one_the_first_is_read_by_the_patcher_a
     let book = part(&dst, "xl/workbook.xml");
     assert_eq!(book.matches("<definedName ").count(), 0, "{book}");
 }
+
+// ---- refute round 16 --------------------------------------------------------------------------
+
+#[test]
+fn a_name_opening_with_a_letter_beyond_ascii_moves_and_is_set() {
+    // a Portuguese or a Chinese workbook's `Área` and `销售`, which Excel takes and the engine now
+    // takes too (fork change 35): a move re-spells it, an edit sets it
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["Área", "销售", "\u{212A}x"] {
+        let src = dir.path().join("names.xlsx");
+        let data = format!(r#"<row r="1"><c r="A1"><v>3</v></c><c r="B1"><f>{name}*2</f><v>6</v></c></row>"#);
+        plain_book(&src, &[("S", worksheet(&data, ""))], &format!("<definedName name=\"{name}\">S!$A$1</definedName>"), &[]);
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let dst = dir.path().join("rows.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            patch(&src, &dst, &[rows("S", 1, 1)], &options).unwrap();
+            let book = part(&dst, "xl/workbook.xml");
+            assert!(book.contains(&format!("<definedName name=\"{name}\">S!$A$2</definedName>")), "{name}: {book}");
+            let want = format!(r#"<c r="B2"><f>{name}*2</f><v>6</v></c>"#);
+            assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B2"), Some(want.as_str()), "{name}");
+            let dst = dir.path().join("cols.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            patch(&src, &dst, &[Edit::InsertColumns { sheet: "S".into(), at: "A".into(), count: 1 }], &options).unwrap();
+            assert!(part(&dst, "xl/workbook.xml").contains(&format!("<definedName name=\"{name}\">S!$B$1</definedName>")), "{name}");
+            let want = format!(r#"<c r="C1"><f>{name}*2</f><v>6</v></c>"#);
+            assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "C1"), Some(want.as_str()), "{name}");
+        }
+    }
+    // set over the file's name, and a new one
+    let src = dir.path().join("area.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>3</v></c><c r="B1"><f>Área*2</f><v>6</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "<definedName name=\"Área\">S!$A$1</definedName>", &[]);
+    let dst = dir.path().join("set.xlsx");
+    let report = patch(
+        &src,
+        &dst,
+        &[
+            Edit::SetName { name: "Área".into(), formula: "=S!$A$1*10".into(), scope: None },
+            Edit::SetName { name: "Índice".into(), formula: "=S!$A$1".into(), scope: None },
+        ],
+        &verified(),
+    )
+    .unwrap();
+    assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{:?}", report.outcomes);
+    let book = part(&dst, "xl/workbook.xml");
+    assert!(book.contains("<definedName name=\"Área\">S!$A$1*10</definedName>") && book.contains("<definedName name=\"Índice\">S!$A$1</definedName>"), "{book}");
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B1"), Some(r#"<c r="B1"><f>Área*2</f><v>60</v></c>"#));
+}
+
+#[test]
+fn of_two_names_that_fold_to_one_a_move_moves_both_in_the_file_and_the_first_in_the_engine() {
+    // `MASS` first, `Maß` second, one name to the engine, which reads the first (fork change 34):
+    // a move on either sheet re-spells each in the file, and S's cells keep what the engine reads
+    let dir = tempfile::tempdir().unwrap();
+    let names = "<definedName name=\"MASS\">S!$A$1</definedName><definedName name=\"Maß\">T!$A$1</definedName>";
+    let t = worksheet(r#"<row r="1"><c r="A1"><v>50</v></c></row>"#, "");
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        // a row on T moves the second name: S's part as it was, and `MASS*2` still 2
+        let src = dir.path().join("pair.xlsx");
+        let s = worksheet(r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>MASS*2</f><v>2</v></c></row>"#, "");
+        plain_book(&src, &[("S", s), ("T", t.clone())], names, &[]);
+        let dst = dir.path().join("t.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[rows("T", 1, 1)], &options).unwrap();
+        assert_eq!(parts(&dst)["xl/worksheets/sheet1.xml"], parts(&src)["xl/worksheets/sheet1.xml"]);
+        let book = part(&dst, "xl/workbook.xml");
+        assert!(book.contains("<definedName name=\"MASS\">S!$A$1</definedName>") && book.contains("<definedName name=\"Maß\">T!$A$2</definedName>"), "{book}");
+        assert_eq!(read_back(&dst, "S", "B1"), Value::Number(2.0));
+        // a row on S moves the first: a cell spelling the second keeps its spelling and reads the first
+        let src = dir.path().join("pair-s.xlsx");
+        let s = worksheet(r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>Maß*2</f><v>2</v></c></row>"#, "");
+        plain_book(&src, &[("S", s), ("T", t.clone())], names, &[]);
+        let dst = dir.path().join("s.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[rows("S", 1, 1)], &options).unwrap();
+        assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B2"), Some(r#"<c r="B2"><f>Maß*2</f><v>2</v></c>"#));
+        assert!(part(&dst, "xl/workbook.xml").contains("<definedName name=\"MASS\">S!$A$2</definedName>"));
+    }
+    // round 15's Kelvin pair, a row inserted at 1: `kx*2` reads the first, `Kx`, now at A3
+    let src = dir.path().join("kelvin.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>kx*2</f><v>4</v></c></row><row r="2"><c r="A2"><v>2</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], "<definedName name=\"\u{212A}x\">S!$A$2</definedName><definedName name=\"kx\">S!$A$1</definedName>", &[]);
+    let dst = dir.path().join("kelvin-out.xlsx");
+    patch(&src, &dst, &[rows("S", 1, 1)], &verified()).unwrap();
+    assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B2"), Some(r#"<c r="B2"><f>kx*2</f><v>4</v></c>"#));
+    let book = part(&dst, "xl/workbook.xml");
+    assert!(book.contains("<definedName name=\"\u{212A}x\">S!$A$3</definedName>") && book.contains("<definedName name=\"kx\">S!$A$2</definedName>"), "{book}");
+}

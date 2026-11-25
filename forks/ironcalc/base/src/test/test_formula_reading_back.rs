@@ -197,3 +197,29 @@ fn of_two_names_a_file_holds_that_fold_to_one_the_first_is_read_and_deleted() {
     model.evaluate();
     assert_eq!(model.get_formatted_cell_value(0, 3, 1).unwrap(), "21");
 }
+
+/// Veredas fork change 35: a name may open with a letter of any script, as Excel's may: it is
+/// defined, set, read in a formula, qualified by its sheet and bound by a LET.
+#[test]
+fn a_name_opens_with_a_letter_of_any_script() {
+    use crate::DefinedNameEntry;
+    let mut model = new_empty_model();
+    model.set_user_input(0, 1, 1, "3".to_string()).unwrap();
+    for (name, formula) in [("Área", "Sheet1!$A$1"), ("Índice", "Sheet1!$A$1*2"), ("销售", "Sheet1!$A$1+1"), ("\u{212A}elvin", "Sheet1!$A$1-1")] {
+        model.new_defined_name(DefinedNameEntry::new(name, formula)).unwrap();
+    }
+    model.update_defined_name("Área", None, DefinedNameEntry::new("Área", "Sheet1!$A$1*10")).unwrap();
+    for (row, typed) in [(2, "=Área"), (3, "=Índice+1"), (4, "=销售"), (5, "=Sheet1!Área"), (6, "=LET(É,1,É+1)"), (7, "=\u{212A}elvin")] {
+        model.set_user_input(0, row, 1, typed.to_string()).unwrap();
+    }
+    model.evaluate();
+    for (row, value) in [(2, "30"), (3, "7"), (4, "4"), (5, "30"), (6, "2"), (7, "2")] {
+        assert_eq!(model.get_formatted_cell_value(0, row, 1).unwrap(), value, "row {row}");
+    }
+    assert_eq!(model.get_cell_formula(0, 2, 1).unwrap().unwrap(), "=Área");
+    assert_eq!(model.formulas_reading_back_otherwise(), Vec::<(u32, i32, i32)>::new());
+    // a digit, a dot or a sign first is still no name
+    for name in ["1x", ".x", "·x", "-x"] {
+        assert!(!crate::expressions::utils::is_valid_identifier(name), "{name}");
+    }
+}

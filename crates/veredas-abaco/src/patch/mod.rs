@@ -2877,11 +2877,21 @@ fn rewrite_defined_names(
 /// file, so the two agree and a name keeps pointing at its cells, as in Excel.
 fn move_model_names(wb: &mut Workbook, sheet: &str, shift: Shift) -> Result<(), String> {
     let order = wb.sheet_names();
+    let mut moved_keys: Vec<(String, Option<String>)> = Vec::new();
     for n in wb.names() {
+        // of two names of a scope that fold to one, the engine reads, sets and deletes the first
+        // alone (fork change 34): the second moves in the file's text and nowhere else, since
+        // setting it would set the first
+        let key = (name_key(&n.name), n.scope.as_ref().map(|s| s.to_lowercase()));
+        if moved_keys.contains(&key) {
+            continue;
+        }
+        moved_keys.push(key);
         let body = n.formula.trim_start_matches('=');
         if let Some(moved) = refs::shift_formula(body, sheet, shift, None, &order) {
-            wb.delete_name(&n.name, n.scope.as_deref())
-                .map_err(|e| e.to_string())?;
+            // set in place, never deleted first (a deletion takes the first of the fold whatever
+            // name is named, and setting it again would update the other and rename every cell
+            // reading it)
             wb.set_name(&n.name, &moved, n.scope.as_deref())
                 .map_err(|e| e.to_string())?;
         }
