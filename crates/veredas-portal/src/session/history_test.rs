@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicU64;
 use super::{Stats, history_is_read, settle_lines};
 
 fn stats(pending: u64, stored: u64) -> Stats {
-    Stats { count: pending + stored, last_arrival_ms: 0, last_ts: None, pending, stored, history_lost: false }
+    Stats { count: pending + stored, last_arrival_ms: 0, last_ts: None, pending, stored, history_lost: false, pending_first_ms: None, first_stored_ms: None }
 }
 
 #[test]

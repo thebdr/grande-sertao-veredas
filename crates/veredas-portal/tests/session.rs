@@ -1103,3 +1103,73 @@ fn a_file_held_from_a_past_start_says_read_only_of_its_own_history() {
         }
     }
 }
+
+/// C-096's seventh refute round. A store kept as a window (C-090) that lets go of some of a log's
+/// rows before its history is read loses part of the history: that log never says it read. A
+/// family read from a start in the past whose backfill takes over three seconds (twelve empty
+/// members, each a drain's grace) under a window of one second never says read; the same family
+/// under a window of an hour says read with all 20 100 rows. A history said read before the
+/// window lets go of anything stays said while the window lets go of its rows.
+#[test]
+fn a_window_that_lets_go_of_a_history_before_it_is_read_never_says_it_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let fam = dir.path().join("fam");
+    std::fs::create_dir_all(&fam).unwrap();
+    write_history(&fam.join("plant_1.log"), 0..20_000);
+    for i in 2..=13 {
+        std::fs::write(fam.join(format!("plant_{i}.log")), "").unwrap();
+    }
+    write_history(&fam.join("plant_14.log"), 20_000..20_100);
+    for (window, read) in [(Duration::from_secs(1), false), (Duration::from_secs(3600), true)] {
+        let mut cfg = SessionConfig::new("window");
+        cfg.start = Some(midnight());
+        cfg.store_window = Some(window);
+        cfg.logs.push(family("fam", &fam, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest));
+        cfg.rules.push(readings_rule(None));
+        let session = Session::start(cfg).unwrap();
+        let live = session.live();
+        if read {
+            assert_eq!(rows_when_history_read(&live, "fam", 20_100), 20_100);
+        } else {
+            let started = Instant::now();
+            let mut most = 0;
+            while started.elapsed() < Duration::from_secs(8) {
+                most = most.max(rows(&live, "readings"));
+                assert!(!live.health.read().unwrap().get("fam").is_some_and(|h| h.history_read), "said read with {} rows stored, {most} at most", rows(&live, "readings"));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(most < 20_100, "the window let go of part of the history: {most} rows at most");
+        }
+        for (id, r) in session.stop() {
+            r.unwrap_or_else(|e| panic!("{id}: {e}"));
+        }
+    }
+
+    // Said read before the window lets go of anything, the flag stays: the window then lets go of
+    // the history's rows and those that follow like any others.
+    let file = dir.path().join("one.log");
+    write_history(&file, 0..100);
+    let mut cfg = SessionConfig::new("window-after");
+    cfg.start = Some(midnight());
+    cfg.store_window = Some(Duration::from_secs(1));
+    cfg.logs.push(log_source("one", &file));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    assert_eq!(rows_when_history_read(&live, "one", 100), 100);
+    let said = |live: &Live| live.health.read().unwrap().get("one").is_some_and(|h| h.history_read);
+    let append = |i: u32| {
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(&file).unwrap().write_all(history_line(i).as_bytes()).unwrap();
+    };
+    for i in 100..130 {
+        append(i);
+        assert!(said(&live), "said once, kept while the window lets go: {} rows", rows(&live, "readings"));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(rows(&live, "readings") < 130, "the window let go of the history's rows");
+    assert!(said(&live));
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}

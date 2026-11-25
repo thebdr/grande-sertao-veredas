@@ -443,9 +443,14 @@ struct Stats {
     /// A log's lines drained since the last flush, and those whose flush landed.
     pending: u64,
     stored: u64,
-    /// A flush failed holding some of the log's lines before its history was read: the history
-    /// is not whole in the store, and the log never says it read.
+    /// A flush failed holding some of the log's lines before its history was read, or the
+    /// store's window let go of some of them: the history is not whole in the store, and the log
+    /// never says it read.
     history_lost: bool,
+    /// The arrival of the log's oldest line drained since the last flush, and of its oldest line
+    /// stored: what a window lets go of first.
+    pending_first_ms: Option<i64>,
+    first_stored_ms: Option<i64>,
 }
 
 struct Inner {
@@ -562,6 +567,10 @@ fn settle_lines(stats: &mut BTreeMap<String, Stats>, history_read: &HashMap<Stri
         if failed && !history_is_read(history_read.get(id), st) {
             st.history_lost = true;
         }
+        if !failed && st.first_stored_ms.is_none() {
+            st.first_stored_ms = st.pending_first_ms;
+        }
+        st.pending_first_ms = None;
         st.stored += st.pending;
         st.pending = 0;
     }
@@ -868,7 +877,7 @@ impl Session {
                 return Err(SessionError::Spawn { id, source: e });
             }
             time_formats.insert(SourceId::new(&id), formats);
-            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false });
+            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None });
             sources.push(SourceInfo { id, display_name: display, kind: "log", has_timestamp: has_ts });
         }
 
@@ -886,7 +895,7 @@ impl Session {
                     return Err(SessionError::Spawn { id: spec.source_id.clone(), source: e });
                 }
             };
-            stats.insert(spec.source_id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false });
+            stats.insert(spec.source_id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None });
             sources.push(SourceInfo { id: spec.source_id.clone(), display_name: spec.display_name.clone(), kind: "opc", has_timestamp: false });
             opc_handles.push(worker.writer.clone());
             opc_runtimes.push(OpcRuntime { handle: worker.handle, spec, base, seq: 0, state: ConnState::Connecting, dedup: DedupState::default() });
@@ -911,7 +920,7 @@ impl Session {
                     return Err(SessionError::Channel(e));
                 }
             };
-            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false });
+            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None });
             sources.push(SourceInfo { id, display_name: display, kind: "channel", has_timestamp: false });
             channel_handles.push(worker.writer.clone());
             channel_runtimes.push(ChannelRuntime { handle: worker.handle, writer: worker.writer, tables, state: LinkState::Waiting });
@@ -925,7 +934,7 @@ impl Session {
                 let closed = Arc::new(Mutex::new(false));
                 let id = c.source_id.trim().to_string();
                 let display = if c.display_name.trim().is_empty() { id.clone() } else { c.display_name.trim().to_string() };
-                stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false });
+                stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None });
                 sources.push(SourceInfo { id: id.clone(), display_name: display, kind: "controller", has_timestamp: false });
                 let runtime = ControllerRuntime {
                     source: SourceId::new(&id),
@@ -1141,6 +1150,7 @@ impl Inner {
             if let Some(st) = self.stats.get_mut(ev.source.as_str()) {
                 st.count += 1;
                 st.pending += 1;
+                st.pending_first_ms.get_or_insert(ev.arrival_unix_ms);
                 st.last_arrival_ms = ev.arrival_unix_ms;
                 if ev.parsed_ts.is_some() {
                     st.last_ts = ev.parsed_ts;
@@ -1603,7 +1613,16 @@ impl Inner {
             return;
         }
         self.evicted_at = Some(Instant::now());
-        match live.store.evict_before(now_unix_ms().saturating_sub(span)) {
+        let cutoff = now_unix_ms().saturating_sub(span);
+        // A log whose history is not read yet loses its oldest stored rows now: its history is
+        // not whole in the store, and it never says it read (C-096). After the flag the window
+        // lets go of the history's rows like any others.
+        for (id, st) in self.stats.iter_mut() {
+            if st.first_stored_ms.is_some_and(|t| t < cutoff) && !history_is_read(self.history_read.get(id), st) {
+                st.history_lost = true;
+            }
+        }
+        match live.store.evict_before(cutoff) {
             Ok(n) => self.counters.evicted += n,
             Err(e) => {
                 self.counters.store_errors += 1;
