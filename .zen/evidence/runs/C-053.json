@@ -10,15 +10,15 @@
     "tables"
   ],
   "exitCode": 0,
-  "outputSha": "c7437814c888a2c106b65050344c8680e5c7ebf5d68ab3739616b2bf4ff33a32",
-  "outputTail": "\nrunning 1 test\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal has been running for over 60 seconds\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 141.90s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running tests/tables.rs (target/debug/build/veredas-supervisao/f46b5a2649dbdbbe/out/tables-f46b5a2649dbdbbe)",
-  "ranAt": "2026-11-23T21:55:00.939Z",
-  "headCommit": "6ca043692beec2d93f5949394001c1f6537bf7aa",
+  "outputSha": "3967e6dfd500e4be36ea70af0d0b475893c042238e0c76b7e8adfba4aff1dce5",
+  "outputTail": "\nrunning 1 test\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal has been running for over 60 seconds\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 145.23s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s\n     Running tests/tables.rs (target/debug/build/veredas-supervisao/5431f326a426d62c/out/tables-5431f326a426d62c)",
+  "ranAt": "2026-11-25T01:04:37.175Z",
+  "headCommit": "23537b9d7788a516e04bfc1fe146c94d0e2b2d28",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/tables.rs",
       "file": "crates/veredas-supervisao/tests/tables.rs",
-      "fileSha": "37d4135d1966154d9e03637adde1a35c6d00056639b64c511edd373a9050922b"
+      "fileSha": "3dc4184b8a8e6ba7130729d09e4d93dc0699c0d5476b53f606c00445cfd38231"
     }
   ]
 }
