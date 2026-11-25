@@ -10,15 +10,15 @@
     "features"
   ],
   "exitCode": 0,
-  "outputSha": "40c7f442e7a98323cc245c07ea4f14aeeb5b8b8eade403a78fd34d3457caebc3",
-  "outputTail": "test every_feature_gate_is_where_it_belongs ... ok\ntest a_consumer_without_the_default_features_reads_stamps_states_and_draws ... ok\ntest without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone ... ok\ntest the_library_compiles_without_its_default_features_and_with_the_masters_alone ... ok\ntest each_form_holds_the_layers_it_promises ... ok\ntest the_compiler_sees_each_layer_where_its_feature_puts_it has been running for over 60 seconds\ntest the_slim_layer_behaves_the_same_in_every_form has been running for over 60 seconds\ntest the_slim_layer_behaves_the_same_in_every_form ... ok\ntest the_compiler_sees_each_layer_where_its_feature_puts_it ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 206.81s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.96s\n     Running tests/features.rs (target/debug/build/veredas-core/57578917fe4a4f45/out/features-57578917fe4a4f45)",
-  "ranAt": "2026-11-25T00:44:31.942Z",
-  "headCommit": "dd2102a268188f0402af3c771a50fe41104f7f35",
+  "outputSha": "f80eade8b03e36c2ba1a20d2b1099840e9d003095ef8876cfe7a849c387224c7",
+  "outputTail": "test every_feature_gate_is_where_it_belongs ... ok\ntest a_consumer_without_the_default_features_reads_stamps_states_and_draws ... ok\ntest without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone ... ok\ntest each_form_holds_the_layers_it_promises ... ok\ntest the_library_compiles_without_its_default_features_and_with_the_masters_alone ... ok\ntest the_compiler_sees_each_layer_where_its_feature_puts_it has been running for over 60 seconds\ntest the_slim_layer_behaves_the_same_in_every_form has been running for over 60 seconds\ntest the_slim_layer_behaves_the_same_in_every_form ... ok\ntest the_compiler_sees_each_layer_where_its_feature_puts_it ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 296.64s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.22s\n     Running tests/features.rs (target/debug/build/veredas-core/57578917fe4a4f45/out/features-57578917fe4a4f45)",
+  "ranAt": "2026-11-25T02:41:50.017Z",
+  "headCommit": "59b795b3ccaacdd2ce59f36f95c71fb007bed800",
   "tests": [
     {
       "name": "crates/veredas-core/tests/features.rs",
       "file": "crates/veredas-core/tests/features.rs",
-      "fileSha": "187f76eb1cffd6710951f9ad2796342cec15360b5a2a6fd3ac38e7774925b76b"
+      "fileSha": "672e0135c4a5f7bf9219e9f4da27d2a77b2a5f026c8321d98c53c03fd1b4548b"
     }
   ]
 }
