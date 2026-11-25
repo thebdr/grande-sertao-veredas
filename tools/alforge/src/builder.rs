@@ -98,7 +98,8 @@ pub struct Build {
 /// versions written down, each component of `builds` built alone with `cargo build --release
 /// --locked --offline -p <component> --bins` (`--lib` for one that ships no executable), so cargo
 /// unifies features within its own inputs, never across components, as many jobs as the builder
-/// has processors, and every executable copied out with cargo's dep-info for it (a library's
+/// has processors, no name under `/build` holding a control character once they are built
+/// ([`CONTROL_CHECK`]), and every executable copied out with cargo's dep-info for it (a library's
 /// dep-info alone); a bin cargo did not build (a required feature the defaults do not turn on) is
 /// named, never skipped, and fails the script, so the cut refuses a release that would ship less
 /// than its components name.
@@ -133,16 +134,28 @@ pub fn script(r: &Recipe, builds: &[Build]) -> String {
     format!(
         "set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
          cd {SRC}\nmkdir -p /build/out/bin /build/out/deps\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
-         {cargo}missing=\n{copies}\
+         {cargo}{CONTROL_CHECK}\nmissing=\n{copies}\
          [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n"
     )
 }
+
+/// The builder script's line run after the builds: a name under `/build` holding a control
+/// character (a newline among them, which a build script may write) fails it, since cargo reads
+/// rustc's dep-info only to such a name and would hide every read after it.
+pub const CONTROL_CHECK: &str = "if [ -n \"$(LC_ALL=C find /build -name \"$(printf '*[\\001-\\037\\177]*')\" -print -quit)\" ]; then echo ALFORGE-CONTROL-NAME; exit 1; fi";
 
 /// What a build's [`script`] log (brought back on the output disk, at `log_path`) and the builder's
 /// console say: every bin cargo did not build refused by name; a build that did not finish (no
 /// `ALFORGE-BUILD-OK` in its log, no `ALFORGE-BUILD-EXIT 0` on the console, or the output disk
 /// unread) refused with the log's tail, or the console's when there is no log.
 pub fn outcome(log: &str, console: &str, unpacked: bool, log_path: &Path) -> Result<(), VmError> {
+    if log.lines().any(|l| l == "ALFORGE-CONTROL-NAME") {
+        return Err(VmError::Failed {
+            program: "the build in the builder machine".into(),
+            status: "refused".into(),
+            stderr: "a name under /build holds a control character after the build: cargo's dep-info would end at it and hide every read after it".into(),
+        });
+    }
     let missing: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("ALFORGE-MISSING ")).collect();
     if !missing.is_empty() {
         return Err(VmError::Failed {

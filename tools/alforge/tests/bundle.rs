@@ -724,7 +724,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
                 optional: Default::default(),
                 lib: Some("veredas_aranha".into()),
                 inputs: Ok(lib_inputs),
-                packages: ["veredas-aranha".to_string()].into_iter().collect(),
+                packages: alforge::inputs::Packages { names: ["veredas-aranha".to_string()].into_iter().collect(), vendored: Default::default() },
             },
         ),
         (
@@ -737,7 +737,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
                 optional: Default::default(),
                 lib: Some("veredas_core".into()),
                 inputs: Ok(inputs),
-                packages: ["veredas-core".to_string(), "x".to_string()].into_iter().collect(),
+                packages: alforge::inputs::Packages { names: ["veredas-core".to_string(), "x".to_string()].into_iter().collect(), vendored: Default::default() },
             },
         ),
     ]
@@ -886,7 +886,8 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
          cd /build/src\nmkdir -p /build/out/bin /build/out/deps\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
          cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\n\
          cargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\n\
-         cargo build --release --locked --offline --jobs 4 -p veredas-portal --bins\nmissing=\n\
+         cargo build --release --locked --offline --jobs 4 -p veredas-portal --bins\n\
+         if [ -n \"$(LC_ALL=C find /build -name \"$(printf '*[\\001-\\037\\177]*')\" -print -quit)\" ]; then echo ALFORGE-CONTROL-NAME; exit 1; fi\nmissing=\n\
          cp target/release/libveredas_aranha.d /build/out/deps/\n\
          if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; cp target/release/veredas-bancada.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-bancada\"; missing=1; fi\n\
          if [ -f target/release/veredas-portal ]; then cp target/release/veredas-portal /build/out/bin/; cp target/release/veredas-portal.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-portal\"; missing=1; fi\n\
@@ -952,6 +953,32 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
                 other => panic!("not refused: {other:?}"),
             }
         }
+    }
+    // A build that leaves a name holding a control character under `/build` (a build script's
+    // `gen\nx.rs`, a tab, DEL), in the tree, the output or the vendored sources: the script fails
+    // before copying anything, and the build is refused by that reason. A name without one passes.
+    for (made, fails) in [("src/target/release/build/x/0123456789abcdef/out/gen\nx.rs", true), ("src/crates/a\tb.rs", true), ("vendor/c-1.0.0/d\u{7f}.rs", true), ("src/target/release/build/x/0123456789abcdef/out/gen x.rs", false)] {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("build");
+        let file = root.join(made);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(root.join("out")).unwrap();
+        std::fs::write(&file, "").unwrap();
+        let ran = Command::new("sh").arg("-c").arg(builder::CONTROL_CHECK.replace("/build", &root.display().to_string())).output().unwrap();
+        assert_eq!((ran.status.success(), String::from_utf8_lossy(&ran.stdout).into_owned()), (!fails, if fails { "ALFORGE-CONTROL-NAME\n".to_string() } else { String::new() }), "{made:?}");
+    }
+    assert!(script.lines().position(|l| l == builder::CONTROL_CHECK) > script.lines().position(|l| l.starts_with("cargo build") && l.ends_with("-p veredas-portal --bins")));
+    assert!(script.lines().position(|l| l == builder::CONTROL_CHECK) < script.lines().position(|l| l.starts_with("cp ")));
+    match builder::outcome("ALFORGE-CONTROL-NAME\n", "ALFORGE-BUILD-EXIT 1", true, Path::new("/build/out/build.log")) {
+        Err(VmError::Failed { program, status, stderr }) => assert_eq!(
+            (program.as_str(), status.as_str(), stderr.as_str()),
+            (
+                "the build in the builder machine",
+                "refused",
+                "a name under /build holds a control character after the build: cargo's dep-info would end at it and hide every read after it"
+            )
+        ),
+        other => panic!("not refused: {other:?}"),
     }
     // A build that did not finish: no OK in its log, another exit on the console, its disk unread.
     let log_path = Path::new("/build/out/build.log");
@@ -1275,8 +1302,12 @@ fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
     let inputs = alforge::inputs::Inputs(
         [("crates/veredas-portal/", "1"), ("crates/veredas-core/", "2"), ("docs/shared.rs", "3"), ("Cargo.toml", "4")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
     );
-    // The packages the build compiles: their build output and vendored sources it may read.
-    let packages: std::collections::BTreeSet<String> = ["veredas-portal", "veredas-core", "x", "y", "serde"].iter().map(|s| s.to_string()).collect();
+    // The packages the build compiles: their build output and vendored sources it may read, a
+    // locked one's vendored folder at the version the build compiles.
+    let packages = alforge::inputs::Packages {
+        names: ["veredas-portal", "veredas-core", "x", "y", "serde"].iter().map(|s| s.to_string()).collect(),
+        vendored: ["serde-1.0.200".to_string()].into_iter().collect(),
+    };
     // Cargo's own form: the rule's target, then what it read; a space in a name escaped, a `$`
     // doubled, a line continued; a rule with no prerequisites; the build's own output and the
     // vendored sources left out.
@@ -1306,11 +1337,25 @@ fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
         "a relative path refused even where it would land on a named folder read from the root"
     );
     // The shared output folder and vendored sources: another component's executable, another
-    // package's build script output and a crate the build does not pin, each refused.
-    let shared = "/build/src/target/release/x: /build/src/target/release/veredas-a /build/src/target/release/build/veredas-a-7777777777777777/out/a.rs /build/vendor/other-1.0.0/src/lib.rs /build/src/target/release/build/x-0123456789abcdef/out/ok.rs /build/vendor/serde-1.0.200/src/lib.rs\n";
+    // package's build script output (as cargo 1.100 lays it out, `build/<package>/<hash>/`, and as
+    // cargo did before, `build/<package>-<hash>/`), a crate the build does not pin and another
+    // version of one it pins, each refused; its own packages' passing.
+    let shared = "/build/src/target/release/x: /build/src/target/release/veredas-a /build/src/target/release/build/veredas-a-7777777777777777/out/a.rs /build/vendor/other-1.0.0/src/lib.rs \
+                  /build/src/target/release/build/x-0123456789abcdef/out/ok.rs /build/vendor/serde-1.0.200/src/lib.rs /build/vendor/serde-1.0.199/src/lib.rs \
+                  /build/src/target/release/build/x/0123456789abcdef/out/ok.rs /build/src/target/release/build/veredas-a/7777777777777777/out/b.rs \
+                  /build/src/target/release/build/x/notahash/out/c.rs /build/src/target/release/build/xy/0123456789abcdef/out/d.rs /build/src/target/release/build/x\n";
     assert_eq!(
         alforge::inputs::read_outside(shared, builder::SRC, builder::VENDOR, &inputs, &packages),
-        ["/build/vendor/other-1.0.0/src/lib.rs", "target/release/build/veredas-a-7777777777777777/out/a.rs", "target/release/veredas-a"]
+        [
+            "/build/vendor/other-1.0.0/src/lib.rs",
+            "/build/vendor/serde-1.0.199/src/lib.rs",
+            "target/release/build/veredas-a-7777777777777777/out/a.rs",
+            "target/release/build/veredas-a/7777777777777777/out/b.rs",
+            "target/release/build/x",
+            "target/release/build/x/notahash/out/c.rs",
+            "target/release/build/xy/0123456789abcdef/out/d.rs",
+            "target/release/veredas-a",
+        ]
     );
     // The vendored sources' stanza, written beside the tree (never over a configuration it holds),
     // names its folder from there.
@@ -1488,5 +1533,100 @@ fn what_the_cut_says_of_bins_it_does_not_ship_comes_back_from_as_built() {
     assert_eq!(said, ["veredas-core's `nao-feito` was not built with its default features: not shipped (docs/questions.md Q443)"]);
     assert_eq!(shipped["veredas-core"].bins.iter().collect::<Vec<_>>(), ["feito"]);
     assert_eq!(m.components[0].bins, ["feito"]);
+    // The manifest checked against the repository again as built: HEAD having left the commit's
+    // history while the build ran, it is refused, nothing written.
+    r.git(&["checkout", "-q", "--orphan", "elsewhere"]);
+    r.commit("another history");
+    match cut::as_built(r.dir.path(), &semver::Version::parse("9.9.9").unwrap(), &c, "x86_64-unknown-linux-gnu", "rustc 1.100.0", cut::NOT_RUN, &held, bin.path()) {
+        Err(e) => assert_eq!(
+            e.to_string(),
+            format!("release 9.9.9 would not check as built:\ncommit {c} is not an ancestor of HEAD: a release is cut from the history it is committed in")
+        ),
+        Ok((_, text, _, _)) => panic!("checked as built: {text}"),
+    }
+}
+
+#[test]
+fn round_seventeen_two_builds_writing_one_dep_info_are_refused_before_the_build() {
+    let message = |got: Result<cut::Cut, CutError>| match got {
+        Err(e) => e.to_string(),
+        Ok(c) => panic!("cut: {:?}", c.manifest),
+    };
+    // Two components shipping no executable, both naming their library `shared`; a third with a
+    // bin `libtres` beside a fourth's library `tres`: each pair writes one dep-info file.
+    let (r, _) = repo_for_cut(
+        "[workspace]\nmembers = [\"crates/veredas-a\", \"crates/veredas-b\", \"crates/veredas-c\", \"crates/veredas-d\"]\n",
+        Some(&recipe_with("cpus = 4", "cpus = 4")),
+    );
+    for (c, extra) in [
+        ("veredas-a", "\n[lib]\nname = \"shared\"\n"),
+        ("veredas-b", "\n[lib]\nname = \"shared\"\n"),
+        ("veredas-c", "\n[[bin]]\nname = \"libtres\"\npath = \"src/main.rs\"\n"),
+        ("veredas-d", "\n[lib]\nname = \"tres\"\n"),
+    ] {
+        r.write(&format!("crates/{c}/Cargo.toml"), &format!("[package]\nname = \"{c}\"\nversion = \"2.0.0\"\nedition = \"2024\"\n{extra}"));
+        r.write(&format!("crates/{c}/src/lib.rs"), "\n");
+        r.write(&format!("crates/{c}/src/main.rs"), "fn main() {}\n");
+    }
+    r.commit("one dep-info file twice");
+    let (got, left) = trial_cut(r.dir.path());
+    assert_eq!(
+        message(got),
+        "`target/release/libshared.d` is the dep-info of veredas-a's library `shared` and veredas-b's library `shared`: each build's reads are judged by a dep-info of its own\n\
+         `target/release/libtres.d` is the dep-info of veredas-c's executable `libtres` and veredas-d's library `tres`: each build's reads are judged by a dep-info of its own"
+    );
+    assert!(!left, "nothing built");
+}
+
+#[test]
+fn round_seventeen_a_build_scripts_output_is_its_own_as_cargo_writes_it() {
+    use std::process::Command;
+    // A throwaway workspace built by the cargo the suite runs with: a build script writes
+    // `$OUT_DIR/gen.rs`, which the library includes. The dep-info cargo writes names it where the
+    // build's own output lies, and it passes as the component's own; held to another package's
+    // build, it is refused.
+    let scratch = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let ws = scratch.path().join("ws");
+    std::fs::create_dir_all(ws.join("crates/veredas-a/src")).unwrap();
+    std::fs::write(ws.join("Cargo.toml"), "[workspace]\nmembers = [\"crates/veredas-a\"]\nresolver = \"3\"\n").unwrap();
+    std::fs::write(ws.join("crates/veredas-a/Cargo.toml"), "[package]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nedition = \"2024\"\n").unwrap();
+    std::fs::write(
+        ws.join("crates/veredas-a/build.rs"),
+        "fn main() {\n    let out = std::env::var(\"OUT_DIR\").unwrap();\n    std::fs::write(format!(\"{out}/gen.rs\"), \"pub fn g() {}\\n\").unwrap();\n}\n",
+    )
+    .unwrap();
+    std::fs::write(ws.join("crates/veredas-a/src/lib.rs"), "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\n").unwrap();
+    let built = Command::new("cargo")
+        .args(["build", "--release", "--offline", "-p", "veredas-a", "--lib", "--target-dir"])
+        .arg(ws.join("target"))
+        .current_dir(&ws)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_BUILD_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let info = std::fs::read_to_string(ws.join("target/release/libveredas_a.d")).unwrap();
+    let src = ws.display().to_string();
+    let out = alforge::inputs::read_outside(&info, &src, &scratch.path().join("vendor").display().to_string(), &alforge::inputs::Inputs::default(), &alforge::inputs::Packages::default());
+    // What the build read beyond the component's folder, judged with nothing named: its sources
+    // and the build script's output, in cargo's own layout.
+    assert_eq!(out.len(), 3, "{out:?}");
+    assert_eq!(&out[..2], ["crates/veredas-a/build.rs", "crates/veredas-a/src/lib.rs"]);
+    let generated = out[2].clone();
+    let parts: Vec<&str> = generated.split('/').collect();
+    assert!(
+        parts.len() == 7 && parts[..4] == ["target", "release", "build", "veredas-a"] && parts[4].len() == 16 && parts[5..] == ["out", "gen.rs"]
+            || parts.len() == 6 && parts[..3] == ["target", "release", "build"] && parts[3].starts_with("veredas-a-") && parts[4..] == ["out", "gen.rs"],
+        "cargo's layout of a build script's output: {generated}"
+    );
+    // Held to the component's folder and its own package: nothing read beyond.
+    let inputs = alforge::inputs::Inputs([("crates/veredas-a/".to_string(), "1".to_string())].into_iter().collect());
+    let own = alforge::inputs::Packages { names: ["veredas-a".to_string()].into_iter().collect(), vendored: Default::default() };
+    assert_eq!(alforge::inputs::read_outside(&info, &src, &scratch.path().join("vendor").display().to_string(), &inputs, &own), Vec::<String>::new());
+    // Held to another package's build: its output is not this one's.
+    let other = alforge::inputs::Packages { names: ["veredas-b".to_string()].into_iter().collect(), vendored: Default::default() };
+    assert_eq!(alforge::inputs::read_outside(&info, &src, &scratch.path().join("vendor").display().to_string(), &inputs, &other), [generated]);
 }
 

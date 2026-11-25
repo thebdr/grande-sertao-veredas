@@ -336,6 +336,26 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     if !shared.is_empty() {
         return Err(refused(shared.join("\n")));
     }
+    // Each build's reads are judged by the dep-info cargo writes beside what it built
+    // (`target/release/<bin>.d`, `lib<library>.d`): a file two of them write would hold only the
+    // last one's, and the earlier build's reads would go unjudged.
+    let mut writers: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for h in held.values() {
+        for b in h.bins.iter().chain(&h.optional) {
+            writers.entry(format!("{b}.d")).or_default().push(format!("{}'s executable `{b}`", h.name));
+        }
+        if let Some(l) = &h.lib {
+            writers.entry(format!("lib{l}.d")).or_default().push(format!("{}'s library `{l}`", h.name));
+        }
+    }
+    let shared: Vec<String> = writers
+        .iter()
+        .filter(|(_, by)| by.len() > 1)
+        .map(|(f, by)| format!("`target/release/{f}` is the dep-info of {}: each build's reads are judged by a dep-info of its own", by.join(" and ")))
+        .collect();
+    if !shared.is_empty() {
+        return Err(refused(shared.join("\n")));
+    }
     // The build's output folder holds no tracked file: the dep-info check takes what lies there as
     // the build's own.
     if let Some(tracked) = git::list(root, &commit, "target").map_err(|e| refused(e.to_string()))? {

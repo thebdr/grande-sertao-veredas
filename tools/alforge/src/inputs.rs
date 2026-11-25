@@ -40,6 +40,17 @@ impl Inputs {
     }
 }
 
+/// The packages a component's build compiles: what of the output folder and the vendored sources
+/// the builds share its build may read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Packages {
+    /// Every package's name: a build script's output is `build/<name>/<16 hexadecimal>/` as cargo
+    /// 1.100 writes it, `build/<name>-<16 hexadecimal>/` as cargo wrote it before.
+    pub names: BTreeSet<String>,
+    /// The folder `cargo vendor --versioned-dirs` gives each locked one: `<name>-<version>`.
+    pub vendored: BTreeSet<String>,
+}
+
 /// A workspace member as cargo reads it (`cargo metadata --no-deps`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Member {
@@ -136,7 +147,7 @@ impl Workspace<'_> {
     /// [`Workspace::inputs`], and the names of every package its build compiles (the component,
     /// the members and packages by path it uses, the locked ones), whose own build output and
     /// vendored sources its build may read.
-    pub fn inputs_and_packages(&self, name: &str) -> Result<(Inputs, BTreeSet<String>), String> {
+    pub fn inputs_and_packages(&self, name: &str) -> Result<(Inputs, Packages), String> {
         let lock = self.lock()?;
         let mut named = BTreeMap::new();
         // The workspace's manifest whole, any byte of it charging every component (docs/questions.md
@@ -250,9 +261,15 @@ impl Workspace<'_> {
                 queue.push(at.ok_or_else(|| format!("its Cargo.lock replaces {} {} by `{r}`, which it does not pin", l.name, l.version))?);
             }
         }
-        let mut packages: BTreeSet<String> = used.iter().map(|m| m.name.clone()).collect();
+        let mut packages = Packages { names: used.iter().map(|m| m.name.clone()).collect(), vendored: BTreeSet::new() };
         if let Some(lock) = &lock {
-            packages.extend(taken.iter().map(|&at| lock[at].name.clone()));
+            for &at in &taken {
+                let l = &lock[at];
+                packages.names.insert(l.name.clone());
+                if l.source.is_some() {
+                    packages.vendored.insert(format!("{}-{}", l.name, l.version));
+                }
+            }
         }
         Ok((Inputs(named), packages))
     }
@@ -717,14 +734,17 @@ fn normal(p: &Path) -> Option<String> {
 /// compilation read, its build scripts' declared ones too) names that `inputs` does not: each file
 /// under `src` (the tree's root in the builder) outside them, and each file elsewhere but the
 /// build's own output (`src/target/`) and the vendored sources the lock file pins (`vendor`).
-pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs, packages: &BTreeSet<String>) -> Vec<String> {
+pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs, packages: &Packages) -> Vec<String> {
     // The builds share one output folder and one copy of the vendored sources: a build may read
-    // there only what its own packages made or brought (a build script's `OUT_DIR`,
-    // `build/<package>-<hash>/`, and `vendor/<package>-<version>/`), never another's.
-    // `build/<package>-<16 hexadecimal>/` and `vendor/<package>-<version>/`: the package named
-    // whole (`foo` never owns `foo-bar-1.0.0`).
-    let built_by = |dir: &str| packages.iter().any(|p| dir.strip_prefix(p.as_str()).and_then(|r| r.strip_prefix('-')).is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit())));
-    let vendored = |dir: &str| packages.iter().any(|p| dir.strip_prefix(p.as_str()).and_then(|r| r.strip_prefix('-')).is_some_and(|v| semver::Version::parse(v).is_ok()));
+    // there only what its own packages made or brought (a build script's `OUT_DIR` and a locked
+    // crate's vendored folder), never another's. The package named whole (`foo` never owns
+    // `foo-bar`), and a vendored crate at the version the build compiles.
+    let hash = |h: &str| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit());
+    let built_by = |first: &str, second: Option<&str>| {
+        (packages.names.contains(first) && second.is_some_and(hash))
+            || packages.names.iter().any(|p| first.strip_prefix(p.as_str()).and_then(|r| r.strip_prefix('-')).is_some_and(hash))
+    };
+    let vendored = |dir: &str| packages.vendored.contains(dir);
     let mut out = BTreeSet::new();
     for path in dep_info_paths(dep_info) {
         // A path as rustc or cargo writes it may climb back (`crates/x/src/../../../docs/y.rs`, a
@@ -739,10 +759,12 @@ pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs, pa
         }
         let landed = PathBuf::from(format!("/{}", rooted(&path)));
         let built = Path::new(src).join("target/release/build");
-        if let Ok(rest) = landed.strip_prefix(&built)
-            && rest.components().next().is_some_and(|c| built_by(&c.as_os_str().to_string_lossy()))
-        {
-            continue;
+        if let Ok(rest) = landed.strip_prefix(&built) {
+            let mut parts = rest.components().map(|c| c.as_os_str().to_string_lossy().into_owned());
+            let (first, second) = (parts.next(), parts.next());
+            if first.is_some_and(|f| built_by(&f, second.as_deref())) {
+                continue;
+            }
         }
         if let Ok(rest) = landed.strip_prefix(vendor)
             && rest.components().next().is_some_and(|c| vendored(&c.as_os_str().to_string_lossy()))
