@@ -1,0 +1,26 @@
+{
+  "clause": "C-145",
+  "command": "cargo test -j 8 -p veredas-aranha --test topology",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-j",
+    "8",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "topology"
+  ],
+  "exitCode": 0,
+  "outputSha": "6725f3a01ffd5f3afce32ea1ac4dc2597d527d81a7520d46890e887b17851580",
+  "outputTail": "\nrunning 4 tests\ntest one_port_heard_on_an_interface_is_its_cable_and_several_are_none ... ok\ntest a_device_s_word_on_its_neighbour_is_reported_and_both_words_confirmed ... ok\ntest a_neighbour_is_found_by_its_mac_or_announced_chassis_never_by_a_name ... ok\ntest an_mrp_ring_is_its_domain_s_members_closed_when_their_links_make_one_cycle ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.08s\n     Running tests/topology.rs (target/debug/build/veredas-aranha/c5231d7933d47b62/out/topology-c5231d7933d47b62)",
+  "ranAt": "2026-11-25T01:53:18.637Z",
+  "headCommit": "026bfd206e40f81b29c9c0b5036732388af69baa",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/topology.rs",
+      "file": "crates/veredas-aranha/tests/topology.rs",
+      "fileSha": "e584b3cdca566c505a5a1b3bc32e58c561b1aa377777113c3007e039c2058855"
+    }
+  ]
+}
