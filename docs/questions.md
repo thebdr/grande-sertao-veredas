@@ -836,6 +836,12 @@ no law checks.
 **Taken meanwhile**: nothing is written. The candidates: the tests of the first consumer
 (controlador), or a crate of repo tooling under `tools/`.
 
+**Decided** 2026-11-25, by the architect, with Q101, which asked it for the first master: asked
+"Where do the tests of core's fieldbus masters against the bench's devices live? The laws keep the
+bench out of core's own tests. Taken meanwhile: a test-only tool crate, `tools/mestres`.",
+"tools/mestres (Recommended)": a test-only crate of repo tooling that depends on core and maquinar,
+one test file per master, controlador's own tests beside it when it drives real devices.
+
 ## Q35 - Which licence expression do the crates carry?
 
 **Raised** 2026-11-15, by the ruling on the review's entry 14.
@@ -1187,6 +1193,10 @@ Linux machine. The Windows VM gets a clone of its own and takes no records.
 
 **Reversible?** Yes: one line of `.gitattributes`, and the records taken again.
 
+**Decided** 2026-11-25, by the architect: asked "Which line endings do the repository's files have
+on every machine? Run records hash a test file's bytes, so CRLF on Windows made records stale on
+Linux. Taken meanwhile: every machine checks out LF.", "LF everywhere". What was taken stands.
+
 ---
 
 ## Numbers from Q100 on: one block per member
@@ -1226,6 +1236,11 @@ Options:
 what a surface draws, and the executable writes the same file a surface would read.
 
 **Reversible?** Yes: a page, or Oficina's surfaces, sit on the library; nothing below changes.
+
+**Decided** 2026-11-25, by the architect: asked "Does aranha (the network scanner) keep an interface
+of its own, as Veredas 1's had (its own web page)? Taken meanwhile: no, a library and one
+command-line executable.", "No interface (Recommended)", (a). What was taken stands: aranha's
+surfaces are Oficina's.
 
 ---
 
@@ -2091,6 +2106,13 @@ leans on it.
 reader and their test. Once controllers publish it and portal stores it, a change is a new
 version of the text, which point 7 does not yet give.
 
+**Decided** 2026-11-25, by the architect: asked "Core's writer and reader of the controller's state
+text took eight readings the plan left open (the unknown state's word `UNKNOWN`, which conditions
+count as debug, what `retain(reset)` holds, one name for two terms, the spelling, maintenance
+requests, no version, argument types). Accept them as taken?", "Accept all eight (Recommended)",
+against going through them one by one. The eight points stand as taken above, and the review's
+entries 17 to 21 on this text are ruled with them (Q31).
+
 ---
 
 ## Q101 - Where core's Modbus client meets the bench's Modbus server
@@ -2117,6 +2139,11 @@ meanwhile**: (a). `tools/mestres` holds `tests/modbus.rs` since the bench's serv
 `main` the same day.
 
 **Reversible?** Yes: a tool crate removed or its tests moved.
+
+**Decided** 2026-11-25, by the architect: asked "Where do the tests of core's fieldbus masters
+against the bench's devices live? The laws keep the bench out of core's own tests. Taken meanwhile:
+a test-only tool crate, `tools/mestres`.", "tools/mestres (Recommended)", (a), and (c) beside it
+when controlador drives real devices. What was taken stands; Q34 is answered with it.
 
 ## Q220 - ORCL's version as a language, beside its crates' versions
 
@@ -2404,6 +2431,12 @@ Apache-2.0.
 
 **Reversible?** Yes: (b) is the same code moved in; (c) needs the architect's account.
 
+**Decided** 2026-11-25, by the architect: asked "What does \"fork a young Rust crate\" mean for
+core's EtherNet/IP scanner? The young crates' codecs are sound, their scanner does not fit a
+controller. Taken meanwhile: depend on the crates for their codecs, write the scanner in core.",
+"Depend, own scanner (Recommended)", (a), against vendoring the crates into core now and a fork on
+the architect's account. What was taken stands; the review's entry 27 is answered with it.
+
 ## Q160 - Which physics engine `fisica` stands on
 
 **Raised** 2026-11-22, starting `fisica` (P-020; `docs/maquinar-plan.md`, "Decided in the briefing
@@ -2432,6 +2465,11 @@ named in one module and a change of engine touches only that module. **Taken mea
 pinned to one version with `enhanced-determinism` on.
 
 **Reversible?** Yes: one dependency and one module; no file format names the engine.
+
+**Decided** 2026-11-25, by the architect: asked "Which physics engine does the bench's `fisica`
+(cartons on belts, parts in chutes, sensors reached) stand on? Taken meanwhile: Rapier, pinned, with
+its determinism feature.", "Rapier (Recommended)", (a), against Avian, Parry with `fisica`'s own
+kinematics and no dependency. What was taken stands.
 
 ---
 
@@ -2567,6 +2605,13 @@ and green in portal's own tests.
 
 **Reversible?** Yes: portal's change and supervisão's assertion, in one push each.
 
+**Decided** 2026-11-25, by the architect: asked "When a page of rows holds a time of day in
+nanoseconds (TIME_NS), which the database driver cannot read, what does portal do? Taken meanwhile:
+the driver's panic, which supervisão catches and shows as \"the panel could not be computed\".",
+"Read it as microseconds", (c), against the recommendation (b): portal casts the column to `TIME`,
+the nanoseconds' last three digits dropped, and the value is written as a time of day like the
+others. Supervisão's panel 22 then reads, and the limit C-052 states for it goes.
+
 ## Q131 - A CSV that two dialects fit: guess, or show both?
 
 **Raised** 2026-11-24, by portal, after fourteen refute rounds of C-041's CSV weighing.
@@ -2594,6 +2639,13 @@ into its reader), and then reads right.
 meanwhile**: (a).
 
 **Reversible?** Yes: (c) adds a call beside `csv_fitting_dialect` and changes no reading.
+
+**Decided** 2026-11-25, by the architect: asked "When a linked CSV fits two dialects (`;` or `,`)
+and the numbers cannot tell which is right, what does portal do? Fourteen refute rounds moved the
+misreads around without ending them. Taken meanwhile: keep the weighing, limits stated.", "Show
+both, operator picks (Recommended)", (c): when two dialects fit, portal returns both readings, each
+with its first rows, the link's page shows them and the pick is written into the view; the weighing
+(a) stays for a file no person looks at.
 
 ---
 
