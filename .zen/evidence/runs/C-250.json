@@ -15,15 +15,15 @@
     "binary(component) | binary(real_tree)"
   ],
   "exitCode": 0,
-  "outputSha": "a7b654bce80ce27f70c2cf03fac9ec90bffe3396a4c510c77c7483dd38dcba3b",
-  "outputTail": "────────────\n Nextest run ID 3bb937a1-b8b6-4c0d-85d7-e3b5b9d18f4e with nextest profile: default\n    Starting 10 tests across 2 binaries (12 binaries skipped)\n        PASS [   0.051s] ( 1/10) veredas-oficina::component the_reading_of_the_build_script_finds_driver_rebound\n        PASS [   0.056s] ( 2/10) veredas-oficina::component the_reading_of_the_cpp_finds_spix_outside_the_driver_however_it_is_branched\n        PASS [   0.066s] ( 3/10) veredas-oficina::component the_tests_driver_is_compiled_in_only_on_asking\n        PASS [   0.142s] ( 4/10) veredas-oficina::component oficina_is_a_library_and_one_executable_its_window_behind_the_shell_feature\n        PASS [   0.177s] ( 5/10) veredas-oficina::component its_members_are_core_alone\n        PASS [   0.925s] ( 6/10) leis::real_tree the_real_tree_obeys_every_law\n        PASS [   1.210s] ( 7/10) veredas-oficina::component the_window_opens_as_oficina_with_the_project_pane_docked\n        PASS [  11.385s] ( 8/10) veredas-oficina::component the_model_and_its_tests_build_with_no_qt\n        PASS [  11.988s] ( 9/10) veredas-oficina::component its_own_graph_holds_no_plant_stack\n        PASS [  12.231s] (10/10) veredas-oficina::component no_member_s_default_build_needs_qt_and_the_shell_brings_it\n────────────\n     Summary [  12.233s] 10 tests run: 10 passed, 0 skipped",
-  "ranAt": "2026-11-25T00:12:06.162Z",
-  "headCommit": "28385db441e3319c7351f08562847009fb713f9b",
+  "outputSha": "da597e6c062d06ec1df8afd16eb16ee369e36c03f49f0722af051ab95742115f",
+  "outputTail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.37s\n────────────\n Nextest run ID 4e3f67ef-87de-45a6-b34e-7f608db30dcb with nextest profile: default\n    Starting 9 tests across 2 binaries (12 binaries skipped)\n        PASS [   0.026s] (1/9) veredas-oficina::component the_bridge_is_one_private_seam\n        PASS [   0.038s] (2/9) veredas-oficina::component its_members_are_core_alone\n        PASS [   0.042s] (3/9) veredas-oficina::component oficina_is_a_library_and_one_executable_its_window_behind_the_shell_feature\n        PASS [   0.328s] (4/9) leis::real_tree the_real_tree_obeys_every_law\n        PASS [   0.676s] (5/9) veredas-oficina::component its_own_graph_holds_no_plant_stack\n        PASS [   0.826s] (6/9) veredas-oficina::component no_member_s_default_build_needs_qt_and_the_shell_brings_it\n        PASS [   0.998s] (7/9) veredas-oficina::component the_model_and_its_tests_build_with_no_qt\n        PASS [   1.083s] (8/9) veredas-oficina::component the_window_opens_as_oficina_with_the_project_pane_docked\n        PASS [  24.113s] (9/9) veredas-oficina::component the_window_that_ships_carries_no_test_server\n────────────\n     Summary [  24.113s] 9 tests run: 9 passed, 0 skipped",
+  "ranAt": "2026-11-25T00:27:42.154Z",
+  "headCommit": "d19046b52ea328a4f685901ebc7820f4e15778a2",
   "tests": [
     {
       "name": "crates/veredas-oficina/tests/component.rs",
       "file": "crates/veredas-oficina/tests/component.rs",
-      "fileSha": "b049c709f563934cf26115889cbc10fde45632d16d369ccec8551a0a3d896a41"
+      "fileSha": "6fa2fb11613edcb5462fd88c47e7191861f840f700f73beca61777f75dca3f15"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
