@@ -648,20 +648,22 @@ impl<'a> Model<'a> {
                     right: right2,
                 },
             ) => {
-                if left1.row == right1.row
-                    && left1.column == right1.column
-                    && left2.row == right2.row
-                    && left2.column == right2.column
-                {
-                    return CalcResult::Range {
-                        left: left1,
-                        right: right2,
+                // two references on one sheet join into the smallest area holding both, whatever
+                // their order or size (`INDEX(A1:A3,3):A1` is `A1:A3`, `A1:INDEX(A1:C3,0,2)` is
+                // `A1:B3`), as Excel joins them (Veredas fork change 32, refined)
+                if left1.sheet != left2.sheet {
+                    return CalcResult::Error {
+                        error: Error::VALUE,
+                        origin: cell,
+                        message: "Invalid range".to_string(),
                     };
                 }
-                CalcResult::Error {
-                    error: Error::VALUE,
-                    origin: cell,
-                    message: "Invalid range".to_string(),
+                let rows = [left1.row, right1.row, left2.row, right2.row];
+                let columns = [left1.column, right1.column, left2.column, right2.column];
+                let corner = |row: i32, column: i32| CellReferenceIndex { sheet: left1.sheet, row, column };
+                CalcResult::Range {
+                    left: corner(rows.into_iter().min().unwrap_or(left1.row), columns.into_iter().min().unwrap_or(left1.column)),
+                    right: corner(rows.into_iter().max().unwrap_or(right2.row), columns.into_iter().max().unwrap_or(right2.column)),
                 }
             }
             // a side's own error stands (an INDEX out of its range is `#REF!`)

@@ -39,3 +39,29 @@ fn an_index_in_a_range_is_the_reference_it_names() {
     }
 }
 
+/// Veredas fork change 32, refined: the range operator joins two references into the smallest area
+/// holding both, in any order, of any size.
+#[test]
+fn a_range_joins_its_sides_into_the_area_holding_both() {
+    let mut model = new_empty_model();
+    for r in 1..=3 {
+        model.set_user_input(0, r, 1, r.to_string()).unwrap();
+        model.set_user_input(0, r, 2, (20 + r).to_string()).unwrap();
+        model.set_user_input(0, r, 3, (30 + r).to_string()).unwrap();
+    }
+    for (typed, value) in [
+        ("=SUM(INDEX(A1:A3,3):A1)", "6"),
+        ("=ROWS(INDEX(A1:A3,3):A1)", "3"),
+        ("=COUNT(INDEX(A1:A3,3):A1)", "3"),
+        ("=MATCH(2,INDEX(A1:A3,3):A1,0)", "2"),
+        ("=SUM(A1:INDEX(A1:C3,0,2))", "72"),
+        ("=SUM(A1:INDEX(A1:C3,2,0))", "109"),
+        ("=SUM(INDEX(A1:C3,0,2):C3)", "162"),
+        ("=COLUMNS(INDEX(A1:C3,1,3):A1)", "3"),
+    ] {
+        model.set_user_input(0, 5, 6, typed.to_string()).unwrap();
+        model.evaluate();
+        assert_eq!(model.get_formatted_cell_value(0, 5, 6).unwrap(), value, "{typed}");
+    }
+}
+
