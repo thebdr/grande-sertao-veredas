@@ -1054,3 +1054,183 @@ fn a_refusal_past_the_first_block_and_statement_names_its_own() {
     });
     assert_eq!(Machine::load(p.program, &[]).map(|_| ()), refused_r14(2, None, "no such block"), "a terminator");
 }
+
+// The fifteenth refute round: the kinds each operation takes (durations, checked shifts, an `isize` index, an array
+// built as a variant, an `Option` whose `None` is not 0), the type or region each refusal names, an index past the
+// end named as the program used it, and a checked shift by the width itself.
+
+fn load_r15(types: &[Type], locals_: &[u32], value: Value) -> Result<(), LoadError> {
+    let mut p = Program { types: types.to_vec(), ..Program::default() };
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&locals_.iter().map(|t| TypeId(*t)).collect::<Vec<_>>()),
+        blocks: vec![block(vec![assign(place(0), value, 1)], ret())],
+    });
+    Machine::load(p, &[]).map(|_| ())
+}
+
+fn refused_r15(reason: &'static str) -> Result<(), LoadError> {
+    Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason })
+}
+
+/// g01: an enum named `Option` whose `None` is 2 and `Some` 1 is no `Option` to a core operation.
+#[test]
+fn an_option_whose_none_is_not_zero_is_no_option() {
+    for op in [CoreOp::OptionIsNone, CoreOp::OptionIsSome, CoreOp::OptionGetOrInsert, CoreOp::CheckedShl(Int::U8)] {
+        let mut b = Build::default();
+        let (u8t, u32t, boolean) = (b.int(Int::U8), b.int(Int::U32), b.bool());
+        let opt = b.ty(Type::Enum {
+            name: "Option".into(),
+            discriminant: Int::Isize,
+            variants: vec![
+                Variant { name: "None".into(), discriminant: 2, fields: vec![] },
+                Variant { name: "Some".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: u8t }] },
+            ],
+        });
+        let (dest, args) = match op {
+            CoreOp::OptionIsNone | CoreOp::OptionIsSome => (boolean, vec![b.reference(opt, false)]),
+            CoreOp::OptionGetOrInsert => (b.reference(u8t, true), vec![b.reference(opt, true), u8t]),
+            _ => (opt, vec![u8t, u32t]),
+        };
+        let mut types = vec![dest];
+        types.extend(&args);
+        b.function(Function {
+            name: "f".into(),
+            params: args.len() as u32,
+            locals: locals(&types),
+            blocks: vec![
+                block(vec![], Terminator::Call { callee: Callee::Core(op), args: (1..=args.len() as u32).map(copy).collect(), dest: place(0), next: BlockId(1), at: at(1) }),
+                block(vec![], ret()),
+            ],
+        });
+        assert_eq!(
+            Machine::load(b.program, &[]).map(|_| ()),
+            Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "a core operation called with types it does not take" }),
+            "{op:?}"
+        );
+    }
+}
+
+/// g02 and g09: arithmetic and bits on two durations, which have neither as MIR's operations (`Duration + Duration`
+/// is a call to `Add::add`), refused.
+#[test]
+fn arithmetic_and_bits_of_durations_are_refused() {
+    // types: 0 Duration
+    let types = [Type::Duration];
+    assert_eq!(load_r15(&types, &[0, 0], Value::Binary(BinOp::Add, copy(1), copy(1))), refused_r15("arithmetic on what is no number"));
+    assert_eq!(load_r15(&types, &[0, 0], Value::Binary(BinOp::BitAnd, copy(1), copy(1))), refused_r15("bits of what has none"));
+}
+
+/// g03: a checked shift, which MIR has no checked form of (its shifts carry an assertion instead), refused.
+#[test]
+fn a_checked_shift_is_refused() {
+    // types: 0 u8, 1 bool, 2 (u8, bool)
+    let types = [
+        Type::Int(Int::U8),
+        Type::Bool,
+        Type::Struct { name: "(..)".into(), fields: vec![Field { name: "0".into(), ty: TypeId(0) }, Field { name: "1".into(), ty: TypeId(1) }] },
+    ];
+    for op in [BinOp::Shl, BinOp::Shr] {
+        assert_eq!(load_r15(&types, &[2, 0], Value::Checked(op, copy(1), copy(1))), refused_r15("a checked operation that MIR has no checked form of"), "{op:?}");
+    }
+}
+
+/// g04: an index by an `isize` local refused.
+#[test]
+fn an_index_by_an_isize_is_refused() {
+    // types: 0 u8, 1 [u8; 4], 2 isize
+    let types = [Type::Int(Int::U8), Type::Array { element: TypeId(0), len: 4 }, Type::Int(Int::Isize)];
+    let value = Value::Use(copy_at(proj(1, vec![Projection::Index(Local(2))])));
+    assert_eq!(load_r15(&types, &[0, 1, 2], value), refused_r15("an index that is no usize"));
+}
+
+/// g05: a type that contains itself named as itself, when the walk that finds it started at another type.
+#[test]
+fn a_type_that_contains_itself_is_named_whatever_type_reaches_it() {
+    let mut b = Build::default();
+    b.program.types.push(Type::Struct { name: "S".into(), fields: vec![Field { name: "t".into(), ty: TypeId(1) }] });
+    b.program.types.push(Type::Struct { name: "T".into(), fields: vec![Field { name: "t".into(), ty: TypeId(1) }] });
+    assert_eq!(Machine::load(b.program, &[]).map(|_| ()).unwrap_err(), LoadError::Type { ty: 1, reason: "it contains itself with no reference between" });
+}
+
+/// g06: a region of no such type named by its own index, past the first.
+#[test]
+fn a_region_of_no_such_type_is_named_by_its_index() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    assert_eq!(
+        Machine::load(b.program, &[u8t, u8t, TypeId(40)]).map(|_| ()).unwrap_err(),
+        LoadError::Region { index: 2, reason: "a region of no such type" }
+    );
+}
+
+/// g07: an index past the end names the index the program used, not the length.
+#[test]
+fn an_index_past_the_end_names_the_index() {
+    let mut b = Build::default();
+    let (u8t, usize_t) = (b.int(Int::U8), b.int(Int::Usize));
+    let arr = b.ty(Type::Array { element: u8t, len: 3 });
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 2,
+        locals: locals(&[u8t, arr, usize_t]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Index(Local(2))]))), 1)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let a = [int(Int::U8, 1), int(Int::U8, 2), int(Int::U8, 3)];
+    let i = [int(Int::Usize, 7)];
+    let err = m.call(f, &[Arg::Value(&a), Arg::Value(&i)]).unwrap_err();
+    assert!(matches!(err, CallError::Program(ProgramError { kind: ErrorKind::Bounds { index: 7, len: 3 }, .. })), "{err:?}");
+}
+
+/// g08: `checked_shl` and `checked_shr` by the width itself are `None`, as core's are.
+#[test]
+fn a_checked_shift_by_the_width_is_none() {
+    let mut b = Build::default();
+    let (u8t, u32t) = (b.int(Int::U8), b.int(Int::U32));
+    let opt = b.option(u8t);
+    let mut fs = vec![];
+    for op in [CoreOp::CheckedShl(Int::U8), CoreOp::CheckedShr(Int::U8)] {
+        fs.push(b.function(Function {
+            name: format!("{op:?}"),
+            params: 2,
+            locals: locals(&[opt, u8t, u32t]),
+            blocks: vec![
+                block(vec![], Terminator::Call { callee: Callee::Core(op), args: vec![copy(1), copy(2)], dest: place(0), next: BlockId(1), at: at(1) }),
+                block(vec![], ret()),
+            ],
+        }));
+    }
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    for f in fs {
+        let got = m.call(f, &[Arg::Value(&[int(Int::U8, 1)]), Arg::Value(&[int(Int::U32, 8)])]).unwrap().to_vec();
+        assert_eq!(got, vec![int(Int::Isize, 0), Scalar::Uninit], "{:?}", 1u8.checked_shl(8));
+    }
+}
+
+/// g10: an array built as a variant refused.
+#[test]
+fn an_array_built_as_a_variant_is_refused() {
+    // types: 0 u8, 1 [u8; 1]
+    let types = [Type::Int(Int::U8), Type::Array { element: TypeId(0), len: 1 }];
+    assert_eq!(load_r15(&types, &[1, 0], Value::Aggregate(TypeId(1), Some(0), vec![copy(1)])), refused_r15("an aggregate of what is built otherwise"));
+}
+
+/// g11 to g14: each type refusal names the type at fault when the walk that finds it started at a structure listed
+/// before it.
+#[test]
+fn a_type_refused_inside_another_is_named_itself() {
+    let s = |inner: u32| Type::Struct { name: "S".into(), fields: vec![Field { name: "x".into(), ty: TypeId(inner) }] };
+    let variant = |d: i128| Variant { name: format!("V{d}"), discriminant: d, fields: vec![] };
+    let cases: Vec<(Vec<Type>, u32, &str)> = vec![
+        (vec![s(1), Type::Ref { to: TypeId(9), mutable: false }], 1, "a reference to no such type"),
+        (vec![s(1), Type::Enum { name: "E".into(), discriminant: Int::U8, variants: vec![variant(1), variant(1)] }], 1, "two variants with one discriminant"),
+        (vec![s(1), Type::Enum { name: "E".into(), discriminant: Int::U8, variants: vec![variant(256)] }], 1, "a discriminant outside its type"),
+        (vec![s(2), Type::Int(Int::U8), Type::Array { element: TypeId(3), len: 2 }, Type::Array { element: TypeId(1), len: u32::MAX }], 2, "too large"),
+    ];
+    for (types, ty, reason) in cases {
+        let p = Program { types, ..Program::default() };
+        assert_eq!(Machine::load(p, &[]).map(|_| ()), Err(LoadError::Type { ty, reason }), "{reason}");
+    }
+}

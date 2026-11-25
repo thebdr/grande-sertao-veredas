@@ -101,10 +101,13 @@ fn no_source_reaches_std_prints_or_reads_a_clock() {
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
         let text = std::fs::read_to_string(&path).unwrap();
+        // no block comment, so every line the reading drops as a comment is one (round 15)
+        assert!(!text.contains("/*"), "{} holds a block comment", path.display());
         let code: Vec<&str> = text.lines().filter(|line| !line.trim_start().starts_with("//")).collect();
         let code = code.join("\n");
         let words: Vec<&str> = code.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).collect();
-        for refused in ["std", "SystemTime", "UNIX_EPOCH", "Instant", "print", "println", "eprint", "eprintln", "dbg"] {
+        // std's macros that reach a thread or the processor with no path named are std too (round 15)
+        for refused in ["std", "SystemTime", "UNIX_EPOCH", "Instant", "print", "println", "eprint", "eprintln", "dbg", "thread_local", "is_x86_feature_detected"] {
             assert!(!words.contains(&refused), "{} names `{refused}`", path.display());
         }
         let squeezed: String = code.chars().filter(|c| !c.is_whitespace()).collect();
