@@ -46,12 +46,13 @@ fn step_starts(h: &fisica::FisicaHandle) -> std::sync::Arc<std::sync::Mutex<Vec<
 
 /// Of the steps from the `from`-th on, how many began more than one step after their time: surely
 /// (their lateness read against the earliest start, at most the real one) and perhaps (within a
-/// quarter of a step of it). The machine's load decides how many; the runner must count them.
+/// tenth of a step of it: the earliest start is late by a twentieth of a millisecond or so). The
+/// machine's load decides how many; the runner must count them, and no more.
 fn begun_late(starts: &[(u64, Instant)], step: Duration, from: u64) -> (usize, usize) {
     let base = starts.iter().map(|(n, t)| *t - step * (*n as u32 + 1)).min().unwrap();
     let lateness = |(n, t): &(u64, Instant)| t.saturating_duration_since(base + step * (*n as u32 + 1));
     let window: Vec<Duration> = starts.iter().filter(|(n, _)| *n >= from).map(lateness).collect();
-    (window.iter().filter(|l| **l > step).count(), window.iter().filter(|l| **l > step - step / 4).count())
+    (window.iter().filter(|l| **l > step).count(), window.iter().filter(|l| **l > step - step / 10).count())
 }
 
 fn run_until(w: &mut World, name: &str, max: u64, mut done: impl FnMut(&mut World, &[SensorEvent]) -> bool) -> (Vec<[f64; 3]>, Vec<SensorEvent>) {
@@ -1398,6 +1399,10 @@ mod round_3 {
         };
         println!("F1 {holds} holds of 9 ms: steps begun more than one step late (a lower bound) {begun_late}, counted late {late}; the latest (ms) {worst:?}");
         assert!(late as usize + 3 >= begun_late, "{begun_late} steps began more than one step after their time, {late} counted late");
+        // And no more: a runner counting a step late past half a step, or past a tenth, passed the
+        // floor alone (round 5).
+        let (_, perhaps) = super::begun_late(&starts, step, window_from);
+        assert!(late as usize <= perhaps + 3, "{late} counted late, at most {perhaps} began late");
     }
 
     /// F2: the same with holds of 6 ms (a step and a half): the step that waits begins up to 6 ms
@@ -1427,6 +1432,10 @@ mod round_3 {
         let begun_late = starts.iter().filter(|(n, _)| *n >= window_from).filter(|(n, t)| t.saturating_duration_since(base + step * (*n as u32 + 1)) > step).count();
         println!("F2 {holds} holds of 6 ms: steps begun more than one step late (a lower bound) {begun_late}, counted late {late}");
         assert!(late as usize + 3 >= begun_late, "{begun_late} steps began more than one step after their time, {late} counted late");
+        // And no more: a runner counting a step late past half a step, or past a tenth, passed the
+        // floor alone (round 5).
+        let (_, perhaps) = super::begun_late(&starts, step, window_from);
+        assert!(late as usize <= perhaps + 3, "{late} counted late, at most {perhaps} began late");
     }
 
     #[test]
@@ -1651,4 +1660,71 @@ mod round_4 {
         assert!(off.is_empty(), "(step_ms, steps, due, late) {off:?}");
     }
 
+}
+
+/// C-114's fifth refute round: the critic's probes (`~/.cache/veredas/critic-c114-r5/probes`), kept as
+/// pins: a stack's contacts sinking with the load above, a body past 300 times the mass under it
+/// sinking through, and the resting depth by a body's proportions.
+mod round_5 {
+    use super::{steps, world};
+
+    /// A 1 kg box of 0.2 m on the floor and one `ratio` times its mass on it: (the lower one's depth
+    /// in the floor, the upper's in the lower, the upper's bottom's height), in metres.
+    fn stack(ratio: f64) -> (f64, f64, f64) {
+        let mut w = world(&format!(
+            "[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
+             [[body]]\nname = \"light\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.1]\nmass = 1\n\
+             [[body]]\nname = \"heavy\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.3005]\nmass = {ratio}\n"
+        ));
+        steps(&mut w, 1000);
+        let (l, h) = (w.body("light").unwrap().at[2], w.body("heavy").unwrap().at[2]);
+        (0.1 - l, 0.2 - (h - l), h - 0.1)
+    }
+
+    #[test]
+    fn a_stack_s_contacts_sink_with_the_load_above_them() {
+        // Two equal bodies: the lower 0.14 mm into the floor (twice a body alone), the upper 0.5 mm
+        // into it; ten times the mass on top: 0.7 mm and 2.7 mm.
+        let (floor, upper, _) = stack(1.0);
+        assert!((0.0001..0.0002).contains(&floor) && (0.0004..0.0006).contains(&upper), "{floor} {upper}");
+        let (floor, upper, _) = stack(10.0);
+        assert!((0.0006..0.0009).contains(&floor) && (0.002..0.0035).contains(&upper), "{floor} {upper}");
+        // Five equal cartons: the lowest 0.34 mm into the floor, each less into the one under it.
+        let mut text = String::from("[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n");
+        for i in 0..5 {
+            text += &format!("[[body]]\nname = \"c{i}\"\nsize = [0.3, 0.3, 0.3]\nat = [0.0, 0.0, {}]\nmass = 2.5\n", 0.15 + 0.3005 * f64::from(i));
+        }
+        let mut w = world(&text);
+        steps(&mut w, 1500);
+        let z: Vec<f64> = (0..5).map(|i| w.body(&format!("c{i}")).unwrap().at[2]).collect();
+        let into: Vec<f64> = (1..5).map(|i| 0.3 - (z[i] - z[i - 1])).collect();
+        assert!((0.00025..0.00045).contains(&(0.15 - z[0])), "the lowest {} m into the floor", 0.15 - z[0]);
+        assert!(into.windows(2).all(|w| w[0] > w[1]) && into.iter().all(|d| *d > 0.0), "each into the one under it {into:?}");
+    }
+
+    #[test]
+    fn a_body_a_thousand_times_the_mass_under_it_sinks_through_to_the_floor() {
+        // Past about 300 times the mass the upper sinks through the lower one; at 1000 its bottom
+        // rests on what lies beneath, the floor.
+        let (_, _, bottom) = stack(1000.0);
+        assert!(bottom.abs() < 0.001, "the upper's bottom {bottom} m above the floor");
+    }
+
+    #[test]
+    fn a_body_alone_rests_deeper_the_flatter_it_is() {
+        // (size, lowest and highest depth in metres) at 4 and 20 ms: a cube 0.07 mm, a tall box less,
+        // a carton more, all within 0.12 mm and none above the floor by more than 0.01 mm.
+        for step_ms in [4u32, 20] {
+            for (size, lo, hi) in [([0.2f64, 0.2, 0.2], 0.00006, 0.00008), ([0.2, 0.2, 1.0], 0.000015, 0.00003), ([0.3, 0.4, 0.2], 0.00008, 0.00011), ([0.2, 0.2, 0.05], 0.00005, 0.00012), ([0.05, 0.05, 2.0], -0.00001, 0.00003)] {
+                let half = size[2] / 2.0;
+                let mut w = world(&format!(
+                    "step_ms = {step_ms}\n[[fixed]]\nname = \"floor\"\nsize = [40.0, 40.0, 0.2]\nat = [0.0, 0.0, -0.1]\n[[body]]\nname = \"box\"\nsize = [{}, {}, {}]\nat = [0.0, 0.0, {}]\n",
+                    size[0], size[1], size[2], half + 0.005
+                ));
+                steps(&mut w, u64::from(4000 / step_ms));
+                let deep = half - w.body("box").unwrap().at[2];
+                assert!((lo..hi).contains(&deep), "{size:?} at {step_ms} ms: {deep} m deep");
+            }
+        }
+    }
 }
