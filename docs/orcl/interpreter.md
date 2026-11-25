@@ -119,7 +119,9 @@ with Veredas 1's conveyor and a probe that reaches every block of `orcl-std` and
    at an instruction and resumed. Built on 2026-11-25 (C-153), with `orcl-std`'s on-delay and rising edge lowered by
    hand and run beside the native blocks.
 2. **The engine of a scan running an interpreted program**, with the program kind whose scan may fail
-   ("Running"): C-151 changed, C-155 new, on 2026-11-25, a hand-lowered program and its native twin on one task.
+   ("Running"): C-151 changed, C-155 new, on 2026-11-25, a hand-lowered program and its native twin on one task;
+   then the controller running one (C-152 changed), made afresh from what its host hands in at every start, its own
+   error the controller's 502 `program(at)`.
 3. **The program file**: written and read back, its header checked, a file refused by name. Built on 2026-11-25
    (C-154): every file it accepts writes back to the very same bytes, and one small program's bytes are pinned.
 4. **`crates/orcl-front`**: the shell on stable, the driver on the nightly lowering the conveyor and the probe. A

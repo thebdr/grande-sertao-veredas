@@ -137,4 +137,5 @@ published at its end, absolute deadlines on the program clock, the time-error ru
 program is native or interpreted (`orcl-interp`'s machine, C-155); a scan whose program ends in an error within
 twice its period faults the task, and one past twice its period is the watchdog's fault whatever it then does, as
 point 6 has it. Several tasks, pre-emption on one logic thread, handlers and the bus thread are ruled and not built
-yet; the controller (C-152) runs native programs only.
+yet; the controller (C-152) runs a native or an interpreted program, made afresh at every start, an interpreted
+program's own error its `FAULT program(at)`.

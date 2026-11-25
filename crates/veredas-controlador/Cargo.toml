@@ -9,6 +9,7 @@ description = "The soft PLC of Veredas 2: an ORCL program in a deterministic sca
 # Law L5: controlador may use core, portal, aranha and the orcl-* crates. This first build uses core's
 # state text (C-070) and the language's crates.
 [dependencies]
+orcl-interp = { path = "../orcl-interp" }
 orcl-runtime = { path = "../orcl-runtime" }
 orcl-std = { path = "../orcl-std" }
 veredas-core = { path = "../veredas-core" }

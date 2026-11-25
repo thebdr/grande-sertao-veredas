@@ -3,9 +3,10 @@
 The soft PLC of Veredas 2. `docs/veredas-plan.md` ("veredas-controlador: the softPLC") wins on
 intent; `.zen/contract.md` (P-003) wins on status. Built so far: ORCL's standard library carried
 from Veredas 1 (`orcl-std`, C-150), the engine of a scan (`orcl-runtime`, C-151), the controller's
-states and commands over one cyclic task (C-152, native programs only), the interpreter's machine
+states and commands over one cyclic task (C-152), the interpreter's machine
 on programs built by hand and its program file (`orcl-interp`, C-153 and C-154, 2026-11-25), and an
-interpreted program on the engine, its program errors faulting the task (C-151, C-155). This
+interpreted program on the engine, its program errors faulting the task (C-151, C-155) and the
+controller as 502 `program(at)` (C-152). This
 file holds what the architect decided in the briefing of 13 to 16 November 2026, in the rulings of
 15 November on its adversarial review, in the robustness round begun on 16 November
 (`docs/robustness.md`), and in the rulings of 25 November on the questions its first build raised

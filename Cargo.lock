@@ -4643,6 +4643,7 @@ dependencies = [
 name = "veredas-controlador"
 version = "2.0.0-alpha.1"
 dependencies = [
+ "orcl-interp",
  "orcl-runtime",
  "orcl-std",
  "veredas-core",
