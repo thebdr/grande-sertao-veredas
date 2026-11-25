@@ -552,3 +552,101 @@ fn a_reference_to_the_type_just_past_the_last_is_refused() {
     b.ty(Type::Ref { to: TypeId(0), mutable: false });
     assert!(Machine::load(b.program, &[]).is_ok(), "a reference to itself is a slot");
 }
+
+#[test]
+fn an_array_built_from_a_part_of_another_type_and_a_switch_value_outside_an_integer_s_type_are_refused() {
+    let mut b = Build::default();
+    let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
+    let arr = b.ty(Type::Array { element: u8t, len: 2 });
+    b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[arr, u16t]),
+        blocks: vec![block(vec![assign(place(0), Value::Aggregate(arr, None, vec![konst(u8t, vec![int(Int::U8, 1)]), copy(1)]), 1)], ret())],
+    });
+    assert_eq!(refused(b.program), at_statement("a part of another type than its place"));
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[u8t, u8t]),
+        blocks: vec![
+            block(vec![], Terminator::SwitchInt { value: copy(1), targets: vec![(256, BlockId(1))], otherwise: BlockId(1), at: at(1) }),
+            block(vec![assign(place(0), Value::Use(copy(1)), 2)], ret()),
+        ],
+    });
+    assert_eq!(refused(b.program), at_terminator("a switch's value outside its operand's type"));
+}
+
+/// `u8`, then `n` structures each holding the one before: the order an interner gives, the innermost first.
+fn chain_inner_first(n: u32) -> (Program, TypeId) {
+    let mut p = Program::default();
+    p.types.push(Type::Int(Int::U8));
+    for k in 0..n {
+        p.types.push(Type::Struct { name: String::new(), fields: vec![Field { name: String::new(), ty: TypeId(k) }] });
+    }
+    (p, TypeId(n))
+}
+
+#[test]
+fn a_nesting_past_the_limit_is_refused_whatever_order_the_types_come_in_and_never_by_a_crash() {
+    let (p, _) = chain_inner_first(258);
+    assert!(matches!(refused(p), LoadError::Type { reason: "nested too deep", .. }), "the innermost first");
+    let (p, _) = chain_inner_first(255);
+    assert!(Machine::load(p, &[]).is_ok(), "255 structures around a u8: 256 deep, at the limit");
+    let (p, _) = chain_inner_first(256);
+    assert!(matches!(refused(p), LoadError::Type { reason: "nested too deep", .. }), "one past it");
+    // a constant of a type nested 100 000 deep, read from a file, loaded on a thread of 8 MiB: refused by its
+    // reason, where the check of the constant's slots once recursed as deep and overflowed the stack
+    let (mut p, outer) = chain_inner_first(100_000);
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[outer]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(konst(outer, vec![int(Int::U8, 1)])), 1)], ret())],
+    });
+    let header = orcl_interp::file::Header { language: 1, nightly: "n".into(), revision: "r".into() };
+    let (_, back) = orcl_interp::file::read(&orcl_interp::file::write(&header, &p)).unwrap();
+    let got = std::thread::Builder::new().stack_size(8 << 20).spawn(move || Machine::load(back, &[]).map(|_| ())).unwrap().join();
+    assert!(matches!(got, Ok(Err(LoadError::Type { reason: "nested too deep", .. }))), "{got:?}");
+}
+
+#[test]
+fn an_array_of_elements_of_no_slot_is_checked_once_however_long() {
+    // a constant of `[[(); u32::MAX]; u32::MAX]`: no slot at all. Checked element by element it took hours; the
+    // thread's 60 seconds are a guard against a hang, not a measure
+    let mut p = Program::default();
+    p.types.push(Type::Struct { name: "()".into(), fields: vec![] });
+    p.types.push(Type::Array { element: TypeId(0), len: u32::MAX });
+    p.types.push(Type::Array { element: TypeId(1), len: u32::MAX });
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[TypeId(2)]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(konst(TypeId(2), vec![])), 1)], ret())],
+    });
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(Machine::load(p, &[]).map(|m| m.memory().len()));
+    });
+    assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(60)), Ok(Ok(0)));
+}
+
+#[test]
+fn an_enum_of_many_variants_is_checked_for_two_with_one_discriminant_without_comparing_every_pair() {
+    let variants = |n: i128, clash: bool| {
+        let mut v: Vec<Variant> = (0..n).map(|d| Variant { name: String::new(), discriminant: d, fields: vec![] }).collect();
+        if clash {
+            v.push(Variant { name: String::new(), discriminant: n / 2, fields: vec![] });
+        }
+        v
+    };
+    // 200 000 variants: every pair compared is 2 * 10^10 comparisons; sorted, a few million
+    let mut b = Build::default();
+    b.ty(Type::Enum { name: "E".into(), discriminant: Int::I32, variants: variants(200_000, true) });
+    assert_eq!(refused(b.program), LoadError::Type { ty: 0, reason: "two variants with one discriminant" });
+    let mut b = Build::default();
+    b.ty(Type::Enum { name: "E".into(), discriminant: Int::I32, variants: variants(200_000, false) });
+    assert!(Machine::load(b.program, &[]).is_ok());
+}

@@ -398,3 +398,66 @@ fn a_count_one_past_the_bytes_left_is_refused_at_the_count() {
     bytes[at..at + 4].copy_from_slice(&(left + 1).to_le_bytes());
     assert_eq!(file::read(&bytes), Err(FileError::Malformed { at, what: "a count past the file's end" }));
 }
+
+/// A program of one function whose only block holds `s` and ends in `t`, over the types `u8` and `[u8; 2]`, its
+/// local 1 named `name`.
+fn one_block(s: Statement, t: Terminator, name: Option<String>) -> Vec<u8> {
+    let mut b = Build::default();
+    let (u8t, arr) = (b.int(Int::U8), b.ty(Type::Array { element: TypeId(0), len: 2 }));
+    let mut decls = locals(&[u8t, arr]);
+    decls[1].name = name;
+    b.function(Function { name: "f".into(), params: 0, locals: decls, blocks: vec![block(vec![s], t)] });
+    file::write(&header(), &b.program)
+}
+
+fn first_difference(a: &[u8], b: &[u8]) -> usize {
+    a.iter().zip(b).position(|(x, y)| x != y).expect("a difference")
+}
+
+fn refused_at(bytes: &[u8], at: usize, what: &'static str) {
+    let mut d = bytes.to_vec();
+    d[at] = 0xEE;
+    assert_eq!(file::read(&d), Err(FileError::Malformed { at, what }), "a tag of 0xEE at {at}");
+}
+
+#[test]
+fn every_other_kind_of_tag_is_refused_at_its_own_byte() {
+    // each tag found as the first byte where two programs differ only in it
+    let use0 = |v: Value| assign(place(0), v, 1);
+    let r = Terminator::Return { at: at(1) };
+    let core = |op| Terminator::Call { callee: Callee::Core(op), args: vec![], dest: place(0), next: BlockId(0), at: at(1) };
+    let c = || konst(TypeId(0), vec![int(Int::U8, 1)]);
+    let types = |t: Int| {
+        let mut b = Build::default();
+        b.int(t);
+        file::write(&header(), &b.program)
+    };
+    let (a, b2) = (types(Int::U8), types(Int::U16));
+    refused_at(&a, first_difference(&a, &b2), "no such integer type");
+    let a = one_block(assign(proj(1, vec![Projection::Field(0)]), Value::Use(c()), 1), r.clone(), None);
+    let b2 = one_block(assign(proj(1, vec![Projection::ConstantIndex(0)]), Value::Use(c()), 1), r.clone(), None);
+    refused_at(&a, first_difference(&a, &b2), "no such projection");
+    let a = one_block(use0(Value::Use(c())), core(CoreOp::DurationFromMillis), None);
+    let b2 = one_block(use0(Value::Use(c())), core(CoreOp::DurationFromSecs), None);
+    refused_at(&a, first_difference(&a, &b2), "no such core operation");
+    let a = one_block(use0(Value::Unary(UnOp::Not, c())), r.clone(), None);
+    let b2 = one_block(use0(Value::Unary(UnOp::Neg, c())), r.clone(), None);
+    refused_at(&a, first_difference(&a, &b2), "no such unary operation");
+    let a = one_block(use0(Value::Binary(BinOp::Add, c(), c())), r.clone(), None);
+    let b2 = one_block(use0(Value::Binary(BinOp::Sub, c(), c())), r.clone(), None);
+    refused_at(&a, first_difference(&a, &b2), "no such operation");
+    let assert = |check| Terminator::Assert { cond: c(), expected: true, check, next: BlockId(0), at: at(1) };
+    let a = one_block(use0(Value::Use(c())), assert(Check::DivisionByZero), None);
+    let b2 = one_block(use0(Value::Use(c())), assert(Check::RemainderByZero), None);
+    refused_at(&a, first_difference(&a, &b2), "no such check");
+    let call = |callee| Terminator::Call { callee, args: vec![], dest: place(0), next: BlockId(0), at: at(1) };
+    let a = one_block(use0(Value::Use(c())), call(Callee::Function(FunctionId(0))), None);
+    let b2 = one_block(use0(Value::Use(c())), call(Callee::Core(CoreOp::Min(Int::I8))), None);
+    refused_at(&a, first_difference(&a, &b2), "no such callee");
+    let a = one_block(use0(Value::Aggregate(TypeId(1), None, vec![])), r.clone(), None);
+    let b2 = one_block(use0(Value::Aggregate(TypeId(1), Some(0), vec![])), r.clone(), None);
+    refused_at(&a, first_difference(&a, &b2), "an option that is neither 0 nor 1");
+    let a = one_block(use0(Value::Use(c())), r.clone(), None);
+    let b2 = one_block(use0(Value::Use(c())), r.clone(), Some(String::new()));
+    refused_at(&a, first_difference(&a, &b2), "an option that is neither 0 nor 1");
+}

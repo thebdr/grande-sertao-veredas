@@ -76,6 +76,10 @@ struct Sizer<'a> {
     types: &'a [Type],
     state: Vec<u8>,
     size: Vec<u32>,
+    /// How deep each type nests: 1 for a scalar or a reference, one more than its deepest part otherwise. Kept
+    /// whatever order the types come in, so a nesting past [`NESTING`] is refused however a file lists it, and every
+    /// walk of a type's parts, a constant's check among them, is as deep as that at most.
+    depth: Vec<u32>,
     fields: Vec<Vec<u32>>,
     variants: Vec<Vec<Vec<u32>>>,
 }
@@ -97,6 +101,7 @@ impl Sizer<'_> {
             *s = 1;
         }
         let types = self.types;
+        let mut deepest = 0u32;
         let size = match types.get(index) {
             None => return Err(err("no such type")),
             Some(Type::Bool | Type::Int(_) | Type::F32 | Type::F64) => 1,
@@ -113,6 +118,7 @@ impl Sizer<'_> {
                 for field in fields {
                     offsets.push(at);
                     at = add(at, self.size_of(field.ty, nesting.saturating_add(1))?).ok_or(err("too large"))?;
+                    deepest = deepest.max(self.depth.get(field.ty.0 as usize).copied().unwrap_or(u32::MAX));
                 }
                 if let Some(slot) = self.fields.get_mut(index) {
                     *slot = offsets;
@@ -122,18 +128,22 @@ impl Sizer<'_> {
             Some(Type::Enum { discriminant, variants, .. }) => {
                 let mut largest = 0u32;
                 let mut all = Vec::with_capacity(variants.len());
-                for (i, variant) in variants.iter().enumerate() {
+                // sorted, so two variants with one discriminant are found side by side, however many there are
+                let mut discriminants: Vec<i128> = variants.iter().map(|v| v.discriminant).collect();
+                discriminants.sort_unstable();
+                if discriminants.windows(2).any(|w| w.first() == w.get(1)) {
+                    return Err(err("two variants with one discriminant"));
+                }
+                for variant in variants {
                     if !discriminant.holds(variant.discriminant) {
                         return Err(err("a discriminant outside its type"));
-                    }
-                    if variants.iter().take(i).any(|v| v.discriminant == variant.discriminant) {
-                        return Err(err("two variants with one discriminant"));
                     }
                     let mut offsets = Vec::with_capacity(variant.fields.len());
                     let mut at = 1u32;
                     for field in &variant.fields {
                         offsets.push(at);
                         at = add(at, self.size_of(field.ty, nesting.saturating_add(1))?).ok_or(err("too large"))?;
+                        deepest = deepest.max(self.depth.get(field.ty.0 as usize).copied().unwrap_or(u32::MAX));
                     }
                     largest = largest.max(at);
                     all.push(offsets);
@@ -144,9 +154,18 @@ impl Sizer<'_> {
                 largest.max(1)
             }
             Some(Type::Array { element, len }) => {
-                self.size_of(*element, nesting.saturating_add(1))?.checked_mul(*len).ok_or(err("too large"))?
+                let size = self.size_of(*element, nesting.saturating_add(1))?.checked_mul(*len).ok_or(err("too large"))?;
+                deepest = self.depth.get(element.0 as usize).copied().unwrap_or(u32::MAX);
+                size
             }
         };
+        let depth = deepest.saturating_add(1);
+        if depth > NESTING {
+            return Err(err("nested too deep"));
+        }
+        if let Some(d) = self.depth.get_mut(index) {
+            *d = depth;
+        }
         if let Some(s) = self.size.get_mut(index) {
             *s = size;
         }
@@ -468,6 +487,10 @@ pub(crate) fn fits(types: &[Type], sizes: &Sizes, ty: TypeId, slots: &[Scalar]) 
         }
         (Some(Type::Array { element, len }), _) => {
             let each = sizes.size.get(element.0 as usize).copied().unwrap_or(u32::MAX) as usize;
+            if each == 0 {
+                // elements of no slot are all alike: one stands for every one of them, however long the array
+                return *len == 0 || fits(types, sizes, *element, &[]);
+            }
             (0..*len as usize).all(|i| {
                 let at = i.saturating_mul(each);
                 slots.get(at..at.saturating_add(each)).is_some_and(|part| fits(types, sizes, *element, part))
@@ -500,6 +523,7 @@ pub(crate) fn lay_out(program: &Program) -> Result<Layout, LoadError> {
         types: &program.types,
         state: vec![0; n],
         size: vec![0; n],
+        depth: vec![0; n],
         fields: vec![Vec::new(); n],
         variants: vec![Vec::new(); n],
     };

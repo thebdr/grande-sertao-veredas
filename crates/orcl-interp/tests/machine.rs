@@ -875,3 +875,70 @@ fn a_duration_read_through_another_variant_is_an_internal_error_and_never_a_pani
         }))
     );
 }
+
+#[test]
+fn a_callee_large_in_slots_and_another_deep_in_frames_both_have_room() {
+    // main calls big (one frame of 65 slots) and a -> b -> c (three frames of few slots): the stack needs four
+    // frames, though the callee deepest in slots is one frame deep
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let arr = b.ty(Type::Array { element: u8t, len: 64 });
+    let c8 = |v| konst(u8t, vec![int(Int::U8, v)]);
+    let call = |f, dest, next| Terminator::Call { callee: Callee::Function(f), args: vec![], dest: place(dest), next: BlockId(next), at: at(1) };
+    let big = b.function(Function { name: "big".into(), params: 0, locals: locals(&[u8t, arr]), blocks: vec![block(vec![assign(place(0), Value::Use(c8(1)), 1)], ret())] });
+    let c = b.function(Function { name: "c".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(c8(3)), 2)], ret())] });
+    let pass = |b: &mut Build, name: &str, g| {
+        b.function(Function {
+            name: name.into(),
+            params: 0,
+            locals: locals(&[u8t, u8t]),
+            blocks: vec![block(vec![], call(g, 1, 1)), block(vec![assign(place(0), Value::Use(copy(1)), 3)], ret())],
+        })
+    };
+    let bb = pass(&mut b, "b", c);
+    let a = pass(&mut b, "a", bb);
+    let main = b.function(Function {
+        name: "main".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t, u8t]),
+        blocks: vec![block(vec![], call(big, 1, 1)), block(vec![], call(a, 2, 2)), block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(1), copy(2)), 4)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    assert_eq!(m.call(main, &[]).unwrap(), &[int(Int::U8, 4)], "big() + a(), a four frames deep");
+    let mut copy = m.clone();
+    assert_eq!(copy.call(main, &[]).unwrap(), &[int(Int::U8, 4)], "and in a copy");
+}
+
+#[test]
+fn a_variant_s_field_after_a_field_of_two_slots_is_read_where_it_was_written() {
+    // enum E { A, B(Duration, u8) }: B's u8 follows a field of two slots
+    let mut b = Build::default();
+    let (u8t, d) = (b.int(Int::U8), b.ty(Type::Duration));
+    let e = b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::Isize,
+        variants: vec![
+            Variant { name: "A".into(), discriminant: 0, fields: vec![] },
+            Variant { name: "B".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: d }, Field { name: "1".into(), ty: u8t }] },
+        ],
+    });
+    // fn f(x: u8) -> u8 { let e = E::B(Duration::new(7, 9), x); (e as B).1 }
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[u8t, u8t, e]),
+        blocks: vec![block(
+            vec![
+                assign(place(2), Value::Aggregate(e, Some(1), vec![konst(d, vec![int(Int::U64, 7), int(Int::U32, 9)]), copy(1)]), 1),
+                assign(place(0), Value::Use(copy_at(proj(2, vec![Projection::Downcast(1), Projection::Field(1)]))), 2),
+            ],
+            ret(),
+        )],
+    });
+    let mut m = Machine::load(b.program, &[e]).unwrap();
+    let arg = [int(Int::U8, 42)];
+    assert_eq!(m.call(f, &[Arg::Value(&arg)]).unwrap(), &[int(Int::U8, 42)], "(e as B).1");
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 1), int(Int::U64, 7), int(Int::U32, 9), int(Int::U8, 42)]), Ok(()), "E::B as a region's slots");
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 1), int(Int::U8, 42), int(Int::U64, 7), int(Int::U32, 9)]), Err(HostError::Slots), "the fields the other way round");
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::U8, 1), int(Int::U64, 7), int(Int::U32, 9), int(Int::U8, 42)]), Err(HostError::Slots), "a discriminant of another integer type");
+}
