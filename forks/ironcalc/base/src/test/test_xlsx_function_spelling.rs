@@ -69,7 +69,8 @@ const XLSXWRITER_FUTURE: &[&str] = &[
 const EXCEL_FILES_FUTURE: &[&str] = &["ENCODEURL", "REGEXEXTRACT", "REGEXREPLACE", "REGEXTEST", "TRIMRANGE"];
 
 /// Listed by no source and in no Excel-saved file of the tests: prefixed as every function Excel
-/// added after 2010 is (DECISION PENDING, Veredas 2's Q346).
+/// added after 2010 is, a reasoned spelling no Excel file has shown (Veredas 2's Q346, ruled
+/// 2026-11-25: it stands).
 const UNLISTED_FUTURE: &[&str] = &["PERCENTOF"];
 
 /// The worksheet-only functions (`worksheet-only-function-list`), written `_xlfn._xlws.`.

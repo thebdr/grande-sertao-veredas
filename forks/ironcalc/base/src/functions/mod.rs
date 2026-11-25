@@ -2302,8 +2302,9 @@ impl Function {
             Function::Gauss => "_xlfn.GAUSS".to_string(),
             Function::GammaDist => "_xlfn.GAMMA.DIST".to_string(),
             Function::Imsech => "_xlfn.IMSECH".to_string(),
-            // DECISION PENDING (Veredas 2's Q346): no Excel-saved file and neither list shows
-            // PERCENTOF's spelling; written as every function Excel added after 2010 is
+            // no Excel-saved file and neither list shows PERCENTOF's spelling: written as every
+            // function Excel added after 2010 is, a reasoned spelling (Veredas 2's Q346, ruled
+            // 2026-11-25: it stands, no workbook saved by Excel 365 taken to show it)
             Function::Percentof => "_xlfn.PERCENTOF".to_string(),
 
             _ => {
