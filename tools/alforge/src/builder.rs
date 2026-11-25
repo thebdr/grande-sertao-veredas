@@ -61,6 +61,7 @@ pub fn image(r: &Recipe, toolchain: &str, work: &Path) -> Result<PathBuf, VmErro
         mac: None,
         qmp: None,
         console: console.clone(),
+        serial_in: false,
     })?;
     m.wait_off(Duration::from_secs(45 * 60))?;
     let text = vm::read_console(&console);
@@ -188,6 +189,7 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, builds: &[(
         mac: None,
         qmp: None,
         console: console.clone(),
+        serial_in: false,
     })?;
     m.wait_off(Duration::from_secs(90 * 60))?;
     let out = work.join("out");

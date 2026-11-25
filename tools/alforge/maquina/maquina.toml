@@ -35,11 +35,12 @@ hardware_version = 14
 # The user (Q438): logged in automatically; sudo asks this password.
 user = "veredas"
 password = "veredas"
-# The desktop (Q434), the browser, the guest tools, an editor; NetworkManager takes any wired card.
+# The desktop (Q434), the browser, the guest tools, an editor; NetworkManager takes any wired card;
+# Python 3, which the update command runs on (Q437).
 packages = [
   "xfce4", "xfce4-terminal", "mousepad", "lightdm", "xserver-xorg", "xserver-xorg-video-vmware",
   "chromium", "open-vm-tools", "open-vm-tools-desktop", "network-manager", "network-manager-gnome",
-  "fonts-dejavu", "sudo",
+  "fonts-dejavu", "sudo", "python3",
 ]
 # Removed from the base: no SSH server on the machine (docs/alforge-plan.md, "What it holds").
 remove = ["openssh-server"]

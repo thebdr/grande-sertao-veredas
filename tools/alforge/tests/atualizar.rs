@@ -1,0 +1,399 @@
+//! C-293: the tester machine's update command (`veredas-atualizar`, docs/questions.md Q437), its
+//! shipped text run here by `python3` as the machine runs it, against a machine's folders of the
+//! test's own (`VEREDAS_ROOT`) with a stand-in for `systemctl` first on its PATH: a newer release's
+//! bundle, packed by the cut's own code, installed beside the old one, `current` moved, the PATH's
+//! links following, the services restarted, the plant's files untouched; every refusal said and
+//! leaving the machine as it was. The command run inside the machine itself is tests/maquina.rs's.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use alforge::{bundle, cut, maquina};
+
+const TARGET: &str = "x86_64-unknown-linux-gnu";
+
+/// A dynamic executable compiled here, standing in for one a release ships.
+fn exe(path: &Path, links: &[&str]) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let src = tempfile::tempdir().unwrap();
+    std::fs::write(src.path().join("main.c"), "int main(void) { return 0; }\n").unwrap();
+    let out = Command::new("cc").arg("-o").arg(path).arg(src.path().join("main.c")).args(links).output().unwrap();
+    assert!(out.status.success(), "cc: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// A release's folder as the cut assembles it: its manifest, `bin/`, the plant and a README, its
+/// sums written.
+fn release_folder(parent: &Path, release: &str, target: &str, bins: &[&str]) -> PathBuf {
+    let dir = parent.join(format!("veredas-{release}-{target}"));
+    for b in bins {
+        exe(&dir.join("bin").join(b), &[]);
+    }
+    std::fs::create_dir_all(dir.join("planta")).unwrap();
+    std::fs::write(dir.join("planta/bench.toml"), format!("# the plant of {release}\n")).unwrap();
+    std::fs::write(dir.join("README.md"), "Veredas\n").unwrap();
+    let components = vec![("veredas-portal".to_string(), "2.0.0".to_string(), bins.iter().map(|b| b.to_string()).collect())];
+    let text = cut::manifest_text(&semver::Version::parse(release).unwrap(), &"ab".repeat(20), target, "rustc 1.100.0", &components, cut::NOT_RUN);
+    std::fs::write(dir.join("release.toml"), text).unwrap();
+    bundle::write_sums(&dir).unwrap();
+    dir
+}
+
+/// A tester machine's folders: release 1.0.0 installed (`veredas-portal` and `veredas-velho`),
+/// `current` naming it, its executables linked onto the PATH beside a link of another's, the
+/// plant in the home folder.
+struct Machine {
+    root: tempfile::TempDir,
+    stub: tempfile::TempDir,
+}
+
+impl Machine {
+    fn new() -> Machine {
+        let root = tempfile::tempdir().unwrap();
+        let opt = root.path().join("opt/veredas");
+        release_folder(&opt, "1.0.0", TARGET, &["veredas-portal", "veredas-velho"]);
+        std::os::unix::fs::symlink(format!("veredas-1.0.0-{TARGET}"), opt.join("current")).unwrap();
+        let bin = root.path().join("usr/local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for b in ["veredas-portal", "veredas-velho"] {
+            std::os::unix::fs::symlink(format!("/opt/veredas/current/bin/{b}"), bin.join(b)).unwrap();
+        }
+        std::os::unix::fs::symlink("/usr/bin/true", bin.join("outro")).unwrap();
+        let plant = root.path().join("home/veredas/planta");
+        std::fs::create_dir_all(&plant).unwrap();
+        std::fs::write(plant.join("bench.toml"), "# the tester's own edits\n").unwrap();
+        let stub = tempfile::tempdir().unwrap();
+        let m = Machine { root, stub };
+        m.systemctl(0);
+        m
+    }
+
+    /// The stand-in `systemctl`: logs its arguments, exits `code`.
+    fn systemctl(&self, code: u8) {
+        use std::os::unix::fs::PermissionsExt;
+        let p = self.stub.path().join("systemctl");
+        std::fs::write(&p, format!("#!/bin/sh\necho \"$*\" >> '{}'\nexit {code}\n", self.stub.path().join("calls").display())).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn calls(&self) -> String {
+        std::fs::read_to_string(self.stub.path().join("calls")).unwrap_or_default()
+    }
+
+    /// The command run on `args` as the machine runs it: its exit code, stdout and stderr.
+    fn run(&self, args: &[&Path]) -> (Option<i32>, String, String) {
+        let script = self.stub.path().join("veredas-atualizar");
+        std::fs::write(&script, maquina::ATUALIZAR).unwrap();
+        let out = Command::new("python3")
+            .arg(&script)
+            .args(args)
+            .env("VEREDAS_ROOT", self.root.path())
+            .env("PATH", format!("{}:/usr/bin:/bin", self.stub.path().display()))
+            .output()
+            .unwrap();
+        (out.status.code(), String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
+    }
+
+    fn path(&self, rel: &str) -> PathBuf {
+        self.root.path().join(rel)
+    }
+
+    /// Every entry under the machine's root: a folder, a link with what it names, a file with its
+    /// bytes' digest and mode.
+    fn snapshot(&self) -> BTreeMap<String, String> {
+        fn walk(base: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
+            use std::os::unix::fs::PermissionsExt;
+            for e in std::fs::read_dir(dir).unwrap() {
+                let e = e.unwrap();
+                let p = e.path();
+                let rel = p.strip_prefix(base).unwrap().display().to_string();
+                let t = e.file_type().unwrap();
+                if t.is_symlink() {
+                    out.insert(rel, format!("-> {}", std::fs::read_link(&p).unwrap().display()));
+                } else if t.is_dir() {
+                    out.insert(rel, "folder".into());
+                    walk(base, &p, out);
+                } else {
+                    let mode = std::fs::metadata(&p).unwrap().permissions().mode();
+                    out.insert(rel, format!("{} {mode:o}", sha256_file(&p)));
+                }
+            }
+        }
+        let mut out = BTreeMap::new();
+        walk(self.root.path(), self.root.path(), &mut out);
+        out
+    }
+}
+
+/// A bundle of `release` packed by the cut's own code from a folder `edit` may change after its
+/// sums are written: the archive's path.
+fn bundle_of(work: &Path, release: &str, target: &str, bins: &[&str], edit: impl FnOnce(&Path)) -> PathBuf {
+    let folder = release_folder(work, release, target, bins);
+    edit(&folder);
+    let name = folder.file_name().unwrap().to_str().unwrap().to_string();
+    let out = work.join(format!("{name}.tar.gz"));
+    bundle::pack(work, &name, "1795300000", &out).unwrap();
+    out
+}
+
+fn sha256_file(p: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(std::fs::read(p).unwrap()))
+}
+
+#[test]
+fn a_newer_release_is_installed_beside_the_old_and_current_moved_to_it() {
+    let m = Machine::new();
+    let work = tempfile::tempdir().unwrap();
+    let b = bundle_of(work.path(), "1.1.0-alpha.1", TARGET, &["veredas-portal", "veredas-novo"], |_| {});
+    let before = m.snapshot();
+    let (code, out, err) = m.run(&[&b]);
+    assert_eq!(code, Some(0), "{out}{err}");
+    assert_eq!(err, "");
+    let opt = m.path("opt/veredas");
+    assert_eq!(
+        out,
+        format!(
+            "veredas-atualizar: {} (SHA-256 {})\nveredas-atualizar: release 1.0.0 -> 1.1.0-alpha.1 (commit {})\n\
+             veredas-atualizar: installed at {}; the old release kept at {}\n\
+             veredas-atualizar: the plant's files in the home folder left as they are; the release's own plant is in /opt/veredas/current/planta\n\
+             veredas-atualizar: the bench and supervisão restarted on it\n",
+            b.display(),
+            sha256_file(&b),
+            "ab".repeat(20),
+            opt.join(format!("veredas-1.1.0-alpha.1-{TARGET}")).display(),
+            opt.join(format!("veredas-1.0.0-{TARGET}")).display(),
+        )
+    );
+    // `current` names the new release, beside the old one, which is as it was.
+    assert_eq!(std::fs::read_link(opt.join("current")).unwrap(), PathBuf::from(format!("veredas-1.1.0-alpha.1-{TARGET}")));
+    let after = m.snapshot();
+    let old = format!("opt/veredas/veredas-1.0.0-{TARGET}");
+    let kept = |s: &BTreeMap<String, String>| -> BTreeMap<String, String> { s.iter().filter(|(k, _)| k.starts_with(&old) || k.starts_with("home/")).map(|(k, v)| (k.clone(), v.clone())).collect() };
+    assert_eq!(kept(&after), kept(&before), "the old release and the plant's files untouched");
+    // The new release's files are the bundle's, every one matching its sums.
+    let new = opt.join(format!("veredas-1.1.0-alpha.1-{TARGET}"));
+    assert_eq!(bundle::verify_sums(&new).unwrap(), Vec::<String>::new());
+    assert_eq!(std::fs::read_to_string(new.join("planta/bench.toml")).unwrap(), "# the plant of 1.1.0-alpha.1\n");
+    // The PATH: a link for each of its executables, none for the one it no longer has, another's
+    // link kept.
+    let link = |b: &str| std::fs::read_link(m.path("usr/local/bin").join(b)).ok().map(|p| p.display().to_string());
+    assert_eq!(link("veredas-portal").as_deref(), Some("/opt/veredas/current/bin/veredas-portal"));
+    assert_eq!(link("veredas-novo").as_deref(), Some("/opt/veredas/current/bin/veredas-novo"));
+    assert_eq!(link("veredas-velho"), None);
+    assert_eq!(link("outro").as_deref(), Some("/usr/bin/true"));
+    // The services restarted, nothing left of the staging.
+    assert_eq!(m.calls(), "restart veredas-bancada.service veredas-supervisao.service\n");
+    let left: Vec<String> = std::fs::read_dir(&opt).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).filter(|n| n.starts_with(".atualizar-")).collect();
+    assert_eq!(left, Vec::<String>::new());
+    // Installed again: refused, already there and not newer.
+    let (code, _, err) = m.run(&[&b]);
+    assert_eq!(code, Some(2));
+    assert_eq!(
+        err,
+        format!(
+            "veredas-atualizar: not installed, the machine is as it was:\n  release 1.1.0-alpha.1 is not newer than the installed 1.1.0-alpha.1\n  {} is there already\n",
+            new.display()
+        )
+    );
+}
+
+#[test]
+fn every_bundle_the_command_refuses_leaves_the_machine_as_it_was() {
+    let refused = |b: &Path, m: &Machine| -> Vec<String> {
+        let before = m.snapshot();
+        let (code, out, err) = m.run(&[b]);
+        assert_eq!(code, Some(2), "{out}{err}");
+        assert_eq!(m.snapshot(), before, "the machine as it was");
+        assert_eq!(m.calls(), "", "no service restarted");
+        let lines: Vec<String> = err.lines().map(String::from).collect();
+        if lines.first().map(String::as_str) == Some("veredas-atualizar: not installed, the machine is as it was:") {
+            lines[1..].iter().map(|l| l.trim_start().to_string()).collect()
+        } else {
+            lines
+        }
+    };
+    let m = Machine::new();
+    let work = |_: ()| tempfile::tempdir().unwrap();
+    let w = work(());
+    let ok = ["veredas-portal"];
+    // Off its sums: a file changed after them, one added, one taken out.
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &ok, |d| {
+        std::fs::write(d.join("README.md"), "changed\n").unwrap();
+        std::fs::write(d.join("extra.txt"), "added\n").unwrap();
+        std::fs::remove_file(d.join("planta/bench.toml")).unwrap();
+    });
+    assert_eq!(refused(&b, &m), ["README.md does not match its sum", "extra.txt is not in SHA256SUMS", "planta/bench.toml is in SHA256SUMS and not in the bundle"]);
+    // Not newer: an older release, and the installed release's own pre-release, which ranks below it.
+    let w = work(());
+    assert_eq!(refused(&bundle_of(w.path(), "0.9.0", TARGET, &ok, |_| {}), &m), ["release 0.9.0 is not newer than the installed 1.0.0"]);
+    let w = work(());
+    assert_eq!(refused(&bundle_of(w.path(), "1.0.0-rc.1", TARGET, &ok, |_| {}), &m), ["release 1.0.0-rc.1 is not newer than the installed 1.0.0"]);
+    // Another target.
+    let w = work(());
+    assert_eq!(
+        refused(&bundle_of(w.path(), "1.1.0", "aarch64-unknown-linux-gnu", &ok, |_| {}), &m),
+        ["the bundle is built for aarch64-unknown-linux-gnu, this machine runs x86_64-unknown-linux-gnu"]
+    );
+    // A folder named after another release than its manifest's.
+    let w = work(());
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &ok, |d| {
+        let t = std::fs::read_to_string(d.join("release.toml")).unwrap().replace("release = \"1.1.0\"", "release = \"1.2.0\"");
+        std::fs::write(d.join("release.toml"), t).unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    assert_eq!(refused(&b, &m), [format!("the bundle's folder is veredas-1.1.0-{TARGET}, not veredas-1.2.0-{TARGET}")]);
+    // Executables the manifest names and the bundle lacks, and one no component ships.
+    let w = work(());
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal", "veredas-x"], |d| {
+        std::fs::remove_file(d.join("bin/veredas-x")).unwrap();
+        exe(&d.join("bin/veredas-y"), &[]);
+        bundle::write_sums(d).unwrap();
+    });
+    assert_eq!(refused(&b, &m), ["bin/veredas-x is named by the manifest and not in the bundle", "bin/veredas-y is in the bundle and no component ships it"]);
+    // A manifest of another format.
+    let w = work(());
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &ok, |d| {
+        let t = std::fs::read_to_string(d.join("release.toml")).unwrap().replace("format = \"veredas-release\"", "format = \"veredas-bench\"");
+        std::fs::write(d.join("release.toml"), t).unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    assert_eq!(refused(&b, &m), ["release.toml is `veredas-bench` version 1, not `veredas-release` version 1"]);
+    // An executable that would not start here: a library it was linked against is not on the machine.
+    let w = work(());
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &ok, |d| {
+        let lib = tempfile::tempdir().unwrap();
+        std::fs::write(lib.path().join("f.c"), "int fantasma(void) { return 0; }\n").unwrap();
+        let out = Command::new("cc").args(["-shared", "-fPIC", "-o"]).arg(lib.path().join("libfantasma.so")).arg(lib.path().join("f.c")).output().unwrap();
+        assert!(out.status.success());
+        exe(&d.join("bin/veredas-portal"), &["-Wl,--no-as-needed", &format!("-L{}", lib.path().display()), "-lfantasma"]);
+        bundle::write_sums(d).unwrap();
+    });
+    assert_eq!(refused(&b, &m), ["bin/veredas-portal would not start here: libfantasma.so => not found"]);
+    // A link in the archive, and two folders at its top.
+    let w = work(());
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &ok, |d| std::os::unix::fs::symlink("/etc/passwd", d.join("README.link")).unwrap());
+    assert_eq!(refused(&b, &m), [format!("veredas-1.1.0-{TARGET}/README.link: neither a file nor a folder")]);
+    let w = work(());
+    let two = w.path().join("two");
+    release_folder(&two, "1.1.0", TARGET, &ok);
+    std::fs::create_dir_all(two.join("another")).unwrap();
+    let b = w.path().join("two.tar.gz");
+    alforge::vm::run("tar", &["-czf", &b.display().to_string(), "-C", &two.display().to_string(), &format!("veredas-1.1.0-{TARGET}"), "another"], None).unwrap();
+    assert_eq!(refused(&b, &m), ["the bundle holds 2 folders at its top, not one"]);
+    // No archive at all, and no file.
+    let w = work(());
+    let b = w.path().join("notes.tar.gz");
+    std::fs::write(&b, "not an archive\n").unwrap();
+    let got = refused(&b, &m);
+    assert!(got.len() == 1 && got[0].starts_with(&format!("{} is no release bundle (a gzipped tar): ", b.display())), "{got:?}");
+    let absent = w.path().join("absent.tar.gz");
+    assert_eq!(refused(&absent, &m), [format!("veredas-atualizar: {}: No such file or directory", absent.display())]);
+}
+
+#[test]
+fn the_command_says_how_it_was_run_wrong_and_what_it_could_not_do() {
+    let m = Machine::new();
+    let (code, _, err) = m.run(&[]);
+    assert_eq!((code, err.as_str()), (Some(1), "usage: sudo veredas-atualizar <bundle.tar.gz>\n"));
+    let w = tempfile::tempdir().unwrap();
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |_| {});
+    // Without the rights to write the release's folder: run it with sudo.
+    use std::os::unix::fs::PermissionsExt;
+    let opt = m.path("opt/veredas");
+    std::fs::set_permissions(&opt, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let before = m.snapshot();
+    let (code, _, err) = m.run(&[&b]);
+    std::fs::set_permissions(&opt, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!((code, err), (Some(2), format!("veredas-atualizar: {} is not writable here: run it with sudo\n", opt.display())));
+    assert_eq!(m.snapshot(), before);
+    // Another update running: refused at once.
+    // `flock --close`: the lock held by flock alone, never by the sleep it runs.
+    let mut holder = Command::new("flock")
+        .arg("--close")
+        .arg(&opt)
+        .args(["sleep", "30"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let (code, _, err) = m.run(&[&b]);
+    holder.kill().unwrap();
+    holder.wait().unwrap();
+    assert_eq!((code, err.as_str()), (Some(2), "veredas-atualizar: another update is running\n"));
+    assert_eq!(std::fs::read_link(opt.join("current")).unwrap(), PathBuf::from(format!("veredas-1.0.0-{TARGET}")));
+    // The services that do not restart: installed, said, and the way back named.
+    m.systemctl(1);
+    let (code, out, err) = m.run(&[&b]);
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert_eq!(m.calls(), "restart veredas-bancada.service veredas-supervisao.service\n");
+    assert_eq!(std::fs::read_link(opt.join("current")).unwrap(), PathBuf::from(format!("veredas-1.1.0-{TARGET}")));
+    assert_eq!(err, format!("veredas-atualizar: the bench and supervisão did not restart (systemctl exited 1); to go back: sudo ln -sfn veredas-1.0.0-{TARGET} /opt/veredas/current\n"));
+}
+
+/// A plant served as it should be, as the host reads it.
+fn served(page: u16) -> alforge::together::Report {
+    let snapshot = |place: f64| {
+        let objects: Vec<serde_json::Value> = ["speed", "read-rate", "infeed", "outlet-1", "outlet-2", "outlet-3", "parcel-1", "parcel-2"]
+            .iter()
+            .map(|id| serde_json::json!({ "id": id, "value": 1.0, "stale": false, "place": place }))
+            .collect();
+        serde_json::json!({ "objects": objects, "session": { "health": { "plc": { "state": "live" }, "sorter": { "state": "live" } } } })
+    };
+    alforge::together::Report {
+        page: alforge::together::Answer { status: page, body: "<html></html>".into() },
+        first: snapshot(0.1),
+        second: snapshot(0.2),
+        apart: std::time::Duration::from_secs(2),
+        write: alforge::together::Answer { status: 403, body: r#"{"error":"writes are turned off for this project"}"#.into() },
+        bench_exit: None,
+        supervisao_exit: None,
+        bench_out: String::new(),
+        supervisao_out: String::new(),
+    }
+}
+
+#[test]
+fn the_update_inside_the_machine_is_judged_by_what_its_console_and_the_host_say() {
+    let old = format!("veredas-1.0.0-{TARGET}");
+    let new = format!("veredas-1.1.0-{TARGET}");
+    let sum = "c".repeat(64);
+    // The console as the proof's commands leave it: each command's echo, its marker split by
+    // quotes, then what it printed.
+    let good = format!(
+        "veredas login: veredas\nPassword: \nveredas@veredas:~$ echo \"ALFORGE-\"\"UPDATE-EXIT $?\"\n\
+         ALFORGE-PLANT-BEFORE {sum}\nveredas-atualizar: release 1.0.0 -> 1.1.0 (commit ab)\nALFORGE-UPDATE-EXIT 0\n\
+         ALFORGE-CURRENT {new}\nALFORGE-RELEASES current {old} {new} \n\
+         ALFORGE-EXE /opt/veredas/{new}/bin/veredas-maquinar\nALFORGE-EXE /opt/veredas/{new}/bin/veredas-supervisao\n\
+         ALFORGE-CHECK VEREDAS-SUMS-OK 1.1.0\nALFORGE-CHECK VEREDAS-ON-PATH ok\nALFORGE-CHECK VEREDAS-ATUALIZAR ok\n\
+         ALFORGE-PLANT-AFTER {sum}\nveredas-atualizar: not installed, the machine is as it was:\nALFORGE-AGAIN-EXIT 2\n"
+    );
+    let proof = |console: &str, page: u16, after: &str| maquina::UpdateProof { console: console.into(), plant: served(page), before: "a".into(), after: after.into() };
+    let faults = |console: &str| maquina::update_faults(&proof(console, 200, "a"), "1.0.0", "1.1.0", TARGET);
+    assert_eq!(faults(&good), Vec::<String>::new());
+    for (from, to, want) in [
+        ("ALFORGE-UPDATE-EXIT 0", "ALFORGE-UPDATE-EXIT 2", vec!["the update command did not install the bundle (it exited 2)".to_string()]),
+        (&format!("ALFORGE-CURRENT {new}") as &str, &format!("ALFORGE-CURRENT {old}") as &str, vec![format!("`current` names {old}, not {new}")]),
+        (&format!("current {old} {new}"), &format!("current {new}"), vec![format!("/opt/veredas holds no {old}")]),
+        (
+            &format!("/opt/veredas/{new}/bin/veredas-supervisao"),
+            &format!("/opt/veredas/{old}/bin/veredas-supervisao"),
+            vec![
+                format!("no running veredas-supervisao is the new release's (/opt/veredas/{new}/bin/veredas-supervisao): [\"/opt/veredas/{new}/bin/veredas-maquinar\", \"/opt/veredas/{old}/bin/veredas-supervisao\"]"),
+                format!("an executable of another release still runs: [\"/opt/veredas/{new}/bin/veredas-maquinar\", \"/opt/veredas/{old}/bin/veredas-supervisao\"]"),
+            ],
+        ),
+        ("VEREDAS-SUMS-OK 1.1.0", "VEREDAS-SUMS-FAILED 1.1.0", vec!["the boot's check on the new release does not say `VEREDAS-SUMS-OK 1.1.0`".to_string()]),
+        ("ALFORGE-CHECK VEREDAS-ATUALIZAR ok", "ALFORGE-CHECK VEREDAS-ATUALIZAR missing", vec!["the boot's check on the new release does not say `VEREDAS-ATUALIZAR ok`".to_string()]),
+        (&format!("ALFORGE-PLANT-AFTER {sum}"), &format!("ALFORGE-PLANT-AFTER {}", "d".repeat(64)), vec![format!("the plant's files changed or were not read ({sum} before, {} after)", "d".repeat(64))]),
+        ("ALFORGE-AGAIN-EXIT 2", "ALFORGE-AGAIN-EXIT 0", vec!["the same bundle was not refused a second time (it exited 0)".to_string()]),
+        ("ALFORGE-UPDATE-EXIT 0\n", "", vec!["the update command did not install the bundle (it exited with nothing said)".to_string()]),
+    ] {
+        assert_eq!(faults(&good.replace(from, to)), want, "{from}");
+    }
+    // The plant from the host, and the shipped disk, after the update's boot.
+    assert_eq!(maquina::update_faults(&proof(&good, 500, "a"), "1.0.0", "1.1.0", TARGET), alforge::together::plant_faults(&served(500)));
+    assert!(!alforge::together::plant_faults(&served(500)).is_empty());
+    assert_eq!(maquina::update_faults(&proof(&good, 200, "b"), "1.0.0", "1.1.0", TARGET), ["the update's boot changed the shipped disk"]);
+}

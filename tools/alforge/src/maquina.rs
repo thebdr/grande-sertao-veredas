@@ -11,13 +11,19 @@ use crate::machine::Recipe;
 use crate::vm::{self, DataDisk, Hardware, Spec, Vm, VmError};
 
 /// Bumped when what the provisioning does changes.
-pub const PROVISIONING: u32 = 1;
+pub const PROVISIONING: u32 = 2;
+
+/// The machine's update command (docs/questions.md Q437, ruled "Update command"), installed by the
+/// provisioning as `/usr/local/sbin/veredas-atualizar`: a newer release's bundle, given by path,
+/// checked and installed beside the old one, `current` moved to it, the services restarted on it,
+/// the plant's files left alone.
+pub const ATUALIZAR: &str = include_str!("veredas-atualizar.py");
 
 /// The provisioning script run as root in the guest, its network up: the packages, the user, the
 /// release under `/opt/veredas/`, the plant in the user's home, the services, the desktop's
-/// automatic login and browser, the network handed to NetworkManager, cloud-init and the SSH
-/// server gone, the disk's free space trimmed.
-pub fn provision_script(r: &Recipe, bundle_dir: &str, release: &str) -> String {
+/// automatic login and browser, the update command, the network handed to NetworkManager,
+/// cloud-init and the SSH server gone, the disk's free space trimmed.
+pub fn provision_script(r: &Recipe, bundle_dir: &str) -> String {
     let m = &r.machine;
     let u = &m.user;
     let packages = m.packages.join(" ");
@@ -42,8 +48,12 @@ grep -q '^127.0.1.1' /etc/hosts || echo '127.0.1.1 veredas' >> /etc/hosts
 echo "ALFORGE-STEP release"
 mkdir -p /opt/veredas
 tar -xzf /alforge/bundle.tar.gz -C /opt/veredas
-ln -sfn /opt/veredas/{bundle_dir} /opt/veredas/current
+ln -sfn {bundle_dir} /opt/veredas/current
 for b in /opt/veredas/current/bin/*; do ln -sf "$b" /usr/local/bin/; done
+mkdir -p /usr/local/sbin
+cat > /usr/local/sbin/veredas-atualizar <<'ATUALIZAR'
+{atualizar}ATUALIZAR
+chmod 755 /usr/local/sbin/veredas-atualizar
 cp -r /opt/veredas/current/planta /home/{u}/planta
 cp /alforge/guide.md /home/{u}/README-veredas.md
 echo "ALFORGE-STEP services"
@@ -84,9 +94,11 @@ cat > /usr/local/libexec/veredas-verifica <<'SCRIPT'
 #!/bin/sh
 # The release's files checked against its SHA256SUMS, the network cards the machine sees, and
 # what the provisioning promised: the recipe's packages installed, the bench and supervisão services
-# of the recipe's user, no SSH server, cloud-init off, every executable on the PATH.
+# of the recipe's user, no SSH server, cloud-init off, every executable on the PATH, the update
+# command there. The release is the one `current` names, as an update moves it.
 cd /opt/veredas/current
-if sha256sum --quiet -c SHA256SUMS; then echo "VEREDAS-SUMS-OK {release}"; else echo "VEREDAS-SUMS-FAILED {release}"; fi
+rel=$(sed -n 's/^release = "\(.*\)"$/\1/p' release.toml)
+if sha256sum --quiet -c SHA256SUMS; then echo "VEREDAS-SUMS-OK $rel"; else echo "VEREDAS-SUMS-FAILED $rel"; fi
 echo "VEREDAS-BUNDLE $(sha256sum SHA256SUMS | cut -d' ' -f1)"
 for c in /sys/class/net/*; do n=$(basename "$c"); [ "$n" = lo ] || echo "VEREDAS-CARD $n $(cat "$c/address")"; done
 if [ -e /usr/sbin/sshd ] || [ -e /lib/systemd/system/ssh.service ] || [ -e /usr/lib/systemd/system/ssh.service ]; then echo "VEREDAS-SSH present"; else echo "VEREDAS-SSH absent"; fi
@@ -100,6 +112,7 @@ if [ -z "$others" ]; then echo "VEREDAS-SERVICES-USER ok"; else echo "VEREDAS-SE
 missing=
 for b in /opt/veredas/current/bin/*; do n=$(basename "$b"); [ "$(command -v "$n")" = "/usr/local/bin/$n" ] || missing="$missing $n"; done
 if [ -z "$missing" ]; then echo "VEREDAS-ON-PATH ok"; else echo "VEREDAS-ON-PATH missing$missing"; fi
+if [ -x /usr/local/sbin/veredas-atualizar ] && python3 -c 'import tomllib, tarfile' 2>/dev/null; then echo "VEREDAS-ATUALIZAR ok"; else echo "VEREDAS-ATUALIZAR missing"; fi
 SCRIPT
 chmod 755 /usr/local/libexec/veredas-verifica
 cat > /etc/systemd/system/veredas-verifica.service <<'UNIT'
@@ -154,6 +167,7 @@ fstrim -av || true
 echo ALFORGE-PROVISION-OK
 "#,
         password = m.password,
+        atualizar = ATUALIZAR,
     )
 }
 
@@ -270,7 +284,7 @@ pub fn build(r: &Recipe, bundle: &Path, bundle_dir: &str, release: &str, guide: 
     std::fs::create_dir_all(&input)?;
     std::fs::copy(bundle, input.join("bundle.tar.gz"))?;
     std::fs::write(input.join("guide.md"), guide)?;
-    std::fs::write(input.join("provision.sh"), provision_script(r, bundle_dir, release))?;
+    std::fs::write(input.join("provision.sh"), provision_script(r, bundle_dir))?;
     let in_tar = work.join("maquina-in.tar");
     vm::run("tar", &["-cf", &in_tar.display().to_string(), "-C", &input.display().to_string(), "."], None)?;
     let disk = work.join("maquina.qcow2");
@@ -295,6 +309,7 @@ pub fn build(r: &Recipe, bundle: &Path, bundle_dir: &str, release: &str, guide: 
         mac: None,
         qmp: None,
         console: console.clone(),
+        serial_in: false,
     })?;
     m.wait_off(Duration::from_secs(90 * 60))?;
     let text = vm::read_console(&console);
@@ -377,6 +392,7 @@ pub fn boot(r: &Recipe, vmdk: &Path, port: u16, qmp: Option<u16>, console: &Path
         mac: Some(PROOF_MAC.into()),
         qmp,
         console: console.to_path_buf(),
+        serial_in: false,
     })
 }
 
@@ -768,6 +784,7 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
         ("VEREDAS-SSH absent", "the machine holds an SSH server"),
         ("VEREDAS-CLOUD-INIT disabled", "cloud-init is not disabled"),
         ("VEREDAS-ON-PATH ok", "the release's executables are not all on the PATH"),
+        ("VEREDAS-ATUALIZAR ok", "the update command is not installed"),
         ("Initializing machine ID from random generator", "the shipped disk carries a machine identity"),
     ] {
         if !p.console.contains(line) {
@@ -843,4 +860,142 @@ pub fn proof_setup(root: &Path, release: &str, target: &str) -> Result<Setup, Vm
     let recipe = Recipe::load(&recipe_text).map_err(|e| VmError::Failed { program: "the recipe".into(), status: "refused".into(), stderr: e.to_string() })?;
     let canvas = page_canvas(root, &m.commit)?;
     Ok(Setup { recipe, ova, canvas, bundle: cache::sha256_text(&sums) })
+}
+
+/// What the update command did inside a tester machine (C-293): the shipped disk booted
+/// copy-on-write on VMware's devices, a newer release's bundle handed in on a disk, the command run
+/// at the serial console as a tester runs it, then run again on the same bundle.
+#[derive(Debug)]
+pub struct UpdateProof {
+    /// The serial console, the login and every command's output on it.
+    pub console: String,
+    /// The plant read from the host after the update.
+    pub plant: crate::together::Report,
+    /// The shipped disk's SHA-256 before and after.
+    pub before: String,
+    pub after: String,
+}
+
+/// The lines the proof's commands print, each marker split by quotes in what is typed so the
+/// console's echo of a command never reads as its output.
+fn marked(console: &str, marker: &str) -> Vec<String> {
+    console.lines().filter_map(|l| l.trim_end().strip_prefix(&format!("ALFORGE-{marker} ")).map(str::to_string)).collect()
+}
+
+/// Boots the disk of `vmdk` copy-on-write with `newer` (a release's bundle archive) on a data disk,
+/// logs in on the serial console as the recipe's user, and runs the update command on it, then
+/// again on the same bundle; what each printed is read back from the console, and the plant from
+/// the host.
+pub fn prove_update(r: &Recipe, vmdk: &Path, newer: &Path, work: &Path) -> Result<UpdateProof, VmError> {
+    std::fs::create_dir_all(work)?;
+    let name = newer.file_name().and_then(|n| n.to_str()).ok_or_else(|| VmError::Io(std::io::Error::other("the bundle has no file name")))?.to_string();
+    let handed = work.join("update.tar");
+    vm::run_clean("tar", &["-cf", &handed.display().to_string(), "-C", &newer.parent().unwrap_or(Path::new(".")).display().to_string(), &name], None)?;
+    let before = cache::sha256(vmdk)?;
+    let port = vm::free_port()?;
+    let console = work.join("update-console.log");
+    let mut m = Vm::start(&Spec {
+        disk: vmdk.to_path_buf(),
+        hardware: Hardware::Vmware,
+        cpus: r.machine.cpus,
+        memory_mb: r.machine.memory_mb,
+        seed: None,
+        data: vec![DataDisk { file: handed.clone(), serial: "alforge-update".into(), writable: false }],
+        forwards: vec![(port, r.machine.supervisao_port)],
+        snapshot: true,
+        mac: Some(PROOF_MAC.into()),
+        qmp: None,
+        console: console.clone(),
+        serial_in: true,
+    })?;
+    let u = &r.machine.user;
+    let pw = &r.machine.password;
+    m.wait_for("login:", Duration::from_secs(300))?;
+    // The plant running from the boot before anything is typed.
+    let _ = crate::together::read_plant(([127, 0, 0, 1], port).into(), Duration::from_secs(300), Duration::from_secs(2));
+    m.type_line(u)?;
+    m.wait_for("Password:", Duration::from_secs(60))?;
+    m.type_line(pw)?;
+    m.wait_for(&format!("{u}@"), Duration::from_secs(60))?;
+    let sudo = format!("echo '{pw}' | sudo -S -p ''");
+    // The plant's files as the tester holds them: the ones the release shipped, at their place in
+    // the home folder (what the bench and supervisão write beside them at run time is theirs).
+    let plant_sum = "$(cd ~/planta && xargs sha256sum < /tmp/plant-files | sha256sum | cut -c1-64)";
+    for line in [
+        // The kernel's messages off this console, so no line of theirs splits one of the proof's.
+        format!("{sudo} dmesg -n 1; (cd /opt/veredas/current/planta && find . -type f | sort) > /tmp/plant-files; echo \"ALFORGE-\"\"PLANT-BEFORE {plant_sum}\""),
+        format!("{sudo} tar -xf /dev/disk/by-id/virtio-alforge-update -C /tmp; {sudo} veredas-atualizar /tmp/{name}; echo \"ALFORGE-\"\"UPDATE-EXIT $?\""),
+    ] {
+        m.type_line(&line)?;
+    }
+    m.wait_for("ALFORGE-UPDATE-EXIT ", Duration::from_secs(300))?;
+    // The services restarted on the new release: what each running executable is, the boot's
+    // check of the release `current` now names, the plant's files, and the command again.
+    std::thread::sleep(Duration::from_secs(10));
+    for line in [
+        "echo \"ALFORGE-\"\"CURRENT $(readlink /opt/veredas/current)\"; echo \"ALFORGE-\"\"RELEASES $(ls /opt/veredas | tr '\\n' ' ')\"".to_string(),
+        "for p in $(pgrep -f 'bin/veredas-(maquinar|supervisao) '); do e=$(readlink /proc/$p/exe); case $e in /opt/veredas/*) echo \"ALFORGE-\"\"EXE $e\";; esac; done".to_string(),
+        format!("{sudo} /usr/local/libexec/veredas-verifica | sed 's/^/ALFORGE-CHECK /'; echo \"ALFORGE-\"\"PLANT-AFTER {plant_sum}\""),
+        format!("{sudo} veredas-atualizar /tmp/{name}; echo \"ALFORGE-\"\"AGAIN-EXIT $?\""),
+    ] {
+        m.type_line(&line)?;
+    }
+    m.wait_for("ALFORGE-AGAIN-EXIT ", Duration::from_secs(300))?;
+    let plant = crate::together::read_plant(([127, 0, 0, 1], port).into(), Duration::from_secs(300), Duration::from_secs(2));
+    let text = m.console();
+    m.kill();
+    let after = cache::sha256(vmdk)?;
+    let _ = std::fs::remove_file(&handed);
+    Ok(UpdateProof { console: text, plant, before, after })
+}
+
+/// What an [`UpdateProof`] shows wrong, each named: release `newer` (on `target`) installed by the
+/// command beside `release`, `current` moved to it, both services running its executables, the
+/// boot's check passing on it, the plant's files unchanged, the same bundle refused again, the
+/// plant served from the host, the shipped disk unchanged.
+pub fn update_faults(p: &UpdateProof, release: &str, newer: &str, target: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let old_dir = format!("veredas-{release}-{target}");
+    let new_dir = format!("veredas-{newer}-{target}");
+    let one = |marker: &str| marked(&p.console, marker).into_iter().next();
+    if one("UPDATE-EXIT").as_deref() != Some("0") {
+        out.push(format!("the update command did not install the bundle (it exited {})", one("UPDATE-EXIT").unwrap_or_else(|| "with nothing said".into())));
+    }
+    if one("CURRENT").as_deref() != Some(new_dir.as_str()) {
+        out.push(format!("`current` names {}, not {new_dir}", one("CURRENT").unwrap_or_else(|| "nothing".into())));
+    }
+    let releases = one("RELEASES").unwrap_or_default();
+    for d in [&old_dir, &new_dir] {
+        if !releases.split_whitespace().any(|x| x == d) {
+            out.push(format!("/opt/veredas holds no {d}"));
+        }
+    }
+    let exes = marked(&p.console, "EXE");
+    for b in ["veredas-maquinar", "veredas-supervisao"] {
+        let want = format!("/opt/veredas/{new_dir}/bin/{b}");
+        if !exes.contains(&want) {
+            out.push(format!("no running {b} is the new release's ({want}): {exes:?}"));
+        }
+    }
+    if exes.iter().any(|e| !e.starts_with(&format!("/opt/veredas/{new_dir}/"))) {
+        out.push(format!("an executable of another release still runs: {exes:?}"));
+    }
+    let check = marked(&p.console, "CHECK");
+    for line in [format!("VEREDAS-SUMS-OK {newer}"), "VEREDAS-ON-PATH ok".to_string(), "VEREDAS-ATUALIZAR ok".to_string()] {
+        if !check.contains(&line) {
+            out.push(format!("the boot's check on the new release does not say `{line}`"));
+        }
+    }
+    match (one("PLANT-BEFORE"), one("PLANT-AFTER")) {
+        (Some(b), Some(a)) if b == a && b.len() == 64 => {}
+        (b, a) => out.push(format!("the plant's files changed or were not read ({} before, {} after)", b.unwrap_or_default(), a.unwrap_or_default())),
+    }
+    if one("AGAIN-EXIT").as_deref() != Some("2") {
+        out.push(format!("the same bundle was not refused a second time (it exited {})", one("AGAIN-EXIT").unwrap_or_else(|| "with nothing said".into())));
+    }
+    out.extend(crate::together::plant_faults(&p.plant));
+    if p.before != p.after {
+        out.push("the update's boot changed the shipped disk".into());
+    }
+    out
 }

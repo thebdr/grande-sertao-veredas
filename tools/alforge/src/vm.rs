@@ -59,16 +59,36 @@ pub struct Spec {
     /// A port on the host's loopback where QEMU's monitor (QMP) listens, for a screen dump.
     pub qmp: Option<u16>,
     pub console: PathBuf,
+    /// The serial console as a socket QEMU waits on before it starts the guest, so the host can
+    /// type into it ([`Vm::type_line`]) as a person at the console does; every byte the guest
+    /// writes is still copied to `console`.
+    pub serial_in: bool,
 }
 
 /// A running machine.
 pub struct Vm {
     child: Child,
     console: PathBuf,
+    /// The serial console's socket, when the spec asked for it, and its path.
+    serial: Option<(std::os::unix::net::UnixStream, PathBuf)>,
+}
+
+/// Where a machine's serial socket goes: the cache's `tmp/`, a short path (a socket's path holds
+/// at most 107 bytes), one name a machine.
+fn serial_socket() -> Result<PathBuf, VmError> {
+    let tmp = crate::cache::dir()?.join("tmp");
+    std::fs::create_dir_all(&tmp)?;
+    let nonce = crate::cache::sha256_text(&format!("{:?}{:?}", std::time::SystemTime::now(), std::thread::current().id()));
+    Ok(tmp.join(format!("s-{}.sock", &nonce[..12])))
 }
 
 /// The arguments QEMU is run with for a spec.
 pub fn args(spec: &Spec) -> Vec<String> {
+    args_with(spec, None)
+}
+
+/// [`args`], the serial console on `socket` when one is given.
+fn args_with(spec: &Spec, socket: Option<&Path>) -> Vec<String> {
     let mut a: Vec<String> = vec!["-accel", "kvm", "-cpu", "host", "-nodefaults", "-no-user-config"]
         .into_iter()
         .map(String::from)
@@ -122,8 +142,18 @@ pub fn args(spec: &Spec) -> Vec<String> {
         a.push("-qmp".into());
         a.push(format!("tcp:127.0.0.1:{p},server=on,wait=off"));
     }
-    a.push("-serial".into());
-    a.push(format!("file:{}", spec.console.display()));
+    match socket {
+        Some(s) => {
+            a.push("-chardev".into());
+            a.push(format!("socket,id=ser0,path={},server=on,wait=on", s.display()));
+            a.push("-serial".into());
+            a.push("chardev:ser0".into());
+        }
+        None => {
+            a.push("-serial".into());
+            a.push(format!("file:{}", spec.console.display()));
+        }
+    }
     a
 }
 
@@ -135,15 +165,56 @@ impl Vm {
         let _ = std::fs::remove_file(&spec.console);
         let tmp = crate::cache::dir()?.join("tmp");
         std::fs::create_dir_all(&tmp)?;
-        let child = Command::new("qemu-system-x86_64")
-            .args(args(spec))
+        let socket = if spec.serial_in { Some(serial_socket()?) } else { None };
+        let mut child = Command::new("qemu-system-x86_64")
+            .args(args_with(spec, socket.as_deref()))
             .env("TMPDIR", &tmp)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|source| VmError::Spawn { program: "qemu-system-x86_64".into(), source })?;
-        Ok(Vm { child, console: spec.console.clone() })
+        let Some(path) = socket else {
+            return Ok(Vm { child, console: spec.console.clone(), serial: None });
+        };
+        // QEMU listens before it starts the guest and waits for this one connection.
+        let start = Instant::now();
+        let stream = loop {
+            match std::os::unix::net::UnixStream::connect(&path) {
+                Ok(s) => break s,
+                Err(e) => {
+                    if child.try_wait()?.is_some() || start.elapsed() > Duration::from_secs(30) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(VmError::Io(std::io::Error::other(format!("the serial console's socket {} never answered: {e}", path.display()))));
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        };
+        let mut from = stream.try_clone()?;
+        let console = spec.console.clone();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&console) else { return };
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = from.read(&mut buf) {
+                if n == 0 || f.write_all(&buf[..n]).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Vm { child, console: spec.console.clone(), serial: Some((stream, path)) })
+    }
+
+    /// Types `text` and Enter at the serial console, as a person at it does.
+    pub fn type_line(&mut self, text: &str) -> Result<(), VmError> {
+        use std::io::Write;
+        let Some((s, _)) = self.serial.as_mut() else {
+            return Err(VmError::Io(std::io::Error::other("this machine's serial console takes no input")));
+        };
+        s.write_all(format!("{text}\r").as_bytes())?;
+        Ok(())
     }
 
     /// What the serial console holds so far, carriage returns dropped.
@@ -209,6 +280,9 @@ impl Drop for Vm {
         if let Ok(None) = self.child.try_wait() {
             let _ = self.child.kill();
             let _ = self.child.wait();
+        }
+        if let Some((_, path)) = &self.serial {
+            let _ = std::fs::remove_file(path);
         }
     }
 }

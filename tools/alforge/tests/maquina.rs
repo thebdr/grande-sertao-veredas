@@ -6,12 +6,13 @@
 //! at boot, the plant live from the first boot with nobody logged in, reached from the host, its
 //! write refused; the desktop drawn; the disk's bytes unchanged after. What only VMware proves
 //! (the import, VMware's own devices and display, the guest tools) is C-292's stated remainder.
+//! Then C-293's update command run inside that machine on a newer release's bundle.
 
 use std::path::{Path, PathBuf};
 
 use alforge::cut::{self, Options};
 use alforge::machine::Recipe;
-use alforge::{cache, maquina, together, vm};
+use alforge::{bundle, cache, maquina, together, vm};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
@@ -101,5 +102,27 @@ fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vm
     assert_eq!(proof.after, proof.before, "the proof boot changed the shipped disk");
     assert_eq!(proof.vmdk, work.join("prova/opened").join(format!("{name}-disk1.vmdk")));
     assert_eq!(cache::sha256(&proof.vmdk).unwrap(), cache::sha256(&vmdk).unwrap(), "the disk proven is the OVA's");
+
+    // C-293: the update command inside the machine. A newer release's bundle (this cut's, its
+    // release named one newer and its sums written again) handed in on a disk and installed at the
+    // serial console as a tester does, the shipped disk booted copy-on-write once more.
+    let newer = "0.0.0-trial.293";
+    let repack = work.join("newer");
+    let _ = std::fs::remove_dir_all(&repack);
+    std::fs::create_dir_all(&repack).unwrap();
+    let (old_name, new_name) = (format!("veredas-{release}-{target}"), format!("veredas-{newer}-{target}"));
+    vm::run("tar", &["-xzf", &cut.bundle.display().to_string(), "-C", &repack.display().to_string()], None).unwrap();
+    std::fs::rename(repack.join(&old_name), repack.join(&new_name)).unwrap();
+    let manifest = repack.join(&new_name).join("release.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    assert_eq!(text.matches(&format!("release = \"{release}\"")).count(), 1);
+    std::fs::write(&manifest, text.replace(&format!("release = \"{release}\""), &format!("release = \"{newer}\""))).unwrap();
+    bundle::write_sums(&repack.join(&new_name)).unwrap();
+    let newer_bundle = repack.join(format!("{new_name}.tar.gz"));
+    bundle::pack(&repack, &new_name, "1795300000", &newer_bundle).unwrap();
+    let update = maquina::prove_update(&setup.recipe, &proof.vmdk, &newer_bundle, &work.join("atualizar")).unwrap();
+    assert_eq!(maquina::update_faults(&update, release, newer, target), Vec::<String>::new(), "{}", update.console);
+    assert!(update.console.contains(&format!("veredas-atualizar: release {release} -> {newer}")), "{}", update.console);
+    assert!(update.console.contains(&format!("release {newer} is not newer than the installed {newer}")), "{}", update.console);
     let _ = std::fs::remove_dir_all(&work);
 }

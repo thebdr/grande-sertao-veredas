@@ -84,7 +84,7 @@ fn proof(console: &str, share: f64, after: &str) -> Proof {
 #[test]
 fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     let card = format!("VEREDAS-CARD ens4 {}", maquina::PROOF_MAC);
-    let promised = "VEREDAS-BUNDLE abababababababababababababababababababababababababababababababab\nVEREDAS-PACKAGES ok\nVEREDAS-SERVICES-USER ok\nVEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
+    let promised = "VEREDAS-BUNDLE abababababababababababababababababababababababababababababababab\nVEREDAS-PACKAGES ok\nVEREDAS-SERVICES-USER ok\nVEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\nVEREDAS-ATUALIZAR ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
     let good = format!("vmw_pvscsi\nvmxnet3\nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
     assert_eq!(maquina::proof_faults(&proof(&good, 0.3, "a"), "2.0.0"), Vec::<String>::new());
     let no_card = good.replace(&card, "VEREDAS-CARD ens4 52:54:00:12:34:56");
@@ -123,6 +123,7 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
         ("VEREDAS-SSH absent", "VEREDAS-SSH present", "the machine holds an SSH server (no `VEREDAS-SSH absent` on the console)"),
         ("VEREDAS-CLOUD-INIT disabled", "VEREDAS-CLOUD-INIT enabled", "cloud-init is not disabled (no `VEREDAS-CLOUD-INIT disabled` on the console)"),
         ("VEREDAS-ON-PATH ok", "VEREDAS-ON-PATH missing veredas-portal", "the release's executables are not all on the PATH (no `VEREDAS-ON-PATH ok` on the console)"),
+        ("VEREDAS-ATUALIZAR ok", "VEREDAS-ATUALIZAR missing", "the update command is not installed (no `VEREDAS-ATUALIZAR ok` on the console)"),
         (
             "systemd[1]: Initializing machine ID from random generator.",
             "systemd[1]: Detected first boot.",
@@ -152,10 +153,16 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
     // before a login starts on the serial console (whose agetty hangs the line up).
     let r = Recipe::load_file(&repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     assert_eq!(r.machine.remove, ["openssh-server"]);
-    let s = maquina::provision_script(&r, "veredas-9.9.9-x86_64-unknown-linux-gnu", "9.9.9");
+    let s = maquina::provision_script(&r, "veredas-9.9.9-x86_64-unknown-linux-gnu");
     for line in [
         "if [ -n \"openssh-server\" ]; then apt-get purge -y openssh-server; fi",
+        // `current` a relative link, as the update command moves it (C-293).
+        "ln -sfn veredas-9.9.9-x86_64-unknown-linux-gnu /opt/veredas/current",
         "for b in /opt/veredas/current/bin/*; do ln -sf \"$b\" /usr/local/bin/; done",
+        "chmod 755 /usr/local/sbin/veredas-atualizar",
+        // The boot's check names the release `current` names, which an update moves.
+        "rel=$(sed -n 's/^release = \"\\(.*\\)\"$/\\1/p' release.toml)",
+        "if sha256sum --quiet -c SHA256SUMS; then echo \"VEREDAS-SUMS-OK $rel\"; else echo \"VEREDAS-SUMS-FAILED $rel\"; fi",
         "touch /etc/cloud/cloud-init.disabled",
         "truncate -s 0 /etc/machine-id",
         "echo \"VEREDAS-BUNDLE $(sha256sum SHA256SUMS | cut -d' ' -f1)\"",
@@ -163,6 +170,18 @@ fn the_provisioning_is_judged_finished_and_trimmed_and_its_boot_check_said_befor
     ] {
         assert!(s.lines().any(|l| l == line), "{line}");
     }
+    // The update command installed as it ships, byte for byte, and Python 3, which it runs on, a
+    // package of the recipe's.
+    let installed = &s[s.find("cat > /usr/local/sbin/veredas-atualizar <<'ATUALIZAR'\n").unwrap() + "cat > /usr/local/sbin/veredas-atualizar <<'ATUALIZAR'\n".len()..];
+    assert_eq!(&installed[..installed.find("ATUALIZAR\n").unwrap()], maquina::ATUALIZAR);
+    assert!(!maquina::ATUALIZAR.lines().any(|l| l == "ATUALIZAR"), "the heredoc's end never inside the script");
+    assert!(r.machine.packages.iter().any(|p| p == "python3"), "{:?}", r.machine.packages);
+    // The release's sums read by the boot's check from the release itself.
+    let rel_line = s.lines().find(|l| l.starts_with("rel=")).unwrap();
+    let probe = tempfile::tempdir().unwrap();
+    std::fs::write(probe.path().join("release.toml"), "# A suite release\nformat = \"veredas-release\"\nversion = 1\nrelease = \"2.0.0-alpha.7\"\n\n[[component]]\nname = \"veredas-core\"\nversion = \"2.0.0\"\n").unwrap();
+    let said = std::process::Command::new("sh").arg("-c").arg(format!("{rel_line}; echo \"$rel\"")).current_dir(probe.path()).output().unwrap();
+    assert_eq!(String::from_utf8(said.stdout).unwrap(), "2.0.0-alpha.7\n");
     // The boot's check asks the package database for every package the recipe installs, the guest
     // tools among them (their working is VMware's to show; their presence is not).
     assert!(r.machine.packages.iter().any(|p| p == "open-vm-tools"), "{:?}", r.machine.packages);

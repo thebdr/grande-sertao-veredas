@@ -344,9 +344,21 @@ passed on 2026-11-23.
   Published nowhere yet (Q436, ruled "OVA" and "Nowhere yet"): it is built and kept on this
   machine and the architect hands it over, the one to try in `/home/thebdr/veredas-entrega/`,
   outside the repository and every build folder.
-- **Updates** (Q437): meanwhile a new OVA per release, the machine disposable; then an update
-  command in the machine that fetches a newer bundle, checks its sums and its manifest, installs it
-  beside the old one under `/opt/veredas/` and moves `current`, leaving the plant's files alone.
+- **Updates** (Q437, ruled "Update command"): `sudo veredas-atualizar <bundle.tar.gz>` in the
+  machine (C-293), a Python 3 script the provisioning installs in `/usr/local/sbin`. Nothing is
+  published (Q436), so it fetches nothing: it takes a bundle the tester has copied into the machine
+  (dragged onto the desktop, or downloaded in Chromium) and prints its SHA-256 to compare with the
+  one handed over; once a place is named it can fetch from it. It installs the bundle only if
+  every file matches `SHA256SUMS`, its manifest is a `veredas-release` of the machine's target,
+  newer than the installed release (SemVer's precedence) and naming exactly the executables in
+  `bin/`, and every executable finds its libraries on the machine (`ldd`); then it moves it beside
+  the old one under `/opt/veredas/`, points `current` at it in one step (a relative link, renamed
+  over the old one), relinks the PATH (a link for each new executable, none left for one it
+  dropped) and restarts the bench and supervisão on it. The plant's files in the home folder are
+  left as they are; the new release's own plant is in `/opt/veredas/current/planta`. Anything
+  refused leaves the machine as it was, one update runs at a time (the release's folder locked),
+  and a restart that fails says how to point `current` back. The boot's check names the release
+  `current` names, and says the command is there (`VEREDAS-ATUALIZAR ok`).
 
 ### What a cut and a machine cost in disk, and what is kept
 Measured on release 2.0.0-alpha.1 (2026-11-22):
@@ -441,3 +453,7 @@ Recorded as the work meets them.
   that was no longer there, and the cut stopped at `qemu-img create`. A cached builder now has its
   backing file rewritten to the base the cache holds (`builder::reuse`, `qemu-img rebase -u`: its
   key holds the base's digest, so the base is the one it was made on).
+- **Typing into a machine with no SSH**: the serial console as a socket QEMU waits on
+  (`server=on,wait=on`, under the cache's `tmp/`: a socket's path holds at most 107 bytes), a
+  login as the recipe's user, and each marker typed split by quotes so the echo of a command never
+  reads as its output (C-293's proof).
