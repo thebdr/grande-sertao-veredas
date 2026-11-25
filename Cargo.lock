@@ -4654,6 +4654,7 @@ dependencies = [
  "chrono",
  "ethernetip-connections",
  "ethernetip-core",
+ "proc-macro2",
  "regex",
  "serde",
  "serde_json",

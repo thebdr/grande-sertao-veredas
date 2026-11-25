@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
+
 fn manifest() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")
 }
@@ -312,15 +314,6 @@ fn main() {
 /// A Rust source with its comments and the contents of its string and character literals blanked
 /// out, so only code is left to read.
 fn code_only(src: &str) -> String {
-    lexed(src, false)
-}
-
-/// A Rust source with its comments taken out and its literals kept as written.
-fn without_comments(src: &str) -> String {
-    lexed(src, true)
-}
-
-fn lexed(src: &str, keep_literals: bool) -> String {
     let c: Vec<char> = src.chars().collect();
     let mut out = String::with_capacity(src.len());
     let mut i = 0;
@@ -373,11 +366,7 @@ fn lexed(src: &str, keep_literals: bool) -> String {
                 j += 1;
             }
             let end = (j + 1 + hashes).min(c.len());
-            if keep_literals {
-                out.extend(&c[i..end]);
-            } else {
-                out.push_str("\"\"");
-            }
+            out.push_str("\"\"");
             i = end;
         } else if c[i] == '"' {
             let mut j = i + 1;
@@ -388,30 +377,19 @@ fn lexed(src: &str, keep_literals: bool) -> String {
                 j += 1;
             }
             let end = (j + 1).min(c.len());
-            if keep_literals {
-                out.extend(&c[i..end]);
-            } else {
-                out.push_str("\"\"");
-            }
+            out.push_str("\"\"");
             i = end;
         } else if c[i] == '\'' && c.get(i + 1) == Some(&'\\') {
-            let mut j = i + 2;
+            // The character after the backslash is the literal's own, a quote too (`'\''`).
+            let mut j = i + 3;
             while j < c.len() && c[j] != '\'' {
                 j += 1;
             }
             let end = (j + 1).min(c.len());
-            if keep_literals {
-                out.extend(&c[i..end]);
-            } else {
-                out.push_str("' '");
-            }
+            out.push_str("' '");
             i = end;
         } else if c[i] == '\'' && c.get(i + 2) == Some(&'\'') {
-            if keep_literals {
-                out.extend(&c[i..i + 3]);
-            } else {
-                out.push_str("' '");
-            }
+            out.push_str("' '");
             i += 3;
         } else {
             out.push(c[i]);
@@ -665,184 +643,52 @@ fn each_form_holds_the_layers_it_promises() {
     }
 }
 
-/// Every feature gate in core's source, as it is ordinarily written, is one of the expected set:
-/// `net` on the four plant-facing modules and the crate root's two re-exports, `demo-server` on the
-/// demo plant, each master on its own module; and nothing hides an item from rustdoc. A gate
-/// written another way (a comment inside it, a macro building it, a file pulled in by `include!`
-/// or `#[path]`) escapes a reading of the text; the compiler's own view, the next test, is what
-/// closes the class for every item rustdoc sees.
+/// Every feature gate in core's source is one of the expected list: `net` on the four plant-facing
+/// modules and the crate root's two re-exports, `demo-server` on the demo plant, each master on its
+/// own module. The sources are read as Rust tokens, so no spelling of a gate reads otherwise (split
+/// over lines, a comment inside it, a macro carrying its words): the identifier `feature` stands
+/// only in an attribute, as a gate's `feature = "..."`, each listed with its attribute and the item
+/// it stands on; `doc` only as an attribute's name, and no attribute holds `hidden`, `path` or a
+/// macro's `$`, so nothing hides an item from rustdoc and no module comes from another file; no
+/// identifier names what pulls in code or a value from elsewhere (`include`, `env` and their kin),
+/// under its own name or imported under another; and core has no build script. That rustc reads no
+/// other file for core and no environment variable, in each form and profile, the probe's builds
+/// show from the compiler's own dep-info.
 #[test]
 fn every_feature_gate_is_where_it_belongs() {
+    // Core's sources as tokens, read by proc-macro2 (the lexer syn reads Rust with): comments
+    // gone (a doc comment is its `doc` attribute), every literal whole, a raw identifier (`r#doc`)
+    // its name. A list, not a set: a gate written twice with the same key is counted twice.
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = vec![src.clone()];
-    // A list, not a set: a gate written twice with the same key is counted twice.
     let mut gates: Vec<String> = Vec::new();
-    while let Some(path) = files.pop() {
-        if path.is_dir() {
-            files.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
-            continue;
-        }
-        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-            continue;
-        }
-        // The code alone, comments taken out, every attribute joined onto one line, so a gate
-        // split by a comment or a line break reads as one.
-        let code = without_comments(&std::fs::read_to_string(&path).unwrap());
-        let mut text = String::with_capacity(code.len());
-        let mut depth = 0usize;
-        let chars: Vec<char> = code.chars().collect();
-        for (k, ch) in chars.iter().enumerate() {
-            let opens = (k > 0 && chars[k - 1] == '#')
-                || (k > 1 && chars[k - 1] == '!' && chars[k - 2] == '#');
-            match ch {
-                '[' if depth > 0 || opens => depth += 1,
-                ']' if depth > 0 => depth -= 1,
-                '\n' if depth > 0 => {
-                    text.push(' ');
-                    continue;
-                }
-                _ => {}
-            }
-            text.push(*ch);
-        }
-        let rel = path
-            .strip_prefix(&src)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/");
-        let lines: Vec<&str> = text.lines().collect();
-        for (n, line) in lines.iter().enumerate() {
-            // A mention of a feature in a cfg, an attribute or the macro; and what would make
-            // rustdoc see an item otherwise than the build (`doc(hidden)`, a cfg on `doc`), of
-            // which core has none.
-            // A raw identifier (`r#doc`) is the identifier itself.
-            let squeezed: String = line
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .collect::<String>()
-                .replace("r#", "");
-            let hides = squeezed.contains("doc(hidden")
-                || ["cfg(doc", "(doc)", "(doc,", ",doc)", ",doc,"]
-                    .iter()
-                    .any(|p| squeezed.contains(p));
-            if squeezed.contains("feature=") || squeezed.contains("cfg!(") || hides {
-                let gated = lines[n + 1..]
-                    .iter()
-                    .map(|l| l.trim())
-                    .find(|l| !l.starts_with("#[") && !l.starts_with("//"))
-                    .unwrap_or("");
-                let item: String = gated
-                    .split(['{', ';'])
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                gates.push(format!("{rel}: {squeezed} -> {item}"));
-            }
-        }
-    }
-    // The tokens a gate is made of, read in the code alone (comments and literals blanked): the
-    // identifier `feature` only as a gate's `feature = ..`, so no macro carries it as a token to
-    // a cfg it builds; `doc` only right after `#[` or `#![`; and no cfg of the build profile
-    // (`debug_assertions`, `overflow_checks`, a cfg on `panic`), so a release build's forms are
-    // the development build's.
     let mut stray: Vec<String> = Vec::new();
-    let mut files = vec![src.clone()];
-    while let Some(path) = files.pop() {
-        if path.is_dir() {
-            files.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
-            continue;
-        }
-        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-            continue;
-        }
+    for path in core_sources() {
         let rel = path
             .strip_prefix(&src)
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        let code: Vec<char> = code_only(&std::fs::read_to_string(&path).unwrap())
-            .replace("r#", "")
-            .chars()
+        let text = std::fs::read_to_string(&path).unwrap();
+        let tokens: Vec<TokenTree> = text
+            .parse::<TokenStream>()
+            .unwrap_or_else(|e| panic!("{rel} does not read as Rust tokens: {e}"))
+            .into_iter()
             .collect();
-        let mut k = 0;
-        while k < code.len() {
-            let word_char = |c: char| c.is_alphanumeric() || c == '_';
-            if !word_char(code[k]) || (k > 0 && word_char(code[k - 1])) {
-                k += 1;
-                continue;
-            }
-            let start = k;
-            while k < code.len() && word_char(code[k]) {
-                k += 1;
-            }
-            let word: String = code[start..k].iter().collect();
-            let after = code[k..].iter().find(|c| !c.is_whitespace()).copied();
-            let before: String = code[..start]
-                .iter()
-                .rev()
-                .filter(|c| !c.is_whitespace())
-                .take(2)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect();
-            // A macro that names `cfg` in its body builds a gate the audit cannot read.
-            if word == "macro_rules" {
-                let open = code[k..].iter().position(|c| matches!(c, '{' | '(' | '['));
-                if let Some(o) = open {
-                    let (opener, closer) = match code[k + o] {
-                        '{' => ('{', '}'),
-                        '(' => ('(', ')'),
-                        _ => ('[', ']'),
-                    };
-                    let mut depth = 0usize;
-                    let mut end = k + o;
-                    for (q, c) in code[k + o..].iter().enumerate() {
-                        if *c == opener {
-                            depth += 1;
-                        } else if *c == closer {
-                            depth -= 1;
-                            if depth == 0 {
-                                end = k + o + q;
-                                break;
-                            }
-                        }
-                    }
-                    let body: String = code[k + o..=end].iter().collect();
-                    let names_cfg = body
-                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                        .any(|w| w == "cfg" || w == "cfg_attr");
-                    if names_cfg {
-                        let line = code[..start].iter().filter(|c| **c == '\n').count() + 1;
-                        stray.push(format!("{rel}:{line}: `macro_rules` naming cfg"));
-                    }
-                }
-            }
-            let wrong = match word.as_str() {
-                "feature" => after != Some('='),
-                "doc" => !before.ends_with("#[") && !before.ends_with("!["),
-                "debug_assertions" | "overflow_checks" => true,
-                // What pulls in code or a value from outside the source the audit reads.
-                "include" | "include_str" | "include_bytes" | "env" | "option_env" => {
-                    after == Some('!')
-                }
-                "path" => before.ends_with("#["),
-                "panic" => after == Some('='),
-                _ => false,
-            };
-            if wrong {
-                let line = code[..start].iter().filter(|c| **c == '\n').count() + 1;
-                stray.push(format!("{rel}:{line}: `{word}`"));
-            }
-        }
+        let mut reading = Reading {
+            rel: &rel,
+            gates: Vec::new(),
+            stray: Vec::new(),
+        };
+        reading.code(&tokens);
+        gates.extend(reading.gates);
+        stray.extend(reading.stray);
     }
     assert_eq!(
         stray,
         Vec::<String>::new(),
         "a gate's token where no gate is"
     );
-    // No build script: one could set a cfg or a value from the feature and the profile.
+    // No build script: one could set a cfg or a value from the features and the profile.
     let meta: serde_json::Value = serde_json::from_str(&cargo(&[
         "metadata",
         "--format-version",
@@ -888,6 +734,187 @@ fn every_feature_gate_is_where_it_belongs() {
     assert_eq!(gates, want);
 }
 
+/// Core's sources: every `.rs` file under `src`.
+fn core_sources() -> BTreeSet<PathBuf> {
+    let mut files = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    let mut found = BTreeSet::new();
+    while let Some(path) = files.pop() {
+        if path.is_dir() {
+            files.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            found.insert(path);
+        }
+    }
+    found
+}
+
+/// What pulls in code or a value from outside core's sources, refused as an identifier wherever it
+/// stands, so an import under another name (`use core::include as split;`) is refused too.
+const PULLS_IN: [&str; 5] = [
+    "include",
+    "include_str",
+    "include_bytes",
+    "env",
+    "option_env",
+];
+
+/// A token's identifier, a raw one (`r#doc`) read as its name.
+fn ident(t: &TokenTree) -> Option<String> {
+    match t {
+        TokenTree::Ident(i) => {
+            let s = i.to_string();
+            Some(s.strip_prefix("r#").map(str::to_string).unwrap_or(s))
+        }
+        _ => None,
+    }
+}
+
+/// Tokens as one line of text, a space only between two words (identifiers, literals):
+/// `#[cfg(feature="net")]`, `pub use source::`.
+fn render(tokens: &[TokenTree]) -> String {
+    let mut out = String::new();
+    let mut word_before = false;
+    for t in tokens {
+        let (text, word) = match t {
+            TokenTree::Ident(_) => (ident(t).unwrap(), true),
+            TokenTree::Literal(l) => (l.to_string(), true),
+            TokenTree::Punct(p) => (p.as_char().to_string(), false),
+            TokenTree::Group(g) => {
+                let (open, close) = match g.delimiter() {
+                    Delimiter::Parenthesis => ("(", ")"),
+                    Delimiter::Bracket => ("[", "]"),
+                    Delimiter::Brace => ("{", "}"),
+                    Delimiter::None => ("", ""),
+                };
+                let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                (format!("{open}{}{close}", render(&inner)), false)
+            }
+        };
+        if word && word_before {
+            out.push(' ');
+        }
+        out.push_str(&text);
+        word_before = word;
+    }
+    out
+}
+
+/// Where an attribute that starts at `k` (`#[..]` or `#![..]`) ends: the index of its brackets.
+fn attribute_end(tokens: &[TokenTree], k: usize) -> Option<usize> {
+    match tokens.get(k)? {
+        TokenTree::Punct(p) if p.as_char() == '#' => {}
+        _ => return None,
+    }
+    let at = match tokens.get(k + 1)? {
+        TokenTree::Punct(q) if q.as_char() == '!' => k + 2,
+        _ => k + 1,
+    };
+    match tokens.get(at)? {
+        TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket => Some(at),
+        _ => None,
+    }
+}
+
+/// One file's tokens read: the gates found, each keyed by its attribute and the item it stands
+/// on, and the tokens that stand where no gate may.
+struct Reading<'a> {
+    rel: &'a str,
+    gates: Vec<String>,
+    stray: Vec<String>,
+}
+
+impl Reading<'_> {
+    fn refuse(&mut self, t: &TokenTree, what: &str) {
+        let line = t.span().start().line;
+        self.stray.push(format!("{}:{line}: {what}", self.rel));
+    }
+
+    /// Tokens outside any attribute, a function's body and a macro's among them.
+    fn code(&mut self, tokens: &[TokenTree]) {
+        let mut k = 0;
+        while k < tokens.len() {
+            if let Some(end) = attribute_end(tokens, k) {
+                let TokenTree::Group(g) = &tokens[end] else {
+                    unreachable!()
+                };
+                let body: Vec<TokenTree> = g.stream().into_iter().collect();
+                // The item it stands on, past the attributes after it, up to its body or its `;`.
+                let mut n = end + 1;
+                while let Some(e) = attribute_end(tokens, n) {
+                    n = e + 1;
+                }
+                let stop = tokens[n..]
+                    .iter()
+                    .position(|t| match t {
+                        TokenTree::Group(g) => g.delimiter() == Delimiter::Brace,
+                        TokenTree::Punct(p) => p.as_char() == ';',
+                        _ => false,
+                    })
+                    .map_or(tokens.len(), |p| n + p);
+                let bang = if end == k + 2 { "!" } else { "" };
+                let key = format!(
+                    "{}: #{bang}[{}] -> {}",
+                    self.rel,
+                    render(&body),
+                    render(&tokens[n..stop])
+                );
+                self.attribute(&body, true, &key);
+                k = end + 1;
+                continue;
+            }
+            let t = &tokens[k];
+            if let TokenTree::Group(g) = t {
+                let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                self.code(&inner);
+            } else if let Some(w) = ident(t) {
+                match w.as_str() {
+                    "feature" => self.refuse(t, "`feature` outside an attribute"),
+                    "doc" => self.refuse(t, "`doc` outside an attribute"),
+                    w if PULLS_IN.contains(&w) => self.refuse(t, &format!("`{w}`")),
+                    _ => {}
+                }
+            }
+            k += 1;
+        }
+    }
+
+    /// An attribute's tokens: `top` when they are its own, not those of a group inside it.
+    fn attribute(&mut self, tokens: &[TokenTree], top: bool, key: &str) {
+        for (k, t) in tokens.iter().enumerate() {
+            match t {
+                TokenTree::Group(g) => {
+                    let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                    self.attribute(&inner, false, key);
+                }
+                TokenTree::Punct(p) if p.as_char() == '$' => {
+                    self.refuse(t, "a macro's `$` in an attribute")
+                }
+                _ => {
+                    let Some(w) = ident(t) else { continue };
+                    match w.as_str() {
+                        "feature" => {
+                            let gate = matches!(tokens.get(k + 1),
+                                    Some(TokenTree::Punct(p)) if p.as_char() == '=')
+                                && matches!(tokens.get(k + 2), Some(TokenTree::Literal(_)));
+                            if gate {
+                                self.gates.push(key.to_string());
+                            } else {
+                                self.refuse(t, "`feature` not as `feature = \"..\"`");
+                            }
+                        }
+                        "doc" if !(top && k == 0) => {
+                            self.refuse(t, "`doc` but as an attribute's name")
+                        }
+                        "hidden" | "path" => self.refuse(t, &format!("`{w}` in an attribute")),
+                        w if PULLS_IN.contains(&w) => self.refuse(t, &format!("`{w}`")),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The twenty forms core can be asked for: the plant-facing layer off, on, or on with the demo
 /// plant, each with `net` with the feature `default` or without it (a member that keeps the
 /// default features gets `default` too, and a gate may name it); each master off or on. The last
@@ -911,7 +938,8 @@ fn forms() -> Vec<Vec<&'static str>> {
 }
 
 /// A consumer crate of the test's own asking for core in `form` alone, with `main` as its source,
-/// in the build folder every consumer here shares.
+/// in the build folder every consumer here shares. Its profiles are the workspace's, so a build of
+/// it is what a member built alone gets.
 fn consumer(name: &str, form: &[&str], main: &str) -> PathBuf {
     let core = Path::new(env!("CARGO_MANIFEST_DIR"));
     let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
@@ -919,11 +947,19 @@ fn consumer(name: &str, form: &[&str], main: &str) -> PathBuf {
         .join(name);
     std::fs::create_dir_all(root.join("src")).unwrap();
     let features: Vec<String> = form.iter().map(|f| format!("{f:?}")).collect();
+    let workspace: toml::Table =
+        toml::from_str(&std::fs::read_to_string(core.join("../../Cargo.toml")).unwrap()).unwrap();
+    let profiles = toml::to_string(&toml::Table::from_iter(
+        workspace
+            .get("profile")
+            .map(|p| ("profile".to_string(), p.clone())),
+    ))
+    .unwrap();
     std::fs::write(
         root.join("Cargo.toml"),
         format!(
             "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
-             [workspace]\n\n[dependencies]\nveredas-core = {{ path = {:?}, default-features = false, features = [{}] }}\n",
+             [workspace]\n\n[dependencies]\nveredas-core = {{ path = {:?}, default-features = false, features = [{}] }}\n\n{profiles}",
             core.to_str().unwrap(),
             features.join(", ")
         ),
@@ -948,7 +984,8 @@ fn capitalized_literals(source: &str) -> Vec<String> {
                 }
             }
             '\'' if chars.get(i + 1) == Some(&'\\') => {
-                i += 2;
+                // The character after the backslash is the literal's own (`'\''`).
+                i += 3;
                 while i < chars.len() && chars[i] != '\'' {
                     i += 1;
                 }
@@ -1011,17 +1048,19 @@ fn capitalized_literals(source: &str) -> Vec<String> {
 }
 
 /// The slim layer behaves the same in every form: a probe crate asking for core in each of the
-/// twenty forms alone, run, calls every public function and reads every public table of `schema`,
-/// `rng` and `state` (bar the PCG32's seeding from entropy) on the inputs listed here and prints
-/// what each answers. That covers every stamp and check of a set of headers with the refusals'
-/// texts; every state line of core's own state-text tests read, written back and asked its state,
-/// reasons, health and conditions; every health and maintenance request; and PCG32 draws from
-/// fixed seeds with the edges of each range. All twenty must print the same, so the form core's
-/// own tests run in (every feature) speaks for each. A gate that changes what an item does
-/// without changing what rustdoc renders of it (a constant's value, a derive's attribute, a
-/// function's body) shows here as a form that prints otherwise, for these calls and inputs. For
-/// the plant-facing layer and the masters, core's own tests hold their behaviour in the merged
-/// form alone.
+/// twenty forms alone, built in the development and the release profile as the workspace sets them
+/// and run, calls every public function and reads every public table of `schema`, `rng` and
+/// `state` (bar the PCG32's seeding from entropy) on the inputs listed here and prints what each
+/// answers. That covers every stamp and check of a set of headers with the refusals' texts; every
+/// state line of core's own state-text tests read, written back and asked its state, reasons,
+/// health and conditions; every health and maintenance request; and PCG32 draws from fixed seeds
+/// with the edges of each range. All forty runs must print what the merged form's development
+/// build prints, the form and build core's own tests run in, so it speaks for each. A gate that
+/// changes what an item does without changing what rustdoc renders of it (a constant's value, a
+/// derive's attribute, a function's body), in one profile or both, shows here as a run that prints
+/// otherwise, for these calls and inputs. Each build's dep-info, rustc's own list of what it read
+/// to compile core, names core's sources alone and no environment variable. For the plant-facing
+/// layer and the masters, core's own tests hold their behaviour in the merged form alone.
 #[test]
 fn the_slim_layer_behaves_the_same_in_every_form() {
     let core = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -1185,49 +1224,129 @@ fn main() {{
 "##,
         lines = lines.join(",\n")
     );
+    let sources = core_sources();
+    // The merged form's development build first, the one core's own tests run in: it speaks for
+    // the forty, each compared with it as soon as it has run.
     let forms = forms();
-    let mut printed = Vec::new();
-    for (n, form) in forms.iter().enumerate() {
+    let order = std::iter::once(forms.len() - 1).chain(0..forms.len() - 1);
+    let mut merged: Option<String> = None;
+    for n in order {
+        let form = &forms[n];
         let root = consumer(&format!("probe-{n}"), form, &main);
-        let out = Command::new(env!("CARGO"))
-            .args(["run", "--offline", "--quiet", "--manifest-path"])
-            .arg(root.join("Cargo.toml"))
-            .env(
-                "CARGO_TARGET_DIR",
-                Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check"),
-            )
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "the probe of {form:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        // What it writes to stderr is part of what it does.
-        printed.push(format!(
-            "{}\n-- stderr --\n{}",
-            String::from_utf8(out.stdout).unwrap(),
-            String::from_utf8(out.stderr).unwrap()
-        ));
-    }
-    let merged = printed.last().unwrap();
-    assert!(
-        merged.lines().count() > 400,
-        "{} lines",
-        merged.lines().count()
-    );
-    assert!(merged.contains("line \"RUN\" = ") && merged.contains("UnknownVersion"));
-    for (form, out) in forms.iter().zip(&printed) {
-        if out != merged {
-            let first = out
-                .lines()
-                .zip(merged.lines())
-                .find(|(a, b)| a != b)
-                .map(|(a, b)| format!("{a}\n  where every feature prints\n{b}"))
-                .unwrap_or_else(|| "a different number of lines".into());
-            panic!("the slim layer in {form:?} behaves otherwise:\n{first}");
+        // The development build and the release build, each as the workspace's profile sets it.
+        for profile in ["dev", "release"] {
+            let (exe, dep_info) = probe_build(&root, profile);
+            // What rustc read to compile core in this form: its sources and nothing else, no
+            // other file and no environment variable, as the compiler's dep-info lists them.
+            let deps = std::fs::read_to_string(&dep_info).unwrap();
+            for line in deps.lines() {
+                assert!(
+                    !line.starts_with("# env-dep:"),
+                    "core in {form:?} ({profile}) reads the environment: {line}"
+                );
+                if line.starts_with('#') || line.trim().is_empty() {
+                    continue;
+                }
+                let read = match line.split_once(": ") {
+                    Some((_, read)) => read.to_string(),
+                    None => line.trim_end_matches(':').to_string(),
+                };
+                for file in read.split_whitespace() {
+                    let file = std::fs::canonicalize(root.join(file)).unwrap();
+                    assert!(
+                        sources
+                            .iter()
+                            .any(|s| std::fs::canonicalize(s).unwrap() == file),
+                        "core in {form:?} ({profile}) reads {} beyond its sources",
+                        file.display()
+                    );
+                }
+            }
+            let out = Command::new(&exe).output().unwrap();
+            assert!(
+                out.status.success(),
+                "the probe of {form:?} ({profile}): {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            // What it writes to stderr is part of what it does.
+            let printed = format!(
+                "{}\n-- stderr --\n{}",
+                String::from_utf8(out.stdout).unwrap(),
+                String::from_utf8(out.stderr).unwrap()
+            );
+            let Some(merged) = &merged else {
+                assert!(
+                    printed.lines().count() > 400,
+                    "{} lines",
+                    printed.lines().count()
+                );
+                assert!(printed.contains("line \"RUN\" = ") && printed.contains("UnknownVersion"));
+                merged = Some(printed);
+                continue;
+            };
+            if printed != *merged {
+                let first = printed
+                    .lines()
+                    .zip(merged.lines())
+                    .find(|(a, b)| a != b)
+                    .map(|(a, b)| {
+                        format!("{a}\n  where every feature's development build prints\n{b}")
+                    })
+                    .unwrap_or_else(|| "a different number of lines".into());
+                panic!("the slim layer in {form:?}'s {profile} build behaves otherwise:\n{first}");
+            }
         }
     }
+}
+
+/// The probe at `root` built in `profile`, in the build folder every probe shares: its executable,
+/// and the dep-info rustc wrote compiling core for it.
+fn probe_build(root: &Path, profile: &str) -> (PathBuf, PathBuf) {
+    let out = Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--offline",
+            "--message-format=json",
+            "--profile",
+            profile,
+        ])
+        .arg("--manifest-path")
+        .arg(root.join("Cargo.toml"))
+        .env(
+            "CARGO_TARGET_DIR",
+            Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check"),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "the probe at {} ({profile}): {}",
+        root.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (mut exe, mut dep_info) = (None, None);
+    for line in String::from_utf8(out.stdout).unwrap().lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if message["reason"] != "compiler-artifact" {
+            continue;
+        }
+        if message["target"]["name"] == "veredas_core" {
+            // `deps/libveredas_core-<hash>.rlib`: its dep-info is `deps/veredas_core-<hash>.d`.
+            let lib = PathBuf::from(message["filenames"][0].as_str().unwrap());
+            let stem = lib.file_stem().unwrap().to_str().unwrap();
+            let stem = stem.strip_prefix("lib").unwrap_or(stem);
+            dep_info = Some(lib.with_file_name(format!("{stem}.d")));
+        }
+        if let Some(e) = message["executable"].as_str() {
+            exe = Some(PathBuf::from(e));
+        }
+    }
+    (
+        exe.expect("the probe's executable"),
+        dep_info.expect("core's dep-info"),
+    )
 }
 
 /// Text with its tags stripped and its whitespace collapsed, each link's title kept with its

@@ -350,6 +350,16 @@ Recorded as the port meets them.
   type) and the `notable-traits-data` tooltip script; leave both out of the comparison. Names
   are not enough: compare what each anchor renders (a field's type, a `pub(crate)`), and check
   the view against the build with a consumer per form, since rustdoc sets `cfg(doc)` (round 6).
+- **Rust is read by a lexer that is Rust's, and a profile is measured, not argued.** C-073's gate
+  audit read core's sources with a lexer of the test's own, and rounds 15 to 18 each beat it with
+  another spelling: a gate split over two lines, a raw byte string or a `'\''` it misread, a
+  built-in macro imported under another name, a `#[path]` inside a `cfg_attr`. The sources are now
+  read as tokens by proc-macro2, as supervisão's own test reads its sources, and every rule is a
+  rule on tokens: `feature` stands inside an attribute only, and the names of `include!`, `env!`
+  and their kin appear nowhere. The audit once also had to argue that a release build relates the
+  forms as the development build does. Now the probe builds and runs every form in both profiles,
+  each consumer carrying the workspace's profiles, and rustc's dep-info says which files it read.
+  The whole test took 6.4 minutes on 2026-11-25 with the probe's build folder emptied first.
 - **A copy of the tree never builds into the worktree's target.** Cargo keys a workspace
   member's artifacts by its path relative to the workspace, and judges a path package fresh by
   file times alone. A critic's copy built with `CARGO_TARGET_DIR` set to the worktree's target
