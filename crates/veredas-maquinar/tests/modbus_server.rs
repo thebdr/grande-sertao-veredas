@@ -2217,3 +2217,234 @@ mod round_7 {
         assert!(wait(Duration::from_secs(5), || server.status().refused == 5), "{:?}", server.status().refused);
     }
 }
+
+/// C-110's eighth refute round: the critic's probes (`~/.cache/veredas/critic-c110-r8/probes`),
+/// kept as pins: a request any byte of which a touched delay read withheld, the read-ahead's cap to
+/// the byte from above and below, and counting what an earlier delay read ahead.
+mod round_8 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::modbus::*;
+
+    fn config(text: &str) -> ModbusConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn wait(within: Duration, mut what: impl FnMut() -> bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            if what() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        what()
+    }
+
+    fn connect(addr: SocketAddr) -> TcpStream {
+        let s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s.set_nodelay(true).unwrap();
+        s
+    }
+
+    fn frame_p(transaction: u16, protocol: u16, pdu: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&transaction.to_be_bytes());
+        f.extend_from_slice(&protocol.to_be_bytes());
+        f.extend_from_slice(&(pdu.len() as u16 + 1).to_be_bytes());
+        f.push(1);
+        f.extend_from_slice(pdu);
+        f
+    }
+
+    fn frame(transaction: u16, pdu: &[u8]) -> Vec<u8> {
+        frame_p(transaction, 0, pdu)
+    }
+
+    const READ: [u8; 5] = [0x03, 0x00, 0x00, 0x00, 0x01];
+    /// 14 bytes on the wire: mask register 0 with AND FFFF, OR 0 (changes nothing).
+    const MASK: [u8; 7] = [0x16, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00];
+    /// 15 bytes on the wire: write one register, 0 at address 0.
+    const WRITE1: [u8; 8] = [0x10, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00];
+
+    fn read_answer(s: &mut TcpStream) -> std::io::Result<(u16, Vec<u8>)> {
+        let mut h = [0u8; 7];
+        s.read_exact(&mut h)?;
+        let length = u16::from_be_bytes([h[4], h[5]]);
+        let mut pdu = vec![0u8; length as usize - 1];
+        s.read_exact(&mut pdu)?;
+        Ok((u16::from_be_bytes([h[0], h[1]]), pdu))
+    }
+
+    fn answers_within(s: &mut TcpStream, d: Duration) -> Vec<u16> {
+        s.set_read_timeout(Some(d)).unwrap();
+        let mut got = Vec::new();
+        while let Ok((t, _)) = read_answer(s) {
+            got.push(t);
+        }
+        got
+    }
+
+    fn answered(s: &ModbusStatus) -> u64 {
+        s.answered.values().sum()
+    }
+
+    fn read_by_server(server: &ModbusHandle, t: u16) {
+        assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == t)), "transaction {t} read");
+    }
+
+    /// On the machine's lock. a request whose head was read ahead during an untouched delay and whose tail was read
+    /// while silent, during a later delay silence touched. The clause: "a request read while silent
+    /// ... never sent later". The same request read whole while silent (P1b), or split without a
+    /// delay (P1c), is withheld; this one?
+    #[test]
+    fn a_request_finished_while_silent_across_a_stretch_s_start_is_withheld() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_delay(Duration::from_millis(600));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        read_by_server(&server, 1);
+        let r3 = frame(3, &[0x06, 0x00, 0x01, 0x00, 0x33]);
+        // Request 2 whole and request 3's first 6 bytes, read ahead during request 1's delay: no silence.
+        c.write_all(&[frame(2, &READ), r3[..6].to_vec()].concat()).unwrap();
+        assert_eq!(read_answer(&mut c).unwrap().0, 1);
+        read_by_server(&server, 2);
+        std::thread::sleep(Duration::from_millis(50));
+        server.set_silent(true);
+        std::thread::sleep(Duration::from_millis(20));
+        // Request 3's last 6 bytes, sent and read while silent.
+        c.write_all(&r3[6..]).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        server.set_silent(false);
+        let got = answers_within(&mut c, Duration::from_millis(2500));
+        let s = server.status();
+        let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+        assert_eq!((got, reg, answered(&s), s.unanswered), (vec![], vec![0], 1, 2), "a request finished while silent was answered and done");
+    }
+
+    #[test]
+    fn the_same_request_read_whole_while_silent_is_withheld() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_delay(Duration::from_millis(600));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        read_by_server(&server, 1);
+        c.write_all(&frame(2, &READ)).unwrap();
+        assert_eq!(read_answer(&mut c).unwrap().0, 1);
+        read_by_server(&server, 2);
+        std::thread::sleep(Duration::from_millis(50));
+        server.set_silent(true);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&frame(3, &[0x06, 0x00, 0x01, 0x00, 0x33])).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        server.set_silent(false);
+        let got = answers_within(&mut c, Duration::from_millis(2500));
+        let s = server.status();
+        let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+        assert_eq!((got, reg, answered(&s), s.unanswered), (vec![], vec![0], 1, 2));
+    }
+
+    #[test]
+    fn the_same_request_split_around_silence_without_a_delay_is_withheld() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        let mut c = connect(server.addr);
+        let r3 = frame(3, &[0x06, 0x00, 0x01, 0x00, 0x33]);
+        c.write_all(&r3[..6]).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        server.set_silent(true);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&r3[6..]).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        server.set_silent(false);
+        let got = answers_within(&mut c, Duration::from_millis(1500));
+        let s = server.status();
+        let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+        assert_eq!((got, reg, answered(&s), s.unanswered), (vec![], vec![0], 0, 1));
+    }
+
+    /// On the machine's lock. a frame beginning exactly at byte 65536 of the read-ahead is past it (answered); the one
+    /// before, beginning at 65522, is withheld. Pins the cap from above.
+    #[test]
+    fn a_frame_beginning_at_65536_is_past_the_read_ahead() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_delay(Duration::from_millis(800));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(0, &READ)).unwrap();
+        read_by_server(&server, 0);
+        server.set_silent(true);
+        let mut behind: Vec<u8> = (1..=5459u16).flat_map(|t| frame(t, &READ)).collect();
+        behind.extend(frame(5460, &MASK));
+        behind.extend(frame(5461, &MASK));
+        assert_eq!(behind.len(), 65536);
+        behind.extend((5462..=6000u16).flat_map(|t| frame(t, &READ)));
+        behind.extend(frame(6001, &[0x06, 0x00, 0x01, 0x00, 0x44]));
+        c.write_all(&behind).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        server.set_silent(false);
+        server.set_delay(Duration::ZERO);
+        let got = answers_within(&mut c, Duration::from_secs(3));
+        let s = server.status();
+        assert_eq!(got, (5462..=6001).collect::<Vec<u16>>());
+        assert_eq!((server.registers(Table::HoldingRegister, 1, 1).unwrap(), answered(&s), s.unanswered), (vec![0x44], 540, 5462));
+    }
+
+    /// On the machine's lock. a frame beginning at byte 65535 of the read-ahead begins within it (withheld). Pins the cap
+    /// from below.
+    #[test]
+    fn a_frame_beginning_at_65535_is_within_the_read_ahead() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_delay(Duration::from_millis(800));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(0, &READ)).unwrap();
+        read_by_server(&server, 0);
+        server.set_silent(true);
+        let mut behind: Vec<u8> = (1..=5460u16).flat_map(|t| frame(t, &READ)).collect();
+        behind.extend(frame(5461, &WRITE1));
+        assert_eq!(behind.len(), 65535);
+        behind.extend((5462..=6000u16).flat_map(|t| frame(t, &READ)));
+        behind.extend(frame(6001, &[0x06, 0x00, 0x01, 0x00, 0x44]));
+        c.write_all(&behind).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        server.set_silent(false);
+        server.set_delay(Duration::ZERO);
+        let got = answers_within(&mut c, Duration::from_secs(3));
+        let s = server.status();
+        assert_eq!(got, (5463..=6001).collect::<Vec<u16>>());
+        assert_eq!((server.registers(Table::HoldingRegister, 1, 1).unwrap(), answered(&s), s.unanswered), (vec![0x44], 539, 5463));
+    }
+
+    /// On the machine's lock. the cap with 12 bytes already read ahead during an earlier, untouched delay: the touched
+    /// delay may read 65524 more; a frame beginning there is past it.
+    #[test]
+    fn the_cap_counts_what_an_earlier_delay_read_ahead() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_delay(Duration::from_millis(600));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(0, &READ)).unwrap();
+        read_by_server(&server, 0);
+        c.write_all(&[frame(1, &READ), frame(2, &READ)].concat()).unwrap();
+        assert_eq!(read_answer(&mut c).unwrap().0, 0);
+        read_by_server(&server, 1);
+        std::thread::sleep(Duration::from_millis(30));
+        server.set_silent(true);
+        let mut behind: Vec<u8> = (3..=5460u16).flat_map(|t| frame(t, &READ)).collect();
+        behind.extend(frame(5461, &MASK));
+        behind.extend(frame(5462, &MASK));
+        assert_eq!(behind.len(), 65524);
+        behind.extend((5463..=6000u16).flat_map(|t| frame(t, &READ)));
+        behind.extend(frame(6001, &[0x06, 0x00, 0x01, 0x00, 0x44]));
+        c.write_all(&behind).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        server.set_silent(false);
+        server.set_delay(Duration::ZERO);
+        let got = answers_within(&mut c, Duration::from_secs(3));
+        let s = server.status();
+        let mut want = vec![2u16];
+        want.extend(5463..=6001u16);
+        assert_eq!(got, want);
+        assert_eq!((server.registers(Table::HoldingRegister, 1, 1).unwrap(), s.unanswered), (vec![0x44], 1 + 5460));
+    }
+}

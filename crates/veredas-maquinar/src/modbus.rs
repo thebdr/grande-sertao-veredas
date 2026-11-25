@@ -971,13 +971,12 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
     // What the client sent while an answer waited out its delay, read so its close is seen.
     let mut ahead: Vec<u8> = Vec::new();
     // Where `ahead` begins in the client's stream, and the stretches of the stream read ahead
-    // during a delay silence touched (in order, from `pos` on): a request beginning in one is
-    // withheld with the answer that waited (read while silent, or not yet handed to the socket when
-    // silence began); one read ahead during an earlier delay silence did not touch is not.
+    // during a delay silence touched (in order, from `pos` on): a request any byte of which lies in
+    // one is withheld with the answer that waited (read while silent, or not yet handed to the
+    // socket when silence began); one read ahead whole during a delay silence did not touch is not.
     let mut pos: u64 = 0;
     let mut withheld: std::collections::VecDeque<(u64, u64)> = std::collections::VecDeque::new();
     loop {
-        let frame_tainted = withheld.front().is_some_and(|&(from, _)| from <= pos);
         let mut header = [0u8; 7];
         tokio::select! {
             r = fill_exact(&mut rd, &mut ahead, &mut header) => if r.is_err() { return },
@@ -997,7 +996,12 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
             r = fill_exact(&mut rd, &mut ahead, &mut pdu) => if r.is_err() { return },
             _ = ended(&mut gone, generation) => return,
         }
-        pos += u64::from(length) + 6;
+        // Judged by its whole span: the stretches ending before it are gone, so the first left
+        // overlaps it when it begins before its end (a frame begun in an untouched delay and ended
+        // in a touched one included).
+        let frame_end = pos + u64::from(length) + 6;
+        let frame_tainted = withheld.front().is_some_and(|&(from, _)| from < frame_end);
+        pos = frame_end;
         while withheld.front().is_some_and(|&(_, to)| to <= pos) {
             withheld.pop_front();
         }
