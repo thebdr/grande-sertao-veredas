@@ -1499,3 +1499,129 @@ fn a_budget_runs_that_many_instructions_and_no_more() {
     assert_eq!(m.run(5), Ok(Step::Returned));
     assert_eq!((m.steps(), m.result()), (10, &[int(Int::U8, 9)][..]));
 }
+
+// Round 9's (the critic's probe, kept): a host region never set, read by well-formed MIR; slots of a reference or
+// of the other float kind offered as values.
+
+fn uninit_at(f: FunctionId, block: u32, statement: Option<u32>, line: u32) -> Result<Vec<Scalar>, CallError> {
+    Err(CallError::Program(ProgramError { function: f, block: BlockId(block), statement, at: at(line), kind: ErrorKind::Uninit }))
+}
+
+#[test]
+fn is_none_on_a_region_never_set_is_uninit_at_its_call() {
+    // fn f(o: &Option<u8>) -> bool { o.is_none() }: _0 = Option::<u8>::is_none(copy _1) -> bb1
+    let mut b = Build::default();
+    let (u8t, boolean) = (b.int(Int::U8), b.bool());
+    let opt = b.option(u8t);
+    let sopt = b.reference(opt, false);
+    let mut fs = vec![];
+    for op in [CoreOp::OptionIsNone, CoreOp::OptionIsSome] {
+        fs.push(b.function(Function {
+            name: format!("{op:?}"),
+            params: 1,
+            locals: locals(&[boolean, sopt]),
+            blocks: vec![
+                block(vec![], Terminator::Call { callee: Callee::Core(op), args: vec![copy(1)], dest: place(0), next: BlockId(1), at: at(4) }),
+                block(vec![], ret()),
+            ],
+        }));
+    }
+    let mut m = Machine::load(b.program, &[opt]).unwrap();
+    for f in fs {
+        assert_eq!(m.call(f, &[Arg::Ref(RegionId(0))]).map(|r| r.to_vec()), uninit_at(f, 0, None, 4), "{f:?} on a region never set");
+        m.abort();
+    }
+}
+
+#[test]
+fn get_or_insert_on_a_region_never_set_is_uninit_and_writes_nothing() {
+    // fn g(o: &mut Option<Duration>, now: Duration) -> Duration { *o.get_or_insert(now) }
+    let mut b = Build::default();
+    let d = b.ty(Type::Duration);
+    let opt = b.option(d);
+    let (ropt, rd) = (b.reference(opt, true), b.reference(d, true));
+    let g = b.function(Function {
+        name: "g".into(),
+        params: 2,
+        locals: locals(&[d, ropt, d, rd]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Core(CoreOp::OptionGetOrInsert), args: vec![copy(1), copy(2)], dest: place(3), next: BlockId(1), at: at(4) }),
+            block(vec![assign(place(0), Value::Use(copy_at(proj(3, vec![Projection::Deref]))), 5)], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[opt]).unwrap();
+    let now = [int(Int::U64, 3), int(Int::U32, 0)];
+    assert_eq!(m.call(g, &[Arg::Ref(RegionId(0)), Arg::Value(&now)]).map(|r| r.to_vec()), uninit_at(g, 0, None, 4));
+    assert_eq!(m.region(RegionId(0)).unwrap(), &[Scalar::Uninit; 3][..], "the region keeps what it held");
+}
+
+#[test]
+fn a_checked_addition_on_a_region_never_set_is_uninit_at_its_statement() {
+    // fn h(s: &mut u8) { *s += 1 }: _2 = AddWithOverflow(copy (*_1), const 1_u8); assert(!move (_2.1: bool)) -> bb1
+    let mut b = Build::default();
+    let (u8t, boolean, unit) = (b.int(Int::U8), b.bool(), b.unit());
+    let r = b.reference(u8t, true);
+    let pair = b.tuple(&[u8t, boolean]);
+    let h = b.function(Function {
+        name: "h".into(),
+        params: 1,
+        locals: locals(&[unit, r, pair]),
+        blocks: vec![
+            block(
+                vec![assign(place(2), Value::Checked(BinOp::Add, copy_at(proj(1, vec![Projection::Deref])), konst(u8t, vec![int(Int::U8, 1)])), 3)],
+                Terminator::Assert { cond: copy_at(proj(2, vec![Projection::Field(1)])), expected: false, check: Check::Overflow(BinOp::Add), next: BlockId(1), at: at(4) },
+            ),
+            block(vec![assign(proj(1, vec![Projection::Deref]), Value::Use(copy_at(proj(2, vec![Projection::Field(0)]))), 5)], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[u8t]).unwrap();
+    assert_eq!(m.call(h, &[Arg::Ref(RegionId(0))]).map(|r| r.to_vec()), uninit_at(h, 0, Some(0), 3));
+}
+
+#[test]
+fn a_reference_offered_as_a_value_is_refused_as_a_constant_a_region_and_an_argument() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let r = b.reference(u8t, false);
+    // fn f(x: &u8) -> u8 { *x }, and fn k() -> u8 { let c: &u8 = <a reference constant>; *c }
+    let f = b.function(Function { name: "f".into(), params: 1, locals: locals(&[u8t, r]), blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Deref]))), 1)], ret())] });
+    let good = b.program.clone();
+    b.function(Function {
+        name: "k".into(),
+        params: 0,
+        locals: locals(&[u8t, r]),
+        blocks: vec![block(vec![assign(place(1), Value::Use(konst(r, vec![Scalar::Ref(0)])), 1), assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Deref]))), 2)], ret())],
+    });
+    assert_eq!(
+        Machine::load(b.program, &[u8t]).map(|_| ()),
+        Err(LoadError::Instruction { function: "k".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" })
+    );
+    let mut m = Machine::load(good, &[u8t, r]).unwrap();
+    m.set_region(RegionId(0), &[int(Int::U8, 42)]).unwrap();
+    assert_eq!(m.set_region(RegionId(1), &[Scalar::Ref(0)]), Err(HostError::Slots), "a region");
+    assert_eq!(m.start(f, &[Arg::Value(&[Scalar::Ref(0)])]), Err(HostError::Arguments), "an argument");
+}
+
+#[test]
+fn a_float_slot_of_the_other_kind_is_refused_as_a_constant_a_region_and_an_argument() {
+    let mut b = Build::default();
+    let (f32t, f64t) = (b.ty(Type::F32), b.ty(Type::F64));
+    // fn f(x: f32) -> f32 { x }, fn g(x: f64) -> f64 { x }
+    let f = b.function(Function { name: "f".into(), params: 1, locals: locals(&[f32t, f32t]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
+    let g = b.function(Function { name: "g".into(), params: 1, locals: locals(&[f64t, f64t]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
+    let good = b.program.clone();
+    let mut m = Machine::load(good.clone(), &[f32t, f64t]).unwrap();
+    assert_eq!(m.set_region(RegionId(0), &[Scalar::F64(1.5)]), Err(HostError::Slots), "an f64 in an f32 region");
+    assert_eq!(m.set_region(RegionId(1), &[Scalar::F32(1.5)]), Err(HostError::Slots), "an f32 in an f64 region");
+    assert_eq!(m.start(f, &[Arg::Value(&[Scalar::F64(1.5)])]), Err(HostError::Arguments), "an f64 for an f32");
+    assert_eq!(m.start(g, &[Arg::Value(&[Scalar::F32(1.5)])]), Err(HostError::Arguments), "an f32 for an f64");
+    for (ty, slot) in [(f32t, Scalar::F64(1.5)), (f64t, Scalar::F32(1.5))] {
+        let mut b = Build { program: good.clone() };
+        b.function(Function { name: "k".into(), params: 0, locals: locals(&[ty]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(ty, vec![slot])), 1)], ret())] });
+        assert_eq!(
+            Machine::load(b.program, &[]).map(|_| ()),
+            Err(LoadError::Instruction { function: "k".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" }),
+            "a constant {slot:?}"
+        );
+    }
+}
