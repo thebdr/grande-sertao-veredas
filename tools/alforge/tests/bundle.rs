@@ -860,6 +860,23 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
     let mut portal = build("veredas-portal", &["veredas-portal"], "veredas_portal");
     portal.optional = vec!["porteiro".into()];
     let builds = vec![build("veredas-aranha", &[], "veredas_aranha"), build("veredas-maquinar", &["veredas-bancada"], "veredas_maquinar"), portal];
+    // A component whose executables all have required features: its library and its bins asked
+    // together, as portal at HEAD; with no library, its bins alone.
+    let mut lib_and_optional = build("veredas-x", &[], "veredas_x");
+    lib_and_optional.optional = vec!["xis".into()];
+    let mut only_optional = build("veredas-y", &[], "unused");
+    only_optional.lib = None;
+    only_optional.optional = vec!["ypsilon".into()];
+    let arms = builder::script(&r, &[lib_and_optional, only_optional]);
+    for line in [
+        "cargo build --release --locked --offline --jobs 4 -p veredas-x --lib --bins",
+        "cargo build --release --locked --offline --jobs 4 -p veredas-y --bins",
+        "cp target/release/libveredas_x.d /build/out/deps/",
+        "if [ -f target/release/xis ]; then cp target/release/xis /build/out/bin/; cp target/release/xis.d /build/out/deps/; fi",
+        "if [ -f target/release/ypsilon ]; then cp target/release/ypsilon /build/out/bin/; cp target/release/ypsilon.d /build/out/deps/; fi",
+    ] {
+        assert!(arms.lines().any(|l| l == line), "{line}\n{arms}");
+    }
     let script = builder::script(&r, &builds);
     assert_eq!(
         script,
@@ -1263,14 +1280,15 @@ fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
                 /build/src/docs/a\\ b.rs /build/src/docs/shared.rs /build/src/docs/cost$$.txt /build/src/target/release/build/x-1/out/gen.rs \
                 /build/vendor/serde-1.0.200/src/lib.rs /etc/fora.conf /build/src/crates/veredas-portalx/src/lib.rs \
                 /build/src/crates/veredas-portal/src/../../../docs/unix.rs /build/src/crates/veredas-core/../../docs/shared.rs \
-                /build/src/crates/../../etc/climbed.rs /build/src/crates/veredas-portal/../../target/release/build/y/out/z.rs\n\n\
+                /build/src/crates/../../etc/climbed.rs /build/src/crates/veredas-portal/../../target/release/build/y/out/z.rs \
+                /build/src/target/release/build/x/h/out/../../../../../../docs/fora.rs /build/vendor/../src/docs/fora2.rs /build/vendor/serde-1/../../src/docs/fora3.rs\n\n\
                 /build/src/crates/veredas-portal/src/main.rs:\n";
     // A path that climbs back (as rustc writes a `#[path]` module's) is judged where it lands: in a
     // named file, in another folder, out of the tree, in the build's own output.
     assert_eq!(
         alforge::inputs::read_outside(info, builder::SRC, builder::VENDOR, &inputs),
-        ["/build/src/crates/../../etc/climbed.rs", "/etc/fora.conf", "crates/veredas-portalx/src/lib.rs", "docs/a b.rs", "docs/cost$.txt", "docs/unix.rs"],
-        "a folder's name is no prefix of another's"
+        ["/build/src/crates/../../etc/climbed.rs", "/etc/fora.conf", "crates/veredas-portalx/src/lib.rs", "docs/a b.rs", "docs/cost$.txt", "docs/fora.rs", "docs/fora2.rs", "docs/fora3.rs", "docs/unix.rs"],
+        "a path is judged where it lands, out of the build's output and the vendored sources too",
     );
     assert_eq!((builder::SRC, builder::VENDOR), ("/build/src", "/build/vendor"));
     assert_eq!(alforge::inputs::read_outside("/build/src/target/release/x: /build/src/crates/veredas-core/src/lib.rs\n", builder::SRC, builder::VENDOR, &inputs), Vec::<String>::new());
@@ -1303,3 +1321,54 @@ fn a_cached_builder_disk_follows_its_base_where_the_cache_now_holds_it() {
     builder::reuse(&disk, &moved.join("base.qcow2")).unwrap();
     assert_eq!(std::fs::read(&disk).unwrap(), before);
 }
+
+#[test]
+fn a_real_cut_refuses_unread_inputs_and_a_shared_executable_before_its_suite_runs() {
+    // Through the real `alforge cut` with the stand-ins: a component whose inputs do not read
+    // (a crate and no lock file), and two components building one executable's name: refused
+    // with the suite never started.
+    for (what, files, want) in [
+        (
+            "unread inputs",
+            vec![("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = \"1\"\n")],
+            "veredas-core's build inputs do not read: veredas-core depends on `serde` and the commit holds no Cargo.lock to pin it\n",
+        ),
+        (
+            "a shared executable",
+            vec![
+                ("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\", \"crates/veredas-b\"]\n"),
+                ("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"ferramenta\"\npath = \"src/f.rs\"\n"),
+                ("crates/veredas-core/src/f.rs", "fn main() {}\n"),
+                ("crates/veredas-b/Cargo.toml", "[package]\nname = \"veredas-b\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"ferramenta\"\npath = \"src/f.rs\"\n"),
+                ("crates/veredas-b/src/f.rs", "fn main() {}\n"),
+            ],
+            "`ferramenta` is an executable of veredas-b and veredas-core: a bundle holds one executable a name\n",
+        ),
+    ] {
+        let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+        for (f, t) in &files {
+            r.write(f, t);
+        }
+        r.commit(what);
+        let cache = tempfile::tempdir().unwrap();
+        let (got, log) = cut_with_suite(&r, cache.path(), 1, "exit 1", &[]);
+        assert_eq!(got.status.code(), Some(2), "{what}");
+        assert_eq!(String::from_utf8_lossy(&got.stderr), want, "{what}");
+        assert_eq!(log, Vec::<String>::new(), "{what}: refused before the suite");
+    }
+}
+
+#[test]
+fn a_proc_macro_component_has_its_library_built_for_its_dep_info() {
+    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\", \"crates/veredas-macro\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    r.write("crates/veredas-macro/Cargo.toml", "[package]\nname = \"veredas-macro\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\n");
+    r.write("crates/veredas-macro/src/lib.rs", "\n");
+    let c = r.commit("a proc-macro component");
+    let held = alforge::manifest::components_at(r.dir.path(), &c, &mut Vec::new()).unwrap();
+    assert_eq!(held["veredas-macro"].lib.as_deref(), Some("veredas_macro"));
+    let b = builder::Build { package: "veredas-macro".into(), bins: vec![], lib: held["veredas-macro"].lib.clone(), optional: vec![] };
+    let s = builder::script(&recipe(), &[b]);
+    assert!(s.lines().any(|l| l == "cargo build --release --locked --offline --jobs 4 -p veredas-macro --lib"), "{s}");
+    assert!(s.lines().any(|l| l == "cp target/release/libveredas_macro.d /build/out/deps/"), "{s}");
+}
+

@@ -640,22 +640,24 @@ fn normal(p: &Path) -> Option<String> {
 pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs) -> Vec<String> {
     let mut out = BTreeSet::new();
     for path in dep_info_paths(dep_info) {
-        let p = PathBuf::from(&path);
-        if p.starts_with(Path::new(src).join("target")) || p.starts_with(vendor) {
+        // A path as rustc or cargo writes it may climb back (`crates/x/src/../../../docs/y.rs`, a
+        // build script's `rerun-if-changed={OUT_DIR}/../../…`): resolved first, then judged where
+        // it lands, the build's own output and the vendored sources included.
+        let Some(landed) = PathBuf::from(&path).strip_prefix("/").ok().and_then(normal).map(|p| PathBuf::from(format!("/{p}"))) else {
+            out.insert(path);
+            continue;
+        };
+        if landed.starts_with(Path::new(src).join("target")) || landed.starts_with(vendor) {
             continue;
         }
-        // A path as rustc writes it may climb back (`crates/x/src/../../../docs/y.rs`): judged
-        // where it lands.
-        match p.strip_prefix(src).ok().and_then(normal) {
-            Some(rel) => {
-                if rel.starts_with("target/") {
-                    continue;
-                }
+        match landed.strip_prefix(src) {
+            Ok(rel) => {
+                let rel = rel.to_string_lossy().into_owned();
                 if !inputs.covers(&rel) {
                     out.insert(rel);
                 }
             }
-            None => {
+            Err(_) => {
                 out.insert(path);
             }
         }

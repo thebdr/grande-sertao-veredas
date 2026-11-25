@@ -422,7 +422,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                 .as_array()
                 .into_iter()
                 .flatten()
-                .find(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| ["lib", "rlib", "dylib", "cdylib", "staticlib"].contains(&k.as_str().unwrap_or_default()))))
+                .find(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"].contains(&k.as_str().unwrap_or_default()))))
                 .and_then(|t| t["name"].as_str().map(String::from));
             let inputs = workspace.inputs(&name);
             held.insert(name.clone(), Held { dir, name, version, bins, optional, lib, inputs });
