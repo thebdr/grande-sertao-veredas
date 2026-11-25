@@ -17,7 +17,7 @@
 pub mod ip;
 
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 #[cfg(target_os = "linux")]
 use std::time::Duration;
@@ -266,6 +266,9 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     muted: AtomicBool,
+    /// The mutes so far (`State::mutes`), readable without the lock: read when a frame is read, so
+    /// a mute between the read and the taking, even one lifted at once, drops the request.
+    mutes: AtomicU64,
     stop: AtomicBool,
 }
 
@@ -322,6 +325,7 @@ impl ProfinetHandle {
         self.shared.muted.store(muted, Ordering::SeqCst);
         if muted {
             state.mutes += 1;
+            self.shared.mutes.store(state.mutes, Ordering::SeqCst);
         }
     }
 
@@ -395,6 +399,7 @@ pub fn start(cfg: &ProfinetConfig) -> Result<ProfinetHandle, ProfinetError> {
     let shared = Arc::new(Shared {
         state: Mutex::new(State { identity: identity_of(cfg, mac), status: ProfinetStatus::new(mac), neighbour: None, mutes: 0 }),
         muted: AtomicBool::new(false),
+        mutes: AtomicU64::new(0),
         stop: AtomicBool::new(false),
     });
     if cfg.hello {
@@ -488,6 +493,8 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
             false
         });
         let Ok(Some(received)) = link.recv(Duration::from_millis(5)) else { continue };
+        // The mutes when it was read: one since, however short, and the request is not taken.
+        let read_mutes = shared.mutes.load(Ordering::SeqCst);
         let Ok(frame) = ether::parse(&received.bytes) else { continue };
         match frame.ethertype {
             ether::ETHERTYPE_LLDP => {
@@ -561,8 +568,9 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
         match pdu.service {
             Service::Identify => {
                 let mut state = shared.lock();
-                // Read before the mute and taken after it: neither matched, counted nor queued.
-                if shared.muted.load(Ordering::SeqCst) {
+                // Read before a mute and taken after it, the mute lifted or not: neither matched,
+                // counted nor queued.
+                if shared.muted.load(Ordering::SeqCst) || state.mutes != read_mutes {
                     continue;
                 }
                 if !matches(&state.identity, &pdu.blocks) {
@@ -570,8 +578,8 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                     continue;
                 }
                 let Ok(answer) = dcp::identify_response(frame.src, mac, pdu.xid, &state.identity) else { continue };
-                // The mutes so far, read with the answer: a mute from now on drops it.
-                let mutes = state.mutes;
+                // The mutes when the request was read: a mute from then on drops its answer.
+                let mutes = read_mutes;
                 drop(state);
                 // Spread over the request's response delay: a factor of 1 (or 0) answers at once,
                 // a factor of n anywhere within (n - 1) steps of 10 ms.
@@ -583,7 +591,7 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
             // untaken.
             Service::Set if frame.dst == mac => {
                 let mut state = shared.lock();
-                if shared.muted.load(Ordering::SeqCst) {
+                if shared.muted.load(Ordering::SeqCst) || state.mutes != read_mutes {
                     continue;
                 }
                 // Each block is answered by a control response of 8 bytes on the wire: a Set whose
@@ -598,7 +606,7 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
             }
             Service::Get if frame.dst == mac => {
                 let mut state = shared.lock();
-                if shared.muted.load(Ordering::SeqCst) {
+                if shared.muted.load(Ordering::SeqCst) || state.mutes != read_mutes {
                     continue;
                 }
                 let held = state.identity.blocks();

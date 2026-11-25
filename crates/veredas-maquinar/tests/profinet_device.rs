@@ -1531,3 +1531,220 @@ mod round_4 {
         assert_eq!(config("interface = \"b0\"\n"), ProfinetConfig::new("b0"), "a file's defaults are the configuration's own");
     }
 }
+
+/// C-112's fifth refute round: the critic's probes (`~/.cache/veredas/critic-c112-r5/probes`), kept
+/// as pins: an Identify and a Get taken only at their addresses, the shutdown to LLDP's group, a
+/// port `port-xyz-abcde`, LLDP while muted, an undecodable frame counted, an Identify by ids the
+/// device lacks and by an alias it has not, a Get's order and its frame's edge.
+mod round_5 {
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::dcp::{self, BlockBody, DcpPdu, Filter};
+    use veredas_aranha::profinet::ether;
+    use veredas_aranha::profinet::lldp::{self, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::*;
+
+    const DEVICE: &str = "interface = \"b0\"\nstation = \"io-device-1\"\nalias = \"port-001.switch-1\"\nvendor_id = 7\ndevice_id = 9\nip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\nlldp_interval_ms = 200\nseed = 3\nhello = false\n";
+
+    fn config(text: &str) -> ProfinetConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn link(iface: &str, ethertype: u16) -> RawLink {
+        RawLink::open_with(iface, Options { ethertype: Some(ethertype), promiscuous: false, outgoing: false }).unwrap()
+    }
+
+    /// The next DCP frame: its source, its destination, its PDU.
+    fn next_dcp(link: &RawLink, within: Duration) -> Option<(Mac, Mac, DcpPdu)> {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            let r = link.recv(within.saturating_sub(started.elapsed())).unwrap()?;
+            let f = ether::parse(&r.bytes).unwrap();
+            if f.ethertype == ether::ETHERTYPE_PROFINET {
+                return Some((f.src, f.dst, dcp::decode(f.payload).unwrap()));
+            }
+        }
+        None
+    }
+
+    fn raw_pdu(frame_id: u16, service: u8, xid: u32, delay: u16, blocks: &[(u8, u8, Vec<u8>)]) -> Vec<u8> {
+        let mut data = Vec::new();
+        for (o, s, d) in blocks {
+            data.extend_from_slice(&[*o, *s]);
+            data.extend_from_slice(&(d.len() as u16).to_be_bytes());
+            data.extend_from_slice(d);
+            if d.len() % 2 == 1 {
+                data.push(0);
+            }
+        }
+        let mut pdu = frame_id.to_be_bytes().to_vec();
+        pdu.extend_from_slice(&[service, 0]);
+        pdu.extend_from_slice(&xid.to_be_bytes());
+        pdu.extend_from_slice(&delay.to_be_bytes());
+        pdu.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        pdu.extend_from_slice(&data);
+        pdu
+    }
+
+    #[test]
+    fn an_identify_is_taken_only_to_the_identify_group_or_its_mac() {
+        netns::isolated("round_5::an_identify_is_taken_only_to_the_identify_group_or_its_mac", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            let mut got = Vec::new();
+            for (xid, dst) in [(1u32, Mac([0x02, 0, 0, 0, 0, 0x99])), (2, Mac::DCP_HELLO_MULTICAST), (3, Mac::BROADCAST), (4, Mac([0x01, 0x0E, 0xCF, 0, 0, 0x02])), (5, dev.mac), (6, Mac::DCP_MULTICAST)] {
+                let pdu = raw_pdu(dcp::FRAME_ID_IDENTIFY_REQ, 5, xid, 1, &[(0xFF, 0xFF, vec![])]);
+                ctl.send(&ether::build(dst, me, ether::ETHERTYPE_PROFINET, &pdu).unwrap()).unwrap();
+                got.push(next_dcp(&ctl, Duration::from_millis(300)).map(|(_, _, p)| p.xid));
+            }
+            assert_eq!(got, [None, None, None, None, Some(5), Some(6)]);
+        });
+    }
+
+    #[test]
+    fn a_get_to_the_dcp_group_is_dropped() {
+        netns::isolated("round_5::a_get_to_the_dcp_group_is_dropped", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            // A Get's pairs bare: (2, 2), the name.
+            let mut pdu = raw_pdu(dcp::FRAME_ID_GET_SET, 3, 9, 0, &[]);
+            pdu.truncate(10);
+            pdu.extend_from_slice(&2u16.to_be_bytes());
+            pdu.extend_from_slice(&[2, 2]);
+            ctl.send(&ether::build(Mac::DCP_MULTICAST, me, ether::ETHERTYPE_PROFINET, &pdu).unwrap()).unwrap();
+            assert_eq!((next_dcp(&ctl, Duration::from_millis(300)).map(|(_, _, p)| p.xid), dev.status().gets), (None, 0));
+        });
+    }
+
+    #[test]
+    fn the_shutdown_goes_to_the_lldp_group() {
+        netns::isolated("round_5::the_shutdown_goes_to_the_lldp_group", &[("a0", "b0")], || {
+            let all = RawLink::open_with("a0", Options { ethertype: Some(ether::ETHERTYPE_LLDP), promiscuous: true, outgoing: false }).unwrap();
+            let dev = start(&config(DEVICE)).unwrap();
+            let mac = dev.mac;
+            std::thread::sleep(Duration::from_millis(500));
+            dev.stop();
+            let mut seen = Vec::new();
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_millis(800) {
+                if let Some(r) = all.recv(Duration::from_millis(100)).unwrap() {
+                    let f = ether::parse(&r.bytes).unwrap();
+                    seen.push((f.src, f.dst, lldp::decode(f.payload).unwrap().ttl));
+                }
+            }
+            let shut: Vec<_> = seen.iter().filter(|s| s.2 == 0).collect();
+            assert_eq!(shut.len(), 1, "{seen:?}");
+            assert_eq!((shut[0].0, shut[0].1), (mac, Mac::LLDP_MULTICAST));
+        });
+    }
+
+    #[test]
+    fn a_port_of_the_form_port_xyz_abcde_is_taken_and_named() {
+        let mut cfg = ProfinetConfig::new("b0");
+        cfg.station = "io-device-1".into();
+        cfg.port = "port-001-00001".into();
+        cfg.alias = Some("port-002-00003.switch-1".into());
+        assert_eq!(validate(&cfg).err().map(|e| e.to_string()), None);
+        for port in ["port-001-1234", "port-001-123456", "port-001-", "port-001-0000a"] {
+            let mut c = ProfinetConfig::new("b0");
+            c.port = port.into();
+            assert!(validate(&c).is_err(), "{port} taken");
+        }
+        netns::isolated("round_5::a_port_of_the_form_port_xyz_abcde_is_taken_and_named", &[("a0", "b0")], || {
+            let lctl = link("a0", ether::ETHERTYPE_LLDP);
+            let mut cfg = config(DEVICE);
+            cfg.port = "port-001-00001".into();
+            let _dev = start(&cfg).unwrap();
+            let r = lctl.recv(Duration::from_secs(2)).unwrap().unwrap();
+            assert_eq!(lldp::decode(ether::parse(&r.bytes).unwrap().payload).unwrap().port, PortId::Local { id: "port-001-00001.io-device-1".into() });
+        });
+    }
+
+    /// On the machine's lock: LLDP frames counted over a second.
+    #[test]
+    fn lldp_goes_on_while_the_dcp_is_muted() {
+        netns::isolated("round_5::lldp_goes_on_while_the_dcp_is_muted", &[("a0", "b0")], || {
+            let lctl = link("a0", ether::ETHERTYPE_LLDP);
+            let dev = start(&config(DEVICE)).unwrap();
+            dev.set_muted(true);
+            std::thread::sleep(Duration::from_millis(250));
+            while lctl.recv(Duration::from_millis(1)).unwrap().is_some() {}
+            let (mut n, started) = (0, Instant::now());
+            while started.elapsed() < Duration::from_millis(1000) {
+                if lctl.recv(Duration::from_millis(100)).unwrap().is_some() {
+                    n += 1;
+                }
+            }
+            assert!(n >= 3, "{n} LLDP frames in a muted second at 200 ms");
+        });
+    }
+
+    #[test]
+    fn a_dcp_frame_it_cannot_read_is_counted() {
+        netns::isolated("round_5::a_dcp_frame_it_cannot_read_is_counted", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            // A data length past the frame.
+            let mut over = raw_pdu(dcp::FRAME_ID_IDENTIFY_REQ, 5, 1, 1, &[(0xFF, 0xFF, vec![])]);
+            over[10..12].copy_from_slice(&600u16.to_be_bytes());
+            ctl.send(&ether::build(Mac::DCP_MULTICAST, me, ether::ETHERTYPE_PROFINET, &over).unwrap()).unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            assert_eq!(dev.status().undecodable, 1);
+        });
+    }
+
+    #[test]
+    fn an_identify_by_ids_it_lacks_or_an_alias_it_has_not_is_unanswered() {
+        netns::isolated("round_5::an_identify_by_ids_it_lacks_or_an_alias_it_has_not_is_unanswered", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            let mut got = Vec::new();
+            for (xid, ids) in [(1u32, [0u8, 7, 0, 9]), (2, [0, 8, 0, 9]), (3, [0, 7, 0, 10])] {
+                let pdu = raw_pdu(dcp::FRAME_ID_IDENTIFY_REQ, 5, xid, 1, &[(2, 3, ids.to_vec())]);
+                ctl.send(&ether::build(Mac::DCP_MULTICAST, me, ether::ETHERTYPE_PROFINET, &pdu).unwrap()).unwrap();
+                got.push(next_dcp(&ctl, Duration::from_millis(300)).map(|(_, _, p)| p.xid));
+            }
+            assert_eq!(got, [Some(1), None, None]);
+            dev.stop();
+            // A device with no alias: no alias filter finds it.
+            let _plain = start(&config(&DEVICE.replace("alias = \"port-001.switch-1\"\n", ""))).unwrap();
+            ctl.send(&dcp::identify_request(me, 4, 1, &Filter::Alias("port-001.switch-1".into())).unwrap()).unwrap();
+            assert_eq!(next_dcp(&ctl, Duration::from_millis(300)).map(|(_, _, p)| p.xid), None);
+        });
+    }
+
+    #[test]
+    fn a_get_keeps_the_order_asked_and_its_frame_s_edge() {
+        netns::isolated("round_5::a_get_keeps_the_order_asked_and_its_frame_s_edge", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            ctl.send(&dcp::get_request(dev.mac, me, 1, &[(9, 1), (2, 2), (2, 9), (1, 2)]).unwrap()).unwrap();
+            let (_, _, r) = next_dcp(&ctl, Duration::from_millis(300)).unwrap();
+            let order: Vec<(u8, u8)> = r
+                .blocks
+                .iter()
+                .map(|b| match &b.body {
+                    BlockBody::ControlResponse { option, suboption, .. } => (*option, *suboption),
+                    _ => (b.option, b.suboption),
+                })
+                .collect();
+            assert_eq!(order, [(9, 1), (2, 2), (2, 9), (1, 2)], "held and lacked pairs in the order asked");
+            // 186 lacked pairs answered in 1500 bytes and counted; 187, neither.
+            let mut got = Vec::new();
+            for (xid, n) in [(2u32, 186u8), (3, 187)] {
+                let pairs: Vec<(u8, u8)> = (0..n).map(|i| (0x80, i)).collect();
+                ctl.send(&dcp::get_request(dev.mac, me, xid, &pairs).unwrap()).unwrap();
+                got.push((n, next_dcp(&ctl, Duration::from_millis(300)).map(|(_, _, p)| dcp::control_responses(&p).len()), dev.status().gets));
+            }
+            assert_eq!(got, [(186, Some(186), 2), (187, None, 2)]);
+        });
+    }
+}

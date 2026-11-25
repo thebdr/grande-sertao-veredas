@@ -464,7 +464,8 @@ Recorded as the port meets them.
   | test(round_8::a_request_finished_while_silent_across_a_stretch_s_start_is_withheld)
   | test(round_8::a_frame_beginning_at_65536_is_past_the_read_ahead)
   | test(round_8::a_frame_beginning_at_65535_is_within_the_read_ahead)
-  | test(round_8::the_cap_counts_what_an_earlier_delay_read_ahead)`
+  | test(round_8::the_cap_counts_what_an_earlier_delay_read_ahead)
+  | test(round_5::lldp_goes_on_while_the_dcp_is_muted)`
   (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23; the adapter's
   multiplier at 3 and its restart within a second; the PROFINET neighbour aged out by its TTL, and
   kept to its last frame's when heard again, a shorter one and another's included; the Modbus server's read-ahead filled during a delay
@@ -472,7 +473,7 @@ Recorded as the port meets them.
   300 ms; the
   executable's status lines a second apart, and its stop with a stdout nobody reads; the Modbus server's delays side by side and a close
   behind many requests seen at once; the PROFINET device's strict mute, whose bursts meet the mute
-  as the load lets them, and an Identify read before a mute not taken after it; `fisica`'s late count against the steps' own starts, and its runner at a 10 and a 20 ms step).
+  as the load lets them, and an Identify read before a mute not taken after it, and LLDP going on while muted; `fisica`'s late count against the steps' own starts, and its runner at a 10 and a 20 ms step).
   Free, by that rule: the bench file, the channels, the controller's rules, the component, the
   EtherCAT segment (ethercrab's own timeouts are deadlines), `fisica` but its runner, and every
   other test of the files above. A new test that measures time joins this list in its commit, and
