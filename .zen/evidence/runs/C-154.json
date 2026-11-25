@@ -1,0 +1,26 @@
+{
+  "clause": "C-154",
+  "command": "sh -c cargo test -p orcl-interp --test file && cargo clippy -p orcl-interp --all-targets -- -D warnings",
+  "commandArgv": [
+    "sh",
+    "-c",
+    "cargo test -p orcl-interp --test file && cargo clippy -p orcl-interp --all-targets -- -D warnings"
+  ],
+  "exitCode": 0,
+  "outputSha": "12d56a9dbbd9b6cd903756fdc9615d3cf8c074f6fe6ef0efda28fb468d24850d",
+  "outputTail": "running 7 tests\ntest a_count_past_the_end_and_text_that_is_not_utf_8_are_refused_where_they_stand ... ok\ntest a_small_program_s_bytes_are_pinned ... ok\ntest a_file_of_another_format_or_language_is_refused_by_its_header_before_anything_else ... ok\ntest every_kind_of_instruction_is_written_and_read_back_to_the_same_program ... ok\ntest a_program_read_from_its_file_runs_as_the_one_written ... ok\ntest every_truncated_copy_is_refused_and_bytes_past_the_end_too ... ok\ntest every_damaged_byte_is_refused_or_reads_to_a_program_that_writes_back_to_those_very_bytes ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.51s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running tests/file.rs (target/debug/build/orcl-interp/7c97453c596330f1/out/file-7c97453c596330f1)\n    Blocking waiting for file lock on package cache\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s",
+  "ranAt": "2026-11-25T01:20:26.816Z",
+  "headCommit": "5fb2a2218675e49618d09b96dd74252fb09c8e17",
+  "tests": [
+    {
+      "name": "crates/orcl-interp/tests/file.rs",
+      "file": "crates/orcl-interp/tests/file.rs",
+      "fileSha": "cc03c275cc765188e688ad4c68fc62f3663939825337a39886720dd92c123ccf"
+    },
+    {
+      "name": "crates/orcl-interp/tests/common/mod.rs",
+      "file": "crates/orcl-interp/tests/common/mod.rs",
+      "fileSha": "67b661dc60e4658620c7c200216413ff8b467c22a21774fa0a88039fd50ab435"
+    }
+  ]
+}
