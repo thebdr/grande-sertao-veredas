@@ -310,8 +310,14 @@ fn run(link: veredas_aranha::wire::raw::RawLink, shared: Arc<Shared>) {
     use std::time::Duration;
     while !shared.stop.load(Ordering::SeqCst) {
         let Ok(Some(received)) = link.recv(Duration::from_millis(5)) else { continue };
-        let frame = received.bytes;
-        // The Ethernet header, untagged: an EtherCAT master sends none.
+        let mut frame = received.bytes;
+        // One IEEE 802.1Q tag taken out and put back on the answer, its contents not evaluated, as
+        // an ESC does (ESC datasheet I, "EtherCAT Protocol"); the frame then read as an untagged one.
+        let mut tag: Option<[u8; 4]> = None;
+        if frame.len() >= 18 + 2 && frame[12..14] == [0x81, 0x00] && u16::from_be_bytes([frame[16], frame[17]]) == esc::ETHERTYPE {
+            tag = Some([frame[12], frame[13], frame[14], frame[15]]);
+            frame.drain(12..16);
+        }
         if frame.len() < 14 + 2 || u16::from_be_bytes([frame[12], frame[13]]) != esc::ETHERTYPE {
             continue;
         }
@@ -335,6 +341,9 @@ fn run(link: veredas_aranha::wire::raw::RawLink, shared: Arc<Shared>) {
             // device sets it on the way back.
             out[6] |= 0x02;
             out.extend(esc::encode(&datagrams, payload.len()));
+            if let Some(tag) = tag {
+                out.splice(12..12, tag);
+            }
             out
         };
         let _ = link.send(&out);

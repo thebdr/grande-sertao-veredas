@@ -1530,3 +1530,155 @@ mod round_5 {
         });
     }
 }
+
+/// C-113's sixth refute round: the critic's probes (`~/.cache/veredas/critic-c113-r6/probes`), kept
+/// as pins: the features register a master reads (and ethercrab's 64-bit clock from it), a VLAN-
+/// tagged frame of commands answered with its tag, a name padded in front refused.
+mod round_6 {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use ethercrab::std::ethercat_now;
+    use ethercrab::{DcSupport, MainDevice, MainDeviceConfig, PduStorage, Timeouts};
+    use veredas_aranha::netns;
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::ethercat::esc::{self, Esc, Identity};
+    use veredas_maquinar::ethercat::*;
+
+    const ME: [u8; 6] = [0x10; 6];
+
+    const SEGMENT: &str = "interface = \"b0\"\ndevices = [ { name = \"d0\" }, { name = \"d1\" }, { name = \"d2\", inputs = [ { index = 0x6000, subindex = 1, bits = 32 } ] } ]\n";
+
+    /// The body (EtherCAT header and datagrams) of a frame of commands.
+    fn ecat(datagrams: &[(u8, u32, Vec<u8>, u16)]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (i, (cmd, address, data, flags)) in datagrams.iter().enumerate() {
+            body.push(*cmd);
+            body.push(i as u8);
+            body.extend_from_slice(&address.to_le_bytes());
+            let more = if i + 1 < datagrams.len() { 0x8000 } else { 0 };
+            body.extend_from_slice(&((data.len() as u16) | more | flags).to_le_bytes());
+            body.extend_from_slice(&[0, 0]);
+            body.extend_from_slice(data);
+            body.extend_from_slice(&[0, 0]);
+        }
+        let mut out = ((body.len() as u16) | 0x1000).to_le_bytes().to_vec();
+        out.extend(body);
+        out
+    }
+
+    fn eth(tag: Option<u16>, ethertype: u16, payload: &[u8]) -> Vec<u8> {
+        let mut f = vec![0xFF; 6];
+        f.extend_from_slice(&ME);
+        if let Some(tci) = tag {
+            f.extend_from_slice(&0x8100u16.to_be_bytes());
+            f.extend_from_slice(&tci.to_be_bytes());
+        }
+        f.extend_from_slice(&ethertype.to_be_bytes());
+        f.extend_from_slice(payload);
+        if f.len() < 60 {
+            f.resize(60, 0);
+        }
+        f
+    }
+
+    /// The next frame not from ME within `wait`.
+    fn back(link: &RawLink, wait: Duration) -> Option<Vec<u8>> {
+        let started = Instant::now();
+        while started.elapsed() < wait {
+            if let Some(r) = link.recv(Duration::from_millis(100)).unwrap()
+                && r.bytes.len() > 12
+                && r.bytes[6..12] != ME
+            {
+                return Some(r.bytes);
+            }
+        }
+        None
+    }
+
+    /// (data, wkc, flags) of each datagram of an EtherCAT payload (header first).
+    fn datagrams(p: &[u8]) -> Vec<(Vec<u8>, u16, u16)> {
+        let len = (u16::from_le_bytes([p[0], p[1]]) & 0x07FF) as usize;
+        let body = &p[2..2 + len];
+        let mut at = 0;
+        let mut out = Vec::new();
+        loop {
+            let lf = u16::from_le_bytes([body[at + 6], body[at + 7]]);
+            let n = (lf & 0x07FF) as usize;
+            out.push((body[at + 10..at + 10 + n].to_vec(), u16::from_le_bytes([body[at + 10 + n], body[at + 11 + n]]), lf & 0xF800));
+            at += 12 + n;
+            if lf & 0x8000 == 0 {
+                break;
+            }
+        }
+        out
+    }
+
+
+    #[test]
+    fn the_features_register_states_what_the_esc_does() {
+        let id = Identity { vendor_id: 1, product_code: 2, revision: 3, serial: 4, name: "x".into(), alias: 0 };
+        let e = Esc::new(esc::sii_image(&id, &[], &[]), 0);
+        let f = e.get16(0x0008);
+        assert_eq!(f & 0x0001, 0, "FMMU bit-oriented (the clause: logical through its FMMUs bit by bit): {f:#06x}");
+        assert_eq!(f & 0x0004, 0x0004, "distributed clocks available (the clause: its distributed clock): {f:#06x}");
+        assert_eq!(f & 0x0008, 0x0008, "64-bit system time: {f:#06x}");
+        assert_eq!(f & 0x0600, 0, "LRW and the read-write commands supported (the clause counts them): {f:#06x}");
+    }
+
+    const PDU_DATA: usize = PduStorage::element_size(1100);
+    static PDU_ROUND_6: PduStorage<16, PDU_DATA> = PduStorage::new();
+
+    /// End to end: the MainDevice sees each device's 64-bit DC (ethercrab's `dc_support`, from 0x0008),
+    /// so it configures the segment's clocks; a segment telling it there is none passes the clause's test.
+    #[test]
+    fn ethercrab_sees_a_64_bit_dc_in_every_device() {
+        netns::isolated("round_6::ethercrab_sees_a_64_bit_dc_in_every_device", &[("a0", "b0")], || {
+            let _segment = start(&toml::from_str(SEGMENT).unwrap()).unwrap();
+            let (tx, rx, pdu_loop) = PDU_ROUND_6.try_split().expect("split once");
+            let maindevice = Arc::new(MainDevice::new(
+                pdu_loop,
+                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), ..Default::default() },
+                MainDeviceConfig { dc_static_sync_iterations: 100, ..Default::default() },
+            ));
+            std::thread::spawn(move || futures_lite::future::block_on(ethercrab::std::tx_rx_task("a0", tx, rx).expect("the raw socket")));
+            futures_lite::future::block_on(async {
+                let group = maindevice.init_single_group::<8, 64>(ethercat_now).await.expect("init");
+                let dc: Vec<DcSupport> = group.iter(&maindevice).map(|s| s.dc_support()).collect();
+                assert_eq!(dc, [DcSupport::Bits64; 3]);
+            });
+        });
+    }
+
+    #[test]
+    fn a_vlan_tagged_frame_of_commands_is_answered_with_its_tag() {
+        netns::isolated("round_6::a_vlan_tagged_frame_of_commands_is_answered_with_its_tag", &[("a0", "b0")], || {
+            let segment = start(&toml::from_str(SEGMENT).unwrap()).unwrap();
+            let link = RawLink::open_with("a0", Options { ethertype: Some(0x88A4), promiscuous: true, outgoing: false }).unwrap();
+            // Untagged first: answered, BRD counted 3.
+            link.send(&eth(None, 0x88A4, &ecat(&[(7, 0, vec![0; 1], 0)]))).unwrap();
+            let f = back(&link, Duration::from_secs(2)).expect("the untagged frame back");
+            assert_eq!(datagrams(&f[14..])[0].1, 3);
+            // Tagged, VID 5 priority 6, and a priority tag (VID 0).
+            let mut seen = Vec::new();
+            for tci in [0xC005u16, 0xC000] {
+                link.send(&eth(Some(tci), 0x88A4, &ecat(&[(7, 0, vec![0; 1], 0)]))).unwrap();
+                let got = back(&link, Duration::from_millis(1500));
+                seen.push((tci, got.as_ref().map(|f| (f[12..16].to_vec(), u16::from_be_bytes([f[16], f[17]]), datagrams(&f[18..])[0].1))));
+            }
+            let s = segment.status();
+            assert_eq!(
+                seen,
+                [(0xC005, Some((vec![0x81, 0x00, 0xC0, 0x05], 0x88A4, 3))), (0xC000, Some((vec![0x81, 0x00, 0xC0, 0x00], 0x88A4, 3)))],
+                "a tagged frame of commands back with its tag and counted by the three devices; status {s:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_name_padded_in_front_is_refused() {
+        let cfg: EthercatConfig = toml::from_str("interface = \"b0\"\ndevices = [ { name = \" d\" } ]\n").unwrap();
+        assert_eq!(validate(&cfg).unwrap_err().to_string(), "ethercat.devices[0]: a device's name is not empty and has no surrounding whitespace");
+        assert_eq!(start(&cfg).err().unwrap().to_string(), "ethercat.devices[0]: a device's name is not empty and has no surrounding whitespace");
+    }
+}
