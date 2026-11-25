@@ -14,15 +14,15 @@
     "listen"
   ],
   "exitCode": 0,
-  "outputSha": "8e2ec18ff94ba6ff2c0ebff1b7b458386668ce8bd749e99ae1367e571c1e47e3",
-  "outputTail": "test a_listener_keeps_every_frame_it_hears_and_fuses_what_it_says ... ok\ntest stopping_joins_every_worker_and_nothing_is_heard_after ... ok\ntest what_is_about_this_machine_is_left_out_and_counted ... ok\ntest the_kept_frames_are_bounded_and_damage_is_kept_with_its_frame ... ok\ntest every_frame_is_the_interface_s_that_heard_it_and_its_account_says_so ... ok\ntest a_worker_that_panics_ends_with_its_reason_and_a_wire_name_may_hold_a_nul ... ok\ntest an_ended_worker_takes_nothing_more_and_says_what_it_never_sent ... ok\ntest sending_is_paced_bounded_and_only_where_it_listens ... ok\ntest a_tracked_frame_knows_its_place_may_be_withdrawn_and_is_told_even_mid_send ... ok\ntest the_defaults_and_the_pace_are_what_the_listener_promises ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.50s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running tests/listen.rs (target/debug/build/veredas-aranha/fe88abb95adfac60/out/listen-fe88abb95adfac60)",
-  "ranAt": "2026-11-25T04:20:59.282Z",
-  "headCommit": "5e1841cf5fbf5a945bde88d29b9b302c27789864",
+  "outputSha": "a42083399c9d089859f9d2a97f0e5c14c7ab05bacd13380185a42633e243891a",
+  "outputTail": "test what_is_about_this_machine_is_left_out_and_counted ... ok\ntest the_kept_frames_are_bounded_and_damage_is_kept_with_its_frame ... ok\ntest every_frame_is_the_interface_s_that_heard_it_and_its_account_says_so ... ok\ntest a_worker_that_panics_ends_with_its_reason_and_a_wire_name_may_hold_a_nul ... ok\ntest an_ended_worker_takes_nothing_more_and_says_what_it_never_sent ... ok\ntest sending_is_paced_bounded_and_only_where_it_listens ... ok\ntest the_frames_after_a_number_are_read_with_their_lost_at_one_moment ... ok\ntest tickets_count_the_frames_ahead_under_many_senders_and_a_withdrawn_frame_never_goes ... ok\ntest a_tracked_frame_knows_its_place_may_be_withdrawn_and_is_told_even_mid_send ... ok\ntest the_defaults_and_the_pace_are_what_the_listener_promises ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.33s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running tests/listen.rs (target/debug/build/veredas-aranha/fe88abb95adfac60/out/listen-fe88abb95adfac60)",
+  "ranAt": "2026-11-25T07:44:48.401Z",
+  "headCommit": "23d3b4f59bcf7224684e995cf0dc96c9e94c18ea",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/listen.rs",
       "file": "crates/veredas-aranha/tests/listen.rs",
-      "fileSha": "afd78c1f5ef73555d5197272dd36951f6ed623e52a603ef106079f8f0e2ba480"
+      "fileSha": "202bc06d75e47b54260fa33951f0ed0bf5db12a723aa4ba4307d68453335aad7"
     }
   ]
 }
