@@ -96,6 +96,8 @@ controlador.
 - **The bench's surfaces:** the bench file editor; a traffic monitor with decoded fields; starting
   a bench beside the portal session that reads it. Later: the live pressure panel.
 - **Supervisão's pages** embedded as tabs.
+- **Aranha's surfaces**, aranha keeping no interface of its own (Q280, ruled 2026-11-25): the
+  device table, the topology, the diff, identify, name and address, as the bench's are.
 
 ### Surfaces that arrive with their components
 - **Ábaco:** the grid as a tab, with the engine and Python of each workspace in its own process; a
@@ -458,9 +460,9 @@ kept, rust-analyzer is held to running nothing of the folder, and the embedded b
   contrast; no light theme), 45 (exports, examples, help), and the minors 51, 52 and 54.
 - **Q341** (ábaco's, not ruled): its recommendation that Oficina link the grid's
   drawing-independent logic in its own process and paint it, the worker serving the model, which
-  would put ábaco in Oficina's `MAP` row. **Q280** (aranha's, not ruled): aranha keeps no interface
-  of its own, its surfaces (the device table, the topology, the diff, identify, name and address)
-  being Oficina's, as the bench's are.
+  would put ábaco in Oficina's `MAP` row.
+- **Q370**, Oficina's: whether the suite's build needs Qt (taken meanwhile: the window and the
+  tests' driver behind features, off by default; "The crate").
 - **Q35** the licence expression. **Q36, Q37** the download's integrity and the robust link.
   **Q43** the security round. **Q45** the briefing's readings, among them where "identify, name
   and address" runs, on the laptop or through a target.
