@@ -6,7 +6,8 @@
 //! - IEC-style timers: [`Ton`], [`Tof`], [`Tp`];
 //! - edge triggers: [`RTrig`], [`FTrig`];
 //! - a counter: [`Ctu`];
-//! - bit access on unsigned values: [`Bits`].
+//! - bit access on unsigned values: [`Bits`];
+//! - the version of the language it states: [`LANGUAGE`].
 //!
 //! Rules this crate keeps, and every ORCL program keeps:
 //! - **no heap** - `no_std`, nothing allocated at run time;
@@ -17,8 +18,8 @@
 //! - **no interior mutability** - no `Cell` and no atomics, so a `&T` is read-only and a `static` is a constant.
 //!   a program crate's `clippy.toml` lists the types, and `clippy::disallowed_types` below denies them. This
 //!   crate carries no `clippy.toml` in Veredas 2 yet: law L7 refuses a TOML file without the suite's stamp, and
-//!   clippy refuses any key it does not know (`docs/questions.md` Q225). Until that is ruled the rule is kept by
-//!   convention here (DECISION PENDING);
+//!   clippy refuses any key it does not know. The architect ruled on 2026-11-25 that L7 treats the file as a
+//!   tool's (`docs/questions.md` Q225); until the law says so, the rule is kept by convention here;
 //! - **function blocks are not copied** - a timer, an edge or a counter is state with an identity. It is neither
 //!   `Copy` nor `Clone`, so scanning a copy by mistake does not compile:
 //!
@@ -78,3 +79,8 @@ pub use counters::Ctu;
 pub use edges::{FTrig, RTrig};
 pub use scan::{Program, Scan, ms, s};
 pub use timers::{Tof, Ton, Tp};
+
+/// The version of the ORCL language this library states: ORCL 1. A number of its own, as Rust has editions, apart
+/// from the crates' SemVer; a compiled program's header records it, and controlador names the versions it runs
+/// (`docs/questions.md` Q220).
+pub const LANGUAGE: u16 = 1;

@@ -35,8 +35,9 @@ them.
   its roadmap is not built.
 - **ORCL text first; ladder later**, as a view of the same source.
 - **ORCL stays a translatable subset of real Rust, with its own SemVer**; controlador states which ORCL versions it
-  runs (the suite's plan, 2026-11-05). How the language's version relates to its crates' versions is open
-  (`docs/questions.md` Q220).
+  runs (the suite's plan, 2026-11-05). The language's version is a number of its own, ORCL 1, 2 and so on, as Rust
+  has editions: stated by `orcl-std`, written in a compiled program's header and named by controlador; the crates
+  keep their SemVer (the architect, 2026-11-25, `docs/questions.md` Q220).
 
 ## Kept by convention
 

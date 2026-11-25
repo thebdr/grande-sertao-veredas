@@ -98,9 +98,10 @@ view need a second front end that reads the source (Q44, the assistant's reading
 ## Rules
 - **A translatable subset of real Rust.** A rule enters the language only if every target in view can represent it;
   start strict, since loosening a rule breaks no program and tightening one can (`language/ownership.md`, OQ2).
-- **Its own SemVer as a language**; controlador states which ORCL versions it runs. Law L3 holds the crates under
-  `crates/` to a version from 2.0.0, so they start at `2.0.0-alpha.1`; what the language's own version is beside
-  them is Q220.
+- **A version of its own as a language**, ORCL 1, 2 and so on, as Rust has editions: `orcl-std` states it
+  (`LANGUAGE`, ORCL 1), a compiled program's header records it, and controlador names the versions it runs (Q220,
+  2026-11-25). The crates keep their SemVer: law L3 holds the crates under `crates/` to a version from 2.0.0, so
+  they start at `2.0.0-alpha.1`.
 - **Time comes from the scan.** No ORCL crate reads a clock inside a program's scan; the host hands the time in.
 - **No operating-system code in the language's crates.** Real-time scheduling, memory locking, threads, sockets and
   the fieldbus belong to the host that runs a program (controlador on Linux; maquinar on the bench). So the same
@@ -152,5 +153,5 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
 - **Q33** controlador's execution model, which decides how the engine runs several tasks.
 - **Q35** the licence. **Q44** the type table, and a second front end for the translators.
 - **Q45** the reading that the conformance suite is only as good as the list of core operations ORCL allows.
-- **Q220** the language's version beside its crates'. **Q221** where the front end builds. **Q222** the pinned nightly
+- **Q221** where the front end builds. **Q222** the pinned nightly
   and its moves. **Q225** a `clippy.toml` under law L7. **Q227** the list of core-library operations ORCL allows.

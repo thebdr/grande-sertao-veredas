@@ -310,9 +310,23 @@ fn the_crate_root_is_exactly_its_attributes_its_modules_and_its_exports() {
             "pub use edges::{FTrig, RTrig};",
             "pub use scan::{Program, Scan, ms, s};",
             "pub use timers::{Tof, Ton, Tp};",
+            "/// The version of the ORCL language this library states: ORCL 1. A number of its own, as Rust has editions, apart",
+            "/// from the crates' SemVer; a compiled program's header records it, and controlador names the versions it runs",
+            "/// (`docs/questions.md` Q220).",
+            "pub const LANGUAGE: u16 = 1;",
         ]
     );
     let _: Duration = ms(1);
+}
+
+// Q220, ruled on 2026-11-25 (b): ORCL has a version of its own as a language, stated by `orcl-std`, apart from the
+// crates' SemVer.
+
+#[test]
+fn the_library_states_the_language_s_own_version_orcl_1_apart_from_its_semver() {
+    let language: u16 = orcl_std::LANGUAGE;
+    assert_eq!(language, 1, "ORCL 1");
+    assert_eq!(env!("CARGO_PKG_VERSION"), "2.0.0-alpha.1", "the crate keeps its SemVer, a number apart");
 }
 
 #[test]
