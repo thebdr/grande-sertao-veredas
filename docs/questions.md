@@ -814,6 +814,13 @@ always be put back for the next start.
   back) leave a fault record, the event being named \"the edit failed\" and not a controller
   fault?", "A record, named \"the edit failed\"".
 
+**Ruled in part** 2026-11-25, by the architect, the last rider:
+
+- The state text. Asked "While the old version is watching and may still take over after an edit,
+  does the state text carry a term for the armed fallback and the time it has left?", "Yes, a term
+  with its time left". The term joins core's table of the state text. What stays open in this entry
+  is the specification itself, controlador's to write.
+
 ## Q33 - Where is controlador's execution model written, and what does it say?
 
 **Raised** 2026-11-15, by the review's entry 13; the architect chose the smaller first release
@@ -1451,6 +1458,25 @@ Points the assistant raised, not decided:
 **Taken meanwhile**: nothing is written; the table is the architect's draft and is not in this
 repository.
 
+**Decided** 2026-11-25, by the architect, point by point:
+
+- The types. Asked "Conversion to native PLC code (S7 first): below `f64` the left column of your
+  type table is not Rust (`char` is 32 bits in Rust; `string`, `time`, `date` have no fixed form;
+  `orcl-std` uses Rust's `Duration`, which matches neither TIME nor LTIME). Do these become
+  `orcl-std` types of their own with a fixed representation?", "Yes, orcl-std's own types".
+
+- The CPU families. Asked "The classic S7-1200 lacks LWORD, LINT, ULINT, LTIME, LTOD, DT and LDT,
+  while the S7-1200 G2 is grouped with the 1500. Does the table get a column per CPU family, a
+  program that uses a type its target lacks being refused for that target?", "Yes, a column per
+  family", against the S7-1500 only at first.
+
+- A second front end. Asked "Readable SCL: names and comments survive only in a front end that reads
+  the source, while the interpreter stands on the compiler's intermediate form (ruled 15 November).
+  Do the SCL translators and the ladder view get a second front end that reads the source?", "Not
+  yet": decided when the conversion is the work in hand.
+
+The table itself is still the architect's draft, outside this repository.
+
 ## Q45 - The briefing's readings and small open points
 
 **Raised** 2026-11-15, in the deliverables list (`docs/briefing/deliverables.md`, section K) and
@@ -1480,6 +1506,64 @@ Open, never asked:
 - whether Npcap's licence allows what raw frames on Windows need.
 
 **Taken meanwhile**: the readings stand as readings, marked so wherever a plan leans on one.
+
+**Ruled in part** 2026-11-25, by the architect, point by point:
+
+- K1. Asked "The state text: are the arguments inside the `force` term always written in the order
+  in, out, var (the counts of forced inputs, outputs and variables)?", "Yes: in, out, var".
+
+- K3. Asked "A force is suspended while the program is halted (at a breakpoint). Does it apply again
+  by itself when the program continues?", "Yes, it applies again".
+
+- K4. Asked "A shadow test (a new version computing beside the driving one): with the two versions'
+  IO mapping allowed to differ, is their output compared per physical channel?", "Per variable
+  name", against the assistant's reading (per physical channel): outputs are compared by the
+  program's variable names.
+
+- K5. Asked "The state text: the start-up's phases (load, restore, handler, devices) have numbers.
+  Does the text show the phase by its word alone, without an `id`?", "Word alone, no id".
+
+- K2 and K6 were ruled with Q100 ("Accept all eight (Recommended)", its points 5 and 6), K7 with
+  Q228 (its point 8), and the list of core operations with Q227, all the same day.
+
+**Ruled in part** 2026-11-25, by the architect, four more points, three of them against the
+assistant's readings:
+
+- Windows. Asked "Does Windows gain a third use for controlador's code, beside development and
+  simulation: the IO check from a laptop (a light controlador session on the laptop driving a remote
+  IO module, which you kept on 15 November under three rules)?", "Linux laptops only": the IO check
+  from a laptop runs where controlador runs for real; on a Windows laptop it goes through a target.
+
+- A shadow test at a power cycle. Asked "A shadow test not yet accepted when the power is cut. You
+  ruled \"always as before\". Does that mean the version that was driving drives again, the test
+  stays unaccepted, and the fallback flag resets as decided?", "The shadow test is dropped": the
+  driving version drives again and the unaccepted test is gone, started again by a person.
+
+- Knowledge protection. Asked "The \"knowledge protection\" you mentioned in passing (locking a
+  block's source, as PLC vendors offer). Is it a picture of the trade and not a requirement, ORCL
+  having no such lock?", "A requirement, later": a way to protect a block's source is wanted
+  eventually and goes on the list.
+
+- K12. Asked "In supervisão every state has a mark and a word. Is \"good\" (green) a new state class
+  of its own, or the colour of the existing normal class?", "The colour of normal".
+
+**Ruled in part** 2026-11-25, by the architect, three of the points never asked before:
+
+- G2. Asked "\"Identify, name and address a device\" (blink a PROFINET device, give it its name and
+  IP address). Does it run from the laptop itself, or through a target controller?", "Both": from
+  the laptop when it is on the segment, and through a target's embedded aranha when it is not.
+
+- C5. Asked "Where do the readers of vendor description files live (GSDML for PROFINET, ESI for
+  EtherCAT, EDS for EtherNet/IP)? Oficina's hardware configuration reads them, and the bench and
+  controlador may too.", "In core", against a member of their own and Oficina.
+
+- A Modbus module's own timeout. Asked "The IO check from a laptop refuses to drive outputs on a
+  Modbus module that has no timeout of its own or too long a one. Does the hardware configuration
+  check a Modbus module's own timeout in production too, for a real controller?", "In production
+  too, as a warning": the configuration warns and the engineer may accept it.
+
+Not a ruling but a fact still to check: whether Npcap's licence allows what raw frames on Windows
+need. With it this entry is ruled throughout.
 
 ---
 
