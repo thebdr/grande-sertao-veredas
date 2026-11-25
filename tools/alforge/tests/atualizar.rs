@@ -166,6 +166,19 @@ fn bundle_of(work: &Path, release: &str, target: &str, bins: &[&str], edit: impl
     out
 }
 
+/// A child's output once it ends, or a failure after `secs` (a regression must not hang the run).
+fn within(mut child: std::process::Child, secs: u64) -> std::process::Output {
+    let start = std::time::Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if start.elapsed() > std::time::Duration::from_secs(secs) {
+            child.kill().unwrap();
+            panic!("the command did not end within {secs} s");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    child.wait_with_output().unwrap()
+}
+
 fn sha256_file(p: &Path) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(std::fs::read(p).unwrap()))
@@ -506,6 +519,16 @@ fn the_update_inside_the_machine_is_judged_by_what_its_console_and_the_host_say(
         ("ALFORGE-AGAIN-EXIT 2", "ALFORGE-AGAIN-EXIT 0", vec!["the same bundle was not refused a second time (it exited 0)".to_string()]),
         ("ALFORGE-RESTARTED 812 1204 active", "ALFORGE-RESTARTED 812 812 active", vec!["the bench, killed, was not started again by systemd (Some([\"812\", \"812\", \"active\"]))".to_string()]),
         ("ALFORGE-RESTARTED 812 1204 active", "ALFORGE-RESTARTED 812 0 inactive", vec!["the bench, killed, was not started again by systemd (Some([\"812\", \"0\", \"inactive\"]))".to_string()]),
+        ("ALFORGE-RESTARTED 812 1204 active", "ALFORGE-RESTARTED 812 1204 activating", vec!["the bench, killed, was not started again by systemd (Some([\"812\", \"1204\", \"activating\"]))".to_string()]),
+        (&format!("current {old} {new}"), &format!("current {old}"), vec![format!("/opt/veredas holds no {new}")]),
+        (
+            &format!("/opt/veredas/{new}/bin/veredas-maquinar"),
+            &format!("/opt/veredas/{old}/bin/veredas-maquinar"),
+            vec![
+                format!("no running veredas-maquinar is the new release's (/opt/veredas/{new}/bin/veredas-maquinar): [\"/opt/veredas/{old}/bin/veredas-maquinar\", \"/opt/veredas/{new}/bin/veredas-supervisao\"]"),
+                format!("an executable of another release still runs: [\"/opt/veredas/{old}/bin/veredas-maquinar\", \"/opt/veredas/{new}/bin/veredas-supervisao\"]"),
+            ],
+        ),
         ("ALFORGE-UPDATE-EXIT 0\n", "", vec!["the update command did not install the bundle (it exited with nothing said)".to_string()]),
     ] {
         assert_eq!(faults(&good.replace(from, to)), want, "{from}");
@@ -519,6 +542,12 @@ fn the_update_inside_the_machine_is_judged_by_what_its_console_and_the_host_say(
         maquina::update_faults(&full(&good, 200, &reboot.replace("VEREDAS-SUMS-OK 1.1.0", "VEREDAS-SUMS-OK 1.0.0"), 200, "a"), "1.0.0", "1.1.0", TARGET),
         ["booted again, the machine's check does not say `VEREDAS-SUMS-OK 1.1.0`"]
     );
+    for line in ["VEREDAS-ON-PATH ok", "VEREDAS-ATUALIZAR ok"] {
+        assert_eq!(
+            maquina::update_faults(&full(&good, 200, &reboot.replace(line, "VEREDAS-OTHER"), 200, "a"), "1.0.0", "1.1.0", TARGET),
+            [format!("booted again, the machine's check does not say `{line}`")]
+        );
+    }
     let got = maquina::update_faults(&full(&good, 200, &reboot, 500, "a"), "1.0.0", "1.1.0", TARGET);
     assert_eq!(got, alforge::together::plant_faults(&served(500)).into_iter().map(|f| format!("booted again: {f}")).collect::<Vec<_>>());
 }
@@ -541,7 +570,7 @@ fn the_command_holds_its_lock_before_it_reads_anything_and_reads_the_bundle_once
     assert_eq!((code, err.as_str()), (Some(2), "veredas-atualizar: another update is running\n"));
     assert_eq!(outside_staging(m.snapshot()), before, "the refused update changed nothing (the staging is the first one's)");
     std::fs::write(&fifo, std::fs::read(&b).unwrap()).unwrap();
-    let out = slow.wait_with_output().unwrap();
+    let out = within(slow, 120);
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("(SHA-256 {})", sha256_file(&b))), "the digest of the bytes it read");
     assert_eq!(std::fs::read_link(m.path("opt/veredas/current")).unwrap(), PathBuf::from(format!("veredas-1.1.0-{TARGET}")));
@@ -705,7 +734,7 @@ fn round_two_the_lock_holds_the_installed_release_read_and_the_manifest_is_held_
     let (code, _, err) = m.run(&[&c]);
     assert_eq!((code, err.as_str()), (Some(2), "veredas-atualizar: another update is running\n"));
     std::fs::write(&installed, &text).unwrap();
-    let out = slow.wait_with_output().unwrap();
+    let out = within(slow, 120);
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(std::fs::read_link(m.path("opt/veredas/current")).unwrap(), PathBuf::from(format!("veredas-1.1.0-{TARGET}")));
 
@@ -771,15 +800,143 @@ fn round_two_the_lock_holds_the_installed_release_read_and_the_manifest_is_held_
 
     // Installed: a tester's file at the name the old command used for its scratch link and a
     // tester's alias through `current` are kept.
-    std::fs::write(m.path("usr/local/bin/veredas-portal.new"), "a tester's notes\n").unwrap();
+    std::fs::write(m.path("usr/local/bin/veredas-novo.new"), "a tester's notes\n").unwrap();
     std::os::unix::fs::symlink("/opt/veredas/current/bin/veredas-velho", m.path("usr/local/bin/vv")).unwrap();
-    std::fs::set_permissions(m.path("usr/local/bin/veredas-portal.new"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::set_permissions(m.path("usr/local/bin/veredas-novo.new"), std::fs::Permissions::from_mode(0o644)).unwrap();
     let (code, out, err) = m.run(&[&n]);
     assert_eq!(code, Some(0), "{out}{err}");
-    assert_eq!(std::fs::read_to_string(m.path("usr/local/bin/veredas-portal.new")).unwrap(), "a tester's notes\n");
+    assert_eq!(std::fs::read_to_string(m.path("usr/local/bin/veredas-novo.new")).unwrap(), "a tester's notes\n", "the old scratch name of a link the run made");
     assert_eq!(std::fs::read_link(m.path("usr/local/bin/vv")).unwrap(), PathBuf::from("/opt/veredas/current/bin/veredas-velho"), "a tester's alias kept");
     assert!(std::fs::read_link(m.path("usr/local/bin/veredas-velho")).is_err(), "the release's own link of an executable it no longer has dropped");
     let scratch: Vec<String> = std::fs::read_dir(m.path("usr/local/bin")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).filter(|n| n.contains(".atualizar-")).collect();
     assert_eq!(scratch, Vec::<String>::new(), "no scratch link left");
+}
+
+/// A library put before libc's (`LD_PRELOAD`) that makes calls fail as a full or failing disk
+/// does: every `symlink` after the first `ALFORGE_FAIL_SYMLINK_AFTER` (ENOSPC), and an `unlink`
+/// of a path holding `ALFORGE_FAIL_UNLINK` (EIO).
+fn failing_disk(dir: &Path) -> PathBuf {
+    let c = dir.join("disk.c");
+    std::fs::write(
+        &c,
+        r#"#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+static int made = 0;
+static int fail_link(void) { const char *n = getenv("ALFORGE_FAIL_SYMLINK_AFTER"); if (!n) return 0; return ++made > atoi(n); }
+static int fail_unlink(const char *p) { const char *m = getenv("ALFORGE_FAIL_UNLINK"); return m && strstr(p, m); }
+int symlink(const char *t, const char *l) { if (fail_link()) { errno = ENOSPC; return -1; } int (*f)(const char *, const char *) = dlsym(RTLD_NEXT, "symlink"); return f(t, l); }
+int symlinkat(const char *t, int d, const char *l) { if (fail_link()) { errno = ENOSPC; return -1; } int (*f)(const char *, int, const char *) = dlsym(RTLD_NEXT, "symlinkat"); return f(t, d, l); }
+int unlink(const char *p) { if (fail_unlink(p)) { errno = EIO; return -1; } int (*f)(const char *) = dlsym(RTLD_NEXT, "unlink"); return f(p); }
+int unlinkat(int d, const char *p, int fl) { if (fail_unlink(p)) { errno = EIO; return -1; } int (*f)(int, const char *, int) = dlsym(RTLD_NEXT, "unlinkat"); return f(d, p, fl); }
+"#,
+    )
+    .unwrap();
+    let so = dir.join("disk.so");
+    let out = Command::new("cc").args(["-shared", "-fPIC", "-o"]).arg(&so).arg(&c).arg("-ldl").output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    so
+}
+
+#[test]
+fn round_three_a_rollback_says_what_it_could_not_put_back_and_links_are_the_releases_by_their_own_name() {
+    let tools = tempfile::tempdir().unwrap();
+    let disk = failing_disk(tools.path());
+    let w = tempfile::tempdir().unwrap();
+    // `current` moved, then the disk fails: the first link, and `current`'s putting back, cannot
+    // be written. Not "as it was": exit 4, what is left said, the folder `current` names kept.
+    let m = Machine::new();
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-novo", "veredas-portal"], |_| {});
+    let out = m.command(&[&b], &[("VEREDAS_SETTLE", "0"), ("LD_PRELOAD", disk.to_str().unwrap()), ("ALFORGE_FAIL_SYMLINK_AFTER", "1")]).output().unwrap();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(4), "{err}");
+    assert!(err.starts_with("veredas-atualizar: not installed, and the machine could not all be put back as it was:\n"), "{err}");
+    let new = format!("veredas-1.1.0-{TARGET}");
+    assert!(err.contains(&format!("`current` could not be put back on veredas-1.0.0-{TARGET} (No space left on device): it names {new}")), "{err}");
+    assert_eq!(std::fs::read_link(m.path("opt/veredas/current")).unwrap(), PathBuf::from(&new));
+    assert!(m.path("opt/veredas").join(&new).join("bin/veredas-portal").is_file(), "the folder `current` names is kept");
+    assert!(err.contains("to go back: sudo ln -sfn veredas-1.0.0-"), "{err}");
+    assert_eq!(m.calls(), "");
+    // Two of the release's own links dropped in name order, the second failing: the first put back.
+    let m = Machine::new();
+    std::os::unix::fs::symlink("/opt/veredas/current/bin/veredas-antigo", m.path("usr/local/bin/veredas-antigo")).unwrap();
+    let only = bundle_of(w.path(), "1.2.0", TARGET, &["veredas-portal"], |_| {});
+    let before = m.snapshot();
+    let out = m.command(&[&only], &[("VEREDAS_SETTLE", "0"), ("LD_PRELOAD", disk.to_str().unwrap()), ("ALFORGE_FAIL_UNLINK", "usr/local/bin/veredas-velho")]).output().unwrap();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(err.ends_with(&format!("{}: Input/output error\n", m.path("usr/local/bin/veredas-velho").display())), "{err}");
+    assert_eq!(m.snapshot(), before, "veredas-antigo's link put back, current and the folder too");
+    // A tester's alias through `current` at an executable's name, naming another: refused.
+    let m = Machine::new();
+    std::os::unix::fs::symlink("/opt/veredas/current/bin/veredas-velho", m.path("usr/local/bin/veredas-novo")).unwrap();
+    let before = m.snapshot();
+    let (code, _, err) = m.run(&[&b]);
+    assert_eq!(code, Some(2));
+    assert!(err.contains(&format!("{} is not a link a release made", m.path("usr/local/bin/veredas-novo").display())), "{err}");
+    assert_eq!(m.snapshot(), before);
+}
+
+#[test]
+fn round_three_the_manifests_kinds_semvers_identifiers_the_archives_room_first_and_the_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    let m = Machine::new();
+    let w = tempfile::tempdir().unwrap();
+    let refused = |b: &Path| -> String {
+        let (code, out, err) = m.run(&[b]);
+        assert_eq!(code, Some(2), "{out}{err}");
+        err
+    };
+    // `[tested]` without `together`, a component's version that is no SemVer.
+    let no_together = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |d| {
+        let t: String = std::fs::read_to_string(d.join("release.toml")).unwrap().lines().filter(|l| !l.starts_with("together = ")).map(|l| format!("{l}\n")).collect();
+        std::fs::write(d.join("release.toml"), t).unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    assert!(refused(&no_together).ends_with("  release.toml's [tested] does not state its `suite` and `together`\n"));
+    let bad_version = bundle_of(w.path(), "1.1.1", TARGET, &["veredas-portal"], |d| {
+        let t = std::fs::read_to_string(d.join("release.toml")).unwrap().replace("\nversion = \"2.0.0\"\n", "\nversion = \"2.x\"\n");
+        std::fs::write(d.join("release.toml"), t).unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    assert!(refused(&bad_version).ends_with("  release.toml's component `veredas-portal` is not a name, a SemVer version and its executables\n"));
+    // The archive's room judged before it is copied: one this user cannot read, the reserve above
+    // the free room, refused for the room and not for the read.
+    let locked = bundle_of(w.path(), "1.1.2", TARGET, &["veredas-portal"], |_| {});
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let out = m.command(&[&locked], &[("VEREDAS_SETTLE", "0"), ("VEREDAS_RESERVE_MB", "1000000000")]).output().unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(err.contains("  the bundle's archive needs ") && !err.contains("Permission denied"), "{err}");
+    // SemVer: a numeric identifier ranks below an alphanumeric one.
+    for (installed, offered, newer) in [("1.0.0-alpha.1", "1.0.0-alpha.beta", true), ("1.0.0-alpha.beta", "1.0.0-alpha.1", false)] {
+        let m = Machine::with(installed);
+        let b = bundle_of(w.path(), offered, TARGET, &["veredas-portal"], |_| {});
+        let (code, out, err) = m.run(&[&b]);
+        assert_eq!(code, Some(if newer { 0 } else { 2 }), "{installed} then {offered}: {out}{err}");
+    }
+    // Under a caller's umask of 077 the release's folders are still the services' to read.
+    let m = Machine::new();
+    let b = bundle_of(w.path(), "1.3.0", TARGET, &["veredas-portal"], |_| {});
+    let script = m.stub.path().join("veredas-atualizar");
+    std::fs::write(&script, maquina::ATUALIZAR).unwrap();
+    let out = Command::new("sh")
+        .args(["-c", "umask 077; exec python3 \"$0\" \"$1\""])
+        .arg(&script)
+        .arg(&b)
+        .env("VEREDAS_ROOT", m.root.path())
+        .env("VEREDAS_SETTLE", "0")
+        .env("PATH", format!("{}:/usr/bin:/bin", m.stub.path().display()))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    for d in ["", "/bin", "/planta"] {
+        let mode = std::fs::metadata(m.path(&format!("opt/veredas/veredas-1.3.0-{TARGET}{d}"))).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "{d}");
+    }
 }
 

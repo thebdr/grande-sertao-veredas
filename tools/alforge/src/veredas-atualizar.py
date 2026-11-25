@@ -13,8 +13,10 @@ one step, the PATH's links follow, and the bench and supervisão restart on it a
 up. The plant's files in the home folder are left as they are; the old release stays where it was.
 Anything refused, an I/O error included, leaves the machine as it was.
 
-Exit 0 when installed, 2 when refused (every reason said), 3 when installed but the services did
-not stay up on it (the way back said), 1 on a usage error. VEREDAS_ROOT (default /) roots every
+Exit 0 when installed, 2 when refused (the reasons of the first check that fails said: the
+archive, then its sums, its manifest, its executables' libraries, the PATH), 3 when installed but
+the services did not stay up on it (the way back said), 4 when a failed install could not all be
+put back (what is left said, the release's folder kept), 1 on a usage error. VEREDAS_ROOT (default /) roots every
 path it touches; VEREDAS_RESERVE_MB (default 64) is the room it leaves free on the disk;
 VEREDAS_SETTLE (default 5) the seconds it watches the services for, twice.
 """
@@ -41,6 +43,14 @@ RESERVE = int(os.environ.get("VEREDAS_RESERVE_MB", "64")) << 20
 SETTLE = float(os.environ.get("VEREDAS_SETTLE", "5"))
 # What a trial cut's manifest says it ran (alforge's `cut::NOT_RUN`): a trial is never installed.
 TRIAL = "not run: a trial cut"
+
+
+class Broken(Exception):
+    """An install that failed and could not be put back: what is left, said as it stands."""
+
+    def __init__(self, reasons):
+        super().__init__("\n".join(reasons))
+        self.reasons = reasons
 
 
 class Refused(Exception):
@@ -223,7 +233,7 @@ def check_path(bins):
     wrong = []
     for b in bins:
         p = os.path.join(PATH_DIR, b)
-        if os.path.lexists(p) and not (os.path.islink(p) and os.readlink(p).startswith(THROUGH)):
+        if os.path.lexists(p) and not (os.path.islink(p) and os.readlink(p) == THROUGH + b):
             wrong.append(f"{p} is not a link a release made: an executable of the release would replace it")
     if wrong:
         raise Refused(wrong)
@@ -250,32 +260,43 @@ def install(stage, top, old_top, bins):
             link = os.path.join(PATH_DIR, b)
             if not (os.path.islink(link) and os.readlink(link) == THROUGH + b):
                 point(link, THROUGH + b)
-        for name in os.listdir(PATH_DIR):
+        for name in sorted(os.listdir(PATH_DIR)):
             link = os.path.join(PATH_DIR, name)
             # A release's own link names its executable through `current` under its own name;
             # another link (a tester's alias) is kept.
             if os.path.islink(link) and os.readlink(link) == THROUGH + name and name not in bins:
                 os.unlink(link)
     except OSError as e:
-        for what in [lambda: old_top and point(CURRENT, old_top)] + [
-            (lambda n=n, t=t: point(os.path.join(PATH_DIR, n), t)) for n, t in links_before.items()
-        ]:
+        # A link or a rename names what it was making second.
+        why = f"{e.filename2 or e.filename or ''}: {e.strerror}".lstrip(": ")
+        failed = []
+        if old_top:
             try:
-                what()
-            except OSError:
-                pass
+                if os.readlink(CURRENT) != old_top:
+                    point(CURRENT, old_top)
+            except OSError as r:
+                failed.append(f"`current` could not be put back on {old_top} ({r.strerror}): it names {top}, kept in {dest}")
+        for n, t in links_before.items():
+            p = os.path.join(PATH_DIR, n)
+            try:
+                if not (os.path.islink(p) and os.readlink(p) == t):
+                    point(p, t)
+            except OSError as r:
+                failed.append(f"{p} could not be put back on {t} ({r.strerror})")
         if os.path.isdir(PATH_DIR):
             for name in os.listdir(PATH_DIR):
                 p = os.path.join(PATH_DIR, name)
-                if name not in links_before and os.path.islink(p):
+                if name not in links_before and os.path.islink(p) and os.readlink(p).startswith(THROUGH):
                     try:
                         os.unlink(p)
-                    except OSError:
-                        pass
+                    except OSError as r:
+                        failed.append(f"{p} could not be removed ({r.strerror})")
+        if failed:
+            # The folder `current` may still name is kept: nothing is deleted under a running link.
+            raise Broken([why] + failed)
         if moved:
             shutil.rmtree(dest, ignore_errors=True)
-        # A link or a rename names what it was making second.
-        raise Refused([f"{e.filename2 or e.filename or ''}: {e.strerror}".lstrip(": ")])
+        raise Refused([why])
 
 
 def services():
@@ -305,6 +326,9 @@ def main(argv):
         print("usage: sudo veredas-atualizar <bundle.tar.gz>", file=sys.stderr)
         return 1
     bundle = argv[1]
+    # The release's folders as the archive's data filter makes its files: readable by the
+    # services' user whatever umask the caller has.
+    os.umask(0o022)
     try:
         # One update at a time, the lock taken before anything is read: the installed release
         # and `current` are the ones this update replaces. The release's folder itself is locked,
@@ -372,6 +396,12 @@ def main(argv):
         for r in e.reasons:
             print(f"  {r}", file=sys.stderr)
         return 2
+    except Broken as e:
+        print("veredas-atualizar: not installed, and the machine could not all be put back as it was:", file=sys.stderr)
+        for r in e.reasons:
+            print(f"  {r}", file=sys.stderr)
+        print(f"veredas-atualizar: to go back: sudo ln -sfn {os.path.basename(old_top)} /opt/veredas/current, and the links named above", file=sys.stderr)
+        return 4
     except Exception as e:
         # Whatever else a bundle makes go wrong before it is installed is a refusal too.
         print("veredas-atualizar: not installed, the machine is as it was:", file=sys.stderr)
