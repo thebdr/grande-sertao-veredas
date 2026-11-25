@@ -306,6 +306,10 @@ pub struct SourceHealth {
     pub last_arrival_ms: i64,
     /// The last parsed stamp, for a log.
     pub last_ts: Option<NaiveDateTime>,
+    /// For a log, whether its start's history is in the store: every line of every file as it
+    /// stood when the start opened it, read and stored (at once for a log started at its end);
+    /// true for a source with no history to read (docs/questions.md Q319).
+    pub history_read: bool,
 }
 
 /// One series' latest state as the ingest keeps it: the listing a server serves instead of a
@@ -452,6 +456,8 @@ struct Inner {
     wide_buf: Vec<Vec<WideRow>>,
     frame_buf: Vec<serde_json::Value>,
     stats: BTreeMap<String, Stats>,
+    /// Per log, where its worker says its start's history read: a count of its lines.
+    history_read: HashMap<String, Arc<std::sync::atomic::AtomicU64>>,
     series: BTreeMap<String, SeriesLastLocal>,
     counters: Counters,
     vitals_at: Option<Instant>,
@@ -586,7 +592,7 @@ fn parse_type(text: &str) -> Option<SeriesType> {
 }
 
 /// A log source built and checked: the source, its timestamp formats, whether it stamps, its display name.
-type BuiltLog = (Box<dyn crate::source::Source>, Vec<String>, bool, String);
+type BuiltLog = (Box<dyn crate::source::Source>, Vec<String>, bool, String, Arc<std::sync::atomic::AtomicU64>);
 
 /// What the store is opened over, compiled once from a configuration: every capture rule a
 /// table, every OPC source's rules a table each (the source compiled with its password from
@@ -751,13 +757,15 @@ impl Session {
                 ),
             };
             let formats: Vec<String> = log.timestamp.as_ref().map(|t| t.formats.iter().map(|f| f.trim().to_string()).collect()).unwrap_or_default();
+            // Where the worker says its start's history read (docs/questions.md Q319).
+            let history = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
             let source: Box<dyn crate::source::Source> = match &log.kind {
                 LogKind::File { path } => {
                     if path.trim().is_empty() {
                         return Err(SessionError::Log { id, reason: "the file path is empty".into() });
                     }
                     let start = if cfg.start.is_some() { FileStart::Begin } else { FileStart::End };
-                    let mut src = FileTailSource::new(&id, &display, path.trim(), TailConfig { start, ..TailConfig::default() });
+                    let mut src = FileTailSource::new(&id, &display, path.trim(), TailConfig { start, ..TailConfig::default() }).with_history_read(Arc::clone(&history));
                     if let Some(spec) = ts.clone() {
                         src = src.with_timestamps(spec);
                     }
@@ -783,14 +791,14 @@ impl Session {
                             FamilyStart::Backfill(t)
                         }
                     };
-                    let mut src = FamilyTailSource::new(&id, &display, spec, FamilyTailConfig { start, ..FamilyTailConfig::default() });
+                    let mut src = FamilyTailSource::new(&id, &display, spec, FamilyTailConfig { start, ..FamilyTailConfig::default() }).with_history_read(Arc::clone(&history));
                     if let Some(spec) = ts.clone() {
                         src = src.with_timestamps(spec);
                     }
                     Box::new(src)
                 }
             };
-            built.push((source, formats, ts.is_some(), display));
+            built.push((source, formats, ts.is_some(), display, history));
         }
 
         // The record's file asked first (refused like the store when a database stands there),
@@ -816,10 +824,12 @@ impl Session {
         let mut sources: Vec<SourceInfo> = Vec::new();
         let mut stats: BTreeMap<String, Stats> = BTreeMap::new();
         let mut time_formats: HashMap<SourceId, Vec<String>> = HashMap::new();
+        let mut history_read: HashMap<String, Arc<std::sync::atomic::AtomicU64>> = HashMap::new();
 
         let (mut set, rx) = SourceSet::new();
-        for (source, formats, has_ts, display) in built {
+        for (source, formats, has_ts, display, history) in built {
             let id = source.id().as_str().to_string();
+            history_read.insert(id.clone(), history);
             if let Err(e) = set.spawn(source) {
                 set.stop_all();
                 return Err(SessionError::Spawn { id, source: e });
@@ -931,6 +941,7 @@ impl Session {
             wide_buf,
             frame_buf: Vec::new(),
             stats,
+            history_read,
             series: BTreeMap::new(),
             counters: Counters::default(),
             vitals_at: None,
@@ -1461,7 +1472,14 @@ impl Inner {
                     }
                 },
             };
-            health.insert(id.clone(), SourceHealth { state, count: st.count, last_arrival_ms: st.last_arrival_ms, last_ts: st.last_ts });
+            // A log's history is read once the lines its worker had sent by then are stored (the
+            // count is the lines this pump stored, flushed before this refresh); a source with
+            // no history to read is read from its start.
+            let history_read = self.history_read.get(id).is_none_or(|at| {
+                let sent = at.load(std::sync::atomic::Ordering::Relaxed);
+                sent != u64::MAX && st.count >= sent
+            });
+            health.insert(id.clone(), SourceHealth { state, count: st.count, last_arrival_ms: st.last_arrival_ms, last_ts: st.last_ts, history_read });
         }
         if let Ok(mut h) = live.health.write() {
             *h = health;

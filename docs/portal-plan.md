@@ -243,6 +243,14 @@ where they differ.
   on a file mixing them), no link followed, a line past 4 MiB searched in its first 4 MiB (the
   cut its end to the patterns), a cap of 0 giving no line, a cancel heard while a file is read
   (at every slice; a line in hand is scanned whole first).
+- **A log says when its start's history is in the store** (Q319, 2026-11-25; **built, C-096**):
+  each log's health carries `history_read`, said once the lines its worker had sent by the end of
+  every file as it stood at the start are stored; a comissionador replay and supervisão's host
+  wait for it instead of guessing from stillness.
+- **Every gated write and send kept in the store with the moment it was answered** (Q318,
+  2026-11-25; not built): a table of the session's writes, what was written to what, the plant's
+  answer and when, so a replay's write moves its clock to that moment; its columns follow what
+  comissionador reads (C-097 to come).
 - **Q14 stands:** portal builds no desktop UI. Oficina is a component of its own.
 - Open: the review's entries 22 and 33 (Q31); robust requests (Q37); what gives way at a size
   limit, and the window's ceiling (Q41); the security round (Q43, P-014).

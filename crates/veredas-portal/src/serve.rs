@@ -135,6 +135,7 @@ pub fn snapshot(live: &Live) -> Json_ {
                     "count": s.count,
                     "last_arrival_ms": s.last_arrival_ms,
                     "last_ts": s.last_ts.map(|t| t.and_utc().timestamp_millis()),
+                    "history_read": s.history_read,
                 }),
             );
         }

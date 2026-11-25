@@ -542,3 +542,96 @@ fn a_reader_holding_the_store_never_holds_the_pump() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
 }
+
+/// A line of the history tests, stamped `i` seconds after 10:00 on the plant's day (hours past
+/// the hour, so tens of thousands stay stamped in order).
+fn history_line(i: u32) -> String {
+    format!("2026-07-19 {:02}:{:02}:{:02} temp={:.1} item=A{} state=run\n", 10 + i / 3600, (i / 60) % 60, i % 60, 20.0 + f64::from(i % 50) * 0.5, i % 3)
+}
+
+fn write_history(path: &std::path::Path, range: std::ops::Range<u32>) {
+    let body: String = range.map(history_line).collect();
+    std::fs::write(path, body).unwrap();
+}
+
+/// Waits until `id` says its start's history read, checking at every look that it never says
+/// so before every one of `history` rows is in the store; returns the rows then.
+fn rows_when_history_read(live: &Live, id: &str, history: u64) -> u64 {
+    let started = Instant::now();
+    loop {
+        let said = live.health.read().unwrap().get(id).is_some_and(|h| h.history_read);
+        let stored = rows(live, "readings");
+        if said {
+            assert_eq!(stored, history, "`{id}` said its history read with {stored} of {history} rows stored");
+            return stored;
+        }
+        assert!(started.elapsed() < Duration::from_secs(60), "`{id}` never said its history read: {stored} of {history} rows stored");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// A log says when its start's history is in the store (docs/questions.md Q319): a family read
+/// from a start in the past, five of its eight members empty in a row (the case a replay's guess
+/// by stillness lost), says so only once every line written before the start is a row; a single
+/// file read from its start alike; a log started at its end says so at once, its history skipped,
+/// no row of it stored; a source with no history to read (a log not there) reads as read.
+#[test]
+fn a_log_says_when_its_start_s_history_is_in_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let fam = dir.path().join("fam");
+    std::fs::create_dir_all(&fam).unwrap();
+    write_history(&fam.join("plant_1.log"), 0..20_000);
+    for i in 2..=6 {
+        std::fs::write(fam.join(format!("plant_{i}.log")), "").unwrap();
+    }
+    write_history(&fam.join("plant_7.log"), 20_000..40_000);
+    write_history(&fam.join("plant_8.log"), 40_000..60_000);
+    let stamps = log_source("x", &fam).timestamp;
+    let mut cfg = SessionConfig::new("history");
+    cfg.start = Some(midnight());
+    cfg.logs.push(LogSourceConfig {
+        id: "fam".into(),
+        display_name: String::new(),
+        kind: LogKind::Family { dir: fam.to_string_lossy().into_owned(), pattern: r"plant_(?P<idx>\d+)\.log".into(), date_format: None, active: ActiveConfig::Newest, recursive: false },
+        timestamp: stamps.clone(),
+    });
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    assert_eq!(rows_when_history_read(&session.live(), "fam", 60_000), 60_000);
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+
+    // A single file read from its start.
+    let file = dir.path().join("one.log");
+    write_history(&file, 0..40_000);
+    let mut cfg = SessionConfig::new("one");
+    cfg.start = Some(midnight());
+    cfg.logs.push(log_source("one", &file));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    assert_eq!(rows_when_history_read(&session.live(), "one", 40_000), 40_000);
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+
+    // Started at its end: read at once, nothing of its history stored; and a log not there.
+    let mut cfg = SessionConfig::new("live");
+    cfg.logs.push(log_source("one", &file));
+    cfg.logs.push(log_source("none", &dir.path().join("not_there.log")));
+    cfg.rules.push(readings_rule(None));
+    let session = Session::start(cfg).unwrap();
+    let live = session.live();
+    assert!(
+        wait(Duration::from_secs(10), || {
+            let h = live.health.read().unwrap();
+            ["one", "none"].iter().all(|id| h.get(*id).is_some_and(|s| s.history_read))
+        }),
+        "{:?}",
+        live.health.read().unwrap()
+    );
+    assert_eq!(rows(&live, "readings"), 0, "the history skipped");
+    for (id, r) in session.stop() {
+        r.unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}

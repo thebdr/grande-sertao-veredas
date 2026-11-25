@@ -13,6 +13,16 @@ mod family;
 mod pathkind;
 mod single;
 
+/// A log's start read in (docs/questions.md Q319): the number of lines its worker had sent once
+/// it reached the end of every file as it stood when the start opened it, `u64::MAX` before. A
+/// session holds one per log (`with_history_read`) and says the log's history read once that
+/// many of its lines are in the store. Set once: the first moment counts.
+pub(crate) fn mark_history_read(at: &Option<std::sync::Arc<std::sync::atomic::AtomicU64>>, sent: u64) {
+    if let Some(at) = at {
+        let _ = at.compare_exchange(u64::MAX, sent, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[doc(hidden)]
 pub use backfill::{line_table, plan_for, plan_for_with};
 pub use family::{FamilyStart, FamilyTailConfig, FamilyTailSource};

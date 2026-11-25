@@ -82,11 +82,21 @@ pub struct FamilyTailSource {
     spec: FamilySpec,
     cfg: FamilyTailConfig,
     ts: Option<TimestampSpec>,
+    history: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl FamilyTailSource {
     pub fn new(id: impl AsRef<str>, display_name: impl Into<String>, spec: FamilySpec, cfg: FamilyTailConfig) -> Self {
-        FamilyTailSource { id: SourceId::new(id), name: display_name.into(), spec, cfg, ts: None }
+        FamilyTailSource { id: SourceId::new(id), name: display_name.into(), spec, cfg, ts: None, history: None }
+    }
+
+    /// Where the worker says its start's history read: the lines it had sent once a backfill
+    /// reached its seam (the end of every member as it stood when the start opened it), or once
+    /// a live start attached at the active's end, at once for a family not there or with nothing
+    /// of its history to read; `u64::MAX` until then (docs/questions.md Q319).
+    pub fn with_history_read(mut self, at: Arc<std::sync::atomic::AtomicU64>) -> Self {
+        self.history = Some(at);
+        self
     }
 
     /// Attach a per-source line-stamp rule; a parse failure leaves `parsed_ts` empty and the
@@ -126,7 +136,7 @@ impl Source for FamilyTailSource {
         let (attached_tx, attached_rx) = channel::<()>();
         let join = std::thread::Builder::new()
             .name(format!("family:{id}"))
-            .spawn(move || run_family(this.spec, this.cfg, ts_spec, emitter, thread_stop, attached_tx))
+            .spawn(move || run_family(this.spec, this.cfg, ts_spec, emitter, thread_stop, attached_tx, this.history))
             .map_err(|e| SourceError::io(Path::new("<thread spawn>"), e))?;
         // The start returns once the worker has looked at its folder (listed it, or located its
         // backfill), so a line written after the start is never taken as history; bounded.
@@ -510,6 +520,7 @@ fn run_family(
     mut emitter: Emitter,
     stop: Arc<AtomicBool>,
     attached_tx: Sender<()>,
+    history: Option<Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<(), SourceError> {
     let mut attached_slot = Some(attached_tx);
     let (wake_tx, wake_rx) = channel::<()>();
@@ -524,11 +535,17 @@ fn run_family(
     let _watcher = if notify_wanted { spawn_watcher(spec.dir(), wake_tx, spec.recursive()) } else { None };
 
     let disconnected = Cell::new(false);
+    let sent = Cell::new(0u64);
     let mut emit = |line: String| {
         if emitter.emit(line).is_err() {
             disconnected.set(true);
+        } else {
+            sent.set(sent.get() + 1);
         }
     };
+    // Nothing of the history to read (a family not there, born after the start, an empty
+    // backfill): read in at once, whatever appears being new content.
+    let nothing_to_read = || crate::tail::mark_history_read(&history, 0);
 
     // ---- attach ------------------------------------------------------------------------------
     // Decided at the very first resolve: a family with members on disk has history to skip; an
@@ -547,7 +564,10 @@ fn run_family(
     if let FamilyStart::Backfill(start_at) = cfg.start {
         match attach_backfill(&spec, &cfg, ts.as_ref(), start_at, &stop, &wake_rx, &mut emit, &mut attached_slot)? {
             BackfillAttach::Stopped => return Ok(()),
-            BackfillAttach::FamilyEmpty => preexisted = Some(false),
+            BackfillAttach::FamilyEmpty => {
+                nothing_to_read();
+                preexisted = Some(false);
+            }
             BackfillAttach::Attached { cursor, key, name, known: consumed } => {
                 known = consumed;
                 backfilled = Some((*cursor, key, name));
@@ -568,6 +588,7 @@ fn run_family(
             let born = preexisted == Some(false);
             let Some(files) = files else {
                 // Looked at, not there: the start may return; whatever appears is new content.
+                nothing_to_read();
                 attached(&mut attached_slot);
                 wait_tick(&wake_rx, cfg.poll_interval);
                 continue;
@@ -575,6 +596,7 @@ fn run_family(
 
             if born {
                 // Born: nothing to attach to, everything that appears is new content.
+                nothing_to_read();
                 attached(&mut attached_slot);
                 match spec.active_mode() {
                     ActiveMode::NewestByOrder => {
@@ -647,6 +669,7 @@ fn run_family(
                     // may return. The retirees listed are history, and from here the family is
                     // followed as one born after the start, so a generation that retires before
                     // the active is opened is read, never taken for history.
+                    nothing_to_read();
                     attached(&mut attached_slot);
                     known = member_names(&files);
                     preexisted = Some(false);
@@ -697,6 +720,9 @@ fn run_family(
             }
             ReadStep::Progress => {}
         }
+        // The attached active read to its end as it stood (from its end, its beginning, or a
+        // backfill's seam): the start's history sent.
+        crate::tail::mark_history_read(&history, sent.get());
 
         match spec.active_mode() {
             ActiveMode::NewestByOrder => {

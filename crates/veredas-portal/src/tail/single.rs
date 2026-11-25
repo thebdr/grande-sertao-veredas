@@ -24,11 +24,20 @@ pub struct FileTailSource {
     path: PathBuf,
     cfg: TailConfig,
     ts: Option<TimestampSpec>,
+    history: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl FileTailSource {
     pub fn new(id: impl AsRef<str>, display_name: impl Into<String>, path: impl Into<PathBuf>, cfg: TailConfig) -> Self {
-        FileTailSource { id: SourceId::new(id), name: display_name.into(), path: path.into(), cfg, ts: None }
+        FileTailSource { id: SourceId::new(id), name: display_name.into(), path: path.into(), cfg, ts: None, history: None }
+    }
+
+    /// Where the worker says its start's history read: the lines it had sent once it read the
+    /// file to its end as it stood when the start opened it (at once for a start at its end, or
+    /// a file not there), `u64::MAX` until then (docs/questions.md Q319).
+    pub fn with_history_read(mut self, at: Arc<std::sync::atomic::AtomicU64>) -> Self {
+        self.history = Some(at);
+        self
     }
 
     /// Attach a per-source line-stamp rule; a parse failure leaves `parsed_ts` empty and the
@@ -57,7 +66,7 @@ impl Source for FileTailSource {
         let (attached_tx, attached_rx) = channel::<()>();
         let join = std::thread::Builder::new()
             .name(format!("tail:{id}"))
-            .spawn(move || run(this.path, this.cfg, emitter, thread_stop, attached_tx))
+            .spawn(move || run(this.path, this.cfg, emitter, thread_stop, attached_tx, this.history))
             .map_err(|e| SourceError::io(Path::new("<thread spawn>"), e))?;
         // The start returns once the worker has looked at its path: a file present is attached
         // where the start says, an absent one awaited, so a line written after the start is
@@ -103,7 +112,7 @@ pub(crate) fn wait_tick(wake: &Receiver<()>, interval: std::time::Duration) {
     }
 }
 
-fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBool>, attached_tx: Sender<()>) -> Result<(), SourceError> {
+fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBool>, attached_tx: Sender<()>, history: Option<Arc<std::sync::atomic::AtomicU64>>) -> Result<(), SourceError> {
     let (wake_tx, wake_rx) = channel::<()>();
     // Automatic mode arms the watcher for local paths alone: directory notifications are
     // unreliable over a share, where polling stays the one mechanism.
@@ -115,9 +124,12 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     let _wake_keep = wake_tx.clone();
 
     let disconnected = Cell::new(false);
+    let sent = Cell::new(0u64);
     let mut emit = |line: String| {
         if emitter.emit(line).is_err() {
             disconnected.set(true);
+        } else {
+            sent.set(sent.get() + 1);
         }
     };
 
@@ -146,6 +158,12 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
         }
     }
     attached(&mut Some(attached_tx));
+    // Not there at the first look: no history to read, whatever appears is new content. Present,
+    // its history is read with its first read; held, with the first read of the open that
+    // succeeds.
+    if active.is_none() && held.is_none() {
+        crate::tail::mark_history_read(&history, 0);
+    }
     let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };
 
     loop {
@@ -188,6 +206,8 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
                     }
                     ReadStep::Progress => {}
                 }
+                // Read to its end as it stood: the start's history sent.
+                crate::tail::mark_history_read(&history, sent.get());
 
                 match tf.check_path() {
                     PathStatus::Same => {}
