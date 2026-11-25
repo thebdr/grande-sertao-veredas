@@ -60,24 +60,33 @@ pub fn image(r: &Recipe, toolchain: &str, work: &Path) -> Result<PathBuf, VmErro
     Ok(path)
 }
 
+/// Where the builder holds the commit's tree, and the vendored sources of its lock file: the
+/// folders a dep-info file names (`crate::inputs::read_outside`).
+pub const SRC: &str = "/build/src";
+pub const VENDOR: &str = "/build/vendor";
+
 /// The script the builder machine runs on the commit's tree: the toolchain's and the C library's
-/// versions written down, `packages`' executables built with `cargo build --release --locked
-/// --offline`, as many jobs as the builder has processors, and every one of `bins` copied out; a
-/// bin cargo did not build (a required feature the defaults do not turn on) is named, never
-/// skipped, and fails the script, so the cut refuses a release that would ship less than its
-/// components name.
-pub fn script(r: &Recipe, packages: &[String], bins: &[String]) -> String {
-    let pkgs: String = packages.iter().map(|p| format!(" -p {p}")).collect();
-    let copies: String = bins
+/// versions written down, each component of `builds` built alone with `cargo build --release
+/// --locked --offline -p <component> --bins` (so cargo unifies features within its own inputs, never
+/// across components), as many jobs as the builder has processors, and every one of its
+/// executables copied out with cargo's dep-info for it; a bin cargo did not build (a required
+/// feature the defaults do not turn on) is named, never skipped, and fails the script, so the cut
+/// refuses a release that would ship less than its components name.
+pub fn script(r: &Recipe, builds: &[(String, Vec<String>)]) -> String {
+    let cargo: String = builds
         .iter()
-        .map(|b| format!("if [ -f target/release/{b} ]; then cp target/release/{b} /build/out/bin/; else echo \"ALFORGE-MISSING {b}\"; missing=1; fi\n"))
+        .map(|(p, _)| format!("cargo build --release --locked --offline --jobs {} -p {p} --bins\n", r.builder.cpus))
+        .collect();
+    let copies: String = builds
+        .iter()
+        .flat_map(|(_, bins)| bins)
+        .map(|b| format!("if [ -f target/release/{b} ]; then cp target/release/{b} /build/out/bin/; cp target/release/{b}.d /build/out/deps/; else echo \"ALFORGE-MISSING {b}\"; missing=1; fi\n"))
         .collect();
     format!(
         "set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
-         cd /build/src\nmkdir -p /build/out/bin\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
-         cargo build --release --locked --offline --jobs {cpus}{pkgs} --bins\nmissing=\n{copies}\
-         [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n",
-        cpus = r.builder.cpus
+         cd {SRC}\nmkdir -p /build/out/bin /build/out/deps\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
+         {cargo}missing=\n{copies}\
+         [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n"
     )
 }
 
@@ -115,10 +124,10 @@ pub struct Built {
     pub libc: String,
 }
 
-/// Builds `packages`' executables at `commit` of the repository at `root` in a fresh copy of the
+/// Builds each of `builds`' components' executables at `commit` of the repository at `root` in a fresh copy of the
 /// builder: the commit's tree as git stores it, `cargo vendor` of its lock file, `cargo build --release
 /// --locked --offline` inside, the executables named in `bins` handed back.
-pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, packages: &[String], bins: &[String], work: &Path) -> Result<Built, VmError> {
+pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, builds: &[(String, Vec<String>)], work: &Path) -> Result<Built, VmError> {
     let builder = image(r, toolchain, work)?;
     let input = work.join("in");
     let _ = std::fs::remove_dir_all(&input);
@@ -129,7 +138,7 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, packages: &
     let config = vm::run("cargo", &["vendor", "--locked", "--versioned-dirs", "../vendor"], Some(&input.join("src")))?;
     std::fs::create_dir_all(input.join("src/.cargo"))?;
     std::fs::write(input.join("src/.cargo/config.toml"), config)?;
-    std::fs::write(input.join("build.sh"), script(r, packages, bins))?;
+    std::fs::write(input.join("build.sh"), script(r, builds))?;
     let in_tar = work.join("in.tar");
     vm::run("tar", &["-cf", &in_tar.display().to_string(), "-C", &input.display().to_string(), "."], None)?;
     let out_raw = work.join("out.raw");

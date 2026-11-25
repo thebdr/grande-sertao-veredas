@@ -40,6 +40,18 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     let at_head: Vec<(String, String)> = held.values().map(|h| (h.name.clone(), h.version.clone())).collect();
     assert_eq!(pinned, at_head);
     assert_eq!(c.manifest.tested.suite, "not run: a trial cut");
+
+    // Each executable's dep-info, as the builder handed it back beside it (each component built
+    // alone): its compilation read its own sources, and nothing outside what its component's
+    // version names (C-290's inputs), or the cut would have stopped.
+    for h in held.values() {
+        let inputs = h.inputs.as_ref().unwrap();
+        for b in &h.bins {
+            let info = std::fs::read_to_string(work.join("out/deps").join(format!("{b}.d"))).unwrap();
+            assert!(info.contains(&format!("/build/src/{}/src/", h.dir)), "{b}: {info}");
+            assert_eq!(alforge::inputs::read_outside(&info, "/build/src", "/build/vendor", inputs), Vec::<String>::new(), "{b}");
+        }
+    }
     assert!(c.manifest.toolchain.starts_with("rustc "), "{}", c.manifest.toolchain);
 
     // The bundle: its name, its files, the manifest inside byte for byte, its sums.

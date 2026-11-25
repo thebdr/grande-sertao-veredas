@@ -1,0 +1,391 @@
+//! What a component's version names in a release (docs/questions.md Q441, ruled 2026-11-25 "All
+//! build inputs"): everything a build of its executables reads but the toolchain, so a change to
+//! any of it bumps the version. Its folder and the folder of every member it uses (its normal and
+//! build dependencies by path, transitively; a test's never goes into an executable); every file
+//! outside those folders their sources name by a literal `#[path]`, `include_str!`, `include_bytes!`
+//! or `include!`; the lock file's entries for its external dependencies, transitively; the
+//! workspace's manifest; and the cargo configuration at the root. Each input is named and
+//! identified as git stores it at the commit (a folder by its tree, a file by its blob, a locked
+//! package by its source and checksum), so two commits are compared without building either.
+//!
+//! The cut builds each component alone, so cargo unifies features within its own inputs and no
+//! other component's manifest reaches its executables, and holds what cargo's dep-info says each
+//! compilation read to these inputs ([`read_outside`]).
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component as Part, Path, PathBuf};
+
+use crate::git;
+
+/// The registry every crate of the suite comes from, left out of a locked package's name.
+const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
+
+/// A component's build inputs: each named (a folder ending in `/`, a file by its path, a locked
+/// package as `Cargo.lock: <name> <version>`) with its identity at the commit.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Inputs(pub BTreeMap<String, String>);
+
+impl Inputs {
+    /// The inputs whose identity differs between the two (one there and not in the other included),
+    /// in name order.
+    pub fn differ(&self, other: &Inputs) -> Vec<String> {
+        let names: BTreeSet<&String> = self.0.keys().chain(other.0.keys()).collect();
+        names.into_iter().filter(|n| self.0.get(*n) != other.0.get(*n)).cloned().collect()
+    }
+
+    /// Whether a file of the tree (its path from the root) is one of these inputs or lies in one of
+    /// their folders.
+    pub fn covers(&self, path: &str) -> bool {
+        self.0.contains_key(path) || self.0.keys().any(|k| k.ends_with('/') && path.starts_with(k.as_str()))
+    }
+}
+
+/// A workspace member as cargo reads it (`cargo metadata --no-deps`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Member {
+    pub name: String,
+    pub version: String,
+    /// Its folder, from the root (`crates/veredas-portal`).
+    pub dir: String,
+    /// The folder of the workspace cargo reads it in: empty for the repository's own, another for a
+    /// path dependency kept in the tree outside it (`forks/ironcalc`).
+    pub workspace: String,
+    /// What goes into its executables: its normal and build dependencies, never its tests'.
+    pub deps: Vec<Dep>,
+}
+
+/// A normal or build dependency of a member.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dep {
+    /// The package's own name (a renamed dependency's `package`).
+    pub name: String,
+    /// The folder, from the root, of a dependency by path; `None` for one the lock file pins.
+    pub dir: Option<String>,
+}
+
+/// A package of the lock file.
+#[derive(Clone, Debug)]
+struct Locked {
+    name: String,
+    version: String,
+    source: Option<String>,
+    checksum: Option<String>,
+    dependencies: Vec<String>,
+}
+
+impl Locked {
+    fn named(&self) -> String {
+        match self.source.as_deref() {
+            None | Some(CRATES_IO) => format!("Cargo.lock: {} {}", self.name, self.version),
+            Some(s) => format!("Cargo.lock: {} {} ({s})", self.name, self.version),
+        }
+    }
+}
+
+/// A workspace at one commit, its tree written out at `tree`, from which each member's inputs are
+/// read.
+pub struct Workspace<'a> {
+    pub root: &'a Path,
+    pub commit: &'a str,
+    pub tree: &'a Path,
+    /// The workspace's members, then every package by path outside them that one of them uses.
+    pub members: Vec<Member>,
+    /// The folders of packages by path cargo could not read, with its reason.
+    pub unread: BTreeMap<String, String>,
+}
+
+impl Workspace<'_> {
+    fn object(&self, path: &str) -> Result<String, String> {
+        git::object(self.root, self.commit, path)
+            .map(|o| o.unwrap_or_else(|| "absent".to_string()))
+            .map_err(|e| format!("git cannot name {path} at {}: {e}", self.commit))
+    }
+
+    /// The lock file's packages; `None` when the commit holds no `Cargo.lock`.
+    fn lock(&self) -> Result<Option<Vec<Locked>>, String> {
+        let text = match std::fs::read_to_string(self.tree.join("Cargo.lock")) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("its Cargo.lock does not read: {e}")),
+        };
+        let table: toml::Table = toml::from_str(&text).map_err(|e| format!("its Cargo.lock does not read: {}", e.message()))?;
+        let mut out = Vec::new();
+        for p in table.get("package").and_then(|p| p.as_array()).into_iter().flatten() {
+            let s = |k: &str| p.get(k).and_then(|v| v.as_str()).map(str::to_string);
+            let (Some(name), Some(version)) = (s("name"), s("version")) else {
+                return Err("its Cargo.lock holds a package without a name or a version".to_string());
+            };
+            let dependencies = p.get("dependencies").and_then(|d| d.as_array()).into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string)).collect();
+            out.push(Locked { name, version, source: s("source"), checksum: s("checksum"), dependencies });
+        }
+        Ok(Some(out))
+    }
+
+    /// The build inputs of the member `name`, or why they cannot be read.
+    pub fn inputs(&self, name: &str) -> Result<Inputs, String> {
+        let lock = self.lock()?;
+        let mut named = BTreeMap::new();
+        // The workspace's manifest whole, any byte of it charging every component (docs/questions.md
+        // Q442: what cargo reads of it for this component alone is recommended).
+        // DECISION PENDING (Q442)
+        for f in ["Cargo.toml", ".cargo/config.toml", ".cargo/config"] {
+            named.insert(f.to_string(), self.object(f)?);
+        }
+        // The members it uses, by path, transitively.
+        let by_dir: BTreeMap<&str, &Member> = self.members.iter().map(|m| (m.dir.as_str(), m)).collect();
+        let start = self.members.iter().find(|m| m.name == name).ok_or_else(|| format!("{name} is no member"))?;
+        let mut used: Vec<&Member> = vec![start];
+        let mut seen: BTreeSet<&str> = BTreeSet::from([start.dir.as_str()]);
+        let mut i = 0;
+        while i < used.len() {
+            let m = used[i];
+            i += 1;
+            for d in &m.deps {
+                let Some(dir) = d.dir.as_deref() else { continue };
+                let Some(other) = by_dir.get(dir) else {
+                    return Err(self.unread.get(dir).cloned().unwrap_or_else(|| format!("{} depends on `{}` by a path ({dir}) where cargo names no package", m.name, d.name)));
+                };
+                if seen.insert(dir) {
+                    used.push(other);
+                }
+            }
+        }
+        for m in &used {
+            named.insert(format!("{}/", m.dir), self.object(&m.dir)?);
+            // A package of another workspace inherits keys from that workspace's manifest.
+            if !m.workspace.is_empty() {
+                let f = format!("{}/Cargo.toml", m.workspace);
+                let id = self.object(&f)?;
+                named.insert(f, id);
+            }
+        }
+        // Files outside those folders their sources name.
+        let folders: Vec<String> = used.iter().map(|m| format!("{}/", m.dir)).collect();
+        for path in self.named_outside(&used, &folders)? {
+            let id = self.object(&path)?;
+            named.insert(path, id);
+        }
+        // The lock file's entries for their external dependencies, transitively.
+        let mut queue: Vec<usize> = Vec::new();
+        for m in &used {
+            let wanted: BTreeSet<&str> = m.deps.iter().filter(|d| d.dir.is_none()).map(|d| d.name.as_str()).collect();
+            if wanted.is_empty() {
+                continue;
+            }
+            let Some(lock) = &lock else {
+                return Err(format!("{} depends on `{}` and the commit holds no Cargo.lock to pin it", m.name, wanted.iter().next().copied().unwrap_or_default()));
+            };
+            let own = lock
+                .iter()
+                .find(|l| l.name == m.name && l.version == m.version && l.source.is_none())
+                .ok_or_else(|| format!("its Cargo.lock does not pin {} {}: the lock file is not this workspace's", m.name, m.version))?;
+            for d in &own.dependencies {
+                let at = resolve(lock, d)?;
+                if wanted.contains(lock[at].name.as_str()) {
+                    queue.push(at);
+                }
+            }
+        }
+        let mut taken: BTreeSet<usize> = BTreeSet::new();
+        while let Some(at) = queue.pop() {
+            if !taken.insert(at) {
+                continue;
+            }
+            let lock = lock.as_ref().expect("a package was resolved in it");
+            let l = &lock[at];
+            if l.source.is_none() {
+                return Err(format!("its Cargo.lock's {} {} has no source and is no member a release builds from its folder", l.name, l.version));
+            }
+            named.insert(l.named(), l.checksum.clone().unwrap_or_default());
+            for d in &l.dependencies {
+                queue.push(resolve(lock, d)?);
+            }
+        }
+        Ok(Inputs(named))
+    }
+
+    /// The files outside `folders` that the Rust sources of `used` (but their tests', benches' and
+    /// examples') name by a literal `#[path]`, `include_str!`, `include_bytes!` or `include!`,
+    /// resolved from the naming file's folder; a named Rust file is read in turn.
+    fn named_outside(&self, used: &[&Member], folders: &[String]) -> Result<BTreeSet<String>, String> {
+        let mut files: Vec<String> = Vec::new();
+        for m in used {
+            walk(self.tree, &m.dir, &mut files).map_err(|e| format!("{}'s sources do not read: {e}", m.dir))?;
+        }
+        let mut out = BTreeSet::new();
+        let mut i = 0;
+        while i < files.len() {
+            let file = files[i].clone();
+            i += 1;
+            let Ok(text) = std::fs::read_to_string(self.tree.join(&file)) else { continue };
+            let from = Path::new(&file).parent().unwrap_or(Path::new(""));
+            for lit in literals(&text) {
+                let path = normal(&from.join(&lit)).ok_or_else(|| format!("{file} names `{lit}`, outside the commit's tree"))?;
+                if folders.iter().any(|f| path.starts_with(f.as_str())) || !out.insert(path.clone()) {
+                    continue;
+                }
+                if path.ends_with(".rs") && self.tree.join(&path).is_file() {
+                    files.push(path);
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// A lock file's dependency string (`name`, `name version` or `name version (source)`) resolved to
+/// the one package it names.
+fn resolve(lock: &[Locked], d: &str) -> Result<usize, String> {
+    let mut parts = d.splitn(3, ' ');
+    let name = parts.next().unwrap_or_default();
+    let version = parts.next();
+    let source = parts.next().map(|s| s.trim_start_matches('(').trim_end_matches(')'));
+    let found: Vec<usize> = lock
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.name == name && version.is_none_or(|v| l.version == v) && source.is_none_or(|s| l.source.as_deref() == Some(s)))
+        .map(|(i, _)| i)
+        .collect();
+    match found[..] {
+        [one] => Ok(one),
+        [] => Err(format!("its Cargo.lock names `{d}` and pins no such package")),
+        _ => Err(format!("its Cargo.lock names `{d}`, which more than one of its packages answers")),
+    }
+}
+
+/// Every `.rs` file under `dir` of the tree (paths from the root, in name order), but under the
+/// folder's own `tests/`, `benches/` and `examples/`.
+fn walk(tree: &Path, dir: &str, out: &mut Vec<String>) -> std::io::Result<()> {
+    fn inner(tree: &Path, rel: &str, top: bool, out: &mut Vec<String>) -> std::io::Result<()> {
+        let mut entries: Vec<_> = std::fs::read_dir(tree.join(rel))?.collect::<Result<_, _>>()?;
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let path = format!("{rel}/{name}");
+            let kind = e.file_type()?;
+            if kind.is_dir() {
+                if !(top && matches!(name.as_str(), "tests" | "benches" | "examples")) {
+                    inner(tree, &path, false, out)?;
+                }
+            } else if kind.is_file() && name.ends_with(".rs") {
+                out.push(path);
+            }
+        }
+        Ok(())
+    }
+    inner(tree, dir, true, out)
+}
+
+/// The string literals a Rust source names files by: `#[path = "…"]` and the argument of
+/// `include_str!`, `include_bytes!` and `include!` when it is one literal (a raw one included).
+/// Read as text, comments too: a path a comment names is one more input, never one less.
+pub fn literals(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (token, sep) in [("#[path", '='), ("include_str!", '('), ("include_bytes!", '('), ("include!", '(')] {
+        let mut rest = text;
+        while let Some(at) = rest.find(token) {
+            rest = &rest[at + token.len()..];
+            let after = rest.trim_start();
+            let Some(after) = after.strip_prefix(sep).or_else(|| if sep == '(' { after.strip_prefix(['[', '{']) } else { None }) else { continue };
+            if let Some(lit) = literal(after.trim_start()) {
+                out.push(lit);
+            }
+        }
+    }
+    out
+}
+
+/// The string literal `s` starts with, unescaped (`"…"` with `\\` and `\"`, or `r"…"`, `r#"…"#`).
+fn literal(s: &str) -> Option<String> {
+    if let Some(raw) = s.strip_prefix('r') {
+        let hashes = raw.len() - raw.trim_start_matches('#').len();
+        let body = raw[hashes..].strip_prefix('"')?;
+        let end = body.find(&format!("\"{}", "#".repeat(hashes)))?;
+        return Some(body[..end].to_string());
+    }
+    let body = s.strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => out.push(chars.next()?),
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+/// A path from the tree's root with its `.` and `..` parts resolved; `None` when it is absolute or
+/// climbs out of the tree.
+fn normal(p: &Path) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for part in p.components() {
+        match part {
+            Part::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
+            Part::CurDir => {}
+            Part::ParentDir => {
+                parts.pop()?;
+            }
+            Part::RootDir | Part::Prefix(_) => return None,
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// What a dep-info file (cargo's `target/release/<bin>.d`: every file of the workspace a bin's
+/// compilation read, its build scripts' declared ones too) names that `inputs` does not: each file
+/// under `src` (the tree's root in the builder) outside them, and each file elsewhere but the
+/// build's own output (`src/target/`) and the vendored sources the lock file pins (`vendor`).
+pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    for path in dep_info_paths(dep_info) {
+        let p = PathBuf::from(&path);
+        if p.starts_with(Path::new(src).join("target")) || p.starts_with(vendor) {
+            continue;
+        }
+        match p.strip_prefix(src) {
+            Ok(rel) => {
+                let rel = rel.to_string_lossy().into_owned();
+                if !inputs.covers(&rel) {
+                    out.insert(rel);
+                }
+            }
+            Err(_) => {
+                out.insert(path);
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// The prerequisites of every rule of a dep-info file (make's syntax: `target: dep dep`, a space
+/// in a name escaped as `\ `, a line continued by a final `\`), its targets left out.
+fn dep_info_paths(text: &str) -> Vec<String> {
+    let joined = text.replace("\\\n", " ");
+    let mut out = Vec::new();
+    for line in joined.lines() {
+        // The rule's colon is the first one followed by a space or the line's end.
+        let Some(colon) = line.char_indices().find(|&(i, c)| c == ':' && line[i + 1..].chars().next().is_none_or(char::is_whitespace)).map(|(i, _)| i) else {
+            continue;
+        };
+        let mut word = String::new();
+        let mut chars = line[colon + 1..].chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' if chars.peek() == Some(&' ') => word.push(chars.next().unwrap_or(' ')),
+                '$' if chars.peek() == Some(&'$') => word.push(chars.next().unwrap_or('$')),
+                c if c.is_whitespace() => {
+                    if !word.is_empty() {
+                        out.push(std::mem::take(&mut word));
+                    }
+                }
+                c => word.push(c),
+            }
+        }
+        if !word.is_empty() {
+            out.push(word);
+        }
+    }
+    out
+}

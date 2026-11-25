@@ -292,8 +292,9 @@ fn the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_the
     r.write("crates/veredas-maquinar/Cargo.toml", "[package]\nname = \"veredas-maquinar\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"a\"\npath = \"src/bin/b.rs\"\n");
     r.write("crates/veredas-maquinar/src/lib.rs", "\n");
     r.write("crates/veredas-maquinar/src/bin/b.rs", "fn main() {}\n");
-    // Required features change nothing here: every bin target cargo names is the component's
-    // (whether cargo builds it with the defaults is the cut's to see, C-291).
+    // A bin whose required features the default features turn on (through another feature) is
+    // shipped; one needing a feature they leave off is not (docs/questions.md Q443), and is named
+    // apart. Whether cargo does build each shipped one is the cut's to see (C-291).
     r.write(
         "crates/veredas-core/Cargo.toml",
         "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"full\"]\nfull = [\"serve\"]\nserve = []\nextra = []\n\n\
@@ -317,12 +318,24 @@ fn the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_the
     assert_eq!(
         got,
         vec![
-            want("veredas-core", &["extra", "servido"]),
+            want("veredas-core", &["servido"]),
             want("veredas-maquinar", &["a"]),
             want("veredas-portal", &["porteiro"]),
             want("veredas-velho", &["velho"]),
         ]
     );
+    assert_eq!(held["veredas-core"].left.iter().collect::<Vec<_>>(), ["extra"]);
+    assert!(held.values().filter(|h| h.name != "veredas-core").all(|h| h.left.is_empty()));
+    // A manifest shipping the one left out is refused by why.
+    let text = format!(
+        "format = \"veredas-release\"\nversion = 1\nrelease = \"2.0.0\"\ncommit = \"{c}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
+         [[component]]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nbins = [\"extra\", \"servido\"]\n\n\
+         [[component]]\nname = \"veredas-maquinar\"\nversion = \"2.0.0\"\nbins = [\"a\"]\n\n\
+         [[component]]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nbins = [\"porteiro\"]\n\n\
+         [[component]]\nname = \"veredas-velho\"\nversion = \"2.0.0\"\nbins = [\"velho\"]\n\n\
+         [tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+    );
+    assert_eq!(checked(&r, &text), [format!("veredas-core builds `extra` at {c} only with a feature its default features leave off: a release does not ship it")]);
     // A workspace cargo cannot read is refused with cargo's reason.
     r.write("crates/veredas-velho/Cargo.toml", "[package]\nname = 3\n");
     let c2 = r.commit("a manifest cargo refuses");
@@ -558,7 +571,7 @@ fn a_release_whose_commit_is_absent_hides_no_other_refusal() {
     let all: Vec<(PathBuf, Manifest)> = vec![load("2.0.0", &c1), load("2.0.1", &c2), load("2.0.2", absent)];
     assert_eq!(
         manifest::check_together(r.path(), &all).unwrap(),
-        vec!["veredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree".to_string()]
+        vec!["veredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (crates/veredas-portal/): a version names everything its build reads".to_string()]
     );
     // Through the executable, every refusal said: the absent commit's and the one tree's.
     for (rel, c) in [("2.0.0", c1.as_str()), ("2.0.1", c2.as_str()), ("2.0.2", absent)] {
@@ -569,7 +582,7 @@ fn a_release_whose_commit_is_absent_hides_no_other_refusal() {
     assert_eq!(out.status.code(), Some(2));
     let err = String::from_utf8(out.stderr).unwrap();
     assert!(err.contains(&format!("commit {absent} is not in the repository")), "{err}");
-    assert!(err.contains("veredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.1 at different code"), "{err}");
+    assert!(err.contains("veredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (crates/veredas-portal/)"), "{err}");
 }
 
 #[test]
@@ -612,7 +625,7 @@ fn a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none() {
     assert_eq!(
         String::from_utf8(out.stderr).unwrap(),
         format!(
-            "{}: commit {c3}: its Cargo.toml is not UTF-8\nveredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree\n",
+            "{}: commit {c3}: its Cargo.toml is not UTF-8\nveredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (crates/veredas-portal/): a version names everything its build reads\n",
             releases.join("2.0.2.toml").display()
         ),
         "said line for line, no false one"
@@ -627,7 +640,7 @@ fn a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none() {
     assert_eq!(
         String::from_utf8(out.stderr).unwrap(),
         format!(
-            "{}: commit {c3}: its Cargo.toml is not UTF-8\nveredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.1 and 2.0.2 at different code: a version names one tree\n",
+            "{}: commit {c3}: its Cargo.toml is not UTF-8\nveredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.1 and 2.0.2 at different build inputs (crates/veredas-portal/): a version names everything its build reads\n",
             releases.join("2.0.0.toml").display()
         )
     );
@@ -785,11 +798,19 @@ fn a_false_pin_charges_no_true_release_and_hides_no_conflict() {
         let out = Command::new(env!("CARGO_BIN_EXE_alforge")).arg("check").current_dir(r.path()).output().unwrap();
         (out.status.code(), String::from_utf8(out.stderr).unwrap())
     };
-    // Case a: portal absent at the first release's commit, which lists it all the same.
+    // Case a: portal absent at the first release's commit, which lists it all the same. The
+    // workspace's members by a glob, so its manifest is one at every commit and charges no one.
     let r = suite();
-    r.write("Cargo.toml", "[workspace]\nmembers = [\"tools/ferramenta\", \"crates/veredas-core\", \"crates/veredas-maquinar\"]\n");
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"tools/ferramenta\", \"crates/*\"]\n");
+    let portal: Vec<(String, Vec<u8>)> = ["Cargo.toml", "src/main.rs", "src/bin/porteiro.rs"]
+        .iter()
+        .map(|f| (format!("crates/veredas-portal/{f}"), std::fs::read(r.path().join("crates/veredas-portal").join(f)).unwrap()))
+        .collect();
+    std::fs::remove_dir_all(r.path().join("crates/veredas-portal")).unwrap();
     let c0 = r.commit("no portal yet");
-    r.write("Cargo.toml", WORKSPACE);
+    for (f, bytes) in &portal {
+        r.write(f, std::str::from_utf8(bytes).unwrap());
+    }
     let c1 = r.commit("portal joins");
     r.write("crates/veredas-portal/src/main.rs", "fn main() { println!(\"changed\"); }\n");
     let c2 = r.commit("portal changed, its version not bumped");
@@ -803,7 +824,7 @@ fn a_false_pin_charges_no_true_release_and_hides_no_conflict() {
         (
             Some(2),
             format!(
-                "{}: veredas-portal is no component at {c0}\nveredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.1 and 2.0.2 at different code: a version names one tree\n",
+                "{}: veredas-portal is no component at {c0}\nveredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.1 and 2.0.2 at different build inputs (crates/veredas-portal/): a version names everything its build reads\n",
                 releases.join("2.0.0.toml").display()
             )
         )
@@ -868,7 +889,7 @@ fn a_version_names_one_tree_across_releases() {
     let moved: Vec<(PathBuf, Manifest)> = vec![load("2.0.0", &c1), load("2.0.1", &c2), load("2.0.2", &c3)];
     assert_eq!(
         manifest::check_together(r.path(), &moved).unwrap(),
-        vec!["veredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.2 at different code: a version names one tree".to_string()]
+        vec!["veredas-portal 2.0.0-alpha.3 is pinned by releases 2.0.0 and 2.0.2 at different build inputs (crates/veredas-portal/): a version names everything its build reads".to_string()]
     );
 }
 
@@ -946,4 +967,213 @@ fn every_release_of_this_repository_checks_against_its_history() {
         assert_eq!(manifest::check(&root, m).unwrap(), Vec::<String>::new(), "{}", p.display());
     }
     assert_eq!(manifest::check_together(&root, &all).unwrap(), Vec::<String>::new());
+}
+
+const SERDE: &str = "[[package]]\nname = \"serde\"\nversion = \"1.0.200\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"aaaa\"\n";
+const TEMPFILE: &str = "[[package]]\nname = \"tempfile\"\nversion = \"3.10.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"bbbb\"\n";
+const ITOA: &str = "[[package]]\nname = \"itoa\"\nversion = \"1.0.11\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"cccc\"\n";
+
+/// The lock file of [`wider`], with `serde`, `tempfile` and `itoa` as given.
+fn lock(serde: &str, tempfile: &str, itoa: &str) -> String {
+    format!(
+        "version = 4\n\n[[package]]\nname = \"garfo\"\nversion = \"0.3.0\"\ndependencies = [\n \"itoa\",\n]\n\n{itoa}\n{serde}\n{tempfile}\n\
+         [[package]]\nname = \"veredas-core\"\nversion = \"2.0.0\"\n\n\
+         [[package]]\nname = \"veredas-maquinar\"\nversion = \"2.1.0\"\ndependencies = [\n \"garfo\",\n]\n\n\
+         [[package]]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.3\"\ndependencies = [\n \"serde\",\n \"tempfile\",\n \"veredas-core\",\n]\n"
+    )
+}
+
+/// A suite whose portal uses core by path, `serde` for what it ships and `tempfile` for its tests
+/// alone, both pinned by the lock file, and names two files outside its folder (a module by
+/// `#[path]`, a text by `include_str!`); whose bench uses `garfo` by path, a fork kept in the tree
+/// in a workspace of its own, excluded from the suite's, that uses `itoa`.
+fn wider() -> Repo {
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\", \"crates/veredas-maquinar\", \"crates/veredas-portal\"]\nexclude = [\"forks/garfo\"]\n");
+    r.write("Cargo.lock", &lock(SERDE, TEMPFILE, ITOA));
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    r.write(
+        "crates/veredas-portal/Cargo.toml",
+        "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.3\"\nedition = \"2024\"\n\n[[bin]]\nname = \"veredas-portal\"\npath = \"src/main.rs\"\n\n\
+         [dependencies]\nveredas-core = { path = \"../veredas-core\" }\nserde = \"1\"\n\n[dev-dependencies]\ntempfile = \"3\"\n",
+    );
+    r.write("crates/veredas-portal/src/main.rs", "#[path = \"../../../docs/shared.rs\"]\nmod shared;\n\nfn main() {\n    let _ = include_str!(\"../../../docs/notes.txt\");\n}\n");
+    r.write("crates/veredas-portal/src/bin/porteiro.rs", "fn main() {}\n");
+    r.write("crates/veredas-portal/tests/reads.rs", "const DOC: &str = include_str!(\"../../../docs/test-only.md\");\n");
+    r.write("docs/shared.rs", "pub fn shared() {}\n");
+    r.write("docs/notes.txt", "notes\n");
+    r.write("docs/test-only.md", "read by a test alone\n");
+    r.write("docs/other.md", "named by nothing\n");
+    r.write("crates/veredas-maquinar/Cargo.toml", "[package]\nname = \"veredas-maquinar\"\nversion = \"2.1.0\"\nedition = \"2024\"\n\n[dependencies]\ngarfo = { path = \"../../forks/garfo/lib\" }\n");
+    r.write("crates/veredas-maquinar/src/main.rs", "fn main() {}\n");
+    r.write("forks/garfo/Cargo.toml", "[workspace]\nmembers = [\"lib\"]\n\n[workspace.package]\nversion = \"0.3.0\"\n");
+    r.write("forks/garfo/lib/Cargo.toml", "[package]\nname = \"garfo\"\nversion.workspace = true\nedition = \"2024\"\n\n[dependencies]\nitoa = \"1\"\n");
+    r.write("forks/garfo/lib/src/lib.rs", "\n");
+    r
+}
+
+/// The manifest that pins [`wider`]'s three components at `commit`.
+fn pins(release: &str, commit: &str) -> (PathBuf, Manifest) {
+    let text = format!(
+        "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
+         [[component]]\nname = \"veredas-core\"\nversion = \"2.0.0\"\n\n\
+         [[component]]\nname = \"veredas-maquinar\"\nversion = \"2.1.0\"\nbins = [\"veredas-maquinar\"]\n\n\
+         [[component]]\nname = \"veredas-portal\"\nversion = \"2.0.0-alpha.3\"\nbins = [\"porteiro\", \"veredas-portal\"]\n\n\
+         [tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+    );
+    (PathBuf::from(format!("{release}.toml")), manifest::load(&text).unwrap())
+}
+
+/// `edit` made on top of `base` and committed, the tree then put back at `base`: the commit.
+fn changed(r: &Repo, base: &str, msg: &str, edit: impl FnOnce(&Repo)) -> String {
+    edit(r);
+    let c = r.commit(msg);
+    r.git(&["reset", "-q", "--hard", base]);
+    c
+}
+
+/// What `check_together` says of releases 2.0.0 at `a` and 2.0.1 at `b`.
+fn together(r: &Repo, a: &str, b: &str) -> Vec<String> {
+    manifest::check_together(r.path(), &[pins("2.0.0", a), pins("2.0.1", b)]).unwrap()
+}
+
+fn charged(component: &str, version: &str, inputs: &str) -> String {
+    format!("{component} {version} is pinned by releases 2.0.0 and 2.0.1 at different build inputs ({inputs}): a version names everything its build reads")
+}
+
+#[test]
+fn a_version_names_everything_its_build_reads_but_the_toolchain() {
+    let r = wider();
+    let c1 = r.commit("the suite");
+    let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
+    let names = |n: &str| -> Vec<String> { held[n].inputs.as_ref().unwrap().0.keys().cloned().collect() };
+    let root = [".cargo/config", ".cargo/config.toml", "Cargo.toml"];
+    let with = |more: &[&str]| -> Vec<String> {
+        let mut v: Vec<String> = root.iter().chain(more).map(|s| s.to_string()).collect();
+        v.sort();
+        v
+    };
+    // Portal: its folder and core's, the two files it names, serde; never tempfile (its tests'
+    // alone) nor the file its test names.
+    assert_eq!(names("veredas-portal"), with(&["Cargo.lock: serde 1.0.200", "crates/veredas-core/", "crates/veredas-portal/", "docs/notes.txt", "docs/shared.rs"]));
+    assert_eq!(held["veredas-portal"].inputs.as_ref().unwrap().0["Cargo.lock: serde 1.0.200"], "aaaa");
+    assert_eq!(held["veredas-portal"].inputs.as_ref().unwrap().0[".cargo/config.toml"], "absent");
+    // The bench: the fork's folder and its workspace's manifest, read by cargo there, and what the
+    // fork uses.
+    assert_eq!(names("veredas-maquinar"), with(&["Cargo.lock: itoa 1.0.11", "crates/veredas-maquinar/", "forks/garfo/Cargo.toml", "forks/garfo/lib/"]));
+    assert_eq!(names("veredas-core"), with(&["crates/veredas-core/"]));
+    assert_eq!(together(&r, &c1, &c1), Vec::<String>::new());
+
+    // Each input changed alone, from the same commit: who is charged, by which input.
+    type Case = (&'static str, Box<dyn FnOnce(&Repo)>, Vec<String>);
+    let cases: Vec<Case> = vec![
+        ("a file nothing names", Box::new(|r: &Repo| r.write("docs/other.md", "changed\n")), vec![]),
+        ("a file portal's test alone names", Box::new(|r: &Repo| r.write("docs/test-only.md", "changed\n")), vec![]),
+        ("portal's test", Box::new(|r: &Repo| r.write("crates/veredas-portal/tests/reads.rs", "\n")), vec![charged("veredas-portal", "2.0.0-alpha.3", "crates/veredas-portal/")]),
+        (
+            "core's code",
+            Box::new(|r: &Repo| r.write("crates/veredas-core/src/lib.rs", "pub fn changed() {}\n")),
+            vec![charged("veredas-core", "2.0.0", "crates/veredas-core/"), charged("veredas-portal", "2.0.0-alpha.3", "crates/veredas-core/")],
+        ),
+        ("the module portal names by #[path]", Box::new(|r: &Repo| r.write("docs/shared.rs", "pub fn changed() {}\n")), vec![charged("veredas-portal", "2.0.0-alpha.3", "docs/shared.rs")]),
+        ("the text portal includes", Box::new(|r: &Repo| r.write("docs/notes.txt", "changed\n")), vec![charged("veredas-portal", "2.0.0-alpha.3", "docs/notes.txt")]),
+        (
+            "serde updated in the lock file",
+            Box::new(|r: &Repo| r.write("Cargo.lock", &lock(&SERDE.replace("1.0.200", "1.0.201").replace("aaaa", "abab"), TEMPFILE, ITOA))),
+            vec![charged("veredas-portal", "2.0.0-alpha.3", "Cargo.lock: serde 1.0.200, Cargo.lock: serde 1.0.201")],
+        ),
+        ("tempfile, portal's tests' alone, updated", Box::new(|r: &Repo| r.write("Cargo.lock", &lock(SERDE, &TEMPFILE.replace("3.10.0", "3.11.0"), ITOA))), vec![]),
+        (
+            "itoa's checksum, under the fork",
+            Box::new(|r: &Repo| r.write("Cargo.lock", &lock(SERDE, TEMPFILE, &ITOA.replace("cccc", "cdcd")))),
+            vec![charged("veredas-maquinar", "2.1.0", "Cargo.lock: itoa 1.0.11")],
+        ),
+        ("the fork's code", Box::new(|r: &Repo| r.write("forks/garfo/lib/src/lib.rs", "pub fn changed() {}\n")), vec![charged("veredas-maquinar", "2.1.0", "forks/garfo/lib/")]),
+        (
+            "the fork's workspace manifest",
+            Box::new(|r: &Repo| r.write("forks/garfo/Cargo.toml", "[workspace]\nmembers = [\"lib\"]\n\n[workspace.package]\nversion = \"0.3.0\"\nedition = \"2024\"\n")),
+            vec![charged("veredas-maquinar", "2.1.0", "forks/garfo/Cargo.toml")],
+        ),
+        (
+            "the workspace's manifest",
+            Box::new(|r: &Repo| {
+                let t = std::fs::read_to_string(r.path().join("Cargo.toml")).unwrap();
+                r.write("Cargo.toml", &format!("{t}\n[profile.release]\nlto = true\n"));
+            }),
+            vec![charged("veredas-core", "2.0.0", "Cargo.toml"), charged("veredas-maquinar", "2.1.0", "Cargo.toml"), charged("veredas-portal", "2.0.0-alpha.3", "Cargo.toml")],
+        ),
+        (
+            "a cargo configuration at the root",
+            Box::new(|r: &Repo| r.write(".cargo/config.toml", "[build]\nrustflags = [\"-C\", \"target-cpu=native\"]\n")),
+            vec![charged("veredas-core", "2.0.0", ".cargo/config.toml"), charged("veredas-maquinar", "2.1.0", ".cargo/config.toml"), charged("veredas-portal", "2.0.0-alpha.3", ".cargo/config.toml")],
+        ),
+    ];
+    for (what, edit, want) in cases {
+        let c = changed(&r, &c1, what, edit);
+        assert_eq!(together(&r, &c1, &c), want, "{what}");
+    }
+}
+
+#[test]
+fn build_inputs_that_do_not_read_are_refused_where_a_version_is_pinned_twice() {
+    let r = wider();
+    let c1 = r.commit("the suite");
+    let unread = |component: &str, why: &str| format!("{component} is pinned by releases 2.0.0 and 2.0.1, and its build inputs at 2.0.1's commit do not read: {why}");
+    // No lock file: what depends on a crate it would pin is refused; core, which depends on none,
+    // is not.
+    let c = changed(&r, &c1, "no lock file", |r| std::fs::remove_file(r.path().join("Cargo.lock")).unwrap());
+    assert_eq!(
+        together(&r, &c1, &c),
+        [
+            unread("veredas-maquinar 2.1.0", "garfo depends on `itoa` and the commit holds no Cargo.lock to pin it"),
+            unread("veredas-portal 2.0.0-alpha.3", "veredas-portal depends on `serde` and the commit holds no Cargo.lock to pin it"),
+        ]
+    );
+    // A lock file that is not the workspace's: portal not in it.
+    let c = changed(&r, &c1, "a lock without portal", |r| {
+        let l = lock(SERDE, TEMPFILE, ITOA);
+        r.write("Cargo.lock", &l[..l.find("[[package]]\nname = \"veredas-portal\"").unwrap()]);
+    });
+    assert_eq!(together(&r, &c1, &c), [unread("veredas-portal 2.0.0-alpha.3", "its Cargo.lock does not pin veredas-portal 2.0.0-alpha.3: the lock file is not this workspace's")]);
+    // A dependency string the lock answers with no package, and one it answers twice.
+    let c = changed(&r, &c1, "a lock naming serde 2", |r| r.write("Cargo.lock", &lock(SERDE, TEMPFILE, ITOA).replace(" \"serde\",", " \"serde 2.0.0\",")));
+    assert_eq!(together(&r, &c1, &c), [unread("veredas-portal 2.0.0-alpha.3", "its Cargo.lock names `serde 2.0.0` and pins no such package")]);
+    let c = changed(&r, &c1, "two serdes", |r| r.write("Cargo.lock", &lock(&format!("{SERDE}\n{}", SERDE.replace("1.0.200", "1.0.201")), TEMPFILE, ITOA)));
+    assert_eq!(together(&r, &c1, &c), [unread("veredas-portal 2.0.0-alpha.3", "its Cargo.lock names `serde`, which more than one of its packages answers")]);
+    // A path a source names that climbs out of the tree.
+    let c = changed(&r, &c1, "a module outside the tree", |r| r.write("crates/veredas-portal/src/bin/porteiro.rs", "#[path = \"../../../../../fora.rs\"]\nmod fora;\nfn main() {}\n"));
+    assert_eq!(
+        together(&r, &c1, &c),
+        [unread("veredas-portal 2.0.0-alpha.3", "crates/veredas-portal/src/bin/porteiro.rs names `../../../../../fora.rs`, outside the commit's tree")]
+    );
+    // A fork cargo cannot read: its users' refusal, with cargo's reason.
+    let c = changed(&r, &c1, "a fork that does not parse", |r| r.write("forks/garfo/lib/Cargo.toml", "[package\n"));
+    let got = together(&r, &c1, &c);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(got[0].starts_with(&unread("veredas-maquinar 2.1.0", "cargo cannot read the package at forks/garfo/lib: ")), "{got:?}");
+    // At the first release's commit too, named as that release's.
+    let got = manifest::check_together(r.path(), &[pins("2.0.0", &c), pins("2.0.1", &c1)]).unwrap();
+    assert!(got[0].starts_with("veredas-maquinar 2.1.0 is pinned by releases 2.0.0 and 2.0.1, and its build inputs at 2.0.0's commit do not read: cargo cannot read the package at forks/garfo/lib: "), "{got:?}");
+}
+
+#[test]
+fn a_source_names_files_by_literal_paths_alone() {
+    let src = r##"
+#[path = "a.rs"]
+mod a;
+#[path="b/c.rs"] mod c;
+const C: &str = include_str!("c.txt");
+const D: &[u8] = include_bytes! ( "d.bin" );
+include!(r"e.rs");
+include!(r#"f "q".rs"#);
+const G: &str = include_str!["g.txt"];
+const H: &str = include_str!(concat!(env!("OUT_DIR"), "/h.rs"));
+const I: &str = include_str!("i\\j \"k\".txt");
+// include_str!("in-a-comment.txt")
+"##;
+    assert_eq!(
+        alforge::inputs::literals(src),
+        ["a.rs", "b/c.rs", "c.txt", "g.txt", "i\\j \"k\".txt", "in-a-comment.txt", "d.bin", "e.rs", "f \"q\".rs"]
+    );
 }

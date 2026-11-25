@@ -2653,6 +2653,58 @@ the build reads but the toolchain.
 
 ---
 
+## Q442 - Does any edit of the workspace's manifest bump every component?
+
+**Raised** 2026-11-25, by the release member, implementing Q441's ruling ("All build inputs").
+
+The workspace's manifest (`Cargo.toml` at the root) is one of the inputs Q441 names. Read whole, any
+edit of it charges every component: a member added to `members`, a comment, a workspace dependency
+one member alone uses. Members edit it often (each new member, each dependency's comment), so every
+such edit would bump every component's version at the next release.
+
+Options:
+- (a) The whole file as git stores it (taken meanwhile): any byte changed bumps every component.
+- (b) What cargo reads of it to build that component: the resolver, the profiles, `[patch]` and
+  `[replace]`, and the `[workspace.package]`, `[workspace.dependencies]` and `[workspace.lints]`
+  entries the component and the members it uses inherit; `members`, `exclude`, comments and the
+  entries other members alone inherit left out.
+
+**Recommended**: (b): a version names what goes into its executables and nothing else (features no
+longer unify across components: the cut builds each alone).
+
+**Taken meanwhile** (most reversible): (a), the stricter reading: a narrower one later lets through
+every set of releases the whole file let through.
+
+**Reversible?** Yes: the check narrows without changing the manifest's format.
+
+---
+
+## Q443 - Does a release ship an executable its component's default features do not build?
+
+**Raised** 2026-11-25, by the release member: Oficina's one executable, `veredas-oficina`, needs its
+`shell` feature (Qt 6.12 and KDDockWidgets), which its default features leave off so that the
+suite's build needs no Qt (Q370). The cut builds every component with its default features and
+refused a release that would ship less than the manifest names; since Oficina landed, every cut of
+HEAD would stop at the builder, "cargo built no `veredas-oficina`".
+
+Options:
+- (a) A release ships what the default features build (taken meanwhile): Oficina pinned at its
+  version with no executable, the cut saying so; a manifest naming such a bin refused by why.
+- (b) No release until Oficina's window builds by default (the suite's build needing Qt, against
+  Q370).
+- (c) The builder builds each component with the features its executables need, and the tester
+  machine carries their libraries: Oficina's window in the machine, for designers. Debian 13 holds
+  Qt 6.8, so Qt 6.12 and KDDockWidgets would be built for the builder and shipped with the release.
+
+**Recommended**: (a) now; (c) once Oficina's window is something a tester or a designer uses.
+
+**Taken meanwhile** (most reversible): (a): a later release ships the window by naming it, and
+nothing shipped is taken back.
+
+**Reversible?** Yes: the manifest's `bins` say what each release ships.
+
+---
+
 ## Q229 - A pulse that comes back with no new edge, and which preset a timer is judged against
 
 **Raised** 2026-11-23, by the controlador session, from C-150's refute rounds 11 and 12.

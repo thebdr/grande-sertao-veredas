@@ -8,6 +8,7 @@ pub mod bundle;
 pub mod cache;
 pub mod cut;
 pub mod git;
+pub mod inputs;
 pub mod machine;
 pub mod manifest;
 pub mod maquina;

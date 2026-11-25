@@ -270,7 +270,7 @@ fn the_cut_refuses_a_version_another_release_pinned_at_other_code_before_buildin
     assert_eq!(got.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&got.stderr),
-        "release 2.0.1 would not check:\nveredas-core 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree\n"
+        "release 2.0.1 would not check:\nveredas-core 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (crates/veredas-core/): a version names everything its build reads\n"
     );
     assert_eq!(log, Vec::<String>::new(), "refused before the suite");
     assert!(!r.dir.path().join("target/alforge/2.0.1").exists(), "refused before anything was run or built");
@@ -709,7 +709,27 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
     stand_in(&bin, "segundo");
     let built = |toolchain: &str| builder::Built { out: built_dir.path().to_path_buf(), toolchain: toolchain.into(), libc: "ldd (Debian GLIBC 2.41-12) 2.41".into() };
     let bins = vec!["primeiro".to_string(), "segundo".to_string()];
-    let components = vec!["veredas-core".to_string()];
+    // The component that builds them, its version naming its folder and one file outside it.
+    let inputs = alforge::inputs::Inputs([("crates/veredas-core/", "1"), ("docs/shared.rs", "2")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
+    let held: std::collections::BTreeMap<String, alforge::manifest::Held> = [(
+        "veredas-core".to_string(),
+        alforge::manifest::Held { dir: "crates/veredas-core".into(), name: "veredas-core".into(), version: "2.0.0".into(), bins: bins.iter().cloned().collect(), left: Default::default(), inputs: Ok(inputs) },
+    )]
+    .into_iter()
+    .collect();
+    // Cargo's dep-info for each, as the builder hands it back: what each compilation read.
+    let deps = built_dir.path().join("deps");
+    std::fs::create_dir_all(&deps).unwrap();
+    let dep_info = |extra: &str| {
+        for b in &bins {
+            let more = if b == "segundo" { extra } else { "" };
+            std::fs::write(
+                deps.join(format!("{b}.d")),
+                format!("/build/src/target/release/{b}: /build/src/crates/veredas-core/src/main.rs /build/src/docs/shared.rs /build/src/target/release/build/x/out/gen.rs{more}\n"),
+            )
+            .unwrap();
+        }
+    };
     let name = "veredas-9.9.9-x86_64-unknown-linux-gnu";
     let rustc = "rustc 1.100.0 (0ef1bc386 2026-11-09)";
     let text = "# the manifest's text\n";
@@ -717,18 +737,39 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
     let packed = work.path().join(format!("{name}.tar.gz"));
 
     // The builder ran another toolchain than the suite: refused before anything is assembled.
-    match cut::after_build(&recipe(), c.path(), &commit, rustc, &built("rustc 1.99.0 (5a1b2c3d4 2026-10-01)"), name, &bins, &components, text, work.path()) {
+    dep_info("");
+    match cut::after_build(&recipe(), c.path(), &commit, rustc, &built("rustc 1.99.0 (5a1b2c3d4 2026-10-01)"), name, &held, text, work.path()) {
         Err(CutError::Refused(e)) => assert_eq!(e, format!("the builder ran `rustc 1.99.0 (5a1b2c3d4 2026-10-01)`, the suite was tested with `{rustc}`")),
         other => panic!("not refused: {other:?}"),
     }
     assert!(!work.path().join(name).exists() && !packed.exists());
+
+    // A compilation that read a file of the tree its version does not name, and one outside the
+    // tree: each refused by name before anything is assembled.
+    dep_info(" /build/src/docs/fora.rs /etc/fora.conf");
+    match cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &held, text, work.path()) {
+        Err(CutError::Refused(e)) => assert_eq!(
+            e,
+            "`segundo` of veredas-core read /etc/fora.conf, which its version does not name\n`segundo` of veredas-core read docs/fora.rs, which its version does not name"
+        ),
+        other => panic!("not refused: {other:?}"),
+    }
+    assert!(!work.path().join(name).exists() && !packed.exists());
+    // No dep-info for one: refused, naming where it was looked for.
+    std::fs::remove_file(deps.join("primeiro.d")).unwrap();
+    match cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &held, text, work.path()) {
+        Err(CutError::Refused(e)) => assert!(e.starts_with(&format!("the build left no dep-info for `primeiro` ({}: ", deps.join("primeiro.d").display())), "{e}"),
+        other => panic!("not refused: {other:?}"),
+    }
+    assert!(!work.path().join(name).exists() && !packed.exists());
+    dep_info("");
 
     // Executables needing more of the C library than the tester machine offers: each refused by
     // name, nothing packed.
     let glibc = bundle::needs(&vm::run("objdump", &["-p", &bin.join("primeiro").display().to_string()], None).unwrap())["GLIBC"].clone();
     let mut old = recipe();
     old.base.glibc = "2.2".into();
-    match cut::after_build(&old, c.path(), &commit, rustc, &built(rustc), name, &bins, &components, text, work.path()) {
+    match cut::after_build(&old, c.path(), &commit, rustc, &built(rustc), name, &held, text, work.path()) {
         Err(CutError::Vm(VmError::Failed { program, status, stderr })) => {
             assert_eq!((program.as_str(), status.as_str()), ("the executables' check", "refused"));
             assert_eq!(
@@ -743,7 +784,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
     assert!(!packed.exists());
 
     // Right: packed, extracted again into `check`, matching its sums, the executables as built.
-    let (p, extracted) = cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &bins, &components, text, work.path()).unwrap();
+    let (p, extracted) = cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &held, text, work.path()).unwrap();
     assert_eq!((p, extracted.clone()), (packed.clone(), work.path().join("check").join(name)));
     let epoch = String::from_utf8(Command::new("git").arg("-C").arg(c.path()).args(["show", "-s", "--format=%ct", &commit]).output().unwrap().stdout).unwrap();
     let entries = listing(&packed);
@@ -784,16 +825,17 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
 fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_did_not_build() {
     let r = recipe();
     assert_eq!(r.builder.cpus, 4);
-    let packages = vec!["veredas-maquinar".to_string(), "veredas-portal".to_string()];
-    let bins = vec!["veredas-bancada".to_string(), "veredas-portal".to_string()];
-    let script = builder::script(&r, &packages, &bins);
+    // Each component built alone, so cargo unifies features within its own inputs.
+    let builds = vec![("veredas-maquinar".to_string(), vec!["veredas-bancada".to_string()]), ("veredas-portal".to_string(), vec!["veredas-portal".to_string()])];
+    let script = builder::script(&r, &builds);
     assert_eq!(
         script,
         "set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
-         cd /build/src\nmkdir -p /build/out/bin\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
-         cargo build --release --locked --offline --jobs 4 -p veredas-maquinar -p veredas-portal --bins\nmissing=\n\
-         if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; else echo \"ALFORGE-MISSING veredas-bancada\"; missing=1; fi\n\
-         if [ -f target/release/veredas-portal ]; then cp target/release/veredas-portal /build/out/bin/; else echo \"ALFORGE-MISSING veredas-portal\"; missing=1; fi\n\
+         cd /build/src\nmkdir -p /build/out/bin /build/out/deps\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
+         cargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\n\
+         cargo build --release --locked --offline --jobs 4 -p veredas-portal --bins\nmissing=\n\
+         if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; cp target/release/veredas-bancada.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-bancada\"; missing=1; fi\n\
+         if [ -f target/release/veredas-portal ]; then cp target/release/veredas-portal /build/out/bin/; cp target/release/veredas-portal.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-portal\"; missing=1; fi\n\
          [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n"
     );
     // The script run here as the builder runs it (its `/build` a folder of the test's, stand-ins
@@ -806,7 +848,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::create_dir_all(root.join("out")).unwrap();
         std::fs::create_dir_all(&stub).unwrap();
-        let touch: String = built.iter().map(|b| format!(" target/release/{b}")).collect();
+        let touch: String = built.iter().map(|b| format!(" target/release/{b} target/release/{b}.d")).collect();
         for (name, text) in [
             ("cargo", format!("#!/bin/sh\necho \"cargo $*\" >> '{}'\nmkdir -p target/release\ntouch{touch}\n", d.path().join("calls").display())),
             ("rustc", "#!/bin/sh\necho 'rustc 1.100.0 (0ef1bc386 2026-11-09)'\n".to_string()),
@@ -820,12 +862,15 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         let log = std::fs::read_to_string(&log_path).unwrap();
         assert_eq!(
             std::fs::read_to_string(d.path().join("calls")).unwrap(),
-            "cargo build --release --locked --offline --jobs 4 -p veredas-maquinar -p veredas-portal --bins\n"
+            "cargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\ncargo build --release --locked --offline --jobs 4 -p veredas-portal --bins\n"
         );
         assert_eq!(std::fs::read_to_string(root.join("out/toolchain")).unwrap(), "rustc 1.100.0 (0ef1bc386 2026-11-09)\n");
         let mut shipped: Vec<String> = std::fs::read_dir(root.join("out/bin")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         shipped.sort();
         assert_eq!(shipped, built);
+        let mut infos: Vec<String> = std::fs::read_dir(root.join("out/deps")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        infos.sort();
+        assert_eq!(infos, built.iter().map(|b| format!("{b}.d")).collect::<Vec<_>>(), "each executable's dep-info beside it");
         let console = format!("ALFORGE-BUILD-EXIT {}", status.code().unwrap());
         let judged = builder::outcome(&log, &console, true, &log_path);
         if built.len() == 2 {
@@ -957,6 +1002,15 @@ fn every_refusal_before_the_build_stops_the_cut_with_nothing_built() {
     let (r, c) = repo_for_cut("[package]\nname = \"veredas-raiz\"\nversion = \"2.0.0\"\nedition = \"2024\"\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
     let (got, left) = trial_cut(r.dir.path());
     assert_eq!(message(got), format!("commit {c}: its Cargo.toml is no workspace (`[workspace]`): cargo would look for one above the tree"));
+    assert!(!left);
+
+    // A component whose build inputs do not read (it depends on a crate and the commit holds no
+    // lock file to pin it): what its version names cannot be held to its build.
+    let (r, _) = repo_for_cut(workspace, Some(&recipe_with("cpus = 4", "cpus = 4")));
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = \"1\"\n");
+    r.commit("core uses serde, nothing locked");
+    let (got, left) = trial_cut(r.dir.path());
+    assert_eq!(message(got), "veredas-core's build inputs do not read: veredas-core depends on `serde` and the commit holds no Cargo.lock to pin it");
     assert!(!left);
 
     // The manifest it would write refused against the repository (a shallow clone's history is
@@ -1105,7 +1159,7 @@ fn a_release_already_cut_where_the_cut_writes_takes_part_in_its_check() {
     assert_eq!(got.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&got.stderr),
-        "release 2.0.1 would not check:\nveredas-core 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different code: a version names one tree\n"
+        "release 2.0.1 would not check:\nveredas-core 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (crates/veredas-core/): a version names everything its build reads\n"
     );
     assert_eq!(log, Vec::<String>::new(), "refused before the suite");
     assert!(!r.dir.path().join("target/alforge/2.0.1").exists() && !out.path().join("2.0.1.toml").exists());
@@ -1153,4 +1207,25 @@ fn a_bundle_packs_to_the_same_bytes_whatever_the_shells_tar_and_gzip_variables_s
         .unwrap();
     assert!(status.success());
     assert_ne!(std::fs::read(&reached).unwrap(), std::fs::read(&parent).unwrap());
+}
+
+#[test]
+fn a_dep_info_is_read_as_make_reads_it_and_held_to_what_a_version_names() {
+    let inputs = alforge::inputs::Inputs(
+        [("crates/veredas-portal/", "1"), ("crates/veredas-core/", "2"), ("docs/shared.rs", "3"), ("Cargo.toml", "4")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+    );
+    // Cargo's own form: the rule's target, then what it read; a space in a name escaped, a `$`
+    // doubled, a line continued; a rule with no prerequisites; the build's own output and the
+    // vendored sources left out.
+    let info = "/build/src/target/release/veredas-portal: /build/src/crates/veredas-portal/src/main.rs /build/src/crates/veredas-core/src/lib.rs \\\n \
+                /build/src/docs/a\\ b.rs /build/src/docs/shared.rs /build/src/docs/cost$$.txt /build/src/target/release/build/x-1/out/gen.rs \
+                /build/vendor/serde-1.0.200/src/lib.rs /etc/fora.conf /build/src/crates/veredas-portalx/src/lib.rs\n\n\
+                /build/src/crates/veredas-portal/src/main.rs:\n";
+    assert_eq!(
+        alforge::inputs::read_outside(info, builder::SRC, builder::VENDOR, &inputs),
+        ["/etc/fora.conf", "crates/veredas-portalx/src/lib.rs", "docs/a b.rs", "docs/cost$.txt"],
+        "a folder's name is no prefix of another's"
+    );
+    assert_eq!((builder::SRC, builder::VENDOR), ("/build/src", "/build/vendor"));
+    assert_eq!(alforge::inputs::read_outside("/build/src/target/release/x: /build/src/crates/veredas-core/src/lib.rs\n", builder::SRC, builder::VENDOR, &inputs), Vec::<String>::new());
 }

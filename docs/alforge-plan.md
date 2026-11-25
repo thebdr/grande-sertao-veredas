@@ -84,8 +84,9 @@ Keys (each required unless a default is given):
 - `toolchain`: what `rustc --version` printed at the cut, stated, not enforced.
 - `[[component]]`: `name` (a `veredas-*` or `orcl-*` member at the commit), `version` (SemVer, the
   one cargo reads at the commit), `bins` (default none: a library such as core ships none; every
-  `bin` target cargo names for the component, each built with the default features or the cut
-  refuses it).
+  `bin` target cargo names for the component whose required features its default features turn
+  on, each built with them or the cut refuses it; one needing a feature they leave off, as
+  Oficina's window needs `shell`, is not shipped, and the cut says so: Q443).
 - `[tested]`: `suite`, the command whose green run at the commit made the set tested; `together`,
   what the cut ran from the bundle itself. Statements of what was run, written by the cut.
 
@@ -93,10 +94,20 @@ Keys (each required unless a default is given):
 1. **HEAD of a clean tree**, cut from a fresh `origin/main`: the cut refuses a tree that differs
    from HEAD (an untracked file included) and a release whose manifest exists. It plans the
    manifest first and checks it against the repository and every release already cut, so a
-   version another release pinned at another tree of the component's folder is refused before
-   anything is built: a component whose folder changed since the last release bumps its version
-   before the next one is cut. Whether a version also names the code it builds with (the members
-   it uses, the lock file, the workspace's manifest) is Q441; meanwhile the folder alone. It then
+   version another release pinned at other build inputs is refused before anything is built.
+   **A version names everything its build reads but the toolchain** (Q441, ruled "All build
+   inputs"): the component's folder; the folder of every member it uses (its normal and build
+   dependencies by path, transitively; what its tests alone use never goes into an executable)
+   and of every package by path outside the members (a fork kept in the tree, `forks/ironcalc`,
+   with its own workspace's manifest, which cargo reads for inherited keys); every file outside
+   those folders their sources name by a literal `#[path]`, `include_str!`, `include_bytes!` or
+   `include!` (Ábaco's `#[path]` to core's `schema.rs`); the lock file's entries for its external
+   dependencies, transitively, each by its source and checksum; the workspace's manifest, whole
+   (Q442: what cargo reads of it for that component alone is recommended); and the root's cargo
+   configuration. Each is identified as git stores it at the commit, so two commits
+   compare without a build, and a refusal names each input that differs. So a change to core
+   bumps core and every component using it, a `Cargo.lock` update every component it reaches, and
+   an edit of the workspace's manifest every component. It then
    runs the whole suite there (`cargo nextest run --workspace`, the gate of `CLAUDE.md`, built
    first and run behind the machine's lock, its temporary files in the cache), and refuses a red
    one. "Tested together" means two runs: that one, which tests the components against each
@@ -113,9 +124,13 @@ Keys (each required unless a default is given):
    build four jobs, holding the machine's lock for the database engine's compilation: the
    commit's tree as git stores it (its objects, no attribute or filter applied) and its
    dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them) handed in on a disk as a tar
-   stream, `cargo build --release --locked --offline` run inside
-   under the toolchain the suite was tested with (the development machine's `rustc`), the
-   executables handed back on another disk. Built on the development machine (Ubuntu 26.10,
+   stream, `cargo build --release --locked --offline -p <component> --bins` run inside for each
+   component alone (in one build cargo unifies features across the packages it builds, so one
+   component's manifest would reach another's executables) under the toolchain the suite was
+   tested with (the development machine's `rustc`), the executables handed back on another disk
+   with cargo's dep-info for each (`target/release/<bin>.d`: every file of the tree its
+   compilation read). Each file it names lies in what its component's version names, or the cut
+   refuses it by name: the sources' scan of step 1 is proven against the compiler at every cut. Built on the development machine (Ubuntu 26.10,
    glibc 2.44), portal and supervisão need `GLIBC_2.44` and do not start on Debian 13 (the probe
    below); built on the oldest, they run there and on every newer system. The builder's disk is
    the base image with the recipe's packages (a C and C++ compiler) and the toolchain from

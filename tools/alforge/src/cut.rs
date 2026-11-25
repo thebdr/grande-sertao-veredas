@@ -11,6 +11,7 @@ use thiserror::Error;
 use crate::builder;
 use crate::bundle;
 use crate::git;
+use crate::inputs;
 use crate::machine::{Recipe, RecipeError};
 use crate::manifest::{self, CheckError, Manifest};
 use crate::together::{self, Report};
@@ -188,15 +189,33 @@ pub fn after_build(
     rustc: &str,
     built: &builder::Built,
     name: &str,
-    bins: &[String],
-    components: &[String],
+    held: &std::collections::BTreeMap<String, manifest::Held>,
     text: &str,
     work: &Path,
 ) -> Result<(PathBuf, PathBuf), CutError> {
     if built.toolchain != rustc {
         return Err(refused(format!("the builder ran `{}`, the suite was tested with `{rustc}`", built.toolchain)));
     }
-    let packed = bundle::assemble(recipe, root, commit, name, &built.out.join("bin"), bins, components, text, work)?;
+    // What each executable's compilation read (cargo's dep-info for it, `deps/<bin>.d`) lies in
+    // what its component's version names: a file outside would ship a change under the same
+    // version (docs/questions.md Q441).
+    let mut outside = Vec::new();
+    for h in held.values() {
+        for b in &h.bins {
+            let d = built.out.join("deps").join(format!("{b}.d"));
+            let info = std::fs::read_to_string(&d).map_err(|e| refused(format!("the build left no dep-info for `{b}` ({}: {e})", d.display())))?;
+            let inputs = h.inputs.as_ref().map_err(|why| refused(format!("{}'s build inputs do not read: {why}", h.name)))?;
+            for p in inputs::read_outside(&info, builder::SRC, builder::VENDOR, inputs) {
+                outside.push(format!("`{b}` of {} read {p}, which its version does not name", h.name));
+            }
+        }
+    }
+    if !outside.is_empty() {
+        return Err(refused(outside.join("\n")));
+    }
+    let bins: Vec<String> = held.values().flat_map(|h| h.bins.iter().cloned()).collect();
+    let components: Vec<String> = held.keys().cloned().collect();
+    let packed = bundle::assemble(recipe, root, commit, name, &built.out.join("bin"), &bins, &components, text, work)?;
     let extracted = unpack_checked(&packed, &work.join("check"), name)?;
     Ok((packed, extracted))
 }
@@ -262,6 +281,17 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     if !shared.is_empty() {
         return Err(refused(shared.join("\n")));
     }
+    // A bin needing a feature its component's defaults leave off is not shipped, and said so.
+    for h in held.values() {
+        for b in &h.left {
+            eprintln!("alforge: {}'s `{b}` needs a feature its default features leave off: not shipped (docs/questions.md Q443)", h.name);
+        }
+    }
+    // What each version names must read at the commit: the build is held to it.
+    let unread: Vec<String> = held.values().filter_map(|h| h.inputs.as_ref().err().map(|why| format!("{}'s build inputs do not read: {why}", h.name))).collect();
+    if !unread.is_empty() {
+        return Err(refused(unread.join("\n")));
+    }
     let tmp = crate::cache::dir()?.join("tmp");
     std::fs::create_dir_all(&tmp)?;
     // The toolchain the suite runs with, read as the suite runs: the manifest's and the builder's.
@@ -309,14 +339,13 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
             return Err(refused(format!("while the suite ran, {why}")));
         }
     }
-    let packages: Vec<String> = held.values().filter(|h| !h.bins.is_empty()).map(|h| h.name.clone()).collect();
-    let bins: Vec<String> = held.values().flat_map(|h| h.bins.iter().cloned()).collect();
+    // Each component built alone, its executables named.
+    let builds: Vec<(String, Vec<String>)> = held.values().filter(|h| !h.bins.is_empty()).map(|h| (h.name.clone(), h.bins.iter().cloned().collect())).collect();
     std::fs::create_dir_all(&o.work)?;
-    let built = builder::build(&recipe, root, &commit, &toolchain, &packages, &bins, &o.work)?;
+    let built = builder::build(&recipe, root, &commit, &toolchain, &builds, &o.work)?;
     eprintln!("alforge: built under {} on {}", built.toolchain, built.libc);
     let name = format!("veredas-{}-{target}", o.release);
-    let names: Vec<String> = held.keys().cloned().collect();
-    let (packed, extracted) = after_build(&recipe, root, &commit, &rustc, &built, &name, &bins, &names, &text, &o.work)?;
+    let (packed, extracted) = after_build(&recipe, root, &commit, &rustc, &built, &name, &held, &text, &o.work)?;
     eprintln!("alforge: running the bundle's bench and supervisão together");
     let report = together::run(&extracted, &o.work.join("together"))?;
     let faults = together::faults(&report);

@@ -12,6 +12,7 @@ use thiserror::Error;
 use veredas_core::schema::{self, HeaderError};
 
 use crate::git::{self, GitError};
+use crate::inputs::{self, Inputs};
 
 pub const FORMAT: &str = "veredas-release";
 pub const VERSION: u32 = 1;
@@ -188,9 +189,15 @@ pub struct Held {
     pub name: String,
     /// Its version, as cargo reads its manifest.
     pub version: String,
-    /// Its executables: every `bin` target cargo itself names for it. Whether cargo builds each
-    /// with the default features is the cut's to see (C-291), never modelled here.
+    /// Its executables: every `bin` target cargo itself names for it whose required features its
+    /// default features turn on. Whether cargo does build each is still the cut's to see (C-291).
     pub bins: BTreeSet<String>,
+    /// The `bin` targets cargo names for it that need a feature its default features leave off:
+    /// a release does not ship them (docs/questions.md Q443).
+    pub left: BTreeSet<String>,
+    /// What its version names: everything a build of it reads but the toolchain
+    /// ([`crate::inputs`]), or why that cannot be read at the commit.
+    pub inputs: Result<Inputs, String>,
 }
 
 /// Why a manifest could not be checked at all.
@@ -298,20 +305,101 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                 }
             }
         }
+        // A folder from the root, in cargo's spelling of the path it gives.
+        let from_root = |p: &Path| p.strip_prefix(&base).ok().map(|d| d.to_string_lossy().replace('\\', "/"));
+        let packages_of = |meta: &serde_json::Value, workspace: &str| -> Vec<inputs::Member> {
+            let mut out = Vec::new();
+            for pkg in meta["packages"].as_array().into_iter().flatten() {
+                let manifest = PathBuf::from(pkg["manifest_path"].as_str().unwrap_or_default());
+                let Some(dir) = manifest.parent().and_then(from_root) else { continue };
+                let deps = pkg["dependencies"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|d| d["kind"].as_str() != Some("dev"))
+                    .map(|d| inputs::Dep {
+                        name: d["name"].as_str().unwrap_or_default().to_string(),
+                        dir: d["path"].as_str().map(|p| from_root(Path::new(p)).unwrap_or_else(|| p.to_string())),
+                    })
+                    .collect();
+                out.push(inputs::Member {
+                    name: pkg["name"].as_str().unwrap_or_default().to_string(),
+                    version: pkg["version"].as_str().unwrap_or_default().to_string(),
+                    dir,
+                    workspace: workspace.to_string(),
+                    deps,
+                });
+            }
+            out
+        };
+        let mut members = packages_of(&meta, "");
+        // A path dependency outside the workspace's members (a fork kept in the tree, excluded from
+        // the workspace) is read by cargo too, in the workspace it belongs to, so its own
+        // dependencies and its inherited keys are cargo's; one cargo cannot read is its users'
+        // refusal.
+        let mut unread = BTreeMap::new();
+        loop {
+            let known: BTreeSet<String> = members.iter().map(|m| m.dir.clone()).chain(unread.keys().cloned()).collect();
+            let unknown: BTreeSet<String> = members.iter().flat_map(|m| m.deps.iter().filter_map(|d| d.dir.clone())).filter(|d| !known.contains(d)).collect();
+            if unknown.is_empty() {
+                break;
+            }
+            for dir in unknown {
+                let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+                let out = Command::new(cargo)
+                    .args(["metadata", "--no-deps", "--offline", "--format-version", "1", "--manifest-path"])
+                    .arg(tree.join(&dir).join("Cargo.toml"))
+                    .current_dir(&tree)
+                    .stdin(Stdio::null())
+                    .output()?;
+                let meta: Option<serde_json::Value> = out.status.success().then(|| serde_json::from_slice(&out.stdout).ok()).flatten();
+                let Some(meta) = meta else {
+                    let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
+                    let reason: Vec<&str> = why.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+                    let why = format!("cargo cannot read the package at {dir}: {}", reason.join(" / "));
+                    unread.insert(dir, why);
+                    continue;
+                };
+                let ws = PathBuf::from(meta["workspace_root"].as_str().unwrap_or_default());
+                let found = packages_of(&meta, &from_root(&ws).unwrap_or_default());
+                if found.iter().all(|m| m.dir != dir) {
+                    unread.insert(dir.clone(), format!("cargo names no package at {dir}"));
+                }
+                for m in found {
+                    if !members.iter().any(|x| x.dir == m.dir) {
+                        members.push(m);
+                    }
+                }
+            }
+        }
+        let workspace = inputs::Workspace { root, commit, tree: &tree, members, unread };
         for pkg in meta["packages"].as_array().into_iter().flatten() {
             let manifest = PathBuf::from(pkg["manifest_path"].as_str().unwrap_or_default());
-            let dir = manifest.parent().and_then(|d| d.strip_prefix(&base).ok()).map(|d| d.to_string_lossy().replace('\\', "/"));
-            let Some(dir) = dir.filter(|d| d.starts_with("crates/")) else { continue };
+            let Some(dir) = manifest.parent().and_then(from_root).filter(|d| d.starts_with("crates/")) else { continue };
             let name = pkg["name"].as_str().unwrap_or_default().to_string();
             let version = pkg["version"].as_str().unwrap_or_default().to_string();
-            let bins = pkg["targets"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "bin")))
-                .filter_map(|t| t["name"].as_str().map(String::from))
-                .collect();
-            held.insert(name.clone(), Held { dir, name, version, bins });
+            // The features its defaults turn on, through the features they name in turn.
+            // DECISION PENDING (Q443): a bin needing another feature is not shipped.
+            let features = pkg["features"].as_object();
+            let mut on: BTreeSet<&str> = BTreeSet::new();
+            let mut queue: Vec<&str> = if features.is_some_and(|f| f.contains_key("default")) { vec!["default"] } else { vec![] };
+            while let Some(f) = queue.pop() {
+                if on.insert(f) {
+                    for x in features.and_then(|fs| fs[f].as_array()).into_iter().flatten().filter_map(|x| x.as_str()) {
+                        if features.is_some_and(|fs| fs.contains_key(x)) {
+                            queue.push(x);
+                        }
+                    }
+                }
+            }
+            let (mut bins, mut left) = (BTreeSet::new(), BTreeSet::new());
+            for t in pkg["targets"].as_array().into_iter().flatten().filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "bin"))) {
+                let Some(b) = t["name"].as_str() else { continue };
+                let needs_off = t["required-features"].as_array().into_iter().flatten().any(|r| !r.as_str().is_some_and(|r| on.contains(r)));
+                if needs_off { left.insert(b.to_string()) } else { bins.insert(b.to_string()) };
+            }
+            let inputs = workspace.inputs(&name);
+            held.insert(name.clone(), Held { dir, name, version, bins, left, inputs });
         }
         Ok(None)
     })();
@@ -390,18 +478,23 @@ pub fn check(root: &Path, m: &Manifest) -> Result<Vec<String>, CheckError> {
             refusals.push(format!("{} builds `{b}` at {c} and the manifest does not ship it", x.name));
         }
         for b in listed.difference(&h.bins) {
-            refusals.push(format!("{} builds no `{b}` at {c}", x.name));
+            if h.left.contains(b) {
+                refusals.push(format!("{} builds `{b}` at {c} only with a feature its default features leave off: a release does not ship it", x.name));
+            } else {
+                refusals.push(format!("{} builds no `{b}` at {c}", x.name));
+            }
         }
     }
     Ok(refusals)
 }
 
-/// Checks manifests against each other: a component's version names one tree, so two releases
-/// pinning one version must hold the same code for it (its folder's tree at each commit).
+/// Checks manifests against each other: a component's version names its build's inputs
+/// ([`crate::inputs`], docs/questions.md Q441), so two releases pinning one version must hold the
+/// same inputs for it at their commits; each difference is named.
 pub fn check_together(root: &Path, all: &[(PathBuf, Manifest)]) -> Result<Vec<String>, CheckError> {
     let mut refusals = Vec::new();
-    // (name, version) -> the first release seen pinning it, with its folder's tree there.
-    let mut first: BTreeMap<(String, String), (String, Option<String>)> = BTreeMap::new();
+    // (name, version) -> the first release seen pinning it, with its inputs there.
+    let mut first: BTreeMap<(String, String), (String, Result<Inputs, String>)> = BTreeMap::new();
     for (_, m) in all {
         // A manifest whose commit is no commit here is `check`'s to refuse; it pins no tree.
         if !git::is_commit_id(root, &m.commit)? {
@@ -418,17 +511,27 @@ pub fn check_together(root: &Path, all: &[(PathBuf, Manifest)]) -> Result<Vec<St
             // Only a true pin names a tree: a component absent at the commit, or there at another
             // version, is `check`'s refusal and charges no other release.
             let Some(h) = held.get(&x.name).filter(|h| h.version == x.version.to_string()) else { continue };
-            let tree = git::object(root, &m.commit, &h.dir)?;
             let key = (x.name.clone(), x.version.to_string());
             match first.get(&key) {
                 None => {
-                    first.insert(key, (m.release.to_string(), tree));
+                    first.insert(key, (m.release.to_string(), h.inputs.clone()));
                 }
-                Some((other, t)) if *t != tree => refusals.push(format!(
-                    "{} {} is pinned by releases {other} and {} at different code: a version names one tree",
-                    x.name, x.version, m.release
-                )),
-                Some(_) => {}
+                Some((other, before)) => match (before, &h.inputs) {
+                    (Ok(a), Ok(b)) => {
+                        let differ = a.differ(b);
+                        if !differ.is_empty() {
+                            refusals.push(format!(
+                                "{} {} is pinned by releases {other} and {} at different build inputs ({}): a version names everything its build reads",
+                                x.name,
+                                x.version,
+                                m.release,
+                                differ.join(", ")
+                            ));
+                        }
+                    }
+                    (Err(why), _) => refusals.push(format!("{} {} is pinned by releases {other} and {}, and its build inputs at {other}'s commit do not read: {why}", x.name, x.version, m.release)),
+                    (_, Err(why)) => refusals.push(format!("{} {} is pinned by releases {other} and {}, and its build inputs at {}'s commit do not read: {why}", x.name, x.version, m.release, m.release)),
+                },
             }
         }
     }
