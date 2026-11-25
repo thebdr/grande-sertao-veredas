@@ -70,6 +70,7 @@ mod test_nan_inf;
 mod test_networkdays_networkdaysintl;
 mod test_quote_prefix;
 mod test_formula_number_spelling;
+mod test_formula_reading_back;
 mod test_row_column_styles;
 mod test_set_user_input;
 mod test_shared_formulas;

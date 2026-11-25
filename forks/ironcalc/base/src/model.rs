@@ -2567,6 +2567,35 @@ impl<'a> Model<'a> {
         }
     }
 
+    /// The formula cells whose spelling (the one [`Model::get_cell_formula`] gives, without its
+    /// `=`) a parser made from this workbook, as [`Model::from_workbook`] makes one, reads as
+    /// another formula than the one the engine holds: what a file storing that spelling would read
+    /// back otherwise. (Veredas fork change 31)
+    pub fn formulas_reading_back_otherwise(&self) -> Vec<(u32, i32, i32)> {
+        let worksheet_names = self.workbook.worksheets.iter().map(|s| s.get_name()).collect();
+        let mut parser = Parser::new(
+            worksheet_names,
+            self.workbook.get_defined_names_with_scope(),
+            self.workbook.tables.clone(),
+            self.locale,
+            self.language,
+        );
+        let mut out = Vec::new();
+        for (sheet, worksheet) in self.workbook.worksheets.iter().enumerate() {
+            let Some(formulas) = self.parsed_formulas.get(sheet) else { continue };
+            for (row, column, cell) in worksheet.sheet_data.cells() {
+                let Some(index) = cell.get_formula() else { continue };
+                let Some((held, _)) = formulas.get(index as usize) else { continue };
+                let cell_reference = CellReferenceRC { sheet: worksheet.get_name(), row, column };
+                let spelled = to_localized_string(held, &cell_reference, self.locale, self.language);
+                if parser.parse(&spelled, &cell_reference) != **held {
+                    out.push((sheet as u32, row, column));
+                }
+            }
+        }
+        out
+    }
+
     /// Returns the text for the formula in (`sheet`, `row`, `column`) in English if any
     ///
     /// See also:
