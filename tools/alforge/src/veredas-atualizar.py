@@ -157,8 +157,23 @@ def check_manifest(folder, top, installed):
     release, target = str(m.get("release", "")), str(m.get("target", ""))
     if semver(release) is None:
         raise Refused([f"release.toml's release `{release}` is no SemVer"])
-    if str(m["tested"].get("suite", "")).startswith("not run") if isinstance(m["tested"], dict) else True:
-        wrong.append(f"the bundle is a trial cut's (its suite `{m['tested'].get('suite') if isinstance(m['tested'], dict) else m['tested']}`): only a release cut for real is installed")
+    # The manifest's shape, as every cut writes it: the keys the command reads, each of its kind.
+    tested = m["tested"]
+    shape = []
+    if not isinstance(tested, dict) or not all(isinstance(tested.get(k), str) and tested.get(k).strip() for k in ["suite", "together"]):
+        shape.append("release.toml's [tested] does not state its `suite` and `together`")
+    components = m["component"]
+    if not isinstance(components, list) or not components:
+        shape.append("release.toml states no `[[component]]`")
+    else:
+        for c in components:
+            if not (isinstance(c, dict) and isinstance(c.get("name"), str) and isinstance(c.get("version"), str) and semver(c["version"]) is not None
+                    and isinstance(c.get("bins", []), list) and all(isinstance(b, str) for b in c.get("bins", []))):
+                shape.append(f"release.toml's component `{c.get('name') if isinstance(c, dict) else c}` is not a name, a SemVer version and its executables")
+    if shape:
+        raise Refused(shape)
+    if tested["suite"].startswith("not run"):
+        wrong.append(f"the bundle is a trial cut's (its suite `{tested['suite']}`): only a release cut for real is installed")
     if target != installed["target"]:
         wrong.append(f"the bundle is built for {target}, this machine runs {installed['target']}")
     if top != f"veredas-{release}-{target}":
@@ -191,12 +206,15 @@ def check_starts(folder):
 
 
 def point(link, target):
-    """`link` made to name `target` in one step (a new link renamed over it)."""
-    new = link + ".new"
-    if os.path.lexists(new):
-        os.unlink(new)
+    """`link` made to name `target` in one step: a new link under a name of this run's own, made
+    (never an existing file removed for it), then renamed over it."""
+    new = os.path.join(os.path.dirname(link), f".{os.path.basename(link)}.atualizar-{os.getpid()}")
     os.symlink(target, new)
-    os.replace(new, link)
+    try:
+        os.replace(new, link)
+    except OSError:
+        os.unlink(new)
+        raise
 
 
 def check_path(bins):
@@ -234,7 +252,9 @@ def install(stage, top, old_top, bins):
                 point(link, THROUGH + b)
         for name in os.listdir(PATH_DIR):
             link = os.path.join(PATH_DIR, name)
-            if os.path.islink(link) and os.readlink(link).startswith(THROUGH) and name not in bins:
+            # A release's own link names its executable through `current` under its own name;
+            # another link (a tester's alias) is kept.
+            if os.path.islink(link) and os.readlink(link) == THROUGH + name and name not in bins:
                 os.unlink(link)
     except OSError as e:
         for what in [lambda: old_top and point(CURRENT, old_top)] + [
@@ -312,6 +332,16 @@ def main(argv):
         # The bundle read once, into the staging folder: its digest and its contents are of the
         # same bytes, whatever the file does meanwhile.
         copy = os.path.join(stage, "bundle.tar.gz")
+        # Room for the copy first, the reserve kept (the files' own room is judged before they
+        # are extracted).
+        try:
+            size = os.stat(bundle).st_size
+        except FileNotFoundError as e:
+            print(f"veredas-atualizar: {bundle}: {e.strerror}", file=sys.stderr)
+            return 2
+        free = shutil.disk_usage(OPT).free
+        if size + RESERVE > free:
+            raise Refused([f"the bundle's archive needs {size >> 20} MB under {OPT} and {RESERVE >> 20} MB left free; {free >> 20} MB are free"])
         h = hashlib.sha256()
         try:
             with open(bundle, "rb") as src, open(copy, "wb") as dst:

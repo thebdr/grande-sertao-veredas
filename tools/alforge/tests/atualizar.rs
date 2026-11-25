@@ -350,7 +350,7 @@ fn every_bundle_the_command_refuses_leaves_the_machine_as_it_was() {
         .unwrap();
     let err = String::from_utf8(out.stderr).unwrap();
     assert_eq!(out.status.code(), Some(2), "{err}");
-    assert!(err.contains("  the bundle needs ") && err.contains(" MB left free; ") && err.ends_with(" MB are free\n"), "{err}");
+    assert!(err.contains("  the bundle's archive needs ") && err.contains(" MB left free; ") && err.ends_with(" MB are free\n"), "{err}");
     assert_eq!(m.snapshot(), before);
     // An I/O error once the release is moved and `current` pointed at it (the PATH's folder not
     // writable): all of it put back.
@@ -363,7 +363,9 @@ fn every_bundle_the_command_refuses_leaves_the_machine_as_it_was() {
     let (code, out, err) = m.run(&[&b]);
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(code, Some(2), "{out}{err}");
-    assert_eq!(err, format!("veredas-atualizar: not installed, the machine is as it was:\n  {}: Permission denied\n", bin.join("veredas-novo.new").display()));
+    // The link the run makes first under a scratch name of its own, refused by the folder's mode.
+    let start = format!("veredas-atualizar: not installed, the machine is as it was:\n  {}/.veredas-novo.atualizar-", bin.display());
+    assert!(err.starts_with(&start) && err.ends_with(": Permission denied\n"), "{err}");
     assert_eq!(m.snapshot(), before, "current, the links and the folder put back");
     assert_eq!(m.calls(), "");
     // No archive at all, and no file.
@@ -619,12 +621,13 @@ fn newer_is_semvers_precedence_numbers_compared_as_numbers() {
 
 #[test]
 fn an_io_error_after_links_changed_puts_them_back_and_the_room_counts_the_bundle() {
-    // The links change in name order: `veredas-a` is made, then `veredas-novo`'s new link cannot
-    // be written (a folder in its way): `current`, `veredas-a` and the folder all put back.
+    // The links change in name order: `veredas-a` is made and `veredas-portal` pointed again, then
+    // the last one's link cannot be written (its name, with the run's scratch prefix, is longer
+    // than a name may be): `current`, the links and the folder all put back.
     let m = Machine::new();
     let w = tempfile::tempdir().unwrap();
-    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-a", "veredas-novo", "veredas-portal"], |_| {});
-    std::fs::create_dir_all(m.path("usr/local/bin/veredas-novo.new/keep")).unwrap();
+    let long = format!("veredas-z{}", "z".repeat(235));
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-a", "veredas-portal", &long], |_| {});
     let before = m.snapshot();
     let (code, out, err) = m.run(&[&b]);
     assert_eq!(code, Some(2), "{out}{err}");
@@ -682,3 +685,100 @@ fn the_services_are_watched_long_enough_to_see_one_restarting() {
     assert_eq!(code, Some(3));
     assert!(err.contains("(systemctl could not say their state)"), "{err}");
 }
+
+#[test]
+fn round_two_the_lock_holds_the_installed_release_read_and_the_manifest_is_held_to_its_shape() {
+    use std::os::unix::fs::PermissionsExt;
+    // The installed release's manifest read slowly (a FIFO): read under the lock, so a second
+    // update meanwhile is refused at once.
+    let m = Machine::new();
+    let w = tempfile::tempdir().unwrap();
+    let installed = m.path(&format!("opt/veredas/veredas-1.0.0-{TARGET}/release.toml"));
+    let text = std::fs::read(&installed).unwrap();
+    std::fs::remove_file(&installed).unwrap();
+    assert!(Command::new("mkfifo").arg(&installed).status().unwrap().success());
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |_| {});
+    let c = bundle_of(w.path(), "1.2.0", TARGET, &["veredas-portal"], |_| {});
+    let slow = m.command(&[&b], &[("VEREDAS_SETTLE", "0")]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let (code, _, err) = m.run(&[&c]);
+    assert_eq!((code, err.as_str()), (Some(2), "veredas-atualizar: another update is running\n"));
+    std::fs::write(&installed, &text).unwrap();
+    let out = slow.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(std::fs::read_link(m.path("opt/veredas/current")).unwrap(), PathBuf::from(format!("veredas-1.1.0-{TARGET}")));
+
+    // A bundle larger than one read, its gzip CRC changed (the archive whole): refused.
+    let m = Machine::new();
+    let big = bundle_of(w.path(), "1.3.0", TARGET, &["veredas-portal"], |d| {
+        // Bytes no compressor shrinks (xorshift), so the archive is larger than one read.
+        let mut x: u64 = 0x9e3779b97f4a7c15;
+        let noise: Vec<u8> = (0..(3u32 << 20))
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 24) as u8
+            })
+            .collect();
+        std::fs::write(d.join("planta/noise.bin"), noise).unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    let mut bytes = std::fs::read(&big).unwrap();
+    assert!(bytes.len() > 2 << 20, "larger than one read");
+    let crc = bytes.len() - 8;
+    bytes[crc] ^= 0xff;
+    let bad = w.path().join("bad-crc.tar.gz");
+    std::fs::write(&bad, &bytes).unwrap();
+    let before = m.snapshot();
+    let (code, _, err) = m.run(&[&bad]);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("  the bundle is no release bundle (a gzipped tar): "), "{err}");
+    assert_eq!(m.snapshot(), before);
+
+    // What a manifest's or the sums' damage makes: each refused by name, never a traceback.
+    let refused = |b: &Path| -> String {
+        let (code, out, err) = m.run(&[b]);
+        assert_eq!(code, Some(2), "{out}{err}");
+        assert!(!err.contains("Traceback"), "{err}");
+        err
+    };
+    let sums = bundle_of(w.path(), "1.4.0", TARGET, &["veredas-portal"], |d| std::fs::write(d.join("SHA256SUMS"), b"\x81\x82 not utf-8\n").unwrap());
+    assert!(refused(&sums).contains("  the bundle holds no readable SHA256SUMS: "));
+    type Shape = (&'static str, Box<dyn Fn(String) -> String>, &'static str);
+    let shapes: Vec<Shape> = vec![
+        ("no suite", Box::new(|t: String| t.lines().filter(|l| !l.starts_with("suite = ")).map(|l| format!("{l}\n")).collect()), "  release.toml's [tested] does not state its `suite` and `together`\n"),
+        ("an empty suite", Box::new(|t: String| t.lines().map(|l| if l.starts_with("suite = ") { "suite = \"\"\n".to_string() } else { format!("{l}\n") }).collect()), "  release.toml's [tested] does not state its `suite` and `together`\n"),
+        ("a component no table", Box::new(|t: String| t.replace("[[component]]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\n", "component = \"x\"\n[x]\n")), "  release.toml states no `[[component]]`\n"),
+        ("a component's version no string", Box::new(|t: String| t.replace("\nversion = \"2.0.0\"\n", "\nversion = 2\n")), "  release.toml's component `veredas-portal` is not a name, a SemVer version and its executables\n"),
+    ];
+    for (i, (what, edit, want)) in shapes.into_iter().enumerate() {
+        let b = bundle_of(w.path(), &format!("1.5.{i}"), TARGET, &["veredas-portal"], |d| {
+            let t = std::fs::read_to_string(d.join("release.toml")).unwrap();
+            std::fs::write(d.join("release.toml"), edit(t)).unwrap();
+            bundle::write_sums(d).unwrap();
+        });
+        assert!(refused(&b).ends_with(want), "{what}");
+    }
+    assert_eq!(m.snapshot(), before);
+
+    // Another's link where an executable would go: refused, as a file is.
+    std::os::unix::fs::symlink("/usr/bin/true", m.path("usr/local/bin/veredas-novo")).unwrap();
+    let n = bundle_of(w.path(), "1.6.0", TARGET, &["veredas-portal", "veredas-novo"], |_| {});
+    assert!(refused(&n).contains(&format!("{} is not a link a release made", m.path("usr/local/bin/veredas-novo").display())));
+    std::fs::remove_file(m.path("usr/local/bin/veredas-novo")).unwrap();
+
+    // Installed: a tester's file at the name the old command used for its scratch link and a
+    // tester's alias through `current` are kept.
+    std::fs::write(m.path("usr/local/bin/veredas-portal.new"), "a tester's notes\n").unwrap();
+    std::os::unix::fs::symlink("/opt/veredas/current/bin/veredas-velho", m.path("usr/local/bin/vv")).unwrap();
+    std::fs::set_permissions(m.path("usr/local/bin/veredas-portal.new"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    let (code, out, err) = m.run(&[&n]);
+    assert_eq!(code, Some(0), "{out}{err}");
+    assert_eq!(std::fs::read_to_string(m.path("usr/local/bin/veredas-portal.new")).unwrap(), "a tester's notes\n");
+    assert_eq!(std::fs::read_link(m.path("usr/local/bin/vv")).unwrap(), PathBuf::from("/opt/veredas/current/bin/veredas-velho"), "a tester's alias kept");
+    assert!(std::fs::read_link(m.path("usr/local/bin/veredas-velho")).is_err(), "the release's own link of an executable it no longer has dropped");
+    let scratch: Vec<String> = std::fs::read_dir(m.path("usr/local/bin")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).filter(|n| n.contains(".atualizar-")).collect();
+    assert_eq!(scratch, Vec::<String>::new(), "no scratch link left");
+}
+
