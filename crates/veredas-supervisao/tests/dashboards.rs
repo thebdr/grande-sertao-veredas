@@ -943,23 +943,71 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
 /// element carrying one (its parts' state classes swapped with it, so it stands in one state whole),
 /// every one of them read as the page drew it in its own state, and a probe per state put beside the
 /// one of them with the most parts (a badge, a dot), read by what paints it and every part inside
-/// it (an SVG shape's fill and stroke; an HTML box's background, shadow and border, and its text's
-/// colour where it holds one: a tile's badge, figure, sub-line and sparkline, a cell's text); every state painted
+/// it (every property of the browser's computed style whose value holds a colour, each where it
+/// paints: an SVG shape's fill and stroke; a box's background, shadows, each side of its border and
+/// its outline; a text's colour, its glyphs' fill and stroke, its decoration and its shadow; a
+/// filter's colours; a property holding a colour that no rule reads refused by name: a tile's
+/// badge, figure, sub-line and sparkline, a cell's text); every state painted
 /// otherwise than every other, and none in the accent's four colours (by red, green and blue) or any
 /// colour of its band of hue (220° to 290°, saturation above 0.2), but the neutral series the
 /// accent draws (Q22): a sparkline's normal and a table's inline bar.
 const STATE_PAINT: &str = r##"((STATES) => {
   const STATE = new RegExp(`^(st-(?:[a-z]+-)?)(${STATES.join("|")})$`);
   const family = (cls) => cls.split(/\s+/).map((c) => c.replace(STATE, "$1*")).join(" ");
-  // What paints a part, read alone: an SVG shape or text its fill and stroke (a colour set on it
-  // paints nothing); an HTML box its background, its shadow and its border where it has one, and its
-  // text's colour where it holds a text of its own.
+  // What paints a part, read from every property of the browser's computed style whose value holds a
+  // colour, each counted where it paints: an SVG shape or text its fill and stroke; a box (an HTML
+  // element, an outermost SVG) its background, its shadow, each side of its border with a width and
+  // a style, its outline with both, its filters; a text of its own its colour, its glyphs' fill and
+  // their stroke with a width, its decoration with a line, its emphasis with a style, its shadow. A
+  // colour SVG keeps for a gradient's stop or a filter's flood and light, a touch's highlight and the
+  // logical sides (the physical ones read) paint nothing here, nor a custom property (it paints
+  // through a property that names it, read); any other property holding a colour is refused by name
+  // until a rule reads it. A column's rule and a row's (the gaps' decorations) with a style and a
+  // width.
   const DRAWS = new Set(["rect", "circle", "ellipse", "path", "line", "polyline", "polygon", "text", "tspan"]);
+  const ownText = (e) => [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim() !== "");
+  const html = (e) => !(e instanceof SVGElement);
+  const box = (e) => html(e) || (e instanceof SVGSVGElement && !e.ownerSVGElement);
+  const shape = (e) => e instanceof SVGElement && DRAWS.has(e.tagName.toLowerCase());
+  const side = (c, s) => parseFloat(c.getPropertyValue(`border-${s}-width`)) > 0 && !["none", "hidden"].includes(c.getPropertyValue(`border-${s}-style`));
+  const PAINTS = {
+    "color": (e) => html(e) && ownText(e),
+    "-webkit-text-fill-color": (e) => html(e) && ownText(e),
+    "-webkit-text-stroke-color": (e, c) => html(e) && ownText(e) && parseFloat(c.getPropertyValue("-webkit-text-stroke-width")) > 0,
+    "text-decoration-color": (e, c) => ownText(e) && c.textDecorationLine !== "none",
+    "text-emphasis-color": (e, c) => ownText(e) && c.getPropertyValue("text-emphasis-style") !== "none",
+    "text-shadow": (e) => ownText(e),
+    "background-color": box,
+    "background-image": box,
+    "box-shadow": box,
+    "border-top-color": (e, c) => box(e) && side(c, "top"),
+    "border-right-color": (e, c) => box(e) && side(c, "right"),
+    "border-bottom-color": (e, c) => box(e) && side(c, "bottom"),
+    "border-left-color": (e, c) => box(e) && side(c, "left"),
+    "outline-color": (e, c) => box(e) && c.outlineStyle !== "none" && parseFloat(c.outlineWidth) > 0,
+    "column-rule-color": (e, c) => box(e) && c.columnRuleStyle !== "none" && parseFloat(c.columnRuleWidth) > 0,
+    "row-rule-color": (e, c) => box(e) && c.getPropertyValue("row-rule-style") !== "none" && parseFloat(c.getPropertyValue("row-rule-width")) > 0,
+    "fill": shape,
+    "stroke": shape,
+    "filter": () => true,
+    "backdrop-filter": box,
+    "caret-color": (e) => e.isContentEditable || e.matches("input, textarea"),
+    "accent-color": (e) => e.matches("input, progress, meter"),
+    "scrollbar-color": box,
+  };
+  const INERT = new Set(["stop-color", "flood-color", "lighting-color", "-webkit-tap-highlight-color", "border-block-start-color", "border-block-end-color", "border-inline-start-color", "border-inline-end-color"]);
+  const HOLDS = /rgba?\(|hsla?\(|#[0-9a-f]{3,8}\b/i;
+  const unread = new Set();
   const paint = (e) => {
     const c = getComputedStyle(e);
-    if (e instanceof SVGElement) return DRAWS.has(e.tagName.toLowerCase()) ? [["fill", c.fill], ["stroke", c.stroke]] : [];
-    const own = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim() !== "");
-    return [...(own ? [["color", c.color]] : []), ["background-color", c.backgroundColor], ["background-image", c.backgroundImage], ["box-shadow", c.boxShadow], ...(parseFloat(c.borderTopWidth) > 0 ? [["border-top-color", c.borderTopColor], ["border-top-style", c.borderTopStyle]] : [])];
+    const got = [];
+    for (const q of c) {
+      const v = c.getPropertyValue(q);
+      if (q.startsWith("--") || !HOLDS.test(v) || INERT.has(q)) continue;
+      if (!(q in PAINTS)) unread.add(q);
+      else if (PAINTS[q](e, c)) got.push([q, v]);
+    }
+    return got;
   };
   const parts = (el) => [el, ...el.querySelectorAll("*")];
   const sig = (el) => parts(el).map((e) => paint(e).map(([, v]) => v).join(" | ")).join(" // ");
@@ -1023,6 +1071,7 @@ const STATE_PAINT: &str = r##"((STATES) => {
       else seen.set(v, s);
     }
   }
+  for (const q of unread) out.push(`a colour the census reads no rule for: ${q}`);
   return [[...places.keys()].sort(), out];
 })"##;
 
