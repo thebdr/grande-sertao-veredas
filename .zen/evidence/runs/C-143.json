@@ -14,15 +14,15 @@
     "bench_device"
   ],
   "exitCode": 0,
-  "outputSha": "d5ccc750d29432a6cf371efefd26229db58e78fdb2e76382264cbe0a790c20e7",
-  "outputTail": "\nrunning 1 test\ntest the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.88s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running tests/bench_device.rs (target/debug/build/veredas-aranha/072447e12d0aca48/out/bench_device-072447e12d0aca48)",
-  "ranAt": "2026-11-25T02:43:45.937Z",
-  "headCommit": "2b604f8c046d3e4644dbe3225ed4de635873585e",
+  "outputSha": "56b0e53c930c710b1f296933a9558c47a7251ce277294d12a44b5c4706334554",
+  "outputTail": "\nrunning 1 test\ntest the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running tests/bench_device.rs (target/debug/build/veredas-aranha/40213c8b1f6d0f53/out/bench_device-40213c8b1f6d0f53)",
+  "ranAt": "2026-11-25T10:14:18.801Z",
+  "headCommit": "a5d9196f98025d36c51df1b613a26558cd88d897",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/bench_device.rs",
       "file": "crates/veredas-aranha/tests/bench_device.rs",
-      "fileSha": "23898a88c26eac3a0b375527937669bc35e410b2b0725de128e887d94ebd68b3"
+      "fileSha": "4baa9ef2ff6a3184c75a3245490409faa9d38c8e225418d12a767263fc2794d7"
     }
   ]
 }
