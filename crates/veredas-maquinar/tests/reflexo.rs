@@ -1295,3 +1295,214 @@ mod round_4 {
         }
     }
 }
+
+/// C-115's fifth refute round: the critic's probes (`~/.cache/veredas/critic-c115-r5/probes`), kept
+/// as pins: an actuator and a sensor model at a 10 ms scene step, every integer type held to both
+/// ends, a pose's centre refused, an actuator reaching an end at the reader's reach and between two
+/// yaws past f64's difference, a reversal whose zero is past f64 going on at its rate.
+mod round_5 {
+    use super::*;
+
+    /// A scene without gravity at `step_ms`: a sensor at the origin, two movers far off.
+    fn scene(step_ms: u32) -> World {
+        let s = format!("format = \"veredas-cena\"\nversion = 1\nstep_ms = {step_ms}\ngravity = 0\n[[sensor]]\nname = \"S\"\nradius = 0.1\nat = [0.0, 0.0, 0.0]\n[[mover]]\nname = \"m\"\nsize = [0.05, 0.05, 0.05]\nat = [5.0, 0.0, 0.0]\n[[mover]]\nname = \"n\"\nsize = [0.05, 0.05, 0.05]\nat = [5.0, 5.0, 0.0]\n");
+        World::new(&fisica::load(&s).unwrap()).unwrap()
+    }
+
+    fn models_at(text: &str, m: &Arc<Mem>, step: Duration) -> Models {
+        let cfg: ReflexoConfig = toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+        let points: Arc<dyn Points> = m.clone();
+        Models::new(&cfg, step, &|p: &str| (p == "m").then(|| points.clone())).unwrap()
+    }
+
+    #[test]
+    fn an_actuator_and_a_sensor_model_count_the_scene_s_own_step() {
+        let mut w = scene(10);
+        let step = w.step_length();
+        assert_eq!(step, Duration::from_millis(10));
+        let m = mem(&[("ext", Bool, 0.0), ("out", Bool, 0.0), ("no", Bool, 0.0)]);
+        let mut x = models_at("actuator = [ { name = \"a\", mover = \"m\", extend = \"m.ext\", retracted = { at = [5.0, 0.0, 0.0] }, extended = { at = [5.0, 1.0, 0.0] }, stroke_ms = 100, extended_switch = \"m.out\" } ]\nsensor = [ { name = \"b\", sensor = \"S\", point = \"m.no\", on_delay_ms = 25 } ]", &m, step);
+        x.step(Some(&mut w));
+        w.step();
+        // 100 ms at 10 ms: out at the 10th step.
+        m.set("ext", 1.0);
+        let mut k = 0;
+        while m.get("out") != 1.0 {
+            x.step(Some(&mut w));
+            w.step();
+            k += 1;
+            assert!(k < 100);
+        }
+        assert_eq!(k, 10, "a 100 ms stroke at a 10 ms scene step");
+        // 25 ms at 10 ms: on at the 3rd step that sees the body (30 ms).
+        w.place("n", fisica::Placement::at([0.0, 0.0, 0.0])).unwrap();
+        while !w.sensor("S").unwrap().occupied() {
+            x.step(Some(&mut w));
+            w.step();
+        }
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            x.step(Some(&mut w));
+            w.step();
+            seen.push(m.get("no"));
+        }
+        assert_eq!(seen, [0.0, 0.0, 1.0, 1.0], "a 25 ms on delay at a 10 ms scene step");
+    }
+
+    #[test]
+    fn every_integer_type_holds_to_both_ends_and_writes_nan_as_0() {
+        let server = modbus::start(&toml::from_str(
+            "port = 0\npoints = [ { name = \"u16\", table = \"holding-register\", address = 0 }, { name = \"i16\", table = \"holding-register\", address = 1, type = \"i16\" }, { name = \"u32\", table = \"holding-register\", address = 2, type = \"u32\" }, { name = \"i32\", table = \"holding-register\", address = 4, type = \"i32\" } ]",
+        ).unwrap())
+        .unwrap();
+        let adapter = ethernetip::start(&toml::from_str(
+            "bind = \"127.0.0.1\"\nport = 0\nio_port = 0\nassemblies = [ { instance = 100, size = 32 } ]\npoints = [ { name = \"u8\", assembly = 100, byte = 1 }, { name = \"i8\", assembly = 100, byte = 0, type = \"i8\" }, { name = \"u16\", assembly = 100, byte = 2, type = \"u16\" }, { name = \"i16\", assembly = 100, byte = 4, type = \"i16\" }, { name = \"u32\", assembly = 100, byte = 8, type = \"u32\" }, { name = \"i32\", assembly = 100, byte = 12, type = \"i32\" } ]",
+        ).unwrap())
+        .unwrap();
+        let (mp, ep) = (server.points(), adapter.points());
+        let range = |ty: &str| -> (f64, f64) {
+            match ty {
+                "u8" => (0.0, 255.0),
+                "i8" => (-128.0, 127.0),
+                "u16" => (0.0, 65535.0),
+                "i16" => (-32768.0, 32767.0),
+                "u32" => (0.0, 4294967295.0),
+                "i32" => (-2147483648.0, 2147483647.0),
+                _ => unreachable!(),
+            }
+        };
+        let devices: [(&str, &dyn Points, &[&str]); 2] = [("modbus", &mp, &["u16", "i16", "u32", "i32"]), ("adapter", &ep, &["u8", "i8", "u16", "i16", "u32", "i32"])];
+        let mut wrong = Vec::new();
+        for (device, p, types) in devices {
+            for ty in types {
+                let (lo, hi) = range(ty);
+                for (v, want) in [(lo - 1000.0, lo), (lo, lo), (hi, hi), (hi + 1000.0, hi), (1e12, hi), (-1e12, lo), (f64::INFINITY, hi), (f64::NEG_INFINITY, lo), (f64::NAN, 0.0)] {
+                    p.write(ty, v).unwrap();
+                    let got = p.read(ty).unwrap();
+                    if got != want {
+                        wrong.push(format!("{device} {ty}: {v} read {got}, not {want}"));
+                    }
+                }
+            }
+        }
+        server.stop();
+        adapter.stop();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    const BASE: &str = "format = \"veredas-bench\"\nversion = 1\n[[modbus]]\nname = \"m\"\nport = 0\npoints = [ { name = \"run\", table = \"coil\", address = 0 }, { name = \"out\", table = \"discrete-input\", address = 0 } ]\n[[fisica]]\nname = \"sc\"\nscene = \"line.cena.toml\"\n[[reflexo]]\nname = \"r\"\nscene = \"sc\"\n";
+
+    fn actuator(retracted: &str, extended: &str) -> String {
+        format!("actuator = [ {{ name = \"a\", mover = \"pusher\", extend = \"m.run\", retracted = {retracted}, extended = {extended}, stroke_ms = 500, extended_switch = \"m.out\" }} ]\n")
+    }
+
+    #[test]
+    fn an_actuator_pose_whose_centre_a_scene_refuses_is_refused() {
+        let dir = scratch("round5-k3");
+        let mut wrong = Vec::new();
+        for (models, want) in [
+            (actuator("{ at = [0.0, 0.0, 0.0] }", "{ at = [20000.0, 0.0, 0.0] }"), "reflexo[0] (`r`).actuator[0] (`a`).extended.at: [20000.0, 0.0, 0.0] m, each coordinate within 10000 of the origin"),
+            (actuator("{ at = [0.0, nan, 0.0] }", "{ at = [0.0, 0.0, 0.0] }"), "reflexo[0] (`r`).actuator[0] (`a`).retracted.at: [0.0, NaN, 0.0] m, each coordinate within 10000 of the origin"),
+        ] {
+            match bench::load(&format!("{BASE}{models}"), &dir) {
+                Err(e) if e.to_string() == want => {}
+                Err(e) => wrong.push(format!("{models}: {e}")),
+                Ok(_) => wrong.push(format!("loaded: {models}")),
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    #[test]
+    fn an_actuator_between_two_accepted_poses_reaches_its_extended_end() {
+        let (retracted, extended) = ("{ at = [-9999.9, 0.0, 0.0] }", "{ at = [10000.0, 0.0, 0.0] }");
+        let dir = scratch("round5-k4");
+        let loaded = bench::load(&format!("{BASE}{}", actuator(retracted, extended)), &dir).map(|_| ()).map_err(|e| e.to_string());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(loaded, Ok(()), "the reader accepts both poses");
+        let mut w = scene(4);
+        let m = mem(&[("ext", Bool, 0.0), ("out", Bool, 0.0)]);
+        let mut a = models_at(&format!("actuator = [ {{ name = \"a\", mover = \"m\", extend = \"m.ext\", retracted = {retracted}, extended = {extended}, stroke_ms = 500, extended_switch = \"m.out\" }} ]"), &m, w.step_length());
+        a.step(Some(&mut w));
+        w.step();
+        m.set("ext", 1.0);
+        for _ in 0..125 {
+            a.step(Some(&mut w));
+            w.step();
+        }
+        let s = a.status();
+        let x = w.body("m").unwrap().at[0];
+        assert_eq!((s.errors, s.last_error.as_deref(), m.get("out")), (0, None, 1.0), "the extended end");
+        assert!((x - 10000.0).abs() < 1e-6, "the mover at its extended end: x = {x}");
+    }
+
+    #[test]
+    fn an_actuator_between_two_accepted_yaws_moves_its_mover() {
+        let (retracted, extended) = ("{ at = [5.0, 0.0, 0.0], yaw = -1e308 }", "{ at = [5.0, 1.0, 0.0], yaw = 1e308 }");
+        let dir = scratch("round5-k5");
+        let loaded = bench::load(&format!("{BASE}{}", actuator(retracted, extended)), &dir).map(|_| ()).map_err(|e| e.to_string());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(loaded, Ok(()), "the reader accepts both poses");
+        let mut w = scene(4);
+        let m = mem(&[("ext", Bool, 1.0), ("out", Bool, 0.0)]);
+        let mut a = models_at(&format!("actuator = [ {{ name = \"a\", mover = \"m\", extend = \"m.ext\", retracted = {retracted}, extended = {extended}, stroke_ms = 100, extended_switch = \"m.out\" }} ]"), &m, w.step_length());
+        for _ in 0..25 {
+            a.step(Some(&mut w));
+            w.step();
+        }
+        let s = a.status();
+        assert_eq!((s.errors, s.last_error.as_deref()), (0, None));
+    }
+
+    #[test]
+    fn a_reversal_whose_zero_time_is_past_f64_goes_on_at_its_rate() {
+        let mut off = Vec::new();
+        for (decel, by) in [("1e-300", "rev"), ("1e-306", "run"), ("1e-306", "rev")] {
+            let m = mem(&[("run", Bool, 1.0), ("sp", PointKind::Number, 50.0), ("rev", Bool, 1.0), ("running", Bool, 9.0)]);
+            let mut d = models_at(&format!("drive = [ {{ name = \"d\", run = \"m.run\", setpoint = \"m.sp\", reverse = \"m.rev\", accel = 100, decel = {decel}, running = \"m.running\" }} ]"), &m, Duration::from_millis(4));
+            for _ in 0..125 {
+                d.step(None);
+            }
+            assert_eq!(d.speed("d"), Some(-50.0));
+            m.set(by, 0.0);
+            for k in 1..=3 {
+                d.step(None);
+                let (s, r) = (d.speed("d").unwrap(), m.get("running"));
+                if (s + 50.0).abs() > 1e-9 || r != 1.0 {
+                    off.push(format!("decel {decel}, {by} off, step {k}: speed {s}, running {r}"));
+                }
+            }
+        }
+        assert!(off.is_empty(), "{off:#?}");
+    }
+
+    #[test]
+    fn that_reversal_goes_on_10_000_steps_later() {
+        let m = mem(&[("run", Bool, 1.0), ("sp", PointKind::Number, 50.0), ("rev", Bool, 1.0), ("running", Bool, 9.0)]);
+        let mut d = models_at("drive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", reverse = \"m.rev\", accel = 100, decel = 1e-306, running = \"m.running\" } ]", &m, Duration::from_millis(4));
+        for _ in 0..125 {
+            d.step(None);
+        }
+        m.set("rev", 0.0);
+        for _ in 0..10_000 {
+            d.step(None);
+        }
+        assert_eq!((d.speed("d"), m.get("running")), (Some(-50.0), 1.0));
+    }
+
+    /// A place the scene refuses (its mover not in the scene the models are stepped with) writes
+    /// neither switch: the bench reads no end the mover did not reach.
+    #[test]
+    fn an_actuator_whose_place_fails_writes_no_switch() {
+        let mut w = scene(4);
+        let m = mem(&[("ext", Bool, 1.0), ("in", Bool, 0.0), ("out", Bool, 0.0)]);
+        let mut a = models_at("actuator = [ { name = \"a\", mover = \"z\", extend = \"m.ext\", retracted = { at = [5.0, 0.0, 0.0] }, extended = { at = [5.0, 1.0, 0.0] }, stroke_ms = 100, retracted_switch = \"m.in\", extended_switch = \"m.out\" } ]", &m, w.step_length());
+        for _ in 0..30 {
+            a.step(Some(&mut w));
+            w.step();
+        }
+        let s = a.status();
+        assert_eq!((s.errors, s.last_error.as_deref(), m.get("in"), m.get("out")), (30, Some("actuator `a`: no mover is named `z`"), 0.0, 0.0));
+    }
+}

@@ -498,8 +498,8 @@ own unit.
 - `extend` (required): a bool point read, extend while 1, retract while 0.
 - `retracted` (required), `extended` (required): its two poses.
 - `stroke_ms` (required): the time from one end to the other, 1 to 600000; the mover moves along
-  the straight line between the poses at an even speed, its angles with it, and is at an end at the
-  first step at or after its time.
+  the straight line between the poses at an even speed, its angles with it, and is at an end, its
+  pose exactly, at the first step at or after its time.
 - `retracted_switch` (none), `extended_switch` (none): bool points written, 1 at that end.
 
 **A pose** (`retracted`, `extended`): as a scene file states one.

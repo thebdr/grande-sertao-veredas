@@ -458,7 +458,8 @@ impl Segment {
         let v = match self.to_zero {
             // On 0 at a step within the slack of its time (the division's rounding put 9/(18 x
             // 0.004) at 124.99999999999999): 0, not a speck of either sign with the drive running.
-            Some((to_zero, _)) if (k - to_zero).abs() <= to_zero * 16.0 * f64::EPSILON + 1e-9 => 0.0,
+            // A zero past f64 (a deceleration of 1e-306) is never reached: the ramp goes on at its rate.
+            Some((to_zero, _)) if to_zero.is_finite() && (k - to_zero).abs() <= to_zero * 16.0 * f64::EPSILON + 1e-9 => 0.0,
             Some((to_zero, after)) if k >= to_zero => after * (k - to_zero),
             // Before 0 the speed keeps its sign, whatever the rounding.
             Some(_) if self.from > 0.0 => (self.from + self.per_step * k).max(0.0),
@@ -555,7 +556,20 @@ impl ActuatorState {
 }
 
 fn lerp(a: Placement, b: Placement, p: f64) -> Placement {
-    let l = |x: f64, y: f64| x + (y - x) * p;
+    // Each end exactly (a pose the scene took stays one it takes: -9999.9 to 10000 at p = 1 gave
+    // 10000.000000000002), every pose between them held between them, and a difference past f64
+    // (yaws of -1e308 and 1e308) taken in two halves.
+    let l = |x: f64, y: f64| {
+        if p >= 1.0 {
+            y
+        } else if p <= 0.0 {
+            x
+        } else if (y - x).is_finite() {
+            (x + (y - x) * p).clamp(x.min(y), x.max(y))
+        } else {
+            (x * (1.0 - p) + y * p).clamp(x.min(y), x.max(y))
+        }
+    };
     Placement { at: [l(a.at[0], b.at[0]), l(a.at[1], b.at[1]), l(a.at[2], b.at[2])], yaw: l(a.yaw, b.yaw), pitch: l(a.pitch, b.pitch), roll: l(a.roll, b.roll) }
 }
 
@@ -686,7 +700,9 @@ impl Models {
             if let Some(w) = world.as_deref_mut()
                 && let Err(e) = w.place(&a.mover, lerp(a.retracted, a.extended, a.position()))
             {
+                // Its mover not where it says: no switch written for the rest of its step.
                 errors.push(format!("actuator `{}`: {e}", a.name));
+                continue 'actuators;
             }
             for (switch, at) in [(&a.retracted_switch, a.out == 0), (&a.extended_switch, a.out == a.stroke)] {
                 if let Some(s) = switch
