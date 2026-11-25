@@ -246,7 +246,9 @@ there, keeps every other part, and evaluates the workbook. A refusal names the f
 for a cell, its address: a part that is missing or not UTF-8, a stamp of another format or of
 another version, a misspelled key, a cell stating two kinds, `v` without `f`, a legacy array of no
 size, past the sheet's edge (refused before its corner is reckoned) or over another's area, a
-formula of white space alone,
+formula of white space alone, a formula the engine cannot read as the file states it (`1+`, `=A1`,
+`SUM(A1:A3`, which the engine would enter as its error or repaired, `SUM(A1:A3)`), read by a
+parser of the file's locale and English with no repair,
 an error code that is none, an address that is none or not written as here, a style the workbook
 does not hold (a cell's, a row's, a column's), a number that is no finite number (`nan`, `inf`)
 or an integer no double holds, a value of the wrong type (a date-time among them, a formula's `v`

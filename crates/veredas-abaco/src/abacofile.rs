@@ -1420,9 +1420,30 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
     // number format from the units of what an array reads: `$#,##0.00`, a date's): every cell gets
     // the style the file states below, and the styles are put back whole, as the file holds them.
     let file_styles = model.workbook.styles.clone();
+    // A formula the engine cannot read as the file states it (`1+`, `=A1`, `SUM(A1:A3`) is refused
+    // by its address, as the writer refuses one: entered, the engine would keep the error or repair
+    // the text (`SUM(A1:A3)`, a `)` added), and the file would hold another formula than it states.
+    // Read by a parser of the file's own locale and English, the reader's, with no repair.
+    let locale = ironcalc_base::locale::get_locale(&model.workbook.settings.locale)
+        .map_err(|e| parts.bad(format!("{WORKBOOK}: `settings`: {e}")))?;
+    let language = ironcalc_base::language::get_language(LANGUAGE).map_err(|e| parts.bad(format!("{WORKBOOK}: {e}")))?;
+    let mut parser = ironcalc_base::expressions::parser::Parser::new(
+        model.workbook.get_worksheet_names(),
+        model.workbook.get_defined_names_with_scope(),
+        model.workbook.tables.clone(),
+        locale,
+        language,
+    );
     for (sheet, key, addr, formula, style) in formulas {
         let (row, column) = (addr.row, addr.column);
         let bad = |e: String| ModelError::file(path, format!("{} {key}: {e}", manifest.sheets[sheet as usize].part));
+        if let Entry::Array(f, ..) | Entry::Formula(f) | Entry::Dynamic(f) = &formula {
+            let sheet_name = model.workbook.worksheet(sheet).map_err(bad)?.get_name();
+            let context = ironcalc_base::expressions::types::CellReferenceRC { sheet: sheet_name, row, column };
+            if matches!(parser.parse(f, &context), ironcalc_base::expressions::parser::Node::ParseErrorKind { .. }) {
+                return Err(bad("a formula the engine cannot read".into()));
+            }
+        }
         let entered = match &formula {
             Entry::Array(f, w, h) => model.set_user_array_formula(sheet, row, column, *w, *h, &format!("={f}")),
             Entry::Formula(f) | Entry::Dynamic(f) => model.update_cell_with_formula(sheet, row, column, format!("={f}")),

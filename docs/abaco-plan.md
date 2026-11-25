@@ -316,6 +316,13 @@ own to close in a fork change of its own:
   file holds. Whether Excel folds a name so is not measured.
 - **A LET's name beyond ASCII:** `LET(É,1,É+1)` does not parse; a use beyond ASCII binds by the
   fold (`LET(ss,1,ß+1)` is 2).
+- **A LET's name that is also a defined name:** with a name `Rate`, `LET(Rate,5,Rate)` and
+  `LET(rate,2,Rate*3)` evaluate `#VALUE!`, and a LET-bound function beside a defined one of its fold
+  (`LET(twice,LAMBDA(v,v*3),TWICE(2))` with a name `Twice`) too: the parser reads the use as the
+  defined name before the binding. Excel's reading is not measured here.
+- **A capital `ẞ` read two ways:** `MAẞ(1)` is held as `maß` and calls the name `Maß`, where a
+  bare `MAẞ` is `#NAME?`: a called name is held in lower case first (change 33), and `name_key`
+  folds `maß` to `mass`, `Maß`'s key, but `MAẞ` to `maß`. Both read back the same.
 
 ## On this machine
 - No Excel, no Office: Excel's acceptance of a written file is owed elsewhere (Rules).

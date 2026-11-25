@@ -380,6 +380,16 @@ fn a_file_that_is_not_what_it_should_be_is_refused_by_its_part_and_place() {
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { f = \" \" }"))), "sheets/01-Loads.toml B4: an empty formula"),
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { f = \"\" }"))), "sheets/01-Loads.toml B4: an empty formula"),
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { dynamic = \"\\t\" }"))), "sheets/01-Loads.toml B4: an empty formula"),
+        // a formula the engine cannot read as stated, which it would enter as its error or repaired
+        // (`SUM(B1:B2` as `SUM(B1:B2)`): refused by its address, as the writer refuses one (round 9)
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { f = \"1+\" }"))), "sheets/01-Loads.toml B4: a formula the engine cannot read"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { f = \"=B1\" }"))), "sheets/01-Loads.toml B4: a formula the engine cannot read"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { f = \"B1)\" }"))), "sheets/01-Loads.toml B4: a formula the engine cannot read"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { f = \"{1,2\" }"))), "sheets/01-Loads.toml B4: a formula the engine cannot read"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { f = \"SUM(B1:B2\" }"))), "sheets/01-Loads.toml B4: a formula the engine cannot read"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { f = \"SUM(B1,,\" }"))), "sheets/01-Loads.toml B4: a formula the engine cannot read"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { array = \"1+\", size = [1, 1] }"))), "sheets/01-Loads.toml B4: a formula the engine cannot read"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { dynamic = \"SEQUENCE(3\" }"))), "sheets/01-Loads.toml B4: a formula the engine cannot read"),
         // a cell stated inside a legacy array's area, in either order of the keys
         ("sheets/01-Loads.toml", Box::new(|t| Some(format!("{t}E1 = {{ array = \"1\", size = [1, 3] }}\nE2 = {{ n = 5 }}\n"))), "sheets/01-Loads.toml E2: a cell stated inside the array formula at E1"),
         ("sheets/01-Loads.toml", Box::new(|t| Some(format!("{t}G2 = {{ array = \"7\", size = [1, 9] }}\nG10 = {{ array = \"7\", size = [1, 1] }}\n"))), "sheets/01-Loads.toml G10: an array formula over the one at G2"),
