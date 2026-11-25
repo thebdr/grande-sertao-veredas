@@ -191,6 +191,37 @@ fn read_range_full(
 #[cfg(test)]
 mod history_test;
 
+/// A held active that retired unopened, `f` the member it became: read from where it stood at the
+/// look, then every generation born after it whole, in order, each awaited while it is there and
+/// not readable. False while the held one does not open yet (the caller looks again), or on a stop.
+#[allow(clippy::too_many_arguments)]
+fn read_retired(
+    f: &FamilyFile,
+    len: u64,
+    identity: Option<&crate::tail::cursor::Identity>,
+    files: &[FamilyFile],
+    cfg: &FamilyTailConfig,
+    stop: &AtomicBool,
+    wake_rx: &Receiver<()>,
+    emit: &mut dyn FnMut(String),
+) -> Result<bool, SourceError> {
+    let Ok(mut c) = TailedFile::open_held(&f.path, len, identity) else { return Ok(false) };
+    c.drain_stable(cfg.drain_grace, stop, emit)?;
+    c.flush_pending(emit);
+    let mut younger: Vec<&FamilyFile> = files.iter().filter(|g| !g.is_active && rank(g) > rank(f)).collect();
+    younger.sort_by(|x, y| rank(x).cmp(&rank(y)));
+    for g in younger {
+        loop {
+            match read_range_full(&g.path, 0, None, cfg.drain_grace, stop, emit)? {
+                Unread::No => break,
+                Unread::Stopped => return Ok(false),
+                Unread::Held => wait_tick(wake_rx, cfg.poll_interval),
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// A test's hooks, each run before the backfill opens its path (the fixed sweep's open of its
 /// fixed path, a replay's open of a member): what a rotation or a stop between a listing and an
 /// open does there (C-096's third and fourth refute rounds).
@@ -627,7 +658,6 @@ fn run_family(
     // held at its first look is, C-035), and a newer active, born after the start, whole.
     let mut held: Option<(String, u64, Option<crate::tail::cursor::Identity>)> = None;
     let mut looked = false;
-    let mut whole = false;
 
     // A backfill start replays history from the located point first; the cursor it returns IS
     // the seam: the same handle, the exact offset, live from here.
@@ -737,7 +767,20 @@ fn run_family(
                         "the pattern's key groups parse on no member of the family: a family is followed by its keys, and these name none (check the date format against the names)".into(),
                     ));
                 }
+                // Where a held active went: a member of its identity that is no longer the active
+                // retired unopened (renamed by a rotation, whatever its name now).
+                let retired: Option<FamilyFile> = held.as_ref().and_then(|(_, _, id)| id.as_ref()).and_then(|id| {
+                    files.iter().find(|f| !f.is_active && crate::tail::cursor::identity_at(&f.path).as_ref() == Some(id)).cloned()
+                });
                 let Some(active) = files.iter().find(|f| f.is_active) else {
+                    // A held active retired with no active after it yet: read where it went first.
+                    if let (Some(f), Some((name, len, identity))) = (&retired, held.take())
+                        && !read_retired(f, len, identity.as_ref(), &files, &cfg, &stop, &wake_rx, &mut emit)?
+                    {
+                        held = Some((name, len, identity));
+                        wait_tick(&wake_rx, cfg.poll_interval);
+                        continue;
+                    }
                     // Listed, with no active to attach to yet (a fixed name not born): the start
                     // may return. The retirees listed are history, and from here the family is
                     // followed as one born after the start, so a generation that retires before
@@ -750,7 +793,8 @@ fn run_family(
                     continue;
                 };
                 // A start at the end skips the history: read in at once, whether or not the
-                // active opens now (held by its writer, it is read from its end once it does).
+                // active opens now (held by its writer, it is read from where it stood once it
+                // does).
                 if matches!(cfg.start, FamilyStart::ActiveEnd) {
                     nothing_to_read();
                 }
@@ -760,32 +804,37 @@ fn run_family(
                     // appears now is newer than the (past) start point, so read it whole.
                     FamilyStart::ActiveBegin | FamilyStart::Backfill(_) => FileStart::Begin,
                 };
-                let opened = match &held {
-                    Some((name, len, identity)) if *name == active.file_name => TailedFile::open_held(&active.path, *len, identity.as_ref()),
-                    Some((_, len, identity)) => {
-                        // The held active retired unopened: what it took after the look read
-                        // where it went (the member of its identity), awaited while it does not
-                        // open, then every generation born after it and retired since, whole, in
-                        // order, and the new active whole.
-                        let same = files.iter().find(|f| identity.is_some() && crate::tail::cursor::identity_at(&f.path) == *identity);
-                        if let Some(f) = same {
-                            let Ok(mut c) = TailedFile::open_held(&f.path, *len, identity.as_ref()) else {
+                let opened = match held.take() {
+                    Some((name, len, identity)) => match &retired {
+                        Some(f) => {
+                            // Retired unopened: read where it went and every generation after it,
+                            // then the active now, born after the start: whole, held in turn if
+                            // it does not open.
+                            if !read_retired(f, len, identity.as_ref(), &files, &cfg, &stop, &wake_rx, &mut emit)? {
+                                held = Some((name, len, identity));
                                 wait_tick(&wake_rx, cfg.poll_interval);
                                 continue;
-                            };
-                            c.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
-                            c.flush_pending(&mut emit);
-                            let mut younger: Vec<&FamilyFile> = files.iter().filter(|g| !g.is_active && rank(g) > rank(f)).collect();
-                            younger.sort_by(|x, y| rank(x).cmp(&rank(y)));
-                            for g in younger {
-                                read_full(&g.path, cfg.drain_grace, &stop, &mut emit)?;
                             }
+                            let id = crate::tail::cursor::identity_at(&active.path);
+                            let opened = TailedFile::open_held(&active.path, 0, id.as_ref());
+                            held = Some((active.file_name.clone(), 0, id));
+                            opened
                         }
-                        held = None;
-                        whole = true;
-                        TailedFile::open(&active.path, FileStart::Begin)
-                    }
-                    None if whole => TailedFile::open(&active.path, FileStart::Begin),
+                        // Still the active: read from where it stood (a replacement whole).
+                        None if name == active.file_name => {
+                            let opened = TailedFile::open_held(&active.path, len, identity.as_ref());
+                            held = Some((name, len, identity));
+                            opened
+                        }
+                        // Gone, its identity nowhere in the family (deleted): the active now, born
+                        // after the start, whole.
+                        None => {
+                            let id = crate::tail::cursor::identity_at(&active.path);
+                            let opened = TailedFile::open_held(&active.path, 0, id.as_ref());
+                            held = Some((active.file_name.clone(), 0, id));
+                            opened
+                        }
+                    },
                     None => TailedFile::open(&active.path, start),
                 };
                 match opened {
@@ -797,6 +846,9 @@ fn run_family(
                         if !looked && matches!(cfg.start, FamilyStart::ActiveEnd) && !crate::tail::single::is_not_found(&e) {
                             let len = std::fs::metadata(&active.path).map(|m| m.len()).unwrap_or(0);
                             held = Some((active.file_name.clone(), len, crate::tail::cursor::identity_at(&active.path)));
+                            // Looked at, where it stood recorded: the start may return, nothing
+                            // written after it lost (as a file held at its first look, C-035).
+                            attached(&mut attached_slot);
                         }
                         looked = true;
                         // Rotated between the resolve and the open, or held; the next round

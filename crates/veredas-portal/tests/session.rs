@@ -721,7 +721,8 @@ fn a_log_s_history_read_on_every_path_and_set_once() {
 /// 100 of the member lost). A fixed-name family whose fixed active is there and not readable holds
 /// history: not said read until it opens and is stored. A family read from a start in the past
 /// whose folder is not there fails its worker, never saying read; a file not there read from a
-/// start in the past says read at once. A member deleted before the backfill reaches it leaves
+/// start in the past says read at once, as does one under a folder that is a regular file. A
+/// member deleted before the backfill reaches it leaves
 /// nothing unread: said read, the newest one (the active it would attach to) too.
 #[cfg(unix)]
 #[test]
@@ -832,10 +833,14 @@ fn a_history_left_unread_is_never_said_read() {
     cfg.start = Some(midnight());
     cfg.logs.push(family("absent", &dir.path().join("no_such_folder"), r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest));
     cfg.logs.push(log_source("none", &dir.path().join("not_there.log")));
+    // A folder on the path that is a regular file: nothing can be there.
+    std::fs::write(dir.path().join("a_file"), "x").unwrap();
+    cfg.logs.push(log_source("under_a_file", &dir.path().join("a_file").join("app.log")));
     cfg.rules.push(readings_rule(None));
     let session = Session::start(cfg).unwrap();
     let live = session.live();
     assert!(wait(Duration::from_secs(10), || history(&live, "none").is_some_and(|h| h.0)), "{:?}", live.health.read().unwrap());
+    assert!(wait(Duration::from_secs(10), || history(&live, "under_a_file").is_some_and(|h| h.0)), "{:?}", live.health.read().unwrap());
     assert!(wait(Duration::from_secs(10), || history(&live, "absent").is_some_and(|h| matches!(h.1, HealthState::Failed(_)))), "{:?}", live.health.read().unwrap());
     assert_eq!(history(&live, "absent").map(|h| h.0), Some(false));
     let _ = session.stop();
@@ -886,7 +891,10 @@ fn a_history_said_read_holds_every_ended_line() {
 /// readable at the first look (write alone allowed) is read from where it stood once it opens,
 /// as a file is: the lines written to it meanwhile read, its history skipped. One that retires
 /// unopened, two newer members born meanwhile, is read from where it stood once it opens,
-/// awaited till then, the generation between whole and the new active whole, held in turn.
+/// awaited till then, the generation between whole and the new active whole, held in turn; a
+/// fixed name's held active retired with no active after it for a while alike; the newer active,
+/// held in turn, retiring before it opens, read whole once it does; and a generation between held
+/// past every patience, awaited and read whole.
 #[cfg(unix)]
 #[test]
 fn a_held_active_started_at_its_end_is_read_from_where_it_stood() {
@@ -910,15 +918,35 @@ fn a_held_active_started_at_its_end_is_read_from_where_it_stood() {
     let file = dir.path().join("held.log");
     write_history(&file, 0..10);
     mode(&file, 0o200);
+    // A fixed name's held active, renamed into a retiree with no active for a while.
+    let fixed = dir.path().join("fixed");
+    std::fs::create_dir_all(&fixed).unwrap();
+    write_history(&fixed.join("done_1.log"), 0..10);
+    write_history(&fixed.join("current.log"), 10..20);
+    mode(&fixed.join("current.log"), 0o200);
+    // The newer active held in turn, retiring before it opens; a younger generation held.
+    let newer = dir.path().join("newer");
+    let younger = dir.path().join("younger");
+    for d in [&newer, &younger] {
+        std::fs::create_dir_all(d).unwrap();
+        write_history(&d.join("plant_1.log"), 0..10);
+        mode(&d.join("plant_1.log"), 0o200);
+    }
     for (id, log) in [
         ("same", family("same", &same, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest)),
         ("retired", family("retired", &retired, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest)),
         ("file", log_source("file", &file)),
+        ("fixed", family("fixed", &fixed, r"done_(?P<idx>\d+)\.log", ActiveConfig::Fixed("current.log".into()))),
+        ("newer", family("newer", &newer, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest)),
+        ("younger", family("younger", &younger, r"plant_(?P<idx>\d+)\.log", ActiveConfig::Newest)),
     ] {
         let mut cfg = SessionConfig::new(id);
         cfg.logs.push(log);
         cfg.rules.push(readings_rule(None));
+        // The start returns once the held active is looked at, not at its five-second bound.
+        let begun = Instant::now();
         let session = Session::start(cfg).unwrap();
+        assert!(begun.elapsed() < Duration::from_secs(3), "`{id}`: the start waited {:?}", begun.elapsed());
         let live = session.live();
         assert!(wait(Duration::from_secs(10), || live.health.read().unwrap().get(id).is_some_and(|h| h.history_read)), "`{id}`");
         let expected = match id {
@@ -941,10 +969,49 @@ fn a_held_active_started_at_its_end_is_read_from_where_it_stood() {
                 mode(&retired.join("plant_3.log"), 0o644);
                 55
             }
-            _ => {
+            "file" => {
                 append(&file, 10..60);
                 mode(&file, 0o644);
                 50
+            }
+            "fixed" => {
+                append(&fixed.join("current.log"), 20..50);
+                std::fs::rename(fixed.join("current.log"), fixed.join("done_2.log")).unwrap();
+                std::thread::sleep(Duration::from_millis(1000));
+                write_history(&fixed.join("current.log"), 50..55);
+                std::thread::sleep(Duration::from_millis(1000));
+                assert_eq!(rows(&live, "readings"), 0, "the retired held active awaited");
+                mode(&fixed.join("done_2.log"), 0o644);
+                35
+            }
+            "newer" => {
+                append(&newer.join("plant_1.log"), 10..40);
+                write_history(&newer.join("plant_2.log"), 40..60);
+                write_history(&newer.join("plant_3.log"), 60..65);
+                mode(&newer.join("plant_3.log"), 0o200);
+                std::thread::sleep(Duration::from_millis(1500));
+                mode(&newer.join("plant_1.log"), 0o644);
+                assert!(wait(Duration::from_secs(10), || rows(&live, "readings") == 50), "{} rows", rows(&live, "readings"));
+                // The newer active, held, retires before it opens: read whole once it does.
+                write_history(&newer.join("plant_4.log"), 65..70);
+                std::thread::sleep(Duration::from_millis(1500));
+                assert_eq!(rows(&live, "readings"), 50, "the newer active awaited");
+                mode(&newer.join("plant_3.log"), 0o644);
+                60
+            }
+            _ => {
+                append(&younger.join("plant_1.log"), 10..40);
+                write_history(&younger.join("plant_2.log"), 40..60);
+                mode(&younger.join("plant_2.log"), 0o200);
+                write_history(&younger.join("plant_3.log"), 60..65);
+                std::thread::sleep(Duration::from_millis(1500));
+                mode(&younger.join("plant_1.log"), 0o644);
+                assert!(wait(Duration::from_secs(10), || rows(&live, "readings") == 30), "{} rows", rows(&live, "readings"));
+                // The generation between, held past every patience: awaited, then read whole.
+                std::thread::sleep(Duration::from_millis(2500));
+                assert_eq!(rows(&live, "readings"), 30, "the held generation awaited");
+                mode(&younger.join("plant_2.log"), 0o644);
+                55
             }
         };
         assert!(wait(Duration::from_secs(10), || rows(&live, "readings") == expected), "`{id}`: {} rows", rows(&live, "readings"));

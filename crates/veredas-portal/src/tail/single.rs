@@ -83,7 +83,9 @@ pub(crate) const ATTACH_WAIT: std::time::Duration = std::time::Duration::from_se
 /// Whether an open failed because nothing is at the path (as against a file there that cannot
 /// be opened for the moment).
 pub(crate) fn is_not_found(e: &SourceError) -> bool {
-    matches!(e, SourceError::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound)
+    use std::io::ErrorKind::{InvalidFilename, NotADirectory, NotFound};
+    // A folder on the path that is a file, or a name no file may have: nothing can be there.
+    matches!(e, SourceError::Io { source, .. } if matches!(source.kind(), NotFound | NotADirectory | InvalidFilename))
 }
 
 /// Whether the file a look recorded the identity of is still in `path`'s folder, under another
