@@ -54,6 +54,17 @@ pub fn mac_of(iface: &str) -> Mac {
     RawLink::open_with(iface, RawOptions::default()).unwrap().mac()
 }
 
+/// Give each interface the MAC the test chose, before anything opens it, and wait for the pairs to
+/// carry frames again: what the test expects of a MAC is then none of the code's reading.
+pub fn pin(macs: &[(&str, Mac)], pairs: &[(&str, &str)]) {
+    for (iface, mac) in macs {
+        netns::ip(&["link", "set", iface, "down"]);
+        netns::ip(&["link", "set", iface, "address", &mac.to_string()]);
+        netns::ip(&["link", "set", iface, "up"]);
+    }
+    netns::wait_pairs(pairs);
+}
+
 pub fn link(iface: &str) -> Box<dyn Wire> {
     Box::new(RawLink::open_with(iface, RawOptions { ethertype: None, promiscuous: false, outgoing: false }).unwrap())
 }

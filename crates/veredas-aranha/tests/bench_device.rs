@@ -22,6 +22,25 @@ use veredas_aranha::profinet::dcp::{self, Filter, IpStatus, IpSuite, Service};
 use veredas_aranha::profinet::mac::Mac;
 use bench::{link, mac_of};
 
+const FIRST: Mac = Mac([0x02, 0, 0, 0, 0, 0xB0]);
+const SECOND: Mac = Mac([0x02, 0, 0, 0, 0, 0xB1]);
+const HERE0: Mac = Mac([0x02, 0, 0, 0, 0, 0xA0]);
+const HERE1: Mac = Mac([0x02, 0, 0, 0, 0, 0xA1]);
+
+/// What each device states, as the dissectors print it: vendor and device ids, address, mask,
+/// gateway, vendor text, and its port's id.
+struct Stated {
+    ids: (&'static str, &'static str),
+    ip: (&'static str, &'static str, &'static str),
+    vendor: &'static str,
+    port: &'static str,
+}
+
+const STATED: [Stated; 2] = [
+    Stated { ids: ("42", "261"), ip: ("192.168.0.10", "255.255.255.0", "192.168.0.1"), vendor: "veredas bench device", port: "port-001.bomba-1" },
+    Stated { ids: ("0", "0"), ip: ("192.168.0.11", "255.255.255.0", "0.0.0.0"), vendor: "segunda bancada", port: "port-002.bomba-1" },
+];
+
 /// Two devices of one station name, each on its own segment, as a plant commissioned twice.
 const BENCH: &str = r#"format = "veredas-bench"
 version = 1
@@ -72,8 +91,10 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
         "the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface",
         &[("a0", "b0"), ("a1", "b1")],
         || {
-            let (first, second) = (mac_of("b0"), mac_of("b1"));
-            let (here0, here1) = (mac_of("a0"), mac_of("a1"));
+            // The four MACs the test chose, set before anything opens an interface.
+            let (first, second, here0, here1) = (FIRST, SECOND, HERE0, HERE1);
+            bench::pin(&[("b0", first), ("b1", second), ("a0", here0), ("a1", here1)], &[("a0", "b0"), ("a1", "b1")]);
+            assert_eq!([mac_of("b0"), mac_of("b1"), mac_of("a0"), mac_of("a1")], [first, second, here0, here1]);
 
             // Listening first: the Hellos the devices send as they start are heard.
             let l = Listener::start(vec![link("a0"), link("a1")], Options::default()).unwrap();
@@ -183,14 +204,32 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
                 assert!(d.has(proto), "#{i} {class}: {}", d.layers);
                 let src = Mac::from_slice(&k.frame.bytes[6..12]).unwrap();
                 let (ours, theirs) = if k.frame.iface == "a0" { (here0, first) } else { (here1, second) };
+                let stated = &STATED[usize::from(k.frame.iface == "a1")];
                 if k.sent {
                     assert_eq!(src, ours, "#{i}");
                     sent.entry(k.frame.iface.clone()).or_default().push(class);
+                    // The Identify asks by the name, read so by the dissectors.
+                    if class == Class::Dcp {
+                        assert_eq!(d.one("pn_dcp", "pn_dcp.suboption_device_nameofstation"), "bomba-1", "#{i}");
+                        assert!(d.values("pn_dcp", "pn_dcp.option").iter().all(|o| o != "255"), "#{i}: no all-selector");
+                    }
                 } else {
                     assert_eq!(src, theirs, "#{i} on {}", k.frame.iface);
                     *by_class.entry(class).or_default() += 1;
+                    // What the device states, read by the dissectors against the bench file, not
+                    // through the codecs the bench and the listener share.
                     if class == Class::Dcp {
-                        assert_eq!(d.one("pn_dcp", "pn_dcp.suboption_device_nameofstation"), "bomba-1", "#{i}");
+                        let p = "pn_dcp";
+                        assert_eq!(d.one(p, "pn_dcp.suboption_device_nameofstation"), "bomba-1", "#{i}");
+                        assert_eq!((d.one(p, "pn_dcp.suboption_vendor_id"), d.one(p, "pn_dcp.suboption_device_id")), (stated.ids.0.to_string(), stated.ids.1.to_string()), "#{i}");
+                        let ip = (d.one(p, "pn_dcp.suboption_ip_ip"), d.one(p, "pn_dcp.suboption_ip_subnetmask"), d.one(p, "pn_dcp.suboption_ip_standard_gateway"));
+                        assert_eq!(ip, (stated.ip.0.to_string(), stated.ip.1.to_string(), stated.ip.2.to_string()), "#{i}");
+                        assert_eq!((d.one(p, "pn_dcp.suboption_device_devicevendorvalue"), d.one(p, "pn_dcp.suboption_device_role")), (stated.vendor.to_string(), "1".to_string()), "#{i}");
+                    }
+                    if class == Class::Lldp {
+                        let hex: Vec<String> = "bomba-1".bytes().map(|b| format!("{b:02x}")).collect();
+                        assert_eq!((d.one("lldp", "lldp.chassis.subtype"), d.one("lldp", "lldp.chassis.id")), ("7".to_string(), hex.join(":")), "#{i}");
+                        assert_eq!(d.one("lldp", "lldp.port.id"), stated.port, "#{i}");
                     }
                 }
             }
@@ -199,6 +238,8 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
             assert_eq!(sent, std::collections::BTreeMap::from([("a0".to_string(), asked.clone()), ("a1".to_string(), asked)]));
             assert_eq!(by_class, s.stats.by_class);
             assert_eq!(s.stats.heard, frames.len() as u64 - 4);
+            // Nothing of this machine's own and nothing damaged, the leaving frames among them.
+            assert_eq!((s.stats.own, s.stats.damaged_frames, s.stats.damage.len()), (0, 0, 0), "{:?}", s.stats.damage);
         },
     );
 }
