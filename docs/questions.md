@@ -871,6 +871,18 @@ manifest and carries its licence files; Oficina states GPL-3.0; no single licenc
 claims the whole repository." Not ruled with it: the copyright holder the licence files name, and
 whether Oficina's GPL is version 3 only or version 3 or later.
 
+**Decided further** 2026-11-25, by the architect, the two points the first answer left. Asked "The
+MIT licence text names a copyright holder (\"Copyright (c) 2026 ...\"), in a public repository. Whom
+do the licence files name?", "thebdr", the GitHub account that owns the repository, against "The
+Veredas authors" and a name given. Asked "Oficina is GPLv3. Does its manifest say version 3 only, or
+version 3 or any later version? This is no legal advice.", "GPL-3.0-or-later".
+
+**Decided further** 2026-11-25, by the architect, on the scope: asked "The ruling of 15 November
+gives a permissive licence to every crate Oficina links. Do the crates Oficina does not link
+(supervisão, controlador, `orcl-runtime`, and the repo's tools) carry MIT OR Apache-2.0 too?",
+"Every crate but Oficina". So every crate of the suite states `MIT OR Apache-2.0` and Oficina alone
+`GPL-3.0-or-later`; the IronCalc fork keeps the licence it came with.
+
 ## Q36 - How is a download's integrity built?
 
 **Raised** 2026-11-16, by the architect's requirement that a download carry "a hash or crc so no
@@ -1084,6 +1096,60 @@ portal has built three pieces of this area, each on the most reversible answer a
 
 The rest waits: fault records, the state history, earlier downloads and the logs have no limit
 and no rule yet.
+
+**Ruled in part** 2026-11-25, by the architect, the question in hand when the round paused: asked
+"When a growing record on a controller's drive (fault records, the state history, earlier downloads,
+logs, a recording, the fault's copies of the window) reaches its size limit, what gives way? Portal
+built the second option for a recording meanwhile.", "The oldest is deleted", (a), with its two
+guards: a fault that repeats is counted on its record and not written again, and the running program
+and its fallback are never deleted. So Q16's "nothing is refused, deleted or merged" holds for a
+project's store on a PC and not for a record on a controller's drive, and what portal built
+meanwhile for a recording (C-091: it stops at its limit) and for the fault's copies (C-093: none
+deleted) gives way.
+
+**Ruled in part** 2026-11-25, by the architect, three of the proposals above:
+
+- Storage in three kinds. Asked "Three kinds kept apart, so wearing or filling one cannot touch
+  another: what RUN needs (written only at a download), the retained save (written often), and
+  everything that grows (on a data area of its own). Is that the rule?", "Yes, three kinds apart
+  (Recommended)".
+
+- Wear is watched. Asked "Where the drive reports its wear, does the controller read it and raise a
+  maintenance request (not urgent) at a threshold the engineer sets, with Oficina showing the years
+  left at the present write rate?", "Yes (Recommended)".
+
+- The window's ceiling. Asked "The memory window of a controller's embedded portal: it has a span in
+  time and, as built, no ceiling in bytes. Does it get a ceiling too, the window being the shorter
+  of the two and the controller saying so when the ceiling came first?", "Span and a ceiling in
+  bytes (Recommended)", against "Span only" as C-090 has it. The engine's own default memory limit
+  is never left as it is on a controller.
+
+**Ruled in part** 2026-11-25, by the architect, four more of the proposals above; with them every
+point of this entry that is the architect's is ruled:
+
+- A failed data area. Asked "When the area that holds a controller's growing records fails or cannot
+  be written, does RUN go on, recording stopping and a maintenance request being raised?", "RUN goes
+  on (Recommended)", against "The controller faults".
+
+- What the window holds. Asked "What the memory window of a controller's embedded portal holds:
+  everything that portal reads, unless the project narrows it? Oficina reads the window when it
+  connects, so it sees the time before its connection.", "Everything, project may narrow
+  (Recommended)", against "Only what the project lists".
+
+- The fault's copies. Asked "The fault's copy of the window (written to the drive with the fault
+  record, so whoever comes later sees the minutes before): as built, every fault gets a copy and
+  nothing limits their number or rate. What bounds them?", "A number and a rate (Recommended)":
+  copies limited in number, the oldest going first, no more than one written per shortest gap, and
+  the program may ask for a copy too; against a number only, and against C-093 as built.
+
+- Portals on PCs. Asked "Supervisão's and Oficina's portals have the same unbounded store, where Q16
+  ruled \"nothing is refused, deleted or merged\". Do they get a default size limit?", "No limit, as
+  Q16 ruled", against a default limit with the oldest deleted, a default limit with recording
+  stopped, and leaving it to Q42.
+
+Left with their owners, not rulings: how the window is built so that it hands memory back (portal's
+plan to prove), and the operating system's own writing (the Linux study, Q226: volatile logs with
+pstore). "Everything that grows has a size limit" follows from the first ruling of this day.
 
 ## Q42 - The robustness round: the areas not opened, and the Linux study
 
