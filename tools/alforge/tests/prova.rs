@@ -235,6 +235,34 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
         assert_eq!(maquina::proof_faults(&proof(&good.replace(said, instead), 0.3, "a"), "2.0.0"), vec![fault.to_string()], "{said}");
     }
     // The boot's check said after a login started on the serial console: named.
+    // The disk on another SCSI host (the board's IDE, as the kernel prints it) with the pvscsi
+    // host idle; the proof's card one another driver names: each named.
+    let ide = good.replace("sd 0:0:0:0: [sda] Attached SCSI disk", "scsi host1: ata_piix\n[    2.616482] sd 1:0:0:0: [sda] Attached SCSI disk");
+    assert_eq!(maquina::proof_faults(&proof(&ide, 0.3, "a"), "2.0.0"), ["no disk was attached on the paravirtual SCSI host 0"]);
+    let e1000 = good.replace(&card, &format!("VEREDAS-CARD ens5 {}", maquina::PROOF_MAC)).replace(
+        "[    1.838046] vmxnet3 0000:00:04.0 ens4: renamed from eth0\n",
+        "[    1.838046] vmxnet3 0000:00:04.0 ens4: renamed from eth0\n[    1.840000] e1000 0000:00:05.0 ens5: renamed from eth1\n",
+    );
+    assert_eq!(maquina::proof_faults(&proof(&e1000, 0.3, "a"), "2.0.0"), ["the proof's card ens5 is not one vmxnet3 drives (the kernel names {\"ens4\"})"]);
+    // A kernel record printed inside one of the check's lines, as journald's way to the console
+    // lets it (the card's and the sums' lines cut, the rest on the next line): put back whole, the
+    // machine judged on what it said.
+    let audit = "[    5.583000] kauditd_printk_skb: 99 callbacks suppressed";
+    let cut = good
+        .replace(&card, &format!("veredas-verifica[600]: VEREDAS-CARD ens4 00:50:5{audit}\n6:3f:00:01"))
+        .replace("VEREDAS-SUMS-OK 2.0.0", &format!("VEREDAS-SUMS-O{audit}\nK 2.0.0"));
+    assert!(!cut.contains(&card) && !cut.contains("VEREDAS-SUMS-OK"), "both lines cut");
+    assert_eq!(maquina::proof_faults(&proof(&cut, 0.3, "a"), "2.0.0"), Vec::<String>::new());
+    // Real cut lines of a proof console: each part where it belongs, a cut inside a cut too.
+    assert_eq!(
+        maquina::rejoined("[  OK  ] Mounted fuse - FUSE Co[    3.140090] EXT4-fs (sda1): resizing filesystem\nntrol File System.\nnext\n"),
+        "[    3.140090] EXT4-fs (sda1): resizing filesystem\n[  OK  ] Mounted fuse - FUSE Control File System.\nnext\n"
+    );
+    assert_eq!(
+        maquina::rejoined("a=\"ST[    4.157185] audit: one\nATUS\" comm=[    4.160749] audit: two\nrest\n"),
+        "[    4.157185] audit: one\n[    4.160749] audit: two\na=\"STATUS\" comm=rest\n"
+    );
+    assert_eq!(maquina::rejoined("[    8.935130] veredas-verifica[600]: VEREDAS-SUMS-OK 2.0.0\n"), "[    8.935130] veredas-verifica[600]: VEREDAS-SUMS-OK 2.0.0\n", "a stamp at its line's start no cut");
     let late = format!("{kernel}veredas login: \nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
     assert_eq!(maquina::proof_faults(&proof(&late, 0.3, "a"), "2.0.0"), ["the boot's check said its lines after a login started on the serial console"]);
     // A login between two of its lines, the check's first said before it and the rest after: named
@@ -264,6 +292,19 @@ fn the_proof_boots_the_shipped_disk_on_vmwares_devices_alone() {
     let r = Recipe::load_file(&repo_root().join("tools/alforge/maquina/maquina.toml")).unwrap();
     let spec = maquina::boot_spec(&r, Path::new("/x/disk1.vmdk"), 18902, Some(14444), Path::new("/x/console.log"));
     let args = alforge::vm::args(&spec);
+    // The whole command line, so no other flag (`-nic`, `-hda`, `-net`) adds a device.
+    let mac = maquina::PROOF_MAC;
+    let (cpus, mem, port) = (r.machine.cpus.to_string(), r.machine.memory_mb.to_string(), r.machine.supervisao_port);
+    let whole: Vec<String> = [
+        "-accel", "kvm", "-cpu", "host", "-nodefaults", "-no-user-config", "-machine", "pc", "-device", "pvscsi,id=scsi0", "-drive",
+        "file=/x/disk1.vmdk,if=none,id=sys,format=vmdk,discard=unmap,detect-zeroes=unmap,snapshot=on", "-device", "scsi-hd,drive=sys,bus=scsi0.0,bootindex=0", "-netdev",
+        &format!("user,id=net0,hostfwd=tcp:127.0.0.1:18902-:{port}"), "-device", &format!("vmxnet3,netdev=net0,mac={mac}"), "-smp", &cpus, "-m", &mem, "-vga", "std",
+        "-display", "none", "-monitor", "none", "-no-reboot", "-qmp", "tcp:127.0.0.1:14444,server=on,wait=off", "-serial", "file:/x/console.log",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    assert_eq!(args, whole);
     let after = |flag: &str| -> Vec<&str> { args.windows(2).filter(|w| w[0] == flag).map(|w| w[1].as_str()).collect() };
     assert_eq!(after("-device"), ["pvscsi,id=scsi0", "scsi-hd,drive=sys,bus=scsi0.0,bootindex=0", &format!("vmxnet3,netdev=net0,mac={}", maquina::PROOF_MAC)]);
     assert_eq!(after("-drive"), ["file=/x/disk1.vmdk,if=none,id=sys,format=vmdk,discard=unmap,detect-zeroes=unmap,snapshot=on"]);

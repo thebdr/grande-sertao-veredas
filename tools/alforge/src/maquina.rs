@@ -841,6 +841,59 @@ pub const CHECK_LINES: [&str; 9] = [
     "VEREDAS-ATUALIZAR ",
 ];
 
+/// The console with each line a kernel record cut put back whole. The kernel prints a record at
+/// once, whole; one landing inside another program's line (the boot's check reaches the console
+/// through journald) ends that line's first part there, its rest beginning the next line. The
+/// record (`[<seconds>.<six digits>] …` after other text on its line) is put on a line of its own
+/// and the cut line's two parts together, in order.
+pub fn rejoined(console: &str) -> String {
+    let stamp = |l: &str| -> Option<usize> {
+        let b = l.as_bytes();
+        (1..b.len()).find(|&i| {
+            if b[i] != b'[' {
+                return false;
+            }
+            let mut j = i + 1;
+            while j < b.len() && b[j] == b' ' {
+                j += 1;
+            }
+            let digits = j;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j == digits || b.get(j) != Some(&b'.') {
+                return false;
+            }
+            let frac = j + 1;
+            b.len() >= frac + 7 && b[frac..frac + 6].iter().all(u8::is_ascii_digit) && b[frac + 6] == b']'
+        })
+    };
+    let mut out = String::new();
+    let mut pending: Option<String> = None;
+    for line in console.lines() {
+        let line = match pending.take() {
+            Some(head) => head + line,
+            None => line.to_string(),
+        };
+        match stamp(&line) {
+            Some(at) => {
+                out.push_str(&line[at..]);
+                out.push('\n');
+                pending = Some(line[..at].to_string());
+            }
+            None => {
+                out.push_str(&line);
+                out.push('\n');
+            }
+        }
+    }
+    if let Some(head) = pending {
+        out.push_str(&head);
+        out.push('\n');
+    }
+    out
+}
+
 /// Why the console does not show the root file system on a disk of the paravirtual SCSI host, as
 /// the kernel says it: `scsi host<N>: VMware PVSCSI`, `sd <N>:0:0:0: [<disk>] Attached SCSI disk`,
 /// and `EXT4-fs (<disk>1): mounted`; None when it does.
@@ -874,19 +927,21 @@ pub fn root_on_pvscsi(console: &str) -> Option<String> {
 /// does.
 pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
     let mut out = p.ova.clone();
-    if !p.console.contains(&format!("VEREDAS-SUMS-OK {release}")) {
+    // The check's lines as it said them, a kernel record printed inside one put apart.
+    let console = rejoined(&p.console);
+    if !console.contains(&format!("VEREDAS-SUMS-OK {release}")) {
         out.push(format!("the boot did not check the release's sums (VEREDAS-SUMS-OK {release})"));
     }
     // Said before a login starts on the serial console (whose agetty would hang the line up):
     // every line of the check, its last one included.
-    let last = CHECK_LINES.iter().filter_map(|w| p.console.rfind(w)).max();
-    if let (Some(login), Some(last)) = (p.console.find("login:"), last)
+    let last = CHECK_LINES.iter().filter_map(|w| console.rfind(w)).max();
+    if let (Some(login), Some(last)) = (console.find("login:"), last)
         && login < last
     {
         out.push("the boot's check said its lines after a login started on the serial console".to_string());
     }
     // The machine holds this cut's bundle, not another cut's of the same release.
-    if p.bundle.is_empty() || !p.console.contains(&format!("VEREDAS-BUNDLE {}", p.bundle)) {
+    if p.bundle.is_empty() || !console.contains(&format!("VEREDAS-BUNDLE {}", p.bundle)) {
         out.push(format!("the machine does not hold this cut's bundle (no `VEREDAS-BUNDLE {}` on the console)", p.bundle));
     }
     // What the provisioning promised, as the boot's check says it and systemd at a first boot.
@@ -899,13 +954,13 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
         ("VEREDAS-ATUALIZAR ok", "the update command is not installed"),
         ("Initializing machine ID from random generator", "the shipped disk carries a machine identity"),
     ] {
-        if !p.console.contains(line) {
+        if !console.contains(line) {
             out.push(format!("{what} (no `{line}` on the console)"));
         }
     }
     // The root disk on the paravirtual SCSI host and the proof's card driven by vmxnet3, as the
     // kernel says them: the drivers' names alone are said by a controller with nothing on it.
-    if let Some(why) = root_on_pvscsi(&p.console) {
+    if let Some(why) = root_on_pvscsi(&console) {
         out.push(why);
     }
     let vmxnet3: std::collections::BTreeSet<&str> = p
@@ -918,7 +973,7 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
             words.next()?.strip_suffix(':')
         })
         .collect();
-    let card = p.console.lines().find_map(|l| {
+    let card = console.lines().find_map(|l| {
         let rest = l.trim_end().strip_suffix(PROOF_MAC)?;
         rest[rest.find("VEREDAS-CARD ")? + "VEREDAS-CARD ".len()..].split_whitespace().next()
     });
