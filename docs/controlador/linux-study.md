@@ -4,7 +4,8 @@
 operating system is written: "we need to study linux for rt applications, i suppose recovery mechanisms exist. [...]
 if existing tested methods exist, we use them" (the architect, 2026-11-16). It checks the list the assistant named
 there from memory against primary sources, corrects it where it was wrong, adds what it missed, and ends with the
-choices it leaves for the architect (`docs/questions.md` Q226).
+choices it leaves for the architect (`docs/questions.md` Q226). The architect accepted all eight of its
+recommendations on 2026-11-25; they are `docs/controlador-plan.md`'s choices ("On the target").
 
 How it was done: every source below was opened on 2026-11-22, when mainline Linux stood at 7.4-rc3. Kernel files are
 cited by their path in mainline (`https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/<path>`).
@@ -211,7 +212,7 @@ ours to set.
 - Real time is a property of the board, its firmware and its drivers: a board is accepted by `cyclictest` under load
   for a day or more, never by a figure from a datasheet.
 
-## What it leaves for the architect (Q226)
+## What it leaves for the architect (Q226, ruled on 2026-11-25: every recommendation accepted)
 - **The kernel line**: kernel.org's long-term (about four years) or CIP's (ten), and how a controller moves to the next.
 - **The update framework**: RAUC, SWUpdate with EFI Boot Guard (CIP's choice), Mender, systemd-sysupdate (UEFI only)
   or OSTree with greenboot; and what "booted well" means for a controller.

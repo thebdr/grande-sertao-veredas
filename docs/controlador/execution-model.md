@@ -1,10 +1,11 @@
-# Controlador's execution model: a proposal
+# Controlador's execution model
 
-**Not ruled.** `docs/questions.md` Q33 asks where controlador's execution model is written and what it says; this
-file is the assistant's answer to both, written on 2026-11-22 for the architect to rule point by point (Q223).
-`docs/controlador-plan.md` wins on intent and names this model under "Before the code"; nothing here is settled
-until the architect rules it. Code stands on one case only, a program with one cyclic task, which every option
-below runs alike (the engine of a scan, `docs/orcl/README.md`).
+**Ruled on 2026-11-25, as proposed** (`docs/questions.md` Q223, which answers Q33): the architect accepted every
+point below, the interrupting on one logic thread (5 (b)) for the first release. Open with it: whether O7's publish
+at the end of a scan should give way to the prior art's LET (section 3). This file is the assistant's proposal of
+2026-11-22, kept as it was ruled; `docs/controlador-plan.md` ("The execution model") carries each decision in a
+line and wins on intent. Code stands on one case so far, a program with one cyclic task (the engine of a scan,
+`docs/orcl/README.md`).
 
 ## What the model must answer
 From the review's entry 13 (`docs/briefing/review.md`) and the deliverables K8 to K11:
@@ -28,7 +29,7 @@ From the review's entry 13 (`docs/briefing/review.md`) and the deliverables K8 t
   shared between tasks is an output of exactly one task, its writer, and an input of each task that reads it",
   copied at the scan boundaries, "the writer's values published together at the end of its scan", "a reader takes
   its copy at the start of its scan". The review listed K8 as the assistant's reading; it is in fact the language's
-  rule, decided before the briefing. Whether O7 answers K8 for the controller is the first point of Q223.
+  rule, decided before the briefing. That O7 answers K8 for the controller was Q223's second point, ruled so.
 
 ## The proposal
 
@@ -58,7 +59,8 @@ on its latched inputs, its own state and its scan's time.
 What it costs, said plainly: what a reader sees depends on when the writer's scan ended, so the order in which two
 tasks' scans end can change a value a third reads. The prior art's LET (publishing at the end of the writer's
 logical period) removes that at the cost of up to one period of latency; it was proposed in Veredas 1 and not
-decided (`docs/orcl/language/README.md`, "Not settled yet"). This proposal keeps O7 as decided.
+decided (`docs/orcl/language/README.md`, "Not settled yet"). This proposal keeps O7 as decided; so did the ruling,
+and whether LET should replace it stays open.
 
 ### 4. Each task its own slice (K10): yes
 - Each task has its own **input slice**, latched whole at the start of its scan, and its own **output slice**,
@@ -91,8 +93,8 @@ The architect's rule "existing, tested Linux methods before our own" (2026-11-16
 hit halts every task, and record and replay of a field incident on the simulator, speak for (b). Either way the
 simulator schedules every task on one thread on virtual time, since a simulation must replay alike.
 
-**The assistant's pick: (b) for the first release**, its one logic thread itself under the kernel's real-time
-scheduling, with (a) reachable later without changing a program.
+**The assistant's pick, ruled on 2026-11-25: (b) for the first release**, its one logic thread itself under the
+kernel's real-time scheduling, with (a) reachable later without changing a program.
 
 ### 6. The fieldbus has its own thread, above the logic
 - The bus cycle runs on its own real-time thread, at a priority above the logic, and keeps the latest input and
@@ -129,7 +131,7 @@ scheduling, with (a) reachable later without changing a program.
 Put off by the first release's limit of one cyclic task. With one cyclic task the check is the review's: both
 versions' measured worst-case scans together fit the period.
 
-## What code stands on meanwhile
+## What code stands on so far
 The engine of a scan (`orcl-runtime`) runs one cyclic task: inputs latched at the start of its scan, outputs
-published at its end, absolute deadlines on the program clock, the time-error rule, safe outputs in FAULT. Every
-option above runs that case alike. Several tasks, pre-emption, handlers and the bus thread wait for Q223.
+published at its end, absolute deadlines on the program clock, the time-error rule, safe outputs in FAULT. Several
+tasks, pre-emption on one logic thread, handlers and the bus thread are ruled and not built yet.

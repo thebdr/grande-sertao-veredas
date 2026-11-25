@@ -1,6 +1,7 @@
-# Controlador's own files: names proposed
+# Controlador's own files: names
 
-**Not ruled** (`docs/questions.md` Q224). `docs/controlador-plan.md` ("Before the code") owes names for
+**Ruled on 2026-11-25** (`docs/questions.md` Q224): the Portuguese names proposed below stand, against English names
+and one `veredas-controlador-*` prefix. `docs/controlador-plan.md` ("Before the code") owed names for
 controlador's own files that do not clash with `veredas-controller`, the format of maquinar's simulated-controller
 file (`docs/controller-schema.md`). This file proposes them, on 2026-11-22. A name is cheap to change until a file
 of that format exists anywhere; none does yet, and no key of any of them is designed here.

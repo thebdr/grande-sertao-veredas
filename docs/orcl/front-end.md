@@ -4,8 +4,10 @@
 entry 12): how a program compiled by rustc becomes the bytecode controlador's interpreter runs, and which
 operations of Rust's core library an ORCL program may reach. It rules nothing. The architect's ruling it stands on:
 the bytecode is made from the compiler's intermediate form (MIR) through `rustc_public`, as it is, which means one
-pinned nightly toolchain ("rustc_public is ok as is / proceed as decided", 2026-11-15). What it leaves open is
-`docs/questions.md` Q221, Q222 and Q227.
+pinned nightly toolchain ("rustc_public is ok as is / proceed as decided", 2026-11-15). What it left open the
+architect ruled on 2026-11-25, each as the study recommends: the front end is `crates/orcl-front`, a member on stable
+whose driver sits behind a feature only the pinned nightly turns on (`docs/questions.md` Q221); the nightly is
+`nightly-2026-11-21`, moved on purpose (Q222); the calls into core are a closed list (Q227).
 
 Everything under "What ran here" was run on the Linux machine on 2026-11-22, in a scratch folder outside the
 repository: a driver of about 300 lines, `orcl-std` and the conveyor copied from Veredas 1 (commit `671cdc43`), and
@@ -118,7 +120,7 @@ What the programs reached, grouped:
 - **Panic paths**: `expect_failed`, `panic_nounwind_fmt` (every precondition check behind the compiler's run-time
   checks), `panic_fmt` (`clamp`); `Unreachable` on a `match`'s impossible arm.
 
-The assistant's proposal for "the list of core-library operations ORCL allows" (J2), not ruled (Q227): the
+The assistant's proposal for "the list of core-library operations ORCL allows" (J2), ruled on 2026-11-25 (Q227): the
 operations above that keep ORCL's types and never reach a panic entry point by design, each implemented natively
 by the interpreter and proven against the native call by the conformance suite; a call into core outside the list
 refused when the program is lowered, naming the function and the place it is called from. That refusal is the
@@ -130,10 +132,11 @@ programs, never by interpreting core.
 The assistant's reading, for the interpreter's plan; each point is open where it names a question.
 - **The front end is a driver on the pinned nightly**, run as the compiler of the program's crates; it writes the
   program file (`<name>.orclb`, `docs/controlador/files.md`) while the compiler runs, keyed on resolved definitions.
-  Where it builds beside a workspace on stable is Q221; which nightly and when it moves is Q222.
+  It builds as `crates/orcl-front`, its driver behind a feature only the pinned nightly turns on (Q221), and the
+  nightly is `nightly-2026-11-21`, in its toolchain file and every program file's header (Q222).
 - **The program's crates are compiled with `-Zalways-encode-mir` and MIR opt-level 0**: every function keeps a body
   and the shape of its source.
-- **The cut at core** (Q227): the operations above, native, in a closed list; core's MIR is never interpreted, so
+- **The cut at core** (Q227, ruled): the operations above, native, in a closed list; core's MIR is never interpreted, so
   the toolchain's own core library serves and no standard library is rebuilt.
 - **The interpreter's values** are ORCL's elementary types, `Duration`, enums with their discriminant, structures,
   fixed arrays and an `Option` of a value; anything else in a body is refused at lowering, by name.

@@ -23,6 +23,9 @@ suite's plan, "Naming"), so its crates keep the names `orcl-*`, live under `crat
 - **Veredas 1, 2026-10-24**: ORCL became part of the Veredas suite.
 - **The suite's plan, 2026-11-05**: ORCL has its own SemVer as a language; controlador states which ORCL versions it
   runs; `orcl-std`, `orcl-runtime` and `demos/conveyor` are carried into ORCL, used by controlador.
+- **The rulings of 2026-11-25** on the questions this plan raised: the language's own version (Q220), where the
+  front end builds and its pinned nightly (Q221, Q222), the closed list of calls into core (Q227), a `clippy.toml`
+  under law L7 (Q225), a pulse that needs a new edge (Q229), and controlador's execution model (Q223 with Q33).
 - **The briefing, 2026-11-13 to 16** (`docs/controlador-plan.md`, "Execution"): programs run in our own
   interpreter, a crate of the ORCL family that maquinar uses too; its bytecode is made from the Rust compiler's
   intermediate form through `rustc_public` as it is ("rustc_public is ok as is / proceed as decided", 2026-11-15),
@@ -38,10 +41,10 @@ suite's plan, "Naming"), so its crates keep the names `orcl-*`, live under `crat
 | `orcl-std` | The standard control library, `no_std`: the scan model (`Scan`, `Program`), IEC-style timers (`Ton`, `Tof`, `Tp`), edges (`RTrig`, `FTrig`), a counter (`Ctu`), bit access (`Bits`) | nothing | carried from Veredas 1 |
 | `orcl-runtime` | The engine of a scan: a task's cycle over a process image, on a clock it is handed (virtual or real), the time-error rule, safe outputs, cycle statistics; no operating-system code, `no_std` with std named where it is used (the target's clock and its sleep) | `orcl-std` | carried from Veredas 1, reworked |
 | `orcl-interp` | The interpreter and its program format: bytecode made from the compiler's intermediate form, run one instruction at a time, suspendable at every instruction boundary | `orcl-std` | planned, after the front end's study |
-| `orcl-front` | The front end: reads an ORCL crate through `rustc_public` on the pinned nightly and writes the program `orcl-interp` runs | `orcl-interp` | planned; where it builds is Q221 |
+| `orcl-front` | The front end: reads an ORCL crate through `rustc_public` on the pinned nightly and writes the program `orcl-interp` runs | `orcl-interp` | planned: a member on stable, its driver behind a feature on the pinned nightly (Q221, Q222) |
 
-A crate's name and its row in law L5's map (`MAP` in `tools/leis`: `orcl-*` use each other and core) are settled
-when the crate lands. The two planned crates are names for the study to argue with, not decisions.
+A crate's row in law L5's map (`MAP` in `tools/leis`: `orcl-*` use each other and core) is settled when the crate
+lands. `orcl-front` is the name the architect ruled (Q221); `orcl-interp` is a name for its plan to argue with.
 
 ## Scope
 
@@ -67,8 +70,9 @@ in Oficina's simulator and on a controller:
 - cycle statistics against the absolute deadline: lateness, execution time, overruns, skipped cycles.
 
 How several tasks pre-empt one another, what they share and each one's slice of the process image is controlador's
-execution model, open (`docs/questions.md` Q33; the proposal is `docs/controlador/execution-model.md`). Until it is
-ruled, the engine runs one cyclic task, which stands on no assumed model.
+execution model, ruled on 2026-11-25 as proposed (`docs/controlador/execution-model.md`, Q223 with Q33): tasks share
+only the process image, each task its own slice of it, and blocks interrupt each other on one logic thread at the
+interpreter's instruction boundaries in the first release. The engine runs one cyclic task so far.
 
 ### The interpreter
 A program compiled by rustc runs, on a controller, in an interpreter of our own (2026-11-13), for what native code
@@ -88,7 +92,20 @@ briefing's and the rest what its debugging, its faults and its online change nee
   outputs are compared scan by scan.
 
 How the intermediate form is reached, what it holds, and the list of core-library operations ORCL allows are the
-study `front-end.md`, owed before the code.
+study `front-end.md`. Ruled on 2026-11-25: a call from a program's crates into core is an operation of a closed
+list, each implemented natively and proven against the native call by the conformance suite, and a call outside the
+list is refused by name and place when the program is lowered; core's own intermediate form is never interpreted
+(Q227).
+
+### The front end
+`crates/orcl-front` (Q221, 2026-11-25): a workspace member that builds on stable as an empty shell, so
+`cargo build --workspace` and the suite stay on stable. Its driver, a `rustc_public` driver run as the compiler of a
+program's crates, sits behind a cargo feature that only the pinned nightly turns on (`cargo +nightly-2026-11-21
+build -p orcl-front --features driver`), and its own tests run under that nightly by a command of their own. The
+nightly is `nightly-2026-11-21` (Q222), written in the front end's toolchain file and in every program file's
+header, moved on purpose a few times a year at most and never for a release being commissioned, each move a change
+of its own gated by the conformance suite. It writes the program file (`<name>.orclb`, `docs/controlador/files.md`)
+whose header records the language's version (`orcl_std::LANGUAGE`) and the nightly.
 
 ### Translators
 To native PLC code, Siemens first (S7-1500 and S7-1200), program and hardware configuration (2026-11-15). Not
@@ -107,12 +124,13 @@ view need a second front end that reads the source (Q44, the assistant's reading
   the fieldbus belong to the host that runs a program (controlador on Linux; maquinar on the bench). So the same
   crates build and test on every machine, and a test on simulated time is the same scan as a target's.
 - **The library is `no_std`, with no `unsafe` and no panic path**, under the denied lints and the `clippy.toml` of
-  `language/README.md` (the file itself waits for Q225). The engine and the interpreter are ordinary Rust held to
-  the suite's rules: typed errors, no `unwrap` or `expect` outside tests.
+  `language/README.md` (the file itself waits for law L7 to exempt it, as Q225 ruled). The engine and the
+  interpreter are ordinary Rust held to the suite's rules: typed errors, no `unwrap` or `expect` outside tests.
 - **Every failure inside a scan is a typed outcome**, never the end of the process (O11, as amended).
 - **Fixture first.** A program's plant in a test is a simulated process image, then maquinar's bench.
 - **One test file per capability** under the crate's `tests/`, so each contract clause links one file.
-- **No licence is stated** in any manifest until Q35 is answered; nothing is published (`publish = false`).
+- **The licence** is `MIT OR Apache-2.0` (Q35, ruled on 2026-11-25); no manifest here states it yet. Nothing is
+  published (`publish = false`).
 
 ## What it absorbs from Veredas 1
 Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crates/orcl-std`, `crates/orcl-runtime`,
@@ -121,8 +139,9 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
   Changed: the version, `0.1.0` there, starts at `2.0.0-alpha.1` (law L3). Left out for now: its `clippy.toml`, the
   list of types O13 forbids. Law L7 refuses a TOML file without the suite's stamp and clippy refuses any key it does
   not know, so the file cannot sit in this repository until L7 treats it as a tool's file, as it treats
-  `.config/nextest.toml` (Q225). Meanwhile O13 is kept by convention in the repository's own crates; a program
-  crate in a project, outside the repository, still carries the file.
+  `.config/nextest.toml`, which the architect ruled it will (Q225, 2026-11-25; the law and its clause, C-046, are
+  portal's to change). Meanwhile O13 is kept by convention in the repository's own crates; a program crate in a
+  project, outside the repository, still carries the file.
 - **`orcl-runtime`** comes as the engine of a scan. Kept: the process image, absolute deadlines, skipped cycles,
   safe outputs once faulted, the statistics. Changed: the clock is handed in, so the same engine runs on virtual
   time; a scan is stepped by its host rather than looped for a fixed duration; the watchdog follows the plan's
@@ -146,12 +165,12 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
 ## Before the code
 - **This plan** (law L6), with the language's rules carried.
 - **The study of the interpreter's front end and of the core-library operations ORCL allows** (`front-end.md`).
-- **Controlador's execution model**, proposed for the architect's ruling (`docs/controlador/execution-model.md`,
-  Q33). The engine runs one cyclic task until it is ruled.
+- **Controlador's execution model**, ruled on 2026-11-25 (`docs/controlador/execution-model.md`, Q223 with Q33).
+- **The front end's section above**, before `crates/orcl-front` (law L6 reads this file for it).
 
 ## Open
-- **Q33** controlador's execution model, which decides how the engine runs several tasks.
-- **Q35** the licence. **Q44** the type table, and a second front end for the translators.
+- **Q44** the type table, and a second front end for the translators.
 - **Q45** the reading that the conformance suite is only as good as the list of core operations ORCL allows.
-- **Q221** where the front end builds. **Q222** the pinned nightly
-  and its moves. **Q225** a `clippy.toml` under law L7. **Q227** the list of core-library operations ORCL allows.
+- Left open by Q223's ruling: whether O7's publish at the end of a writer's scan should give way to the prior art's
+  LET, at the end of its logical period (`language/README.md`, "Not settled yet").
+- The copyright holder Q35's licence files name, not ruled with it.

@@ -5,8 +5,9 @@ intent; `.zen/contract.md` (P-003) wins on status. Built so far (2026-11-22): OR
 carried from Veredas 1 (`orcl-std`, C-150), the engine of a scan (`orcl-runtime`, C-151) and the
 controller's states and commands over one cyclic task (C-152). This
 file holds what the architect decided in the briefing of 13 to 16 November 2026, in the rulings of
-15 November on its adversarial review, and in the robustness round begun on 16 November
-(`docs/robustness.md`). The list that was reviewed and the review itself are kept as they were
+15 November on its adversarial review, in the robustness round begun on 16 November
+(`docs/robustness.md`), and in the rulings of 25 November on the questions its first build raised
+(Q220 to Q229, and Q33 with Q223). The list that was reviewed and the review itself are kept as they were
 delivered (`docs/briefing/deliverables.md`, `docs/briefing/review.md`); where they differ from this
 file, this file is the later word. What is not decided is a question in `docs/questions.md`, named
 under "Open" below; nothing open is written here as settled.
@@ -43,12 +44,63 @@ time."
   bytecode is made from the Rust compiler's intermediate form, through `rustc_public` as it is
   ("rustc_public is ok as is / proceed as decided", the architect, 2026-11-15), which means one
   pinned nightly toolchain.
+- **The front end and the cut at core** (2026-11-25): the front end is `crates/orcl-front`, built on
+  stable, its driver behind a cargo feature only the pinned nightly turns on (Q221); the nightly is
+  `nightly-2026-11-21`, moved on purpose a few times a year at most, never for a release being
+  commissioned, each move gated by the conformance suite (Q222); a program's calls into core are a
+  closed list of the interpreter's operations, a call outside it refused by name and place when the
+  program is lowered (Q227). `docs/orcl/README.md`, "The front end".
 - **The interpreter is proven against Rust by a fixed conformance suite.**
 - **No check of a program's structure before it runs**, for now: "rust as a base gives us an
   optimal linter and compiler. no further checks necessary (for now)" (the architect, 2026-11-16).
   The compiler and the linter on the sender's machine stand for the source, and the download's
   hash for the program that arrives.
 - **The program's clock pauses while the program is halted.**
+
+### The execution model
+Ruled on 2026-11-25 as proposed (Q223, which answers Q33), point by point:
+1. **Where it is written:** `docs/controlador/execution-model.md`, this list carrying each point.
+2. **Tasks share only the process image** (K8, ORCL's O7): a value two tasks share is one task's
+   output and the others' input, copied at scan boundaries; a force, a write through the embedded
+   portal and a device event reach a task at its scan boundary, never inside its scan. Not ruled
+   with it: whether O7's publish at the end of the writer's scan gives way to the prior art's LET.
+3. **Each task its own slice of the process image** (K10): an output in one task's slice only, an
+   input latched by every task that reads it, a slice copied whole.
+4. **One logic thread** in the first release, itself under the kernel's real-time scheduling,
+   switching between tasks at the interpreter's instruction boundaries: a hit halts every task, and
+   a field incident replays on the simulator.
+5. **The fieldbus has its own thread**, above the logic and never halted: halt values at a halt,
+   safe values in FAULT, and the logic's watchdog at twice a scan's period (fault 501).
+6. **Time:** the program clock, paused at a halt; time-of-day blocks on the confirmed date alone; a
+   start that fell during a halt dropped (K9); the main cycle held to the maximum cycle time,
+   pre-emptions included.
+7. **Start-up, handlers and stop:** start-up blocks before the first main cycle, with no cyclic
+   interrupt; a handler is a task its event releases; a program error ends its block's scan, then
+   the program-error handler runs or the controller faults (502); a stop runs the stop handler's
+   one last scan.
+8. **The shadow test's period check with several tasks** (K11) is put off by the first release's
+   one cyclic task.
+
+### On the target
+The Linux study's recommendations, all accepted on 2026-11-25 (Q226;
+`docs/controlador/linux-study.md`):
+- **The kernel:** the Civil Infrastructure Platform's ten-year line (6.12-cip to 2035).
+- **Updates with fallback:** SWUpdate with EFI Boot Guard, CIP's own reference; "booted well"
+  means the controller's process up with its program loaded and its first cycle within time.
+- **The system partition:** read-only under dm-verity with correction (2 parity bytes, about
+  0.8 %); uncorrectable damage restarts into the other slot, and the count of corrected blocks is a
+  maintenance request.
+- **The program's two copies:** Btrfs (RAID1, or DUP on one drive), repairing on read as well as on
+  scrub.
+- **Time:** chrony, a clock chip that reports (`RTC_VL_READ`), systemd's 15-year rewind built out
+  of the system image.
+- **The watchdog chain:** firmware or bootloader, kernel, PID 1, and the controller's own process
+  owning the last ping.
+- **Logs** volatile, with pstore keeping a crash's record.
+- **What a target must have:** ECC memory, a drive that reports its wear (eMMC or NVMe, not SD),
+  memory that keeps its content where retained data is saved every cycle, a power-fail line where
+  there is hold-up power; the target's hardware description, which Q40's "who says what a target
+  can do" reads.
 
 ### Entry points
 After Siemens' organisation blocks: the architect went through Siemens' list on 2026-11-14 ("I
@@ -83,6 +135,14 @@ think Siemens did a great job in the PLC implementation") and kept every family 
 - **Nobody switches states in normal work**: "we do not switch states in normal working
   conditions, ever" (the architect, 2026-11-15). RUN is the only state with no user interaction
   going on; a fault needs a person, and a triggered stop follows the same logic.
+- **Where this plan was silent, the first build's nine readings stand** (Q228, 2026-11-25): in
+  STOP the outputs take their safe values and the plant's exchange goes on; a controller that never
+  ran comes up in STOP with no reason; a start-up a power cut interrupted returns through a warm
+  start; warm and cold starts both begin from the initial values until ORCL can mark a variable
+  retained; the start-up's phases pass at once with nothing to restore, no handler and no device;
+  the condition `overruns` counts the time errors since the last start; a command that would
+  change nothing is refused, naming the state; a runtime restarted while the machine was not comes
+  up in `FAULT internal`; a stop from STARTUP is allowed.
 
 ### Monitoring, forcing, debugging
 - **Live values** of any variable; watch tables.
@@ -244,7 +304,9 @@ in a fixed order, with counts and identifiers and never lists.
 - **IO check** runs through a controlador target; with none set, through the laptop session
   (`docs/oficina-plan.md`, "The IO check from a laptop").
 - **Fixture first:** the bench devices for all four networks live in maquinar
-  (`docs/maquinar-plan.md`).
+  (`docs/maquinar-plan.md`). Core's masters are tested against them in the test-only tool
+  `tools/mestres`, and controlador's own tests sit beside them when it drives real devices (Q101
+  with Q34, 2026-11-25).
 
 ### Talking to other systems
 - **Modbus/TCP and OPC UA by default**, with other controllers and higher-level systems, both
@@ -330,28 +392,32 @@ and redundancy blocks.
 - **The whole controller faults, and a fault always needs a person.**
 - **A device's trouble is the program's to handle**; it never faults the controller by itself.
 - **The state is structured data;** its text has one writer and one reader, in core.
-- **ORCL stays a translatable subset of real Rust**, with its own SemVer; controlador states which
-  ORCL versions it runs.
+- **ORCL stays a translatable subset of real Rust**, with a version of its own as a language,
+  ORCL 1, 2 and so on, as Rust has editions: `orcl-std` states it, a compiled program's header
+  records it, and controlador names the versions it runs; the crates keep their SemVer (Q220,
+  2026-11-25).
 - **Fixture first:** every network and every device it drives has its bench device in maquinar
   before or alongside.
 - **Existing, tested Linux methods before our own** (the architect, 2026-11-16).
 
 ## Before the code
-Where each item stands on 2026-11-22:
+Where each item stands on 2026-11-25:
 - **`docs/orcl/README.md`**, the plan the language's crates share (law L6), and the ORCL crates: the
   plan written, with the language's rules carried from Veredas 1 (`docs/orcl/language/`); `orcl-std`
   and `orcl-runtime` carried.
-- **The execution model**: how one block interrupts another inside the interpreter, what tasks
-  share, and each block's slice of the process image. Where it is written and what it says is Q33;
-  the assistant's proposal is `docs/controlador/execution-model.md`, for the architect to rule point
-  by point (Q223). No code stands on it but the one case every option runs alike, one cyclic task.
+- **The execution model**: ruled, "The execution model" above; code stands on one cyclic task so
+  far.
 - **A study of the interpreter's front end** and of the list of core-library operations ORCL allows:
-  `docs/orcl/front-end.md` (Q221, Q222, Q227).
+  `docs/orcl/front-end.md`, its choices ruled (Q221, Q222, Q227). The front end's plan is a section
+  of `docs/orcl/README.md`, which law L6 reads for every `orcl-*` crate.
 - **The study of Linux for real time and of its recovery methods** (`docs/robustness.md`, "The Linux
-  study"): `docs/controlador/linux-study.md`, its choices for the architect in Q226.
+  study"): `docs/controlador/linux-study.md`, its choices ruled ("On the target" above).
 - **PROFINET International membership**: the architect's.
 - **Names for controlador's own files** that do not clash with `veredas-controller`, already the
-  format of maquinar's simulated-controller file: proposed in `docs/controlador/files.md` (Q224).
+  format of maquinar's simulated-controller file: `veredas-aplicacao` (the application),
+  `veredas-rede` (the hardware configuration), `veredas-alvo` (the target's own settings),
+  `veredas-carga` (a download's manifest) and `<name>.orclb` for a compiled program, ruled
+  (Q224; `docs/controlador/files.md`).
 - **Rows in `MAP`** (`tools/leis`) for what controlador and the interpreter may depend on, each a
   contract change: the rows stand since 2026-11-05 (C-005: controlador uses portal, aranha and the
   `orcl-*` crates; `orcl-*` use each other). The interpreter in maquinar is P-020's change.
@@ -365,12 +431,10 @@ Where each item stands on 2026-11-22:
   Resilience Act; the fieldbus organisations' terms), 40 and 41 (no language a PLC programmer
   knows; no closed loop), 44 (libraries; structures), 46 (what a Rust engineer gets), and the
   minors 47 to 50, 53 and 55.
-- **Q32** what disqualifies an edit from a live takeover. **Q33** the execution model. **Q34**
-  where core's masters are tested against the bench. **Q36, Q37** the download's integrity and
-  robust requests. **Q38 to Q42** the robustness round's open points. **Q43** the security round.
-  **Q44** the conversion's type table. **Q45** the briefing's readings.
-- **Q220** ORCL's version beside its crates'. **Q221, Q222** the front end's build and its pinned
-  toolchain. **Q223** the execution model as proposed. **Q224** controlador's file names. **Q225**
-  a `clippy.toml` under law L7. **Q226** the Linux study's choices. **Q227** the core-library
-  operations ORCL allows, a closed list or core's MIR interpreted. **Q228** the readings the
-  controller's first clause takes where this plan is silent (outputs in STOP among them).
+- **Q32** what disqualifies an edit from a live takeover. **Q36, Q37** the download's integrity
+  and robust requests. **Q38 to Q42** the robustness round's open points. **Q43** the security
+  round. **Q44** the conversion's type table. **Q45** the briefing's readings.
+- Left open by Q223's ruling: whether O7's publish at the end of a writer's scan gives way to the
+  prior art's LET.
+- Ruled and waiting on another member: Q225's `clippy.toml`, once law L7 and its clause (C-046,
+  portal's) treat it as a tool's file.

@@ -14,11 +14,12 @@
 //! - **cycle statistics:** scans, overruns, skipped cycles, each scan's lateness against its deadline and its
 //!   length.
 //!
-//! One cyclic task only: how several tasks pre-empt one another is controlador's execution model, not ruled
-//! (`docs/questions.md` Q33, Q223). No operating-system code: the host that runs a program on a target sets its
-//! own process up for real time (`docs/orcl/README.md`). The crate is `no_std` with std brought in by name, so
-//! every use of std is written out (`std::time::Instant`, `std::thread::sleep`, `std::rc::Rc`) and no macro of
-//! std's prelude, a print to the terminal among them, comes in unseen.
+//! One cyclic task only: several tasks, pre-empting one another on one logic thread as controlador's execution
+//! model rules (`docs/questions.md` Q223 with Q33), are not built yet. No operating-system code: the host that
+//! runs a program on a target sets its own process up for real time (`docs/orcl/README.md`). The crate is
+//! `no_std` with std brought in by name, so every use of std is written out (`std::time::Instant`,
+//! `std::thread::sleep`, `std::rc::Rc`) and no macro of std's prelude, a print to the terminal among them, comes
+//! in unseen.
 #![no_std]
 #![forbid(unsafe_code)]
 
