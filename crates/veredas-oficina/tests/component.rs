@@ -128,18 +128,41 @@ fn its_members_are_core_alone() {
     assert!(!names.iter().any(|n| n.starts_with("veredas-") && n != "veredas-core"), "{names:?}");
 }
 
-/// The model and its tests built and linked with no feature, and with `QMAKE` naming a qmake that is
-/// not there: had any crate of Qt's bridge come into the default build, or a Qt library into its
-/// link, the build would fail.
+/// The model and its tests built and linked with no feature as a machine without Qt would build
+/// them: a fresh build folder (every build script run again), the home folder an empty one (no
+/// `~/.local/opt/Qt` to be found), no folder holding a qmake on `PATH`, no `LIBRARY_PATH` or
+/// `LD_LIBRARY_PATH`, `QMAKE` naming no qmake and `OFICINA_DEPS` unset; cargo's and rustup's own
+/// homes kept, and rustc named, so the toolchain is still found.
 #[test]
 fn the_model_and_its_tests_build_with_no_qt() {
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("no-qt");
+    let _ = std::fs::remove_dir_all(&scratch);
+    let home = scratch.join("home");
+    std::fs::create_dir_all(&home).expect("an empty home");
+    let user_home = PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).expect("a home"));
+    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| user_home.join(".cargo"));
+    let rustup_home = std::env::var_os("RUSTUP_HOME").map(PathBuf::from).unwrap_or_else(|| user_home.join(".rustup"));
+    let rustc = Path::new(env!("CARGO")).with_file_name(format!("rustc{}", std::env::consts::EXE_SUFFIX));
+    let qmake_names = ["qmake", "qmake6", "qmake.exe", "qmake6.exe", "qmake.bat"];
+    let path: Vec<PathBuf> = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).filter(|d| !qmake_names.iter().any(|q| d.join(q).exists())).collect();
     let manifest = workspace_manifest();
     let out = Command::new(env!("CARGO"))
         .args(["build", "--offline", "--locked", "-p", "veredas-oficina", "--lib", "--tests", "--manifest-path", manifest.to_str().expect("a UTF-8 path")])
-        .env("QMAKE", crate_dir().join("no-such-qmake"))
+        .env("CARGO_TARGET_DIR", scratch.join("target"))
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("CARGO_HOME", &cargo_home)
+        .env("RUSTUP_HOME", &rustup_home)
+        .env("RUSTC", &rustc)
+        .env("PATH", std::env::join_paths(path).expect("a PATH"))
+        .env("QMAKE", home.join("no-such-qmake"))
+        .env_remove("OFICINA_DEPS")
+        .env_remove("LIBRARY_PATH")
+        .env_remove("LD_LIBRARY_PATH")
         .output()
         .expect("cargo runs");
     assert!(out.status.success(), "the model's build with no Qt: {}", String::from_utf8_lossy(&out.stderr));
+    let _ = std::fs::remove_dir_all(&scratch);
 }
 
 /// Core without its default features (C-073): its header reader, and no crate of a plant's stack in
@@ -158,9 +181,11 @@ fn its_own_graph_holds_no_plant_stack() {
     }
 }
 
-/// One private seam: the bridge (cxx and cxx-qt) is named only in the files under `src/shell/`,
-/// the library declares that module without `pub` and the module its own without `pub`, so the
-/// library's public items are the model's and `run`. A reading of the sources.
+/// One private seam: the bridge (cxx and cxx-qt) is named only in the files under `src/shell/`;
+/// the library declares that module without `pub`, and no file outside the seam names it but the
+/// library's one `pub use shell::run;`; the seam re-exports nothing (`pub use`) and declares its
+/// modules without `pub`, so the library's public items are the model's and `run`. A reading of the
+/// sources, against accidents: a name built by a macro is outside it.
 #[test]
 fn the_bridge_is_one_private_seam() {
     fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -183,16 +208,20 @@ fn the_bridge_is_one_private_seam() {
         let names_bridge = text.contains("cxx_qt") || text.contains("cxx::");
         if file.starts_with(&seam) {
             bridged += usize::from(text.contains("#[cxx_qt::bridge]"));
+            for line in text.lines().map(str::trim) {
+                assert!(!(line.starts_with("pub use") || line.starts_with("pub(crate) use") || line.starts_with("pub(super) use")), "{}: the seam re-exports: {line}", file.display());
+            }
         } else {
             assert!(!names_bridge, "{}: the bridge named outside the seam", file.display());
+            let naming: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.starts_with("//") && l.contains("shell::")).collect();
+            let allowed: &[&str] = if *file == src.join("lib.rs") { &["pub use shell::run;"] } else { &[] };
+            assert_eq!(naming, allowed, "{}: the seam named outside it", file.display());
         }
     }
     assert_eq!(bridged, 2, "the seam's two bridges, the start and the tree");
     let lib = std::fs::read_to_string(src.join("lib.rs")).expect("lib.rs");
     let declared: Vec<&str> = lib.lines().map(str::trim).filter(|l| l.contains("mod shell")).collect();
     assert_eq!(declared, ["mod shell;"], "the seam declared without `pub`");
-    let used: Vec<&str> = lib.lines().map(str::trim).filter(|l| l.contains("shell::")).collect();
-    assert_eq!(used, ["pub use shell::run;"], "the seam's one public item");
     let seam_mod = std::fs::read_to_string(seam.join("mod.rs")).expect("shell/mod.rs");
     for line in seam_mod.lines().map(str::trim).filter(|l| l.contains("mod ") && l.ends_with(';')) {
         assert!(!line.starts_with("pub"), "a module of the seam made public: {line}");
@@ -204,23 +233,50 @@ fn holds(bytes: &[u8], name: &[u8]) -> bool {
     bytes.windows(name.len()).any(|w| w == name)
 }
 
-/// What ships carries no test server: the window built as it ships (`shell`, no `driver`), into a
-/// build folder of its own and with the environment set against it (cargo's variable for the
-/// driver feature, the driver's port), holds no name of Spix's or AnyRPC's, where the driver's
-/// executable does; started with a port named, it stays up and nothing answers on that port.
+/// What the build script reads of its environment, by name: Qt's qmake, the C++ libraries' place,
+/// the home folder for its default, and the target's system; `driver` bound once, to the
+/// compiler's word on the feature, and named elsewhere only by the blocks it opens. A reading,
+/// against accidents: a name computed at run time is outside it.
+#[test]
+fn the_build_script_reads_its_environment_by_name_and_the_driver_from_the_compiler() {
+    let text = std::fs::read_to_string(crate_dir().join("build.rs")).expect("build.rs");
+    let code: String = text.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+    let allowed = ["QMAKE", "OFICINA_DEPS", "HOME", "USERPROFILE", "CARGO_CFG_TARGET_OS"];
+    for call in ["var(", "var_os("] {
+        for (at, _) in code.match_indices(call) {
+            let rest = &code[at + call.len()..];
+            let name = rest.strip_prefix('"').and_then(|r| r.split('"').next()).unwrap_or_else(|| panic!("an environment variable not named by a literal: {}", &code[at..(at + 60).min(code.len())]));
+            assert!(allowed.contains(&name), "the build script reads {name}");
+        }
+    }
+    for refused in ["vars()", "vars_os()", "env!(", "option_env!("] {
+        assert!(!code.contains(refused), "the build script reads its environment through {refused}");
+    }
+    let binding = "let driver = cfg!(feature = \"driver\");";
+    assert_eq!(code.matches(binding).count(), 1, "driver bound to the compiler's word");
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    let words = code.match_indices("driver").filter(|(i, _)| !word(code[..*i].chars().next_back()) && !word(code[i + 6..].chars().next())).count();
+    assert_eq!(words, 2 + code.matches("if driver {").count(), "driver named only in its binding and the blocks it opens");
+}
+
+/// What ships carries no test server: the window built as the release tool builds it (`--release
+/// --locked --offline`, `shell` without `driver`), into a build folder of its own and with the
+/// environment set against it (cargo's variable for the driver feature, the driver's port), holds
+/// no name of Spix's or AnyRPC's, where the driver's executable does; started with a port named,
+/// it stays up and nothing answers on that port. The first build of that folder takes minutes.
 #[test]
 fn the_window_that_ships_carries_no_test_server() {
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("shipped");
     let manifest = workspace_manifest();
     let out = Command::new(env!("CARGO"))
-        .args(["build", "--offline", "--locked", "-p", "veredas-oficina", "--features", "shell", "--bin", "veredas-oficina", "--manifest-path", manifest.to_str().expect("a UTF-8 path")])
+        .args(["build", "--release", "--offline", "--locked", "-p", "veredas-oficina", "--features", "shell", "--bin", "veredas-oficina", "--manifest-path", manifest.to_str().expect("a UTF-8 path")])
         .env("CARGO_TARGET_DIR", &target)
         .env("CARGO_FEATURE_DRIVER", "1")
         .env("OFICINA_SPIX_PORT", "1")
         .output()
         .expect("cargo runs");
     assert!(out.status.success(), "the window as it ships: {}", String::from_utf8_lossy(&out.stderr));
-    let exe = target.join("debug").join(format!("veredas-oficina{}", std::env::consts::EXE_SUFFIX));
+    let exe = target.join("release").join(format!("veredas-oficina{}", std::env::consts::EXE_SUFFIX));
     let shipped = std::fs::read(&exe).expect("the executable that ships");
     let driven = std::fs::read(env!("CARGO_BIN_EXE_veredas-oficina")).expect("the driver's executable");
     for name in [&b"spix"[..], b"Spix", b"AnyRpc", b"OFICINA_SPIX_PORT"] {
@@ -256,6 +312,20 @@ fn the_window_opens_as_oficina_with_the_project_pane_docked() {
     // Docked: its dock open and not floating, the pane inside the docking area (its parents reach
     // it) and drawn in the main window.
     assert_eq!(shell.property("oficina/area", "uniqueName"), "workbench");
+    shell.invoke("oficina/area", "describeDocks", &[]);
+    shell.wait_for("oficina/area", "docks", r#"[["project",true,false,true,true]]"#);
+    // In its dock: closed, the dock takes the pane with it; opened again, the pane is back.
+    let shown_within = |shown: bool, what: &str| {
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        while shell.visible("oficina/projectPane") != shown {
+            assert!(std::time::Instant::now() < until, "{what}\nthe shell's log:\n{}", shell.log_text());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    shell.invoke("oficina/area", "closeDock", &[common::X::Str("project".into())]);
+    shown_within(false, "the pane still shown with its dock closed");
+    shell.invoke("oficina/area", "openDock", &[common::X::Str("project".into())]);
+    shown_within(true, "the pane not shown again with its dock opened");
     shell.invoke("oficina/area", "describeDocks", &[]);
     shell.wait_for("oficina/area", "docks", r#"[["project",true,false,true,true]]"#);
     // No folder named: the tree is empty and says nothing went wrong.

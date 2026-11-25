@@ -32,6 +32,19 @@ ApplicationWindow {
             return false;
         }
 
+        // What a person does with a dock's title bar and the window's menu: close it, open it.
+        function closeDock(name) {
+            dockNamed(name).close();
+        }
+
+        function openDock(name) {
+            dockNamed(name).open();
+        }
+
+        function dockNamed(name) {
+            return [projectDock].find((d) => d.uniqueName === name);
+        }
+
         function describeDocks() {
             docks = JSON.stringify([[projectDock, projectPane]].map(([dock, pane]) => [dock.uniqueName, dock.isOpen, dock.isFloating, inside(pane, area), pane.Window.window === window]));
         }

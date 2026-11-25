@@ -3175,7 +3175,10 @@ The assistant recommends (a) now, and (b) once Oficina has several surfaces and 
 should hold its tests without being asked.
 
 **Taken meanwhile**: (a). The tests' driver stays a feature of its own whichever is ruled: what
-ships carries no test server.
+ships carries no test server. With (a), the release tool (`tools/alforge`, which builds each
+component with `cargo build --release --locked --offline -p <component> --bins` and no feature)
+must name `--features shell` for Oficina, or it builds no executable of it: the releases member's,
+when Oficina first ships.
 
 **Reversible?** Yes: (b) is `default = ["shell"]` in Oficina's manifest, and Qt on the machines.
 
