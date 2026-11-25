@@ -434,11 +434,29 @@ fn two_sessions_never_open_one_database_file() {
     let got = refused(two("store = { disk = \"../one.duckdb\" }", "store = { disk = \"../one.duckdb\" }", "the hall"));
     assert!(got.starts_with("session `hall`: its store (") && got.contains("one.duckdb)") && got.ends_with(&tail("store")), "{got}");
     assert!(two("store = { disk = \"../one.duckdb\" }", "store = { disk = \"../two.duckdb\" }", "the hall").is_ok(), "two files");
-    // A record of each run's own, in one folder under one name.
-    let rec = "store = \"ram\"\nrecord = { dir = \"../records\", max_mb = 5 }";
-    let got = refused(two(rec, rec, "the loop"));
-    assert!(got.starts_with("session `hall`: its record (a file of each run's own in ") && got.contains(", named from the project's name `the loop` and the start)") && got.ends_with(&tail("record")), "{got}");
-    assert!(two(rec, rec, "the hall").is_ok(), "another name, one record folder");
+    // A record of each run's own, in one folder under one name, beside every store portal keeps (its
+    // `Store` matched in full): each kept in memory refused; one on the drive refused by portal
+    // itself, a record being for a store in memory.
+    let mut kinds = std::collections::BTreeSet::new();
+    for store in ["store = \"ram\"", "store = { window_s = 60 }", "store = { disk = \"../one.duckdb\" }", "store = { dir = \"../stores\" }"] {
+        let alone = two(store, "store = \"ram\"", "the hall").unwrap_or_else(|e| panic!("{store}: {e}"));
+        let (kind, memory) = match &alone.sessions[0].project.store {
+            veredas_portal::project::Store::Ram => ("ram", true),
+            veredas_portal::project::Store::Window { .. } => ("window", true),
+            veredas_portal::project::Store::Disk { .. } => ("disk", false),
+            veredas_portal::project::Store::PerSession { .. } => ("dir", false),
+        };
+        kinds.insert(kind);
+        let rec = format!("{store}\nrecord = {{ dir = \"../records\", max_mb = 5 }}");
+        let got = refused(two(&rec, &rec, "the loop"));
+        if memory {
+            assert!(got.starts_with("session `hall`: its record (a file of each run's own in ") && got.contains(", named from the project's name `the loop` and the start)") && got.ends_with(&tail("record")), "{store}: {got}");
+            assert!(two(&rec, &rec, "the hall").is_ok(), "{store}: another name, one record folder");
+        } else {
+            assert!(got.contains("a record is for a store in memory"), "{store}: {got}");
+        }
+    }
+    assert_eq!(kinds.len(), 4, "every store portal keeps, beside a record: {kinds:?}");
     // Two names portal writes as one file name (`session_store_file`: letters, digits, `-` and `_`
     // kept, every other character `_`): one file, refused; and a name it writes otherwise loads.
     for name in ["the_loop", "the-loop"] {
@@ -485,16 +503,22 @@ fn two_sessions_never_open_one_database_file() {
         // A chain of links to a file not made yet, beside that file: three links and forty refused
         // (the drive follows forty), forty-one loaded (the drive refuses to open it, so no two
         // sessions open one file); and a loop of links loaded, its reading ended.
-        let chain = |links: usize| move |d: &std::path::Path| {
+        // And a chain whose end stands: forty refused beside its end, forty-one and eighty-one loaded
+        // (a path through more than forty links opens nowhere: it has no place).
+        let chain = |links: usize, stands: bool| move |d: &std::path::Path| {
             std::fs::create_dir_all(d.join("stores")).unwrap();
             for k in 1..=links {
                 let to = if k == links { "a.duckdb".to_string() } else { format!("l{}.duckdb", k + 1) };
                 std::os::unix::fs::symlink(to, d.join(format!("stores/l{k}.duckdb"))).unwrap();
             }
+            if stands {
+                std::fs::write(d.join("stores/a.duckdb"), b"").unwrap();
+            }
         };
-        for (links, refused_too) in [(3, true), (40, true), (41, false)] {
-            let got = refused(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/l1.duckdb\" }", "the hall", false, &chain(links)));
-            assert_eq!(got.ends_with(&tail("store")), refused_too, "a chain of {links} links to a file not made, beside it: {got}");
+        for (links, stands, refused_too) in [(3, false, true), (40, false, true), (41, false, false), (40, true, true), (41, true, false), (81, true, false)] {
+            let got = refused(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/l1.duckdb\" }", "the hall", false, &chain(links, stands)));
+            let end = if stands { "a file that stands" } else { "a file not made" };
+            assert_eq!(got.ends_with(&tail("store")), refused_too, "a chain of {links} links to {end}, beside it: {got}");
         }
         let looped = |d: &std::path::Path| {
             std::fs::create_dir_all(d.join("stores")).unwrap();
@@ -502,6 +526,23 @@ fn two_sessions_never_open_one_database_file() {
             std::os::unix::fs::symlink("b.duckdb", d.join("stores/c.duckdb")).unwrap();
         };
         assert!(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/b.duckdb\" }", "the hall", false, &looped).is_ok(), "a loop of links loaded");
+        // A link whose target holds a link and its `..`, and one whose target holds a `.`, each read
+        // as the drive reads it: `stores/b.duckdb` leading to `deep/../a.duckdb`, `stores/deep` to
+        // `../x/y`, is `x/a.duckdb`: refused beside it, loaded beside `stores/a.duckdb`, where the
+        // target's letters alone would fold it; `stores/c.duckdb` leading to `./a.duckdb` refused
+        // beside `stores/a.duckdb`.
+        let through = |d: &std::path::Path| {
+            std::fs::create_dir_all(d.join("stores")).unwrap();
+            std::fs::create_dir_all(d.join("x/y")).unwrap();
+            std::os::unix::fs::symlink("../x/y", d.join("stores/deep")).unwrap();
+            std::os::unix::fs::symlink("deep/../a.duckdb", d.join("stores/b.duckdb")).unwrap();
+            std::os::unix::fs::symlink("./a.duckdb", d.join("stores/c.duckdb")).unwrap();
+        };
+        let got = refused(two_by("store = { disk = \"../x/a.duckdb\" }", "store = { disk = \"../stores/b.duckdb\" }", "the hall", false, &through));
+        assert!(got.ends_with(&tail("store")), "a link's target through a link and its `..`: {got}");
+        assert!(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/b.duckdb\" }", "the hall", false, &through).is_ok(), "where the target's letters alone would fold it");
+        let got = refused(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/c.duckdb\" }", "the hall", false, &through));
+        assert!(got.ends_with(&tail("store")), "a link's target holding a `.`: {got}");
         // A pinned file that is itself a link to the other's, neither made yet (a link to nothing).
         let got = refused(two_by("store = { disk = \"../stores/a.duckdb\" }", "store = { disk = \"../stores/b.duckdb\" }", "the hall", false, &|d| {
             std::fs::create_dir_all(d.join("stores")).unwrap();
@@ -542,8 +583,13 @@ fn two_sessions_never_open_one_database_file() {
     // folder the test runs in: refused.
     let got = refused(two_by("store = { disk = \"../one.duckdb\" }", "store = { disk = \"{dir}/one.duckdb\" }", "the hall", true, &none));
     assert!(got.ends_with(&tail("store")), "relative beside absolute: {got}");
+    // The per-run names compared at one instant, the epoch (a limit): a pinned file named as a run's
+    // would be then, refused beside that folder.
+    let got = refused(two("store = { dir = \"../stores\" }", "store = { disk = \"../stores/the_loop-19700101-000000.duckdb\" }", "the hall"));
+    assert!(got.ends_with(&tail("store")), "a pinned file named as a run's at the epoch: {got}");
     // Case: one name on Windows, whose drives compare names without case; Linux's compare it, a
-    // drive that folds case mounted there (vfat, exFAT, a share) read as one that keeps it, a limit.
+    // drive that folds case mounted there (vfat, exFAT, a share), or a folder that does on a drive
+    // that keeps it (ext4's or f2fs's casefold), read as one that keeps it, a limit.
     let cased = two("store = { dir = \"../stores\" }", "store = { dir = \"../Stores\" }", "The Loop");
     if cfg!(windows) {
         assert!(refused(cased).ends_with(&tail("store")), "case on Windows");

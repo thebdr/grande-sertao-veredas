@@ -160,7 +160,9 @@ fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
             files.push((r.file.clone(), format!("its record (a file of each run's own in {}, named from the project's name `{name}` and the start)", rec.dir.display())));
         }
         for (file, what) in files {
-            let at = same_place(&file);
+            // A path through more than forty links opens nowhere (the drive refuses it): no place,
+            // so nothing to share.
+            let Some(at) = same_place(&file) else { continue };
             if let Some((_, other, theirs)) = opened.iter().find(|(k, _, _)| *k == at) {
                 return Err(ConfigError::Invalid(format!(
                     "session `{}`: {what} is the database file session `{other}` opens for {theirs}: two sessions of one host open no file alike (give one project another folder, or a name portal writes as another file name)",
@@ -176,11 +178,13 @@ fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
 
 /// A file's place, read as one place however its path is written: made absolute, then read part by
 /// part as the drive reads it, a part that is a link replaced by where it leads (its target taken
-/// from its folder), standing or not yet, forty links at most, the drive's own bound; a `..` the
-/// parent of what is read so far, so a `..` after a link is the parent of where the link leads. What
-/// of it stands is then read by the drive itself (on Windows, its names as the drive keeps them),
-/// and on Windows the whole compared without case (Unicode's lowercase).
-fn same_place(p: &Path) -> PathBuf {
+/// from its folder, read part by part in turn), standing or not yet; a `..` the parent of what is
+/// read so far, so a `..` after a link, written or in a link's target, is the parent of where the
+/// link leads. Forty links at most, the drive's own bound: a path that meets one more opens nowhere,
+/// and has no place (`None`). What of it stands is then read by the drive itself (on Windows, its
+/// names as the drive keeps them), and on Windows the whole compared without case (Unicode's
+/// lowercase).
+fn same_place(p: &Path) -> Option<PathBuf> {
     use std::path::Component;
     let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
     let owned = |q: &Path| q.components().map(|c| PathBuf::from(c.as_os_str())).collect::<std::collections::VecDeque<PathBuf>>();
@@ -196,14 +200,15 @@ fn same_place(p: &Path) -> PathBuf {
             Some(Component::Normal(_)) => {
                 let next = out.join(&part);
                 match std::fs::read_link(&next) {
-                    Ok(to) if hops < 40 => {
+                    Ok(_) if hops == 40 => return None,
+                    Ok(to) => {
                         hops += 1;
                         let mut led = owned(&out.join(to));
                         led.extend(pending.drain(..));
                         pending = led;
                         out = PathBuf::new();
                     }
-                    _ => out = next,
+                    Err(_) => out = next,
                 }
             }
             Some(_) => out.push(&part),
@@ -221,7 +226,7 @@ fn same_place(p: &Path) -> PathBuf {
     if cfg!(windows) {
         out = PathBuf::from(out.to_string_lossy().to_lowercase());
     }
-    out
+    Some(out)
 }
 
 /// Read a supervisão file from disk; its folder is where its references live.
