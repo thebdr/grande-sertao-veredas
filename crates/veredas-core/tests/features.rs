@@ -348,7 +348,9 @@ fn lexed(src: &str, keep_literals: bool) -> String {
             }
             out.push(' ');
         } else if c[i] == 'r'
-            && !ident_before(i)
+            // A raw string, its `b` or `c` prefix (`br"..."`, `cr"..."`) read with it.
+            && (!ident_before(i)
+                || (matches!(c[i - 1], 'b' | 'c') && !ident_before(i - 1)))
             && matches!(c.get(i + 1), Some('"') | Some('#'))
             && c[i + 1..].iter().find(|x| **x != '#') == Some(&'"')
         {
@@ -821,6 +823,11 @@ fn every_feature_gate_is_where_it_belongs() {
                 "feature" => after != Some('='),
                 "doc" => !before.ends_with("#[") && !before.ends_with("!["),
                 "debug_assertions" | "overflow_checks" => true,
+                // What pulls in code or a value from outside the source the audit reads.
+                "include" | "include_str" | "include_bytes" | "env" | "option_env" => {
+                    after == Some('!')
+                }
+                "path" => before.ends_with("#["),
                 "panic" => after == Some('='),
                 _ => false,
             };
@@ -834,6 +841,33 @@ fn every_feature_gate_is_where_it_belongs() {
         stray,
         Vec::<String>::new(),
         "a gate's token where no gate is"
+    );
+    // No build script: one could set a cfg or a value from the feature and the profile.
+    let meta: serde_json::Value = serde_json::from_str(&cargo(&[
+        "metadata",
+        "--format-version",
+        "1",
+        "--no-deps",
+        "--offline",
+        "--manifest-path",
+        manifest().to_str().unwrap(),
+    ]))
+    .unwrap();
+    let core = meta["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "veredas-core")
+        .unwrap();
+    let kinds: BTreeSet<String> = core["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|t| strings(&t["kind"]))
+        .collect();
+    assert!(
+        !kinds.contains("custom-build"),
+        "core has a build script: {kinds:?}"
     );
     gates.sort();
     let mut want: Vec<String> = [
