@@ -1,0 +1,21 @@
+{
+  "clause": "C-155",
+  "command": "sh -c cargo test -p orcl-runtime --test interpreted && cargo clippy -p orcl-runtime --all-targets -- -D warnings",
+  "commandArgv": [
+    "sh",
+    "-c",
+    "cargo test -p orcl-runtime --test interpreted && cargo clippy -p orcl-runtime --all-targets -- -D warnings"
+  ],
+  "exitCode": 0,
+  "outputSha": "24ed07a4ed47a307462a85c6c10118ec72b2937121fd4214f51d1635c49e89f7",
+  "outputTail": "test the_scan_s_time_its_cycle_and_the_output_image_reach_the_program_scan_by_scan ... ok\ntest the_adapter_refuses_by_name_what_does_not_fit_when_it_is_made ... ok\ntest a_scan_of_an_interpreted_program_allocates_nothing ... ok\ntest an_interpreted_program_and_its_native_twin_write_the_same_outputs_at_the_same_times ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n    Blocking waiting for file lock on package cache\n   Compiling orcl-runtime v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/orcl-runtime)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s\n     Running tests/interpreted.rs (target/debug/build/orcl-runtime/4b17c6ce58b2784b/out/interpreted-4b17c6ce58b2784b)\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Checking orcl-runtime v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/orcl-runtime)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.47s",
+  "ranAt": "2026-11-25T07:34:45.565Z",
+  "headCommit": "cb219d8f7956e3efb17eddd4e63c9c10d0e19537",
+  "tests": [
+    {
+      "name": "crates/orcl-runtime/tests/interpreted.rs",
+      "file": "crates/orcl-runtime/tests/interpreted.rs",
+      "fileSha": "5348bc33f355dea7dd6c79c6ad3ef89748589506a4c52efa887168c504a571a0"
+    }
+  ]
+}
