@@ -172,7 +172,7 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
     }
     let named = regex_free_change_ids(&later);
     let record = std::fs::read_to_string(root().join("forks/ironcalc/VEREDAS-FORK.md")).unwrap();
-    assert_eq!(record.matches("## Local changes").count(), 1);
+    local_changes_heading(&record).unwrap();
     let rows = change_rows(&record);
     assert_eq!(named.len(), later.lines().count(), "a commit changed the engine without naming its change:\n{later}");
     let mut sorted_named = named.clone();
@@ -1496,6 +1496,12 @@ fn no_socket_in_its_sources_or_the_engine_s() {
     }
     let mut paths: Vec<String> = ["crates/veredas-abaco/src", "forks/ironcalc/base/src", "forks/ironcalc/xlsx/src"].iter().map(|s| s.to_string()).collect();
     paths.extend(scripts.iter().map(|(f, _)| f.clone()));
+    // the round at 36bd57e3: every file compiled, wherever it stands, unchanged too (core's header
+    // reader, which Ábaco's library compiles by path, Q345, is outside the three folders)
+    paths.extend(files.iter().map(|f| relative(f)));
+    assert!(paths.iter().any(|p| p == "crates/veredas-core/src/schema.rs"), "core's header reader is among the files compiled");
+    paths.sort();
+    paths.dedup();
     let mut args: Vec<&str> = vec!["status", "--porcelain", "--ignored", "--untracked-files=all", "--"];
     args.extend(paths.iter().map(String::as_str));
     let changed = git(&args);
@@ -1512,12 +1518,16 @@ const SOCKET_WORDS: [&str; 11] =
 const SOCKET_IDENTIFIERS: &[&str] =
     &["net", "ToSocketAddrs", "lookup_host", "libc", "dlsym", "dlvsym", "dlopen", "dlmopen", "GetProcAddress", "LoadLibraryA", "LoadLibraryW", "LoadLibraryExA", "LoadLibraryExW", "link_ordinal"];
 
-/// Every `macro_rules!` definition of `code` (comments blanked): its text from `macro_rules!` to the
-/// end of the group that holds its rules.
+/// Every `macro_rules!` definition of `code` (comments blanked): its text from `macro_rules` to the
+/// end of the group that holds its rules. A definition is found by its token, the identifier
+/// `macro_rules` wherever it stands outside a string, whatever spaces or blanked comments come
+/// before its `!` (`macro_rules ! m`, `macro_rules /**/ ! m`, which rustc reads alike); one not
+/// followed by `!` is taken whole too, and fails as no reviewed text.
 fn macro_definitions(code: &str) -> Vec<String> {
     let b = code.as_bytes();
     let mut out = Vec::new();
-    for (start, _) in code.match_indices("macro_rules!") {
+    let starts = identifiers(code).into_iter().filter(|(w, _)| w == "macro_rules").map(|(w, end)| end - w.len());
+    for start in starts {
         let Some(open) = code[start..].find(['{', '(', '[']).map(|o| start + o) else { continue };
         let mut depth = 0;
         let mut k = open;
@@ -1642,6 +1652,16 @@ fn socket_route_in(text: &str, build_script: bool) -> Option<String> {
     if let Some((w, _)) = words.iter().find(|(w, _)| BRIDGE_IDENTIFIERS.contains(&w.as_str())) {
         return Some(format!("`{w}`"));
     }
+    // the round at 36bd57e3: a system crate named (`windows_link::link!`, a crate's path, `extern
+    // crate`), and a `link!` call, which writes an `extern` block and its library out of sight
+    for (w, at) in &words {
+        if SYSTEM.iter().any(|c| c.replace('-', "_") == *w && c.contains(['-', '_'])) {
+            return Some(format!("`{w}`, a crate that binds the system's own interfaces"));
+        }
+        if w == "link" && code[*at..].trim_start().starts_with('!') {
+            return Some("a `link!` call, which writes an `extern` block and the library it links".into());
+        }
+    }
     let uses = use_spans(&code);
     for (w, at) in &words {
         // a child process: none in a library; in a build script `Command::new("git")` alone, and its
@@ -1710,18 +1730,61 @@ fn the_shipped_packages_rename_no_dependency_and_take_no_system_or_socket_crate(
     // `sys = { package = "libc" }` would call `sys::socket` past every spelling: the three packages'
     // own dependencies (normal and build) carry their own names, and none is a crate that reaches
     // the system's sockets
-    const SYSTEM: &[&str] = &["libc", "nix", "rustix", "windows-sys", "windows", "winapi", "socket2", "mio", "tokio", "async-std", "smol"];
     let full: serde_json::Value = serde_json::from_str(&cargo(&["metadata", "--format-version", "1", "--offline"])).unwrap();
     for (name, _) in SHIPPED {
+        let mut direct = Vec::new();
         for d in package(&full, name)["dependencies"].as_array().unwrap() {
             if d["kind"] == "dev" {
                 continue;
             }
-            assert!(d["rename"].is_null(), "{name} takes `{}` as `{}`", d["name"], d["rename"]);
-            assert!(!SYSTEM.contains(&d["name"].as_str().unwrap()), "{name} takes `{}`", d["name"]);
+            let dep = d["name"].as_str().unwrap();
+            assert!(d["rename"].is_null(), "{name} takes `{dep}` as `{}`", d["rename"]);
+            // a `-sys` crate binds the system's own library; `js-sys` is the browser's, reached by
+            // `js_sys::Date`, `::Math` and `::Array` alone (`socket_route`)
+            assert!(!SYSTEM.contains(&dep) && !(dep.ends_with("-sys") && dep != "js-sys"), "{name} takes `{dep}`");
+            direct.push(format!("{dep} {} {}", d["kind"].as_str().unwrap_or("normal"), d["target"].as_str().unwrap_or("")).trim_end().to_string());
         }
+        // the round at 36bd57e3: a reviewed crate of the graph taken as a direct dependency calls
+        // its macros (`windows_link::link!` writes an `extern` block and its `link`): every direct
+        // dependency, for every target, is the reviewed one, and any other fails until it is
+        // reviewed
+        direct.sort();
+        let reviewed = DIRECT_DEPENDENCIES.iter().find(|(p, _)| *p == name).map(|(_, d)| d.to_vec()).unwrap_or_default();
+        assert_eq!(direct, reviewed, "{name}'s direct dependencies (name, kind, target) are the reviewed ones");
     }
 }
+
+/// The crates that bind the system's own interfaces, sockets among them, which none of the three
+/// packages takes (and whose names none of their sources holds, `socket_route`).
+const SYSTEM: &[&str] = &[
+    "libc", "nix", "rustix", "windows-sys", "windows", "winapi", "socket2", "mio", "tokio", "async-std", "smol",
+    "windows-link", "windows-targets", "windows-core", "core-foundation-sys", "core-foundation", "r-efi",
+    "android_system_properties",
+];
+
+/// Each shipped package's direct dependencies, normal and build, as cargo states them: the name, the
+/// kind and the target a dependency is taken for, sorted.
+const DIRECT_DEPENDENCIES: &[(&str, &[&str])] = &[
+    ("veredas-abaco", &["ironcalc normal", "ironcalc_base normal", "serde normal", "serde_ignored normal", "serde_json normal", "sha2 normal", "thiserror normal", "toml normal", "zip normal"]),
+    ("ironcalc", &["bitcode normal", "chrono normal", "ironcalc_base normal", "itertools normal", "quick-xml normal", "serde normal", "serde_json normal", "thiserror normal", "zip normal"]),
+    (
+        "ironcalc_base",
+        &[
+            "bitcode normal",
+            "chrono normal",
+            "chrono-tz normal cfg(not(all(target_arch = \"wasm32\", target_os = \"unknown\")))",
+            "csv normal",
+            "js-sys normal cfg(all(target_arch = \"wasm32\", target_os = \"unknown\"))",
+            "rand normal cfg(not(all(target_arch = \"wasm32\", target_os = \"unknown\")))",
+            "regex normal cfg(not(all(target_arch = \"wasm32\", target_os = \"unknown\")))",
+            "regex-lite normal cfg(all(target_arch = \"wasm32\", target_os = \"unknown\"))",
+            "ryu normal",
+            "serde normal",
+            "statrs normal",
+            "wasm-bindgen normal cfg(all(target_arch = \"wasm32\", target_os = \"unknown\"))",
+        ],
+    ),
+];
 
 #[test]
 fn every_route_the_critics_found_is_a_socket_route() {
@@ -1758,6 +1821,11 @@ fn every_route_the_critics_found_is_a_socket_route() {
         ("a child process", "fn f() { let _ = std::process::Command::new(\"bash\").args([\"-c\", \"exec 3<>/dev/tcp/plant/4840\"]).status(); }"),
         // the round at 3df0bd89: an `r` after a string's closing quote is its suffix
         ("a suffix before a string", "const _: &str = stringify!(\"x\"r\"\\\" /* \");\nunsafe extern \"C\" { fn socket(d: i32) -> i32; }\n// */"),
+        // the round at 36bd57e3: a dependency's macro writing the block, a system crate's path
+        ("windows_link's link!", "windows_link::link!(\"c\" \"C\" fn rexec(ahost: *mut *mut c_char, inport: i32) -> i32);"),
+        ("a spaced link! call", "link ! (\"c\" \"C\" fn rcmd() -> i32);"),
+        ("windows_link renamed", "use windows_link::link as l;"),
+        ("core_foundation_sys", "let _ = unsafe { core_foundation_sys::stream::CFStreamCreatePairWithSocketToHost(a, h, p, r, w) };"),
     ] {
         assert!(socket_route(text).is_some(), "{what}: {text}");
     }
@@ -1780,6 +1848,14 @@ fn every_route_the_critics_found_is_a_socket_route() {
     assert_eq!(found.len(), 2, "{found:?}");
     assert!(found[0].starts_with("macro_rules! glue") && found[0].ends_with("$m $b $c; } }"), "{found:?}");
     assert!(found.iter().all(|m| !REVIEWED_MACROS.iter().any(|(_, h)| *h == sha256_hex(m.as_bytes()))));
+    // the round at 36bd57e3: a definition spaced or with a comment before its `!` is one, and a
+    // `macro_rules!` in a string is none
+    for spaced in ["macro_rules ! glue { ($a:tt, $b:tt, $c:tt) => { $a $b $c } }", "macro_rules /**/ ! glue { ($a:tt) => { $a } }", "macro_rules\n!\tglue { () => {} }"] {
+        let found = macro_definitions(&without_comments(spaced));
+        assert_eq!(found.len(), 1, "{spaced}: {found:?}");
+        assert!(found[0].starts_with("macro_rules") && found[0].ends_with('}'), "{found:?}");
+    }
+    assert_eq!(macro_definitions("const _: &str = \"macro_rules! m { () => {} }\";"), Vec::<String>::new());
     assert!(socket_route("// see std::net").is_some());
 }
 
@@ -1994,6 +2070,53 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
     }
 }
 
+/// Where the record's one `Local changes` heading line ends (its line's end, the newline excluded),
+/// the heading found as GFM reads one, not by its bytes: an ATX heading (up to three spaces, one to
+/// six `#`, a space or a tab, its text trimmed and its closing `#`s passed over) or a setext one (a
+/// line its `===` or `---` underlines), in any level. The record holds exactly one, an ATX heading
+/// of level 2: `##  Local changes` with two spaces is that heading, and a second one, of any level
+/// or spelling, is refused, so no decoy heading lower down is read as the section (the round at
+/// 36bd57e3).
+fn local_changes_heading(record: &str) -> Result<usize, String> {
+    let lines: Vec<(usize, &str)> = record.split_inclusive('\n').scan(0, |at, l| {
+        let start = *at;
+        *at += l.len();
+        Some((start, l.trim_end_matches(['\n', '\r'])))
+    }).collect();
+    let mut found = Vec::new();
+    for (k, (start, l)) in lines.iter().enumerate() {
+        if column_of(l) > 3 {
+            continue;
+        }
+        let t = l.trim_start();
+        let hashes = t.chars().take_while(|c| *c == '#').count();
+        let rest = &t[hashes..];
+        if (1..=6).contains(&hashes) && (rest.is_empty() || rest.starts_with([' ', '\t'])) {
+            // a closing sequence of `#`s, after a space or a tab, is none of the text
+            let text = rest.trim();
+            let closed = text.trim_end_matches('#');
+            let text = if closed.is_empty() || closed.ends_with([' ', '\t']) { closed.trim() } else { text };
+            if text == "Local changes" {
+                found.push((hashes, start + l.len()));
+            }
+            continue;
+        }
+        let underlined = lines.get(k + 1).is_some_and(|(_, u)| {
+            let u = u.trim();
+            column_of(lines[k + 1].1) <= 3 && !u.is_empty() && (u.chars().all(|c| c == '=') || u.chars().all(|c| c == '-'))
+        });
+        if underlined && t.trim() == "Local changes" {
+            found.push((0, start + l.len()));
+        }
+    }
+    match found.as_slice() {
+        [(2, end)] => Ok(*end),
+        [] => Err("the record has no `Local changes` heading".into()),
+        [_] => Err("the record's `Local changes` heading is not an ATX heading of level 2".into()),
+        _ => Err(format!("the record has {} `Local changes` headings, one the section", found.len())),
+    }
+}
+
 /// The rows of every table of the record's `## Local changes` section (to the next heading of level 1
 /// or 2), each by its first cell, as GitHub's Markdown (GFM 0.29) reads a table: a header row and a
 /// delimiter row of as many cells (each `:?-+:?`) open it, the header a line a paragraph holds but
@@ -2002,7 +2125,8 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
 /// ([`block_start`]). Cells split at each `|` no backslash escapes, one leading and one trailing
 /// pipe passed over. Fenced code and HTML blocks are none of it.
 fn change_rows(record: &str) -> Vec<String> {
-    let section = record.split("## Local changes").nth(1).unwrap();
+    let at = local_changes_heading(record).unwrap_or_else(|e| panic!("{e}"));
+    let section = &record[at..];
     let lines: Vec<&str> = section.lines().collect();
     let delimiter = |l: &str| {
         column_of(l) <= 3 && {
@@ -2366,6 +2490,17 @@ fn closes_fence(line: &str, ch: char, n: usize) -> bool {
 
 #[test]
 fn the_record_s_rows_are_read_as_markdown_reads_a_table() {
+    // the round at 36bd57e3: the heading read as GFM reads it, one and only one
+    let decoy = "# Fork\n##  Local changes\n| # | Change |\n|---|---|\n| 35 | no commit names it |\n## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n";
+    assert!(local_changes_heading(decoy).unwrap_err().contains("2 `Local changes` headings"));
+    for one in ["##  Local changes\n", "## Local changes  \n", "##\tLocal changes\n", "   ## Local changes ##\n"] {
+        let record = format!("{one}| # | Change |\n|---|---|\n| 7 | a |\n");
+        assert_eq!(change_rows(&record), ["7"], "{one:?}");
+    }
+    assert!(local_changes_heading("## Local changes\nLocal changes\n---\n").is_err());
+    assert!(local_changes_heading("Local changes\n---\n| 1 | a |\n").is_err());
+    assert!(local_changes_heading("### Local changes\n").is_err());
+    assert!(local_changes_heading("## Local changesx\n").is_err());
     let record = "# Fork\n## Local changes\n| # | Change | Where | Upstream |\n|---|---|---|---|\n| 1 | a | x | none |\n|28| **no space** | x | none |\n   | 29 | indented | x | none |\n    | 30 | code, not a row |\n| :-- | --- |\n## After\n| 31 | another table |\n";
     assert_eq!(change_rows(record), ["1", "28", "29"]);
     // a row with no leading pipe is one; a row in an HTML comment after the table is none
