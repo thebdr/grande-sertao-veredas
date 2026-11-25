@@ -2810,3 +2810,31 @@ window sits behind a cargo feature, off by default.", "Built by default", (b), a
 recommendation: the window is built by default, so every machine that builds the suite carries Qt
 6.12, KDDockWidgets, Spix and AnyRPC, GitHub's run among them. The switch waits until every member's
 build on the development machine finds them.
+
+---
+
+## Q320 - How a person confirms a run's gated writes, and a switch a run finds armed
+
+**Raised** 2026-11-25, by the comissionador session, from the architect's ruling on Q314 (b): the
+run arms portal's switch at its start once the person has confirmed the list of the test's gated
+writes, and disarms it at its end. Two things the ruling leaves open:
+
+1. **How the person confirms, with no screen** (Oficina's designer is not built). Options:
+   - (a) A fingerprint of the list: the executable, refusing a run whose switch is off, prints the
+     test's gated writes as written and their fingerprint (16 hex digits); the person runs again
+     with `--arm <fingerprint>`, which confirms that list and no other: an edited test asks again.
+     Oficina's screen later shows the list and confirms it the same way, through the library.
+   - (b) An interactive prompt in the executable (`arm the switch for these 3 writes? [y/N]`).
+     Natural on a laptop, but nothing can confirm it in a pipeline.
+   - (c) A flag with no list (`--arm`): the person confirms what they have not been shown.
+2. **A switch the run finds armed** (another user of the same session armed it). Options:
+   - (a) Left as found: the run uses it and never disarms a switch it did not arm.
+   - (b) Disarmed at the run's end anyway, as option (c) of Q314 read: surprises the other user.
+
+The assistant recommends 1 (a) and 2 (a): a fingerprint binds the confirmation to the list and works
+headless, and leaving a switch as found changes nothing for anyone else.
+
+**Taken meanwhile**: 1 (a) and 2 (a). C-202 and C-205 state them, the tests hold them.
+
+**Reversible?** Yes: the fingerprint is one function (`run::writes_fingerprint`) and one option
+(`--arm`); a prompt or another form of confirmation would call the same `RunOptions::confirming`.
