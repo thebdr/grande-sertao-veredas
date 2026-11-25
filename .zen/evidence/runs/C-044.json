@@ -10,15 +10,15 @@
     "serve"
   ],
   "exitCode": 0,
-  "outputSha": "c3b7dc2f32975c7a2495b7c96f4a198ebb5ad6d655420f2a0841dfb12f2e827c",
-  "outputTail": "\nrunning 4 tests\ntest the_live_stream_says_hello_then_carries_every_numeric_sample ... ok\ntest the_write_surface_is_refused_by_default_on_the_wire_and_whitelisted_when_armed ... ok\ntest the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session ... ok\ntest the_write_surface_s_other_answers_the_budget_the_lag_and_the_end ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.47s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.20s\n     Running tests/serve.rs (target/debug/build/veredas-portal/0e8543dba93deb4b/out/serve-0e8543dba93deb4b)",
-  "ranAt": "2026-11-22T20:10:02.732Z",
-  "headCommit": "fa270c6291c65d15926caff6a433efc1ce48020a",
+  "outputSha": "747bcc599b89f9d4f2fe682dfa7b1775a290b49865b3463e484902fa20b79741",
+  "outputTail": "\nrunning 5 tests\ntest the_live_stream_says_hello_then_carries_every_numeric_sample ... ok\ntest the_write_surface_is_refused_by_default_on_the_wire_and_whitelisted_when_armed ... ok\ntest the_snapshot_the_listing_the_windows_and_the_tables_over_a_running_session ... ok\ntest the_snapshot_says_a_log_s_history_not_read ... ok\ntest the_write_surface_s_other_answers_the_budget_the_lag_and_the_end ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.52s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running tests/serve.rs (target/debug/build/veredas-portal/cb83b7c6d05eaa57/out/serve-cb83b7c6d05eaa57)",
+  "ranAt": "2026-11-25T03:15:37.009Z",
+  "headCommit": "e7a0405ad4cc187aa5ee109ed68da907b159e131",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/serve.rs",
       "file": "crates/veredas-portal/tests/serve.rs",
-      "fileSha": "9a959a59f23eb9c3ac4c5c76c1aa86f1feec952048c60fd5424a7273fcb1ddae"
+      "fileSha": "a28d42f0d43c366c1d152727671066eb9d85b3da2fb35fe8707ebd385950b2cc"
     }
   ]
 }
