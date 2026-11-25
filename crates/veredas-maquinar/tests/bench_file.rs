@@ -924,7 +924,9 @@ fn every_invalid_bench_is_refused_with_its_place_named_before_anything_starts() 
     let q = free_port();
     let spec = load(&format!("{h}[[profinet]]\nname = \"d\"\ninterface = \"nowhere0\"\n\n[[ethernetip]]\nname = \"x\"\nport = {q}\nio_port = 0\n"), &dir).unwrap();
     let err = start_err(spec);
-    assert!(err.starts_with("profinet `d`: the interface: "), "{err}");
+    // Off Linux a PROFINET device refuses to start, named the same way.
+    let want = if cfg!(target_os = "linux") { "profinet `d`: the interface: " } else { "profinet `d`: a PROFINET device runs on Linux only" };
+    assert!(err.starts_with(want), "{err}");
     assert!(std::net::TcpListener::bind(("127.0.0.1", q)).is_ok(), "the adapter before it stopped");
     // Servers start before channels: a channel that would dial the test's own socket never
     // dials when a server before it fails.
@@ -2113,5 +2115,194 @@ mod round_4 {
         assert_ne!(eight, seven, "the bench's seed over the rules file's");
         let (clock1, clock2) = (first_weights("rules-e", None, false), first_weights("rules-f", None, false));
         assert_ne!(clock1, clock2, "the clock where neither has one");
+    }
+}
+
+/// C-033's fifth refute round: the critic's probes (`~/.cache/veredas/critic-c033-r5/probes`), kept
+/// as pins: a path not UTF-8, a stdout closed or no longer read, one line per part whatever a value
+/// holds, `-` alone a file, a segment and the first of a kind named, `out_dir` made only for an
+/// emitter, and the reference's statements quoted beside their pins.
+mod round_5 {
+    use super::*;
+    use std::io::Read;
+
+    const EXE: &str = env!("CARGO_BIN_EXE_veredas-maquinar");
+
+    #[cfg(unix)]
+    #[test]
+    fn a_bench_path_that_is_not_utf8_is_read_checked_and_run() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = scratch("not-utf8");
+        let path = dir.join(std::ffi::OsStr::from_bytes(b"b\xe9nch.toml"));
+        std::fs::write(&path, format!("{}[[modbus]]\nname = \"m\"\nport = 0\n", header())).unwrap();
+        let check = Command::new(EXE).arg(&path).arg("--check").output().unwrap();
+        let run = Command::new(EXE).arg(&path).stdin(Stdio::null()).output().unwrap();
+        let version = Command::new(EXE).arg("--version").arg(&path).output().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((check.status.code(), run.status.code(), version.status.code()), (Some(0), Some(0), Some(0)), "{}", String::from_utf8_lossy(&run.stderr));
+        assert!(String::from_utf8_lossy(&check.stdout).lines().nth(1).is_some_and(|l| l == "  modbus `m`: 127.0.0.1:0 answering every unit with 0 point(s)"));
+        assert_eq!(String::from_utf8_lossy(&run.stdout).lines().last(), Some("stopped"));
+    }
+
+    /// The executable on a bench file of one Modbus server, its stdout piped.
+    fn spawn_one(dir: &Path) -> std::process::Child {
+        let path = dir.join("bench.toml");
+        std::fs::write(&path, format!("{}[[modbus]]\nname = \"drive\"\nport = 0\n", header())).unwrap();
+        Command::new(EXE).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()
+    }
+
+    #[test]
+    fn a_stdout_closed_after_the_start_s_lines_changes_neither_the_run_nor_its_exit() {
+        let dir = scratch("stdout-closed");
+        let mut child = spawn_one(&dir);
+        let mut reader = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        while !line.starts_with("modbus drive: ") {
+            line.clear();
+            assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+        }
+        let port: u16 = line.trim_end().strip_prefix("modbus drive: 127.0.0.1:").unwrap().split(' ').next().unwrap().parse().unwrap();
+        drop(reader);
+        // A status line or two into the closed pipe.
+        std::thread::sleep(Duration::from_millis(1500));
+        child.stdin.take().unwrap().write_all(b"stop\n").unwrap();
+        let mut stderr = String::new();
+        child.stderr.take().unwrap().read_to_string(&mut stderr).unwrap();
+        let exit = child.wait().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((exit.code(), stderr.as_str()), (Some(0), ""), "stopped by `stop`");
+        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(), "the port free");
+    }
+
+    #[test]
+    fn a_stdout_closed_from_the_start_changes_neither_a_run_nor_a_check() {
+        let dir = scratch("stdout-closed-early");
+        let path = dir.join("bench.toml");
+        std::fs::write(&path, format!("{}[[modbus]]\nname = \"drive\"\nport = 0\n", header())).unwrap();
+        let (r, w) = std::io::pipe().unwrap();
+        drop(r);
+        let mut child = Command::new(EXE).arg(&path).stdin(Stdio::piped()).stdout(w).stderr(Stdio::piped()).spawn().unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(child.try_wait().unwrap().is_none(), "the run ended with nobody to read it");
+        child.stdin.take().unwrap().write_all(b"stop\n").unwrap();
+        let exit = child.wait().unwrap();
+        let (r, w) = std::io::pipe().unwrap();
+        drop(r);
+        let check = Command::new(EXE).arg(&path).arg("--check").stdout(w).stderr(Stdio::piped()).output().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((exit.code(), check.status.code()), (Some(0), Some(0)));
+    }
+
+    /// On the machine's lock: a stdout nobody reads, full, holds neither `stop` nor the end.
+    #[test]
+    fn a_stdout_nobody_reads_holds_neither_a_stop_nor_the_end() {
+        let dir = scratch("stdout-full");
+        let path = dir.join("bench.toml");
+        let mut text = header().to_string();
+        for i in 0..150 {
+            text.push_str(&format!("[[modbus]]\nname = \"m{i:03}\"\nport = 0\n\n"));
+        }
+        std::fs::write(&path, text).unwrap();
+        let mut child = Command::new(EXE).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        // 150 status lines of some 95 bytes a second fill a 64 KiB pipe in under 5 s.
+        std::thread::sleep(Duration::from_secs(7));
+        child.stdin.take().unwrap().write_all(b"stop\n").unwrap();
+        let asked = Instant::now();
+        let mut ended = None;
+        while asked.elapsed() < Duration::from_secs(6) {
+            if let Some(s) = child.try_wait().unwrap() {
+                ended = Some(s);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if ended.is_none() {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(ended.map(|s| s.code()), Some(Some(0)), "the run still held by its full stdout {:?} after `stop`", asked.elapsed());
+    }
+
+    /// No line of `lines` breaks: a control character or a line separator is written escaped.
+    fn one_each(lines: &[String]) -> bool {
+        lines.iter().all(|l| !l.chars().any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}'))
+    }
+
+    #[test]
+    fn a_value_holding_a_line_break_keeps_its_part_to_one_line() {
+        let dir = scratch("one-line");
+        std::fs::write(dir.join("channel.toml"), &blocks("channel-schema.md")[0]).unwrap();
+        std::fs::write(dir.join("catalog.toml"), &blocks("controller-schema.md")[0]).unwrap();
+        let port = free_port();
+        let text = format!(
+            "{}[[channel]]\nname = \"ear\"\nrole = \"listen\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n\n[[channel]]\nname = \"mouth\"\nrole = \"connect\"\nhost = \"127.0.0.1\\n\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n",
+            header()
+        );
+        let spec = load(&text, &dir).unwrap();
+        let plan = spec.plan();
+        assert!(plan.iter().any(|l| l.contains("127.0.0.1\\n")), "the newline written escaped: {plan:?}");
+        let bench = Bench::start(spec).unwrap();
+        assert!(wait(Duration::from_secs(5), || bench.lines().iter().any(|l| l.starts_with("channel mouth: connected"))));
+        let lines = bench.lines();
+        bench.stop();
+        assert!(one_each(&plan) && one_each(&lines), "{plan:?} {lines:?}");
+        // A folder with a newline, a name with a line separator: --check prints a line per part.
+        let path = dir.join("bench.toml");
+        std::fs::write(&path, format!("{}out_dir = \"lo\\ngs\"\n[[emitter]]\nname = \"e\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 100\nfile = \"e.log\"\n\n[[modbus]]\nname = \"a\\u2028b\"\nport = 0\n", header())).unwrap();
+        let out = Command::new(EXE).arg(&path).arg("--check").output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((out.status.code(), stdout.lines().count()), (Some(0), 3), "{stdout}");
+        assert!(one_each(&stdout.lines().map(String::from).collect::<Vec<_>>()), "{stdout}");
+    }
+
+    #[test]
+    fn a_dash_alone_is_a_file_s_name() {
+        let dir = scratch("dash");
+        std::fs::write(dir.join("-"), format!("{}[[modbus]]\nname = \"m\"\nport = 0\n", header())).unwrap();
+        let out = Command::new(EXE).current_dir(&dir).arg("-").arg("--check").output().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stdout).lines().next().map(String::from)), (Some(0), Some("-: 1 part(s)".to_string())));
+    }
+
+    #[test]
+    fn a_segment_and_the_first_of_a_kind_that_cannot_start_are_named() {
+        let dir = scratch("named");
+        let spec = load(&format!("{}[[ethercat]]\nname = \"seg\"\ninterface = \"nowhere1\"\ndevices = [ {{ name = \"t\" }} ]\n", header()), &dir).unwrap();
+        let err = start_err(spec);
+        assert!(err.starts_with("ethercat `seg`: "), "{err}");
+        // Two OPC UA servers on taken ports: the first in the file starts first and is named.
+        let (s1, s2) = (std::net::TcpListener::bind("127.0.0.1:0").unwrap(), std::net::TcpListener::bind("127.0.0.1:0").unwrap());
+        let (t1, t2) = (s1.local_addr().unwrap().port(), s2.local_addr().unwrap().port());
+        let spec = load(&format!("{}[[opc]]\nname = \"first\"\nport = {t1}\n\n[[opc]]\nname = \"second\"\nport = {t2}\n", header()), &dir).unwrap();
+        let err = start_err(spec);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(err.starts_with("opc `first`: "), "{err}");
+    }
+
+    #[test]
+    fn out_dir_is_made_only_for_an_emitter_as_the_reference_says() {
+        let prose = doc_prose();
+        assert!(prose.contains("`out_dir` (`\".\"`): where the emitters write, created when there is an emitter."));
+        let dir = scratch("out-dir");
+        let bench = Bench::start(load(&format!("{}out_dir = \"made\"\n[[modbus]]\nname = \"m\"\nport = 0\n", header()), &dir).unwrap()).unwrap();
+        bench.stop();
+        let made = dir.join("made").exists();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!made, "an out_dir made with no emitter");
+    }
+
+    #[test]
+    fn the_seeds_statements_are_the_ones_the_seed_pins_hold() {
+        let prose = doc_prose();
+        // Beside round 4's seed pins: an emitter's own seed at its place, the bench's plus the
+        // index, the clock; what the bench gives an OPC UA server and a PROFINET device.
+        assert!(prose.contains("a fixed seed replays the same values at the emitter's place among the file's emitters (its index picks the draw's stream); absent, the bench's seed plus the emitter's index, else the clock."));
+        assert!(prose.contains("The bench gives an OPC UA server, and a PROFINET device without a `seed` of its own, none: each takes the clock."));
+        let dir = scratch("seeds");
+        let spec = load(&format!("{}seed = 7\n[[profinet]]\nname = \"d\"\ninterface = \"b0\"\n", header()), &dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(spec.profinet[0].1.seed, None, "the bench gives an unseeded PROFINET device no seed");
     }
 }

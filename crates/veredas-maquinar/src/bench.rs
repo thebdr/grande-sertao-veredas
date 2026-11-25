@@ -405,6 +405,15 @@ pub struct ChannelPart {
     pub messages: Vec<CyclicMessage>,
 }
 
+/// A part's line kept to one line whatever its values hold: a control character or a line or
+/// paragraph separator (a host, a bind, a folder, an error's text) written escaped, as `\n`.
+fn one_line(line: String) -> String {
+    if !line.chars().any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}') {
+        return line;
+    }
+    line.chars().map(|c| if c.is_control() || c == '\u{2028}' || c == '\u{2029}' { c.escape_default().to_string() } else { c.to_string() }).collect()
+}
+
 impl BenchSpec {
     /// One line per part: what `--check` prints.
     pub fn plan(&self) -> Vec<String> {
@@ -469,7 +478,7 @@ impl BenchSpec {
             };
             out.push(format!("channel `{}`: {role}, {} message(s) of its own, {controller}", c.name, c.messages.len()));
         }
-        out
+        out.into_iter().map(one_line).collect()
     }
 }
 
@@ -880,6 +889,7 @@ impl Bench {
                     )
                 }
             })
+            .map(one_line)
             .collect()
     }
 

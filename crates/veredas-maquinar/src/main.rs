@@ -7,37 +7,89 @@
 //!
 //! Exit codes: 0 when the bench ran and stopped, the check passed or the version was printed; 2 when
 //! the file or a referenced file is refused, or a part could not start, with the reason on stderr;
-//! 1 on a usage error.
+//! 1 on a usage error. A stdout closed or no longer read changes none of them.
 
+use std::ffi::OsString;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::time::Duration;
+
+const USAGE: &str = "usage: veredas-maquinar <bench.toml> [--check] | --version";
+
+/// Prints a line, a stdout closed or failing ignored: what the bench does does not hang on it.
+fn say(line: &str) {
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{line}");
+    let _ = out.flush();
+}
+
+/// A run's lines go out through a thread of their own, so a consumer that has stopped reading never
+/// holds a stop, a signal or the end of the run; its write's failure is ignored.
+struct Out {
+    lines: SyncSender<String>,
+    done: Receiver<()>,
+}
+
+impl Out {
+    fn start() -> Out {
+        // Lines enough for some seconds of a large bench's status: a status line that finds the
+        // writer this far behind is dropped (a second later another says the same).
+        let (lines, rx) = mpsc::sync_channel::<String>(1024);
+        let (done_tx, done) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in rx {
+                say(&line);
+            }
+            let _ = done_tx.send(());
+        });
+        Out { lines, done }
+    }
+
+    /// A line that must go out: the start's and the end's.
+    fn send(&self, line: String) {
+        let _ = self.lines.send(line);
+    }
+
+    /// A status line, dropped while the writer is this far behind.
+    fn offer(&self, line: String) -> bool {
+        !matches!(self.lines.try_send(line), Err(TrySendError::Full(_)))
+    }
+
+    /// Every line handed over written, or a few seconds past: a reader that never reads again does
+    /// not keep the process.
+    fn finish(self) {
+        drop(self.lines);
+        let _ = self.done.recv_timeout(Duration::from_secs(2));
+    }
+}
 
 use veredas_maquinar::bench::{self, Bench};
 
 fn main() {
     // The host's timer held fine for the whole run: a 20 ms tick on every platform (Q13).
     let _timer = veredas_maquinar::timer::FineTimer::hold();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Read as the system gives them: a path need not be UTF-8.
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     if args.iter().any(|a| a == "--version") {
-        println!("veredas-maquinar {}", env!("CARGO_PKG_VERSION"));
+        say(&format!("veredas-maquinar {}", env!("CARGO_PKG_VERSION")));
         return;
     }
     let mut check = false;
     let mut file: Option<PathBuf> = None;
     for a in &args {
-        match a.as_str() {
-            "--check" => check = true,
+        let bytes = a.as_encoded_bytes();
+        if a == "--check" {
+            check = true;
+        } else if bytes.first() == Some(&b'-') && bytes != b"-" {
             // Any argument beginning with a dash is an option (`-` alone is a file's name).
-            other if other.starts_with('-') && other != "-" => {
-                eprintln!("unknown option `{other}`\nusage: veredas-maquinar <bench.toml> [--check] | --version");
-                std::process::exit(1);
-            }
-            other if file.is_some() => {
-                eprintln!("a second bench file `{other}`\nusage: veredas-maquinar <bench.toml> [--check] | --version");
-                std::process::exit(1);
-            }
-            other => file = Some(PathBuf::from(other)),
+            eprintln!("unknown option `{}`\n{USAGE}", a.to_string_lossy());
+            std::process::exit(1);
+        } else if file.is_some() {
+            eprintln!("a second bench file `{}`\n{USAGE}", a.to_string_lossy());
+            std::process::exit(1);
+        } else {
+            file = Some(PathBuf::from(a));
         }
     }
     // SIGTERM and SIGINT are taken before the bench starts, so one that comes early ends the run as
@@ -45,7 +97,7 @@ fn main() {
     #[cfg(unix)]
     let signals = (!check).then(stop_signals).flatten();
     let Some(file) = file else {
-        eprintln!("usage: veredas-maquinar <bench.toml> [--check] | --version");
+        eprintln!("{USAGE}");
         std::process::exit(1);
     };
     let spec = match bench::load_file(&file) {
@@ -57,9 +109,9 @@ fn main() {
     };
     let plan = spec.plan();
     if check {
-        println!("{}: {} part(s)", file.display(), plan.len());
+        say(&format!("{}: {} part(s)", file.display(), plan.len()));
         for line in plan {
-            println!("  {line}");
+            say(&format!("  {line}"));
         }
         return;
     }
@@ -70,14 +122,15 @@ fn main() {
             std::process::exit(2);
         }
     };
-    println!("{}: {} part(s) running; close stdin or end the process to stop", file.display(), plan.len());
+    let out = Out::start();
+    out.send(format!("{}: {} part(s) running; close stdin or end the process to stop", file.display(), plan.len()));
     for line in &plan {
-        println!("  {line}");
+        out.send(format!("  {line}"));
     }
     // Every part's status at once, with the addresses the servers got: a consumer that started the
     // bench on port 0 reads its port here rather than a second later.
     for line in bench.lines() {
-        println!("{line}");
+        out.send(line);
     }
     // Stdin closing is the stop signal: a line "stop" too, and on Unix a SIGTERM or a SIGINT.
     let (tx, rx) = std::sync::mpsc::channel::<()>();
@@ -105,18 +158,19 @@ fn main() {
         }
         let _ = tx.send(());
     });
-    let mut stdout = std::io::stdout();
     loop {
         if rx.recv_timeout(Duration::from_secs(1)).is_ok() {
             break;
         }
         for line in bench.lines() {
-            let _ = writeln!(stdout, "{line}");
+            if !out.offer(line) {
+                break;
+            }
         }
-        let _ = stdout.flush();
     }
     bench.stop();
-    println!("stopped");
+    out.send("stopped".into());
+    out.finish();
 }
 
 /// A thread that waits for SIGTERM or SIGINT, its handlers installed when this returns; the

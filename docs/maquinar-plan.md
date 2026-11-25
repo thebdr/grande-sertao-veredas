@@ -459,12 +459,13 @@ Recorded as the port meets them.
   | test(round_4::an_identify_read_before_a_mute_is_not_taken_after_it)
   | test(round_4::the_runner_keeps_its_scene_s_own_step)
   | test(round_4::a_shorter_ttl_heard_again_is_the_one_kept)
-  | test(round_4::the_last_heard_neighbour_ages_at_its_own_ttl)`
+  | test(round_4::the_last_heard_neighbour_ages_at_its_own_ttl)
+  | test(round_5::a_stdout_nobody_reads_holds_neither_a_stop_nor_the_end)`
   (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23; the adapter's
   multiplier at 3 and its restart within a second; the PROFINET neighbour aged out by its TTL, and
   kept to its last frame's when heard again, a shorter one and another's included; the Modbus server's read-ahead filled during a delay
   and its refusal at the limit within 300 ms; the
-  executable's status lines a second apart; the Modbus server's delays side by side and a close
+  executable's status lines a second apart, and its stop with a stdout nobody reads; the Modbus server's delays side by side and a close
   behind many requests seen at once; the PROFINET device's strict mute, whose bursts meet the mute
   as the load lets them, and an Identify read before a mute not taken after it; `fisica`'s late count against the steps' own starts, and its runner at a 10 and a 20 ms step).
   Free, by that rule: the bench file, the channels, the controller's rules, the component, the
