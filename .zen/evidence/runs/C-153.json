@@ -7,10 +7,10 @@
     "cargo test -p orcl-interp --test ops --test machine --test load --test core_ops --test blocks --test alloc --test root && cargo clippy -p orcl-interp --all-targets -- -D warnings"
   ],
   "exitCode": 0,
-  "outputSha": "beb30c64781af6e7b859d4b99e1434b1f1fb46d09765b58c649c56aec0022b93",
-  "outputTail": "\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s\n\n   Compiling orcl-interp v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/orcl-interp)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s\n     Running tests/alloc.rs (target/debug/build/orcl-interp/54c2726b8b400b83/out/alloc-54c2726b8b400b83)\n     Running tests/blocks.rs (target/debug/build/orcl-interp/336f86939313670b/out/blocks-336f86939313670b)\n     Running tests/core_ops.rs (target/debug/build/orcl-interp/a32ef259cdf8c8ed/out/core_ops-a32ef259cdf8c8ed)\n     Running tests/load.rs (target/debug/build/orcl-interp/06768c6afd5c0222/out/load-06768c6afd5c0222)\n     Running tests/machine.rs (target/debug/build/orcl-interp/b39edabbbab6ac4f/out/machine-b39edabbbab6ac4f)\n     Running tests/ops.rs (target/debug/build/orcl-interp/8d58a971ea52ffe1/out/ops-8d58a971ea52ffe1)\n     Running tests/root.rs (target/debug/build/orcl-interp/59358e83d1fe7718/out/root-59358e83d1fe7718)\n    Checking orcl-std v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/orcl-std)\n    Checking orcl-interp v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/controlador-4be04a/crates/orcl-interp)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.08s",
-  "ranAt": "2026-11-25T08:05:46.873Z",
-  "headCommit": "0431d5ac1b190521269ddb75481f19e03a0de377",
+  "outputSha": "f320528984bbe2ad028c6c2f897a03776f2bc3a9a26cfde6331b63f270d81042",
+  "outputTail": "test no_source_holds_a_panic_macro_the_denied_lints_miss ... ok\ntest no_source_reaches_std_prints_or_reads_a_clock ... ok\ntest the_interpreter_depends_on_nothing_but_for_its_tests ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.37s\n     Running tests/alloc.rs (target/debug/build/orcl-interp/54c2726b8b400b83/out/alloc-54c2726b8b400b83)\n     Running tests/blocks.rs (target/debug/build/orcl-interp/336f86939313670b/out/blocks-336f86939313670b)\n     Running tests/core_ops.rs (target/debug/build/orcl-interp/a32ef259cdf8c8ed/out/core_ops-a32ef259cdf8c8ed)\n     Running tests/load.rs (target/debug/build/orcl-interp/06768c6afd5c0222/out/load-06768c6afd5c0222)\n     Running tests/machine.rs (target/debug/build/orcl-interp/b39edabbbab6ac4f/out/machine-b39edabbbab6ac4f)\n     Running tests/ops.rs (target/debug/build/orcl-interp/8d58a971ea52ffe1/out/ops-8d58a971ea52ffe1)\n     Running tests/root.rs (target/debug/build/orcl-interp/59358e83d1fe7718/out/root-59358e83d1fe7718)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s",
+  "ranAt": "2026-11-25T08:27:24.856Z",
+  "headCommit": "7986f78238a63344a995aa29f20ab1d1e2f29a88",
   "tests": [
     {
       "name": "crates/orcl-interp/tests/ops.rs",
@@ -25,7 +25,7 @@
     {
       "name": "crates/orcl-interp/tests/load.rs",
       "file": "crates/orcl-interp/tests/load.rs",
-      "fileSha": "3065fa24ea2926e95510c7127c5bf77aad6a56978e25e1c1f8163ef2c8a1e016"
+      "fileSha": "13a5f30f69c1c6385326a8ccc585558a6b637b8578e9e42d63ad74e42e2af862"
     },
     {
       "name": "crates/orcl-interp/tests/core_ops.rs",
@@ -45,7 +45,7 @@
     {
       "name": "crates/orcl-interp/tests/root.rs",
       "file": "crates/orcl-interp/tests/root.rs",
-      "fileSha": "2e97e96185dea956429d46919acdbdc1b2fa3fcf80368c232cdac2001e67dd22"
+      "fileSha": "a256c55c2333e81b8ea92d1158f0aa9bf01b0b7d06de865c6473f4b40042060c"
     },
     {
       "name": "crates/orcl-interp/tests/common/mod.rs",
