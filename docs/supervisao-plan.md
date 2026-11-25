@@ -255,6 +255,10 @@ The architect's decisions of 13 to 15 November 2026 that touch supervisão
   expression against the rule of a mark and a word; the string colour of the syntax palette) and
   43 (contrast, a light theme), all under Q31; whether "good" is a new state class or the colour
   of the normal one (Q45).
+- **A linked CSV read both ways** (`docs/questions.md` Q131, ruled 2026-11-25, "Show both, operator
+  picks"): a file that fits two dialects comes from portal with both readings and their first rows,
+  and a page shows them for the operator to pick, the pick written into the view. Whether that page
+  is supervisão's or Oficina's waits on the shape of portal's call.
 
 ## Traps
 Recorded as the port meets them. Carried from Veredas 1's supervision app, where they apply here:
