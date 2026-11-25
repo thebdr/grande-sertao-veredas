@@ -14,15 +14,15 @@
     "listen"
   ],
   "exitCode": 0,
-  "outputSha": "d0e3b9fdb0321f07c5b7bb38a11bf345e1e00a3a0f3dea376c3f878064a403f0",
-  "outputTail": "test this_machine_s_own_frames_and_two_devices_of_one_name_in_the_snapshot ... ok\ntest stopping_joins_every_worker_and_nothing_is_heard_after ... ok\ntest what_is_about_this_machine_is_left_out_and_counted ... ok\ntest every_frame_is_the_interface_s_that_heard_it_and_its_account_says_so ... ok\ntest the_kept_frames_are_bounded_and_damage_is_kept_with_its_frame ... ok\ntest an_ended_worker_takes_nothing_more_and_says_what_it_never_sent ... ok\ntest sending_is_paced_bounded_and_only_where_it_listens ... ok\ntest the_defaults_and_the_pace_are_what_the_listener_promises ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.01s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running tests/listen.rs (target/debug/build/veredas-aranha/fe88abb95adfac60/out/listen-fe88abb95adfac60)",
-  "ranAt": "2026-11-24T23:08:40.712Z",
-  "headCommit": "76e5fea74e4c2aad880b26127e2e60dc1965c0e5",
+  "outputSha": "9fe014d4291eb5bc082a1fbac0c4c358002b7803288275d80b141468937233cc",
+  "outputTail": "test a_listener_keeps_every_frame_it_hears_and_fuses_what_it_says ... ok\ntest this_machine_s_own_frames_and_two_devices_of_one_name_in_the_snapshot ... ok\ntest stopping_joins_every_worker_and_nothing_is_heard_after ... ok\ntest what_is_about_this_machine_is_left_out_and_counted ... ok\ntest the_kept_frames_are_bounded_and_damage_is_kept_with_its_frame ... ok\ntest every_frame_is_the_interface_s_that_heard_it_and_its_account_says_so ... ok\ntest a_worker_that_panics_ends_with_its_reason_and_a_wire_name_may_hold_a_nul ... ok\ntest an_ended_worker_takes_nothing_more_and_says_what_it_never_sent ... ok\ntest sending_is_paced_bounded_and_only_where_it_listens ... ok\ntest the_defaults_and_the_pace_are_what_the_listener_promises ... ok\n\ntest result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.49s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running tests/listen.rs (target/debug/build/veredas-aranha/fe88abb95adfac60/out/listen-fe88abb95adfac60)",
+  "ranAt": "2026-11-25T01:20:31.704Z",
+  "headCommit": "1a648ffc35fb8a70c2e2730a5236ec224fbbca58",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/listen.rs",
       "file": "crates/veredas-aranha/tests/listen.rs",
-      "fileSha": "4416b213f9ca5c9383f77c2c20f9e0226494638a100c210434a555a131b24436"
+      "fileSha": "f3afd218411e0989f9662c3cb17027698da87fafd76668599e68c4ab08176c1a"
     }
   ]
 }
