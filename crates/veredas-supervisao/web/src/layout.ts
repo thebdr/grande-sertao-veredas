@@ -89,72 +89,108 @@ const GEOMETRY = "path, rect, circle, ellipse, line, polyline, polygon";
 /// properties that shape what a stroke or a fill covers.
 const CARRIED = ["stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dashoffset", "fill-rule"];
 
-/// An open run's two ends, each with the way out of the run there, in the shape's own coordinates:
-/// a line's, a polyline's, and each subpath of a path not closed back on its start (a path with an
-/// arc read as one run, from its first point to its last unless it closes); none for a closed shape.
-function openEnds(g: SVGGeometryElement): [Pt, Pt][] {
-  // The way out of an end taken from the first point off it (a curve's handle drawn back onto its
-  // node, or a point written twice, gives none of its own).
-  const ends = (pts: Pt[]): [Pt, Pt][] => {
-    if (pts.length < 2) return [];
-    const [a, z] = [pts[0], pts[pts.length - 1]];
-    const b = pts.find((p) => p.x !== a.x || p.y !== a.y);
-    const y = [...pts].reverse().find((p) => p.x !== z.x || p.y !== z.y);
-    return b && y ? [[a, { x: a.x - b.x, y: a.y - b.y }], [z, { x: z.x - y.x, y: z.y - y.y }]] : [];
-  };
-  if (g instanceof SVGLineElement) return ends([{ x: g.x1.baseVal.value, y: g.y1.baseVal.value }, { x: g.x2.baseVal.value, y: g.y2.baseVal.value }]);
-  if (g instanceof SVGPolylineElement) {
+/// A shape's outline as the runs of points that draw it, in its own coordinates, each with whether
+/// it closes and the way out at each of its ends: a path's subpaths (its curves and arcs followed,
+/// closed by a `Z` alone, the ways out its own tangents), a polyline's points, a polygon's (closed),
+/// a line's two ends, a rect's four corners; a circle, an ellipse or a rounded rect followed by the
+/// browser (`getPointAtLength`, `n` points, one closed run).
+type Outline = { pts: Pt[]; closed: boolean; outs: [Pt, Pt] | null };
+function outline(g: SVGGeometryElement, n: number): Outline[] {
+  const plain = (pts: Pt[], closed: boolean): Outline => ({ pts, closed, outs: null });
+  if (g instanceof SVGLineElement) return [plain([{ x: g.x1.baseVal.value, y: g.y1.baseVal.value }, { x: g.x2.baseVal.value, y: g.y2.baseVal.value }], false)];
+  if (g instanceof SVGPolylineElement || g instanceof SVGPolygonElement) {
     const pts: Pt[] = [];
     for (let i = 0; i < g.points.numberOfItems; i++) pts.push(g.points.getItem(i));
-    return ends(pts);
+    return [plain(pts, g instanceof SVGPolygonElement)];
+  }
+  if (g instanceof SVGRectElement && !g.rx.baseVal.value && !g.ry.baseVal.value) {
+    const [x, y, w, h] = [g.x.baseVal.value, g.y.baseVal.value, g.width.baseVal.value, g.height.baseVal.value];
+    return [plain([{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }], true)];
   }
   if (g instanceof SVGPathElement) {
-    const d = g.getAttribute("d") ?? "";
-    const subs = subpaths(d);
-    if (subs) return subs.filter((s) => !s.closed).flatMap((s) => ends(s.drawn));
-    if (/[zZ]/.test(d)) return [];
-    const len = g.getTotalLength();
-    const step = Math.min(1, len / 2);
-    return ends([g.getPointAtLength(0), g.getPointAtLength(step), g.getPointAtLength(len - step), g.getPointAtLength(len)]);
+    const subs = subpaths(g.getAttribute("d") ?? "");
+    if (!subs) return [];
+    return subs.map((s) => {
+      // Its ways out from the points that make it: a curve's own tangent at each end (its handle,
+      // or the next one where the handle lies on its node).
+      const off = (pts: Pt[], e: Pt) => pts.find((p) => p.x !== e.x || p.y !== e.y);
+      const [a, z] = [s.pts[0], s.pts[s.pts.length - 1]];
+      const b = off(s.pts, a), y = off([...s.pts].reverse(), z);
+      return { pts: s.drawn, closed: s.closed, outs: b && y ? [{ x: a.x - b.x, y: a.y - b.y }, { x: z.x - y.x, y: z.y - y.y }] : null };
+    });
   }
-  return [];
+  const len = g.getTotalLength();
+  const pts: Pt[] = [];
+  for (let i = 0; i < n; i++) pts.push(g.getPointAtLength((len * i) / n));
+  return [plain(pts, true)];
 }
 
-/// What a shape paints, as points in the frame `m` carries it to: a point every quarter unit of that
-/// frame or so along its outline (`getPointAtLength`), each spread by half the stroke's width `w`
-/// across the way the outline runs there (none for a body, `w` 0), and an open run's ends grown by
-/// its cap (a square's half width out of the run, a round's all round). A mitre join's tip past half
-/// the width is not followed.
-function painted(g: SVGGeometryElement, m: DOMMatrix, w: number, cap: string): Pt[] {
-  const len = g.getTotalLength();
+/// What a shape paints, as points in the frame `m` carries it to: its outline (`outline`), each edge
+/// spread by half the stroke's width `w` across its own way (none for a body, `w` 0), each corner
+/// joined as the browser joins it (`join`: a mitre's tip where its length over the width stays
+/// within `limit`, else a bevel; a bevel; a round), and an open run's ends grown by its cap (a
+/// square's half width out of the run, a round's all round).
+function painted(g: SVGGeometryElement, m: DOMMatrix, w: number, cap: string, join: string, limit: number): Pt[] {
   const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
-  const n = Math.min(4096, Math.max(64, Math.ceil((len * scale) / 0.25)));
-  const at = (i: number) => g.getPointAtLength(Math.min(len, Math.max(0, (len * i) / n)));
+  const n = Math.min(4096, Math.max(64, Math.ceil((g.getTotalLength() * scale) / 0.25)));
   const h = w / 2;
   const out: Pt[] = [];
   const put = (x: number, y: number) => {
     const q = new DOMPoint(x, y).matrixTransform(m);
     out.push({ x: q.x, y: q.y });
   };
-  for (let i = 0; i <= n; i++) {
-    const p = at(i), a = at(i - 1), b = at(i + 1);
-    const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy);
-    if (!h || !l) {
-      put(p.x, p.y);
-      continue;
+  const unit = (d: Pt) => { const l = Math.hypot(d.x, d.y); return l ? { x: d.x / l, y: d.y / l } : null; };
+  for (const run of outline(g, n)) {
+    // Its points, each once (a point written twice, a curve's handle on its node), a closed run's
+    // start not again at its end.
+    const pts = run.pts.filter((p, k) => k === 0 || p.x !== run.pts[k - 1].x || p.y !== run.pts[k - 1].y);
+    if (run.closed && pts.length > 1 && pts[0].x === pts[pts.length - 1].x && pts[0].y === pts[pts.length - 1].y) pts.pop();
+    for (const p of pts) put(p.x, p.y);
+    if (!h || pts.length < 2) continue;
+    const edges = run.closed ? pts.length : pts.length - 1;
+    const dirs: Pt[] = [];
+    for (let k = 0; k < edges; k++) {
+      const [a, b] = [pts[k], pts[(k + 1) % pts.length]];
+      const u = unit({ x: b.x - a.x, y: b.y - a.y })!;
+      dirs.push(u);
+      for (const p of [a, b]) {
+        put(p.x - u.y * h, p.y + u.x * h);
+        put(p.x + u.y * h, p.y - u.x * h);
+      }
     }
-    put(p.x - (dy / l) * h, p.y + (dx / l) * h);
-    put(p.x + (dy / l) * h, p.y - (dx / l) * h);
-  }
-  if (h && cap !== "butt") {
-    for (const [e, out_] of openEnds(g)) {
-      const l = Math.hypot(out_.x, out_.y);
-      if (!l) continue;
-      const [ux, uy] = [out_.x / l, out_.y / l];
-      if (cap === "square") {
-        put(e.x + ux * h - uy * h, e.y + uy * h + ux * h);
-        put(e.x + ux * h + uy * h, e.y + uy * h - ux * h);
-      } else for (let k = 0; k < 32; k++) put(e.x + h * Math.cos((k * Math.PI) / 16), e.y + h * Math.sin((k * Math.PI) / 16));
+    // Each corner where one edge meets the next, joined on its outer side.
+    for (let k = run.closed ? 0 : 1; k < pts.length - (run.closed ? 0 : 1); k++) {
+      const d1 = dirs[(k - 1 + edges) % edges], d2 = dirs[k % edges], v = pts[k];
+      const cross = d1.x * d2.y - d1.y * d2.x, dot = d1.x * d2.x + d1.y * d2.y;
+      if (Math.abs(cross) < 1e-9 && dot > 0) continue;
+      const s = cross > 0 ? -1 : 1;
+      const [n1, n2] = [{ x: -d1.y * s, y: d1.x * s }, { x: -d2.y * s, y: d2.x * s }];
+      if (join === "round") {
+        const [a1, a2] = [Math.atan2(n1.y, n1.x), Math.atan2(n2.y, n2.x)];
+        let da = a2 - a1;
+        while (da > Math.PI) da -= 2 * Math.PI;
+        while (da < -Math.PI) da += 2 * Math.PI;
+        for (let q = 1; q < 16; q++) put(v.x + h * Math.cos(a1 + (da * q) / 16), v.y + h * Math.sin(a1 + (da * q) / 16));
+      } else if (join !== "bevel") {
+        // A mitre: its length over the width is one over the sine of half the angle between the
+        // edges; past the limit the browser bevels.
+        const half = Math.acos(Math.max(-1, Math.min(1, -dot))) / 2;
+        const ratio = half > 1e-9 ? 1 / Math.sin(half) : Infinity;
+        const b = unit({ x: n1.x + n2.x, y: n1.y + n2.y });
+        if (b && ratio <= limit) put(v.x + b.x * h * ratio, v.y + b.y * h * ratio);
+      }
+    }
+    // An open run's ends, by their own ways out (a path's tangents; else the first point off it).
+    if (!run.closed && cap !== "butt") {
+      const outs = run.outs ?? [{ x: pts[0].x - pts[1].x, y: pts[0].y - pts[1].y }, { x: pts[pts.length - 1].x - pts[pts.length - 2].x, y: pts[pts.length - 1].y - pts[pts.length - 2].y }];
+      for (const [e, o] of [[pts[0], outs[0]], [pts[pts.length - 1], outs[1]]] as [Pt, Pt][]) {
+        const u = unit(o);
+        if (!u) continue;
+        if (cap === "square") {
+          put(e.x + u.x * h - u.y * h, e.y + u.y * h + u.x * h);
+          put(e.x + u.x * h + u.y * h, e.y + u.y * h - u.x * h);
+        } else for (let k = 0; k < 32; k++) put(e.x + h * Math.cos((k * Math.PI) / 16), e.y + h * Math.sin((k * Math.PI) / 16));
+      }
     }
   }
   return out;
@@ -186,12 +222,41 @@ function bezier(p: Pt[], t: number): Pt {
   return q[0];
 }
 
-/// A subpath: the points that make it (every end and control point, absolute), the points it draws
-/// (each curve followed at 32 points), and whether a `Z` closes it.
+/// The points an elliptical arc draws from (x1, y1) to (x2, y2), `k` of them past its start (SVG's
+/// own conversion of an arc's end points to its centre); a radius of 0 a straight line to its end.
+function arcPoints(x1: number, y1: number, rx: number, ry: number, phi: number, large: boolean, sweep: boolean, x2: number, y2: number, k: number): Pt[] {
+  if (x1 === x2 && y1 === y2) return [];
+  rx = Math.abs(rx); ry = Math.abs(ry);
+  if (!rx || !ry) return [{ x: x2, y: y2 }];
+  const [c, s] = [Math.cos(phi), Math.sin(phi)];
+  const [dx, dy] = [(x1 - x2) / 2, (y1 - y2) / 2];
+  const [xp, yp] = [c * dx + s * dy, -s * dx + c * dy];
+  const lam = (xp * xp) / (rx * rx) + (yp * yp) / (ry * ry);
+  if (lam > 1) { rx *= Math.sqrt(lam); ry *= Math.sqrt(lam); }
+  const num = rx * rx * ry * ry - rx * rx * yp * yp - ry * ry * xp * xp, den = rx * rx * yp * yp + ry * ry * xp * xp;
+  const co = (large === sweep ? -1 : 1) * Math.sqrt(Math.max(0, num / den));
+  const [cxp, cyp] = [(co * rx * yp) / ry, (-co * ry * xp) / rx];
+  const [cx, cy] = [c * cxp - s * cyp + (x1 + x2) / 2, s * cxp + c * cyp + (y1 + y2) / 2];
+  const ang = (ux: number, uy: number, vx: number, vy: number) => Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+  const t1 = ang(1, 0, (xp - cxp) / rx, (yp - cyp) / ry);
+  let dt = ang((xp - cxp) / rx, (yp - cyp) / ry, (-xp - cxp) / rx, (-yp - cyp) / ry);
+  if (!sweep && dt > 0) dt -= 2 * Math.PI;
+  else if (sweep && dt < 0) dt += 2 * Math.PI;
+  const out: Pt[] = [];
+  for (let q = 1; q <= k; q++) {
+    const a = t1 + (dt * q) / k;
+    const [px, py] = [rx * Math.cos(a), ry * Math.sin(a)];
+    out.push(q === k ? { x: x2, y: y2 } : { x: c * px - s * py + cx, y: s * px + c * py + cy });
+  }
+  return out;
+}
+
+/// A subpath: the points that make it (every end and control point, absolute; an arc's the points
+/// it draws), the points it draws (each curve and arc followed at 32 points), and whether a `Z`
+/// closes it.
 type Sub = { pts: Pt[]; drawn: Pt[]; closed: boolean };
 
-/// A path's subpaths, from its data; null where a subpath holds an arc (no run of its points says
-/// it is straight). A subpath is closed by a `Z` alone, whatever its ends; after one, the next
+/// A path's subpaths, from its data; null where its data cannot be read. A subpath is closed by a `Z` alone, whatever its ends; after one, the next
 /// command starts a new subpath at the closed one's start. A smooth curve's first control (`S`, `T`)
 /// is the one before it mirrored, as the browser draws it.
 function subpaths(d: string): Sub[] | null {
@@ -259,6 +324,16 @@ function subpaths(d: string): Sub[] | null {
         const q: Pt = qc ? { x: 2 * x - qc.x, y: 2 * y - qc.y } : { x, y };
         bend([q, { x: ox + p[0], y: oy + p[1] }]);
         qc = q; c2 = null;
+        break;
+      }
+      case "A": {
+        const p = [num(), num(), num(), num(), num(), num(), num()];
+        begin();
+        const arc = arcPoints(x, y, p[0], p[1], (p[2] * Math.PI) / 180, p[3] !== 0, p[4] !== 0, ox + p[5], oy + p[6], 32);
+        cur.push(...arc);
+        drawn.push(...arc);
+        ({ x, y } = { x: ox + p[5], y: oy + p[6] });
+        c2 = qc = null;
         break;
       }
       case "Z": put(sx, sy); end(true); after = true; x = sx; y = sy; cmd = ""; c2 = qc = null; break;
@@ -446,7 +521,7 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
       if (!gc) continue;
       const c = getComputedStyle(g);
       const line = g.classList.contains("sv-line");
-      for (const p of painted(g, o.multiply(gc), line ? parseFloat(c.strokeWidth) || 0 : 0, line ? c.strokeLinecap : "butt")) {
+      for (const p of painted(g, o.multiply(gc), line ? parseFloat(c.strokeWidth) || 0 : 0, line ? c.strokeLinecap : "butt", c.strokeLinejoin, parseFloat(c.strokeMiterlimit) || 4)) {
         lo = Math.min(lo, p.y);
         hi = Math.max(hi, p.y);
       }

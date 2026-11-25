@@ -2059,6 +2059,16 @@ const LINES_SVG: &str = r##"  <line id="ln-normal" x1="15" y1="240" x2="15" y2="
   <polyline id="la-dup" points="245,600 275,600 275,640 275,640" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/>
   <path id="la-cusp" d="M 300 640 C 300 640 300 600 340 600" fill="none" stroke="#3a3a40" stroke-width="8" stroke-linecap="square"/>
   <path id="la-loop" d="M 370 600 L 395 640 L 345 640 L 370 600" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square" stroke-linejoin="bevel"/>
+  <path id="la-walls" d="M 20 680 V 740 H 80 M 35 680 V 725 H 80" fill="none" stroke="#3a3a40" stroke-width="8"/>
+  <path id="la-bevel" d="M 110 745 L 118 680 L 126 745" fill="none" stroke="#3a3a40" stroke-width="8"/>
+  <path id="la-bevel2" d="M 140 745 L 160 690 L 180 745" fill="none" stroke="#3a3a40" stroke-width="8" stroke-linejoin="bevel"/>
+  <path id="la-mitre" d="M 190 745 L 210 690 L 230 745" fill="none" stroke="#3a3a40" stroke-width="8"/>
+  <path id="la-arcz" d="M 274 695 A 14 14 0 0 1 246 695 A 14 14 0 0 1 274 695 Z M 260 709 V 740" fill="none" stroke="#3a3a40" stroke-width="8" stroke-linecap="square"/>
+  <path id="la-pr-t" d="M 300 685 Q 300 710 325 710 T 350 735" fill="none" stroke="#3a3a40" stroke-width="8" stroke-linecap="square"/>
+  <path id="la-qt-rel" d="m 20 760 q 0 10 10 10 t 10 10 t 10 10" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/>
+  <path id="la-ss-rel" d="m 80 760 c 0 10 10 10 10 10 s 0 10 10 10 s 0 10 10 10" fill="none" stroke="#3a3a40" stroke-width="6" stroke-linecap="square"/>
+  <path id="la-round" d="M 150 790 L 170 770 L 190 790" fill="none" stroke="#3a3a40" stroke-width="8" stroke-linejoin="round"/>
+  <path id="la-tangent" d="M 230 765 C 230 766 262 792 262 765" fill="none" stroke="#3a3a40" stroke-width="12" stroke-linecap="square"/>
 </svg>"##;
 
 /// Each shape drawn as a line and bound to show its state: its id, its state, the width it was drawn
@@ -2095,7 +2105,7 @@ const BODY_CASES: [(&str, (f64, f64)); 3] = [("nf-zero", (205.0, 320.0)), ("nf-b
 /// on its lines below its level, on them above it, and inside what they close (off every line), in
 /// its own coordinates.
 #[allow(clippy::type_complexity)]
-const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 17] = [
+const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 27] = [
     ("la-ring", 0.35, "normal", 6.0, &[(40.0, 386.0)], &[(40.0, 354.0), (24.0, 370.0)], &[(40.0, 370.0), (40.0, 380.0)]),
     ("la-bent", 0.35, "normal", 8.0, &[(100.0, 390.0), (80.0, 385.0), (122.5, 390.0)], &[(80.0, 360.0)], &[(95.0, 380.0)]),
     ("la-hollow", 1.0, "normal", 4.0, &[(160.0, 350.0), (140.0, 370.0), (180.0, 370.0), (160.0, 390.0)], &[], &[(160.0, 370.0)]),
@@ -2118,6 +2128,21 @@ const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64,
     ("la-dup", 1.0, "normal", 6.0, &[], &[], &[]),
     ("la-cusp", 1.0, "normal", 8.0, &[], &[], &[]),
     ("la-loop", 1.0, "normal", 6.0, &[], &[], &[]),
+    // A bent pipe drawn as its two walls in one path (Inkscape's Combine), each spread across its
+    // own way and never across the move between them; an apex the browser bevels (a mitre past its
+    // limit, a bevel written), one it mitres within its limit, its sharp tip followed; a ring and its
+    // outlet in one path, the ring closed by its `Z`, the outlet open and capped; and smooth curves
+    // after the curves they mirror (`T` after `Q`, `t` after `t`, `s` after `c` and after `s`).
+    ("la-walls", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-bevel", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-bevel2", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-mitre", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-arcz", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-pr-t", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-qt-rel", 1.0, "normal", 6.0, &[], &[], &[]),
+    ("la-ss-rel", 1.0, "normal", 6.0, &[], &[], &[]),
+    ("la-round", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-tangent", 1.0, "normal", 12.0, &[], &[], &[]),
 ];
 
 /// The state's colours on a line, read from the page's own tokens as the browser computes a stroke:
@@ -2209,18 +2234,36 @@ const ALONG_PAINT: &str = r##"((cases, carried) => {
     }
     // The level's rect against what its lines and bodies paint, read by the browser itself: every
     // point the browser takes for a line's stroke or a body's fill, over each shape's box with room
-    // for its stroke, every quarter pixel down and every half across; up and down, from that reach's
-    // foot to its level within half a pixel; across, past all of it.
+    // for its stroke, every quarter pixel down and every half across, then finer near the first and the
+    // last rows it met (every twentieth of a pixel, a pixel and a half beyond, two pixels either side
+    // of where it met them: a sharp tip, a mitre's or a butt end's corner on a slant, narrower than
+    // the half pixel across); up and down, from that reach's foot to its level within half a pixel;
+    // across, past all of it.
     const shapes = (el.matches(GEOM) ? [el] : [...el.querySelectorAll(GEOM)]).filter((g) => g.checkVisibility());
     let [top, foot, left, right] = [Infinity, -Infinity, Infinity, -Infinity];
     for (const g of shapes) {
       const sm = g.getScreenCTM(), inv = sm.inverse(), r = g.getBoundingClientRect();
       const line = g.classList.contains("sv-line");
       const pad = (line ? parseFloat(getComputedStyle(g).strokeWidth) * Math.sqrt(Math.abs(sm.a * sm.d - sm.b * sm.c)) : 0) + 4;
+      const hit = (px, py) => { const q = new DOMPoint(px, py).matrixTransform(inv); return line ? g.isPointInStroke(q) : g.isPointInFill(q); };
+      let [gt, gf, gtx, gfx] = [Infinity, -Infinity, [], []];
       for (let py = r.top - pad; py <= r.bottom + pad; py += 0.25) for (let px = r.left - pad; px <= r.right + pad; px += 0.5) {
-        const q = new DOMPoint(px, py).matrixTransform(inv);
-        if (line ? g.isPointInStroke(q) : g.isPointInFill(q)) { top = Math.min(top, py); foot = Math.max(foot, py); left = Math.min(left, px); right = Math.max(right, px); }
+        if (!hit(px, py)) continue;
+        if (py < gt) [gt, gtx] = [py, [px]]; else if (py === gt) gtx.push(px);
+        if (py > gf) [gf, gfx] = [py, [px]]; else if (py === gf) gfx.push(px);
+        left = Math.min(left, px); right = Math.max(right, px);
       }
+      if (gt === Infinity) continue;
+      const fine = (y0, xs, dir) => {
+        let best = y0;
+        for (let k = 1; k <= 30; k++) {
+          const py = y0 + dir * k * 0.05;
+          for (let px = Math.min(...xs) - 2; px <= Math.max(...xs) + 2; px += 0.05) if (hit(px, py)) { best = py; break; }
+        }
+        return best;
+      };
+      top = Math.min(top, fine(gt, gtx, -1));
+      foot = Math.max(foot, fine(gf, gfx, 1));
     }
     const m = along.getScreenCTM();
     const [x, y, rw, rh] = ["x", "y", "width", "height"].map((k) => Number(rect.getAttribute(k)));
@@ -2312,7 +2355,7 @@ fn a_shape_drawn_with_no_fill_shows_its_state_on_its_line() {
     let bench = plant(&dir.path().join("bench"));
     let mut ex = live_example(&bench, false);
     assert!(ex.svg.contains("viewBox=\"0 0 400 220\"") && ex.svg.ends_with("</svg>\n"));
-    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 660\"").replace("</svg>\n", LINES_SVG) + "\n";
+    ex.svg = ex.svg.replace("viewBox=\"0 0 400 220\"", "viewBox=\"0 0 400 800\"").replace("</svg>\n", LINES_SVG) + "\n";
     // Each object in its state: a rule over `fill2` (85) naming it, normal with none, stale on the
     // sorter's rate (its log empty: no value yet).
     let value_in = |state: &str| match state {
