@@ -2430,6 +2430,51 @@ fn is_format_char(c: char) -> bool {
         | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
 }
 
+/// A line's text outside its code spans, as CommonMark reads them: a run of backticks opens a span
+/// the next run of as many closes, an unclosed run is text, and a backslash outside a span escapes
+/// the character after it (`\`` opens none).
+fn outside_code_spans(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            out.push(chars[i]);
+            out.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+        if chars[i] == '`' {
+            let run = chars[i..].iter().take_while(|c| **c == '`').count();
+            let mut j = i + run;
+            let mut closed = None;
+            while j < chars.len() {
+                if chars[j] == '`' {
+                    let other = chars[j..].iter().take_while(|c| **c == '`').count();
+                    if other == run {
+                        closed = Some(j + other);
+                        break;
+                    }
+                    j += other;
+                } else {
+                    j += 1;
+                }
+            }
+            match closed {
+                Some(end) => i = end,
+                None => {
+                    out.extend(&chars[i..i + run]);
+                    i += run;
+                }
+            }
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
 /// The header and the delimiter of the record's one table, as written.
 const RECORD_HEADER: &str = "| # | Change | Where | Upstream |";
 const RECORD_DELIMITER: &str = "|---|---|---|---|";
@@ -2453,6 +2498,26 @@ fn change_rows(record: &str) -> Result<Vec<String>, String> {
         return Err("the record holds a carriage return, which ends a line to GitHub".into());
     }
     let lines: Vec<&str> = record.split('\n').collect();
+    // the whole record, before the section too, in what GitHub reads one way only (the round at
+    // 7a0bedec): no white space but the space (a no-break space or a tab GitHub's lexer and the
+    // reading's take apart: a fence closed to one and not the other, a setext paragraph split), no
+    // fence, no `<` but in a code span (raw HTML in a cell ends or adds a row), no line opening a
+    // link reference or a footnote's definition
+    for (k, l) in lines.iter().enumerate() {
+        if let Some(c) = l.chars().find(|c| c.is_whitespace() && *c != ' ') {
+            return Err(format!("line {} of the record holds white space other than a space ({c:?})", k + 1));
+        }
+        let text = without_containers(l).0.trim_start_matches(' ');
+        if text.starts_with("```") || text.starts_with("~~~") {
+            return Err(format!("line {} of the record opens a fence", k + 1));
+        }
+        if outside_code_spans(l).contains('<') {
+            return Err(format!("line {} of the record holds a `<` outside a code span", k + 1));
+        }
+        if text.starts_with('[') && text.contains("]:") {
+            return Err(format!("line {} of the record opens a link reference or a footnote's definition", k + 1));
+        }
+    }
     let heading = lines.iter().position(|l| *l == "## Local changes").ok_or("the record has no line `## Local changes`")?;
     let at = local_changes_heading(record)?;
     let heading_end: usize = lines[..=heading].iter().map(|l| l.len() + 1).sum::<usize>() - 1;
@@ -2934,6 +2999,34 @@ fn the_record_is_read_in_its_one_form() {
     }
     assert!(refused(&canon("| 1 | a | b | c |\n| 4 | a \\\\| b | c |\n")));
     assert_eq!(gfm_cells("| 4 | a \\\\| b | c |"), ["4", "a \\\\| b", "c"]);
+    // the round at 7a0bedec: a fence GitHub closes otherwise, before the heading or in an item;
+    // white space other than the space; raw HTML in a cell; a link reference definition in the
+    // prose; HTML in a footnote or a nested item
+    for before_heading in [
+        "```\nA note.\n```\u{a0}",
+        "```\nA note.\n```\u{3000}",
+        "```\nA note.\n```\u{b}",
+        "```\nA note.\n```\u{c}",
+        "- A note:\n\n  ```\n  x\n```",
+        "Local\n\u{a0}\nchanges\n---\n| # | Change |\n|---|---|\n| 41 | an uncommitted change |",
+        "[^1]: <textarea>",
+        "- a\n    - <details>",
+    ] {
+        let record = format!("# Fork\n\n{before_heading}\n\n## Local changes\nProse.\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n");
+        assert!(refused(&record), "{before_heading:?}");
+    }
+    for row in [
+        "| 1 | a </td><td>x</td><td>y</td></tr><tr><td>41</td><td>an uncommitted change</td><td>base</td><td>none</td></tr><tr><td>1</td><td>(cont.) | b | c |",
+        "| 1 | a </table> | b | c |",
+        "| 1 | a </td><td> x | b | c |",
+        "| 1 | a \\`<b>\\` | b | c |",
+    ] {
+        assert!(refused(&canon(&format!("{row}\n"))), "{row:?}");
+    }
+    assert!(refused(&format!("# Fork\n\n## Local changes\n[x]: #a \"Each was\nfirst made\"\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n")));
+    // and a `<` in a code span of a row is the cell's text
+    assert_eq!(change_rows(&canon("| 1 | `<v>9</v>` | `a <b>` | none |\n")), Ok(vec!["1".to_string()]));
+    assert_eq!(outside_code_spans("a `<b>` c ``d ` e`` \\`<x>\\` ```f"), "a  c  \\`<x>\\` ```f");
     // the table after the heading with no blank line, a delimiter of another spelling, no table
     assert!(refused(&format!("## Local changes\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n")));
     assert!(refused(&format!("## Local changes\n\n{RECORD_HEADER}\n|:--|---|---|---|\n| 1 | a | b | c |\n")));
