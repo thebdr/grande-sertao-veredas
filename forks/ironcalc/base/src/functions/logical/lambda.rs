@@ -133,9 +133,11 @@ impl<'a> Model<'a> {
             .iter()
             .filter_map(|n| {
                 if let Node::NamedVariableKind { name, id } = n {
-                    let (clean, is_optional) = if let Some(s) = name.strip_prefix("_xlop.") {
+                    // the file's prefixes in any case (Veredas fork change 43)
+                    use crate::expressions::parser::strip_prefix_any_case;
+                    let (clean, is_optional) = if let Some(s) = strip_prefix_any_case(name, "_xlop.") {
                         (s.to_string(), true)
-                    } else if let Some(s) = name.strip_prefix("_xlpm.") {
+                    } else if let Some(s) = strip_prefix_any_case(name, "_xlpm.") {
                         (s.to_string(), false)
                     } else {
                         (name.clone(), false)

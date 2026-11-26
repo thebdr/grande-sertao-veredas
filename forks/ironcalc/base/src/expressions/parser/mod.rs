@@ -118,6 +118,25 @@ pub struct NamedVariable {
     pub(crate) is_optional: bool,
 }
 
+/// `name` without the prefix `prefix` in any case, if it opens with it (Veredas fork change 43:
+/// the file's `_xlfn.`, `_xlws.`, `_xlpm.` and `_xlop.`, which Excel writes in lower case, read in
+/// any).
+pub(crate) fn strip_prefix_any_case<'n>(name: &'n str, prefix: &str) -> Option<&'n str> {
+    (name.len() >= prefix.len() && name.is_char_boundary(prefix.len()) && name[..prefix.len()].eq_ignore_ascii_case(prefix)).then(|| &name[prefix.len()..])
+}
+
+/// Whether a function's name is LAMBDA's, its `_xlfn.` and `_xlws.` prefixes passed over in any
+/// case (Veredas fork change 43).
+fn is_lambda_name(name: &str) -> bool {
+    let mut rest = name;
+    for prefix in ["_xlfn.", "_xlws."] {
+        if rest.len() >= prefix.len() && rest[..prefix.len()].eq_ignore_ascii_case(prefix) {
+            rest = &rest[prefix.len()..];
+        }
+    }
+    rest.eq_ignore_ascii_case("LAMBDA")
+}
+
 impl NamedVariable {
     /// The parameter's name as the formula spells it (`_xlpm.` and all), which a host compares
     /// with the calls in the LAMBDA's body as the engine binds them, by `utils::name_key`. Veredas
@@ -1050,7 +1069,10 @@ impl<'a> Parser<'a> {
                     self.lexer.advance_token();
                     // It's a function call "SUM(.."
                     // _xlfn.LAMBDA(_xlpm.a,_xlpm.b, SQRT(_xlpm.a*_xlpm.a+_xlpm.b*_xlpm.b))(3,4)
-                    if &name == "_xlfn.LAMBDA" || &name.to_uppercase() == "LAMBDA" {
+                    // in any spelling the file's prefixes give it, in any case (`_xlfn.lambda`,
+                    // `_xlfn._xlws.LAMBDA`): read otherwise, as a function, its parameters were
+                    // bound to nothing and written without their `_xlpm.` (Veredas fork change 43)
+                    if is_lambda_name(&name) {
                         return self.parse_lambda();
                     }
                     // The user-facing name, without the xlsx import prefixes.
@@ -1141,7 +1163,7 @@ impl<'a> Parser<'a> {
                     // every lookup compares it: `=Fn(3)` typed reads back as the formula it is
                     // (Veredas fork change 33)
                     return Node::NamedFunctionKind {
-                        name: name.trim_start_matches("_xlpm.").to_lowercase(),
+                        name: strip_prefix_any_case(&name, "_xlpm.").unwrap_or(&name).to_lowercase(),
                         args,
                         id: None,
                     };
@@ -1175,8 +1197,9 @@ impl<'a> Parser<'a> {
                         return Node::TableNameKind(name);
                     }
                 }
-                // xlpm: Excel Lambda Parameter
-                let name = name.trim_start_matches("_xlpm.").to_string();
+                // xlpm: Excel Lambda Parameter, in any case (Veredas fork change 43: `_Xlpm.g` kept
+                // its prefix where its call `_xlpm.g(` lost it, the two bound and written apart)
+                let name = strip_prefix_any_case(&name, "_xlpm.").unwrap_or(&name).to_string();
                 Node::NamedVariableKind { name, id: None }
             }
             // A defined name qualified with a sheet: Sheet1!MyName

@@ -356,3 +356,27 @@ fn a_parameter_s_name_reads_as_the_formula_spells_it() {
     }
 }
 
+#[test]
+fn a_lambda_is_read_in_any_spelling_the_file_s_prefixes_give_it() {
+    // Veredas fork change 43: `_xlfn.lambda`, `_xlfn.Lambda` and `_xlfn._xlws.LAMBDA` were read as a
+    // plain function, their parameters bound to nothing and written without `_xlpm.`
+    let mut p = parser();
+    for spelling in ["LAMBDA", "lambda", "_xlfn.LAMBDA", "_xlfn.lambda", "_xlfn.Lambda", "_xlfn._xlws.LAMBDA", "_XLFN.LAMBDA"] {
+        let node = p.parse(&format!("{spelling}(x,x*2)"), &cell());
+        let Node::LambdaDefKind { parameters, .. } = &node else { panic!("{spelling}: {node:?}") };
+        assert_eq!(parameters.iter().map(NamedVariable::name).collect::<Vec<_>>(), ["x"], "{spelling}");
+        // written in the file's spelling, its parameter with its `_xlpm.`
+        assert_eq!(crate::expressions::parser::stringify::to_excel_string(&node, &cell()), "_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2)", "{spelling}");
+    }
+    // and its parameter's `_xlpm.` in any case, on the parameter and on its call alike
+    for spelling in ["_xlpm.g", "_Xlpm.g", "_XLPM.g"] {
+        let node = p.parse(&format!("LAMBDA({spelling},{spelling}(1))"), &cell());
+        let Node::LambdaDefKind { parameters, body } = node else { panic!("{spelling}: {node:?}") };
+        assert_eq!(parameters.iter().map(NamedVariable::name).collect::<Vec<_>>(), ["g"], "{spelling}");
+        let Node::NamedFunctionKind { name, .. } = *body else { panic!("{spelling}: {body:?}") };
+        assert_eq!(name, "g", "{spelling}");
+    }
+    assert!(!matches!(p.parse("LAMBDAS(x,x*2)", &cell()), Node::LambdaDefKind { .. }));
+    assert!(!matches!(p.parse("_xlfn.LAMBDAX(x,x*2)", &cell()), Node::LambdaDefKind { .. }));
+}
+
