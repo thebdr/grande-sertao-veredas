@@ -12,15 +12,15 @@
     "topology"
   ],
   "exitCode": 0,
-  "outputSha": "4c0b470a5032582258fc0139e16448d29c346756a80a53879b2d2222e773cd7d",
-  "outputTail": "test round_3::a_chassis_is_matched_by_the_text_a_port_data_writes_for_it_whatever_its_subtype ... ok\ntest round_4::a_chassis_is_rendered_as_the_bench_s_port_data_writes_it_byte_for_byte ... ok\ntest round_3::a_ring_with_a_member_gone_is_open_whatever_links_are_still_reported ... ok\ntest round_4::a_member_with_a_port_in_the_domain_that_has_not_left_is_there ... ok\ntest round_5::the_bench_s_text_at_every_edge_the_fourth_answer_left_unpinned ... ok\ntest round_2::a_port_that_left_and_came_back_elsewhere_has_moved_and_joins_nothing ... ok\ntest what_is_drawn_and_said_is_only_what_the_evidence_holds ... ok\ntest an_mrp_ring_is_its_domain_s_members_closed_when_their_links_make_one_cycle ... ok\ntest round_4::a_name_written_like_a_mac_is_found_as_itself_and_a_mac_by_its_address ... ok\n\ntest result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.93s\n     Running tests/topology.rs (target/debug/build/veredas-aranha/122ef5a47708f22f/out/topology-122ef5a47708f22f)",
-  "ranAt": "2026-11-26T16:45:36.773Z",
-  "headCommit": "c7fa039148650e0e12fb659e175dd8cb90d0efb1",
+  "outputSha": "8d10f477b77b85b876978eb3be25f197f167957744b0ef29e460b71087737787",
+  "outputTail": "test round_4::a_chassis_is_rendered_as_the_bench_s_port_data_writes_it_byte_for_byte ... ok\ntest round_6::a_cycle_with_a_chord_or_a_double_edge_is_not_one_cycle ... ok\ntest round_4::a_name_written_like_a_mac_is_found_as_itself_and_a_mac_by_its_address ... ok\ntest an_mrp_ring_is_its_domain_s_members_closed_when_their_links_make_one_cycle ... ok\ntest what_is_drawn_and_said_is_only_what_the_evidence_holds ... ok\ntest round_3::a_chassis_is_matched_by_the_text_a_port_data_writes_for_it_whatever_its_subtype ... ok\ntest round_6::two_rings_over_one_set_of_devices_see_each_other_s_links ... ok\ntest round_5::the_bench_s_text_at_every_edge_the_fourth_answer_left_unpinned ... ok\ntest round_2::a_port_that_left_and_came_back_elsewhere_has_moved_and_joins_nothing ... ok\n\ntest result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.96s\n     Running tests/topology.rs (target/debug/build/veredas-aranha/122ef5a47708f22f/out/topology-122ef5a47708f22f)",
+  "ranAt": "2026-11-26T21:31:41.494Z",
+  "headCommit": "b95a9a324f901aae80f88168724b59ef00f41a80",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/topology.rs",
       "file": "crates/veredas-aranha/tests/topology.rs",
-      "fileSha": "d9d03d9ff723c9cd8b079573025406906e787fbb15f2bcd7d74e57f260b2f463"
+      "fileSha": "611bc48483e4d5c0f12c18bb3aada7345fec6ede07be3d767d36e28b6ca474f3"
     }
   ]
 }
