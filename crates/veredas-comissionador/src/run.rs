@@ -183,13 +183,24 @@ pub fn gated_writes(c: &Checked) -> Vec<String> {
     c.test.steps.iter().flat_map(|s| s.actions.iter()).filter(|a| a.is_gated()).map(|a| squash(c.text.get(a.span.start..a.span.end).unwrap_or(""))).collect()
 }
 
-/// The fingerprint of a list of gated writes: FNV-1a over the list, one per line, in 16 hex digits,
-/// so a confirmation is of that list and of no other.
-pub fn writes_fingerprint(writes: &[String]) -> String {
+/// The fingerprint a person confirms a test's gated writes by: FNV-1a in 16 hex digits over the
+/// list ([`gated_writes`]), the test's whole text and every function file it uses, so an edit that
+/// could change what a write writes (a constant, a function, a string's blanks) asks again.
+pub fn writes_fingerprint(c: &Checked) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in writes.join("\n").bytes() {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    let mut eat = |text: &str| {
+        for b in text.bytes().chain(std::iter::once(0)) {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    for w in gated_writes(c) {
+        eat(&w);
+    }
+    eat(&c.text);
+    for f in &c.files {
+        eat(&f.path);
+        eat(&f.text);
     }
     format!("{h:016x}")
 }
@@ -515,7 +526,7 @@ pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode, confirmed: Option<&s
     // confirmed this test's gated writes and the embedder handed it the way (Q314 (b)).
     let mut arm = false;
     if mode == &RunMode::Live && writes > 0 && !plant.armed() {
-        let fp = writes_fingerprint(&gated_writes(c));
+        let fp = writes_fingerprint(c);
         let what = if writes == 1 { "its 1 gated write, confirmed".to_string() } else { format!("its {writes} gated writes, confirmed") };
         match confirmed {
             _ if !plant.can_arm() => problems.push("the test writes, and portal's write switch is off".to_string()),

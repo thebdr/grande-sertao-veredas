@@ -4,9 +4,12 @@
 //! A library first, one executable on top (`docs/comissionador-plan.md`, "Rules"): cargo is asked
 //! what it would build (`cargo metadata --no-deps`, which parses and builds nothing), and the
 //! targets are exactly one library, one binary named `veredas-comissionador`, and tests; no build
-//! script. Its members among its dependencies are core and portal at most (L5's row). And it never
-//! arms portal's write switch (`docs/questions.md` Q314): its sources, read as the compiler's
-//! tokens, name no call that sets the switch, and pull in no file from elsewhere that could.
+//! script. Its members among its dependencies are core and portal at most (L5's row). And it arms
+//! portal's write switch in one place, for a run whose gated writes the person confirmed
+//! (`docs/questions.md` Q314 (b)): its sources, read as the compiler's tokens, name the session's
+//! arming once, in the executable, and the plant's in its definitions and the run's arm and
+//! disarm alone; they reach the session's store by its two readers alone, and pull in no file
+//! from elsewhere.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -367,6 +370,44 @@ fn its_library_and_executable_are_built_from_its_src_folder_alone() {
 /// used by a run for a test whose gated writes the person confirmed (Q314 (b)).
 const ARMING_FILE: &str = "main.rs";
 
+/// Where the plant's arming (`Plant::set_armed`) is named, and how often: its definitions (the
+/// trait's and `LivePlant`'s) and the run's arm and disarm, nothing else.
+const SET_ARMED: [(&str, usize); 2] = [("plant.rs", 2), ("run.rs", 2)];
+
+/// The session store's methods the engine reads with: the rows of a table, and the catalog.
+const STORE_READERS: [&str; 2] = ["query_rows", "list_tables"];
+
+/// Every reach of the session's store but by its readers: `store` as anything but portal's module
+/// in a path or `.store.` followed by one of [`STORE_READERS`] (the store bound to a name, handed
+/// on, destructured, or one of its other methods, which take SQL or a path, called).
+fn store_breaches(text: &str) -> Vec<String> {
+    use proc_macro2::TokenTree as T;
+    fn walk(stream: proc_macro2::TokenStream, out: &mut Vec<String>) {
+        let trees: Vec<T> = stream.into_iter().collect();
+        let punct = |k: usize, c: char| matches!(trees.get(k), Some(T::Punct(p)) if p.as_char() == c);
+        for (i, t) in trees.iter().enumerate() {
+            match t {
+                T::Ident(id) if id.to_string().trim_start_matches("r#") == "store" => {
+                    let in_path = i >= 2 && punct(i - 1, ':') && punct(i - 2, ':');
+                    let read = i >= 1 && punct(i - 1, '.') && punct(i + 1, '.') && matches!(trees.get(i + 2), Some(T::Ident(m)) if STORE_READERS.contains(&m.to_string().as_str()));
+                    if !in_path && !read {
+                        let next = match trees.get(i + 2) {
+                            Some(T::Ident(m)) if punct(i + 1, '.') => format!(".{m}"),
+                            _ => String::new(),
+                        };
+                        out.push(format!("store{next}: the session's store reached past its readers ({})", STORE_READERS.join(", ")));
+                    }
+                }
+                T::Group(g) => walk(g.stream(), out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(text.parse().unwrap_or_else(|e| panic!("a source that does not lex: {e:?}")), &mut out);
+    out
+}
+
 #[test]
 fn its_sources_reach_the_plant_through_portal_alone_and_arm_the_switch_in_one_place() {
     let mut armings = Vec::new();
@@ -381,6 +422,10 @@ fn its_sources_reach_the_plant_through_portal_alone_and_arm_the_switch_in_one_pl
         }
         assert_eq!(breaches, Vec::<String>::new(), "{}", f.display());
         assert_eq!(portal_breaches(&text), Vec::<String>::new(), "{}", f.display());
+        assert_eq!(store_breaches(&text), Vec::<String>::new(), "{}", f.display());
+        let set_armed = read(&text).idents.iter().filter(|i| *i == "set_armed").count();
+        let allowed = SET_ARMED.iter().find(|(n, _)| *n == name).map_or(0, |(_, k)| *k);
+        assert_eq!(set_armed, allowed, "{}: the plant's arming named {set_armed} times, where {allowed}", f.display());
         assert!(!fs_outside(&f, &text), "{} reaches files of its own: `fs` is the engine's own files', in {FS_FILES:?} alone", f.display());
     }
     assert_eq!(armings, [ARMING_FILE], "the switch is armed once, in {ARMING_FILE}");
@@ -552,4 +597,33 @@ fn portal_is_reached_through_what_the_engine_takes_from_it_alone() {
     let mut listed: Vec<String> = PORTAL.iter().map(|a| a.to_string()).collect();
     listed.sort();
     assert_eq!(used, listed);
+}
+
+#[test]
+fn the_session_s_store_is_reached_by_its_readers_alone() {
+    let one = |t: &str| store_breaches(t);
+    let past = |m: &str| vec![format!("store{m}: the session's store reached past its readers (query_rows, list_tables)")];
+    // Its readers, and portal's module in a path: passed.
+    assert_eq!(one("fn f(l: &Live) { l.store.query_rows(t, q); l.store.list_tables(); }"), Vec::<String>::new());
+    assert_eq!(one("use veredas_portal::store::{RowsQuery, TableKind};\nconst P: usize = veredas_portal::store::MAX_PAGE;"), Vec::<String>::new());
+    // Its other methods, which take SQL or a path, the store bound, handed on, destructured.
+    assert_eq!(one("fn f(l: &Live) { l.store.validate_definition(\"SELECT * FROM read_csv('x')\"); }"), past(".validate_definition"));
+    assert_eq!(one("fn f(l: &Live, p: &Path) { l.store.save_to(p); }"), past(".save_to"));
+    assert_eq!(one("fn f(l: &Live) { let s = &l.store; s.export_all_csv(p); }"), past(""));
+    assert_eq!(one("fn f(l: &Live) { g(&l.store); }"), past(""));
+    assert_eq!(one("fn f(l: &Live) { let Live { store, .. } = l; }"), past(""));
+    assert_eq!(one("fn f(l: &Live) { l.r#store.checkpoint(); }"), past(".checkpoint"));
+    // A comment and a literal are not code.
+    assert_eq!(one("// l.store.save_to(p)\nconst S: &str = \"the store\";"), Vec::<String>::new());
+}
+
+#[test]
+fn the_plant_s_arming_is_named_where_the_run_arms_and_disarms_alone() {
+    // A call of the plant's arming in any other file, or a third in `run.rs`, is counted.
+    let count = |t: &str| read(t).idents.iter().filter(|i| *i == "set_armed").count();
+    assert_eq!(count("fn keep(plant: &dyn Plant) { plant.set_armed(true); }"), 1);
+    assert_eq!(count("fn f(p: &dyn Plant) { p.r#set_armed(true) }"), 1);
+    assert_eq!(count("// p.set_armed(true)\nfn f() {}"), 0);
+    let at = |name: &str| SET_ARMED.iter().find(|(n, _)| *n == name).map_or(0, |(_, k)| *k);
+    assert_eq!((at("record.rs"), at("eval.rs"), at("main.rs"), at("plant.rs"), at("run.rs")), (0, 0, 0, 2, 2));
 }

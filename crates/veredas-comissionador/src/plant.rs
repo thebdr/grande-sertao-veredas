@@ -2,8 +2,9 @@
 //!
 //! A run asks the plant four things: the catalog of tables, the rows of a table in a window of the
 //! store's axis, a write of one OPC UA tag, a send of one catalog message; and it reads the write
-//! switch's position, never setting it. [`LivePlant`] answers them over a portal session held in
-//! this process (`docs/questions.md` Q313, taken: in process first); a reach over portal's HTTP
+//! switch's position, setting it only by the arming its embedder hands it, for a run whose gated
+//! writes the person confirmed (`docs/questions.md` Q314 (b)). [`LivePlant`] answers them over a
+//! portal session held in this process (Q313 (c): in process first); a reach over portal's HTTP
 //! interface would be a second implementation of [`Plant`].
 
 use std::collections::HashMap;

@@ -387,13 +387,13 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
         evidence,
         signatures: Vec::new(),
     };
-    store(&folder, &report)?;
+    write_report(&folder, &report)?;
     Ok(folder)
 }
 
 /// Write a report into its folder: beside it first, then moved into place, so a reader never
 /// meets half a report.
-fn store(folder: &Path, report: &Report) -> Result<(), RecordError> {
+fn write_report(folder: &Path, report: &Report) -> Result<(), RecordError> {
     let text = toml::to_string(report).map_err(|e| RecordError::NotAReport { path: folder.display().to_string(), reason: e.to_string() })?;
     let tmp = folder.join("report.toml.part");
     std::fs::write(&tmp, &text).map_err(io(&tmp))?;
@@ -417,7 +417,7 @@ fn changed(folder: &Path, change: impl FnOnce(&mut Report) -> Result<(), RecordE
     lock.lock().map_err(io(&path))?;
     let mut r = read(folder)?;
     change(&mut r)?;
-    store(folder, &r)?;
+    write_report(folder, &r)?;
     Ok(r)
 }
 

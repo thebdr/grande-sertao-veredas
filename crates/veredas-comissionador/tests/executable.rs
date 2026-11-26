@@ -118,7 +118,7 @@ fn run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict() {
     // it, the run arms the switch for itself, passes, and leaves it off (Q314 (b)).
     let c = veredas_comissionador::load_test(&dir.path().join("chk-012.test")).unwrap();
     let writes = veredas_comissionador::run::gated_writes(&c);
-    let fp = veredas_comissionador::run::writes_fingerprint(&writes);
+    let fp = veredas_comissionador::run::writes_fingerprint(&c);
     let (code, stdout, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off.toml"]));
     assert_eq!((code, stdout.len()), (4, 0));
     let mut want = vec![format!("the run is refused: the test writes, and portal's write switch is off: its 3 gated writes, confirmed as `{fp}`, arm it for the run")];

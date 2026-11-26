@@ -121,9 +121,10 @@ catalog (every table with its columns and types); the rows of a table in a windo
 axis (`DuckStore::query_rows`, newest first, which the engine pages and orders); a write of one
 OPC UA tag (the session's `OpcHandle::write_tags`, the tag found by its table and column in the
 session's compiled spec, the value coerced to the tag's type by `serve::coerce`); a send of one
-catalog message (`ChannelHandle::send`). It reads the switch's position; it never sets it. The
-in-process implementation holds a session's `Live`, all of it public today: nothing is needed
-from portal for the phases below.
+catalog message (`ChannelHandle::send`). It reads the switch's position, and sets it only by the
+arming its embedder hands it (`LivePlant::with_arming`, the session's own `set_writes_armed`), for a
+run whose gated writes the person confirmed (Q314 (b)). The in-process implementation holds a
+session's `Live` and reaches its store by two readers alone (`query_rows`, `list_tables`).
 
 **The clock.** A run keeps a moment on the store's axis (`docs/test-schema.md`, "Time"). A wait
 gathers the rows of every table its condition reads, from the clock on, in stamp order, applies
@@ -136,8 +137,9 @@ the stored window's end is the run's horizon. The same rows give the same verdic
 **Bound before it runs.** Before its first step a run checks the test against the session: the
 session's name against `portal`, the mode against `modes`, every table and column the test and
 its functions read (a column read through a name no table it may hold a row of has among them, an `await`'s and through every copy), every `write` target an OPC UA tag marked writable, every `send` a channel
-and a message of the session, and, live, the switch armed when the test writes. A refusal there
-starts nothing and writes no run.
+and a message of the session, and, live, when the test writes, the switch armed, or the person's
+confirmation of its gated writes (the fingerprint of their list and of every text they depend on)
+with a way to arm it. A refusal there starts nothing and writes no run.
 
 **What a write is.** Live, a `write` or a `send` goes to the plant through portal's handle and the
 step's detail keeps portal's answer word for word; a refusal (the switch turned off mid-run, a

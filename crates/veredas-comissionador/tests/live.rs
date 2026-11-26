@@ -791,8 +791,15 @@ fn a_run_arms_the_switch_for_the_writes_it_was_confirmed_for_and_disarms_it_afte
     };
     let c = checked(&test_of("  step go write plc_main.run := 1\n  step w wait plc_main.speed >= 2.0 timeout 5s\n"));
     let writes = gated_writes(&c);
-    let fp = writes_fingerprint(&writes);
+    let fp = writes_fingerprint(&c);
     assert_eq!((writes, fp.len()), (vec!["write plc_main.run := 1".to_string()], 16));
+    // An edit anywhere in the test, a constant the writes use or a blank in a string among them,
+    // asks again: the fingerprint is of the list and of every text it depends on.
+    let edited = |text: &str| writes_fingerprint(&checked(&test_of(text)));
+    let base = edited("  let t = 1\n  step go write plc_main.run := t\n");
+    assert_ne!(base, edited("  let t = 1000\n  step go write plc_main.run := t\n"));
+    assert_ne!(edited("  step go send sorter.command(code: 1)\n  step r report \"a b\"\n"), edited("  step go send sorter.command(code: 1)\n  step r report \"a  b\"\n"));
+    assert_eq!(base, edited("  let t = 1\n  step go write plc_main.run := t\n"), "the same test, the same fingerprint");
     // Not confirmed, or confirmed for another list: refused, the fingerprint named, nothing written.
     let p = arming();
     let e = run(&c, &p, &RunOptions::live(), &mut |_| {}).unwrap_err();
@@ -812,7 +819,7 @@ fn a_run_arms_the_switch_for_the_writes_it_was_confirmed_for_and_disarms_it_afte
     assert_eq!(tag(&bench, "run"), "Int32(1)");
     // A run that aborts disarms too.
     let aborting = checked(&test_of("  step go write plc_main.run := 1\n  step w wait plc_main.speed >= 9.0 timeout 300ms\n"));
-    let r = run(&aborting, &p, &RunOptions::live().confirming(writes_fingerprint(&gated_writes(&aborting))), &mut |_| {}).unwrap();
+    let r = run(&aborting, &p, &RunOptions::live().confirming(writes_fingerprint(&aborting)), &mut |_| {}).unwrap();
     assert_eq!((r.verdict, s.live().writes_armed()), (RunVerdict::Aborted, false));
     // A switch the run found armed: left as found, confirmed or not.
     s.set_writes_armed(true);
