@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(replay)"
   ],
   "exitCode": 0,
-  "outputSha": "ac73b9eb2f6083f3aa0243ab96a8ca027cacc9e4c651e9cf85f542848879b0b6",
-  "outputTail": "   Compiling ironcalc_base v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/forks/ironcalc/base)\n   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/crates/veredas-abaco)\n   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.40s\n────────────\n Nextest run ID f36742e1-4828-4236-b88a-b8f64637a876 with nextest profile: default\n    Starting 5 tests across 1 binary (132 binaries skipped)\n        PASS [   1.418s] (1/5) veredas-comissionador::replay a_replay_reads_the_plant_right_after_a_write_as_it_stood_before_it\n        PASS [   1.560s] (2/5) veredas-comissionador::replay a_replay_s_write_moves_no_clock_where_the_live_one_moved_to_the_plant_s_answer\n        PASS [   1.619s] (3/5) veredas-comissionador::replay a_replay_never_writes_and_reads_the_stamps_a_write_caused\n        PASS [   2.483s] (4/5) veredas-comissionador::replay a_replay_ends_where_its_window_ends_and_times_out_on_its_own_clock\n        PASS [   6.712s] (5/5) veredas-comissionador::replay a_live_run_s_own_window_replays_to_the_same_verdict_and_values\n────────────\n     Summary [   6.713s] 5 tests run: 5 passed, 0 skipped",
-  "ranAt": "2026-11-25T00:15:35.343Z",
-  "headCommit": "b798e7a0ec5cf984c73a37730d8309333daccba4",
+  "outputSha": "f213b6c15ddf6414bae61c8d12199e9a9495c610de4e4b44dd2066c6f7a9ecb5",
+  "outputTail": "   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/crates/veredas-abaco)\n   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.88s\n────────────\n Nextest run ID bb1177f2-7224-425a-9e5d-35cf8861c7bf with nextest profile: default\n    Starting 6 tests across 1 binary (146 binaries skipped)\n        PASS [   1.046s] (1/6) veredas-comissionador::replay a_run_s_bound_passed_by_a_write_s_answer_replays_on_past_it\n        PASS [   1.395s] (2/6) veredas-comissionador::replay a_replay_reads_the_plant_right_after_a_write_as_it_stood_before_it\n        PASS [   1.531s] (3/6) veredas-comissionador::replay a_replay_s_write_moves_no_clock_where_the_live_one_moved_to_the_plant_s_answer\n        PASS [   1.570s] (4/6) veredas-comissionador::replay a_replay_never_writes_and_reads_the_stamps_a_write_caused\n        PASS [   2.305s] (5/6) veredas-comissionador::replay a_replay_ends_where_its_window_ends_and_times_out_on_its_own_clock\n        PASS [   6.655s] (6/6) veredas-comissionador::replay a_live_run_s_own_window_replays_to_the_same_verdict_and_values\n────────────\n     Summary [   6.655s] 6 tests run: 6 passed, 0 skipped",
+  "ranAt": "2026-11-26T08:12:26.341Z",
+  "headCommit": "3ff1646e727a47a10a85ac3812d0cedb5a96c26f",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/replay.rs",
       "file": "crates/veredas-comissionador/tests/replay.rs",
-      "fileSha": "918c200489769d31229733ae873fc2619de1f4585d52f1c5de1a5ef06b61c536"
+      "fileSha": "79cf7973589c680e297f52e5daea6b9b201fd1bffefb69957bbcee995312943c"
     }
   ]
 }

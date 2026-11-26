@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(live)"
   ],
   "exitCode": 0,
-  "outputSha": "45c44df3902c68ab1c1cbaccff939f8ec2357c055dcc1c705ba2c2467b62325b",
-  "outputTail": "        PASS [   1.791s] ( 9/21) veredas-comissionador::live an_event_moves_the_clock_to_its_row_and_a_read_without_a_value_is_an_error\n        PASS [   2.327s] (10/21) veredas-comissionador::live a_run_arms_the_switch_for_the_writes_it_was_confirmed_for_and_disarms_it_after\n        PASS [   2.611s] (11/21) veredas-comissionador::live a_write_the_switch_or_the_plant_refuses_mid_run_ends_its_step_in_error\n        PASS [   2.618s] (12/21) veredas-comissionador::live functions_take_typed_inputs_give_their_outputs_and_keep_their_bound\n        PASS [   2.807s] (13/21) veredas-comissionador::live an_awaited_row_s_copies_are_followed_in_any_order_and_a_name_s_tables_judged_together\n        PASS [   2.926s] (14/21) veredas-comissionador::live awaits_over_a_view_take_each_row_of_a_stamp_once\n        PASS [   2.953s] (15/21) veredas-comissionador::live a_live_wait_for_a_duration_waits_until_its_bound_has_passed\n        PASS [   4.431s] (16/21) veredas-comissionador::live the_run_s_bound_is_the_run_s_clock_s_live_and_replayed_alike\n        PASS [   5.126s] (17/21) veredas-comissionador::live rows_sharing_a_stamp_are_judged_together_and_each_awaited\n        PASS [   5.743s] (18/21) veredas-comissionador::live a_wait_and_a_read_agree_on_a_stamp_two_keys_share\n        PASS [   6.544s] (19/21) veredas-comissionador::live the_worked_example_passes_live_against_the_machine\n        PASS [   6.800s] (20/21) veredas-comissionador::live timeouts_the_run_s_bound_and_the_tester_s_stop\n        PASS [   7.500s] (21/21) veredas-comissionador::live the_worked_example_fails_where_the_destination_is_free\n────────────\n     Summary [   7.500s] 21 tests run: 21 passed, 0 skipped",
-  "ranAt": "2026-11-26T07:23:30.745Z",
-  "headCommit": "3abc0b7caf4b08b3488fb931e0ecf54b9af35016",
+  "outputSha": "8dcd5082c57ed91018e35e6a788bdf2a6ab4e5fd776c475d50c1ba941acea337",
+  "outputTail": "        PASS [   2.272s] (11/23) veredas-comissionador::live a_run_arms_the_switch_for_the_writes_it_was_confirmed_for_and_disarms_it_after\n        PASS [   2.607s] (12/23) veredas-comissionador::live a_write_the_switch_or_the_plant_refuses_mid_run_ends_its_step_in_error\n        PASS [   2.835s] (13/23) veredas-comissionador::live functions_take_typed_inputs_give_their_outputs_and_keep_their_bound\n        PASS [   2.905s] (14/23) veredas-comissionador::live a_long_replayed_window_stops_at_the_tester_s_word\n        PASS [   2.933s] (15/23) veredas-comissionador::live a_live_wait_for_a_duration_waits_until_its_bound_has_passed\n        PASS [   2.962s] (16/23) veredas-comissionador::live an_awaited_row_s_copies_are_followed_in_any_order_and_a_name_s_tables_judged_together\n        PASS [   3.081s] (17/23) veredas-comissionador::live awaits_over_a_view_take_each_row_of_a_stamp_once\n        PASS [   4.344s] (18/23) veredas-comissionador::live the_run_s_bound_is_the_run_s_clock_s_live_and_replayed_alike\n        PASS [   5.040s] (19/23) veredas-comissionador::live rows_sharing_a_stamp_are_judged_together_and_each_awaited\n        PASS [   5.793s] (20/23) veredas-comissionador::live a_wait_and_a_read_agree_on_a_stamp_two_keys_share\n        PASS [   6.432s] (21/23) veredas-comissionador::live the_worked_example_passes_live_against_the_machine\n        PASS [   6.941s] (22/23) veredas-comissionador::live timeouts_the_run_s_bound_and_the_tester_s_stop\n        PASS [   7.470s] (23/23) veredas-comissionador::live the_worked_example_fails_where_the_destination_is_free\n────────────\n     Summary [   7.479s] 23 tests run: 23 passed, 0 skipped",
+  "ranAt": "2026-11-26T08:12:04.960Z",
+  "headCommit": "3ff1646e727a47a10a85ac3812d0cedb5a96c26f",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/live.rs",
       "file": "crates/veredas-comissionador/tests/live.rs",
-      "fileSha": "5d907911b6602a8b61ca5959814a4f3777c7e425b489738b477822730cfcc8f0"
+      "fileSha": "82b1be743bd31f934d5249899d0d4d0d5226048d0dd0f311d0c205b37676d39e"
     }
   ]
 }
