@@ -23,7 +23,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use ironcalc_base::Model;
-use ironcalc_base::cf_types::{CfRule, Cfvo, ConditionalFormatting};
+use ironcalc_base::cf_types::{CfRule, Cfvo, ConditionalFormatting, Icon, PeriodType, TextOperator, ValueOperator};
 use ironcalc_base::expressions::token::get_error_by_english_name;
 use ironcalc_base::external::{ExternalBook, ExternalValue};
 use ironcalc_base::sheet_data::SheetData;
@@ -1026,6 +1026,13 @@ impl Parts<'_> {
         if let Some(path) = unread_in_tagged(&json, &back, String::new()) {
             return Err(self.bad(format!("{name}: `{path}` is a key nothing reads")));
         }
+        // a structure in another form than the file's, which serde reads too but whose keys no
+        // reading here sees (refute round 17): a list where the value written back holds a table
+        // (serde reads a structure from its fields' values in order, a tagged one with its tag
+        // first), a table where it holds a text (a variant of no data spelled `{ Min = {} }`)
+        if let Some((path, what)) = form_unlike(&json, &back, String::new()) {
+            return Err(self.bad(format!("{name}: `{path}` is {what}")));
+        }
         Ok(value)
     }
 }
@@ -1123,6 +1130,24 @@ fn variant_objects(json: &serde_json::Value) -> Vec<(String, &serde_json::Value,
                 out.push((format!("{at}.{end}"), cfvo, read_back::<Cfvo> as TaggedReader));
             }
         }
+        // and its enums of no data, a text in the file, a table to serde's buffer too (refute
+        // round 17): a rule's operator (a Text rule's of texts, any other's of values), period and
+        // icon, an icon set's thresholds' icons
+        let operator = if rule.get("type").and_then(J::as_str) == Some("Text") {
+            read_back::<TextOperator> as TaggedReader
+        } else {
+            read_back::<ValueOperator> as TaggedReader
+        };
+        for (key, read) in [("operator", operator), ("time_period", read_back::<PeriodType> as TaggedReader), ("icon", read_back::<Icon> as TaggedReader)] {
+            if let Some(value) = rule.get(key).filter(|v| v.is_object()) {
+                out.push((format!("{at}.{key}"), value, read));
+            }
+        }
+        for (m, threshold) in list(rule.get("thresholds")).into_iter().enumerate() {
+            if let Some(icon) = threshold.get("icon").filter(|v| v.is_object()) {
+                out.push((format!("{at}.thresholds.{m}.icon"), icon, read_back::<Icon> as TaggedReader));
+            }
+        }
     }
     for (n, book) in list(json.get("external_books")).into_iter().enumerate() {
         for (m, sheet) in list(book.get("sheets")).into_iter().enumerate() {
@@ -1137,24 +1162,42 @@ fn variant_objects(json: &serde_json::Value) -> Vec<(String, &serde_json::Value,
 }
 
 /// The first key, in the order of the part, beside or in place of an externally tagged enum's
-/// variant ([`variant_objects`]), by its path: read alone, an object that names a variant none of
-/// the enum's has that key nothing reads (`Numbr`); one of two keys or more has, beside the one
-/// key that reads alone as a variant, the others (`note`). An object no key of which reads alone,
-/// or more than one, names none: the deserialiser's words stand.
+/// variant ([`variant_objects`]), by its path, each object read alone as the part reads it (a
+/// variant of no data spelled `{ Min = {} }` is `Min` to serde's buffer): an object naming a
+/// variant none of the enum's has that key nothing reads (`Numbr`; the enum's own words, not an
+/// inner one's: a cached error `{ Error = "Error" }` names the engine's error codes); one of two keys
+/// or more has, beside the one key that reads alone as a variant, the others (`note`); a variant of
+/// no data holding keys has them (`Min.note`). An object no key of which reads alone, or more than
+/// one, names none: the deserialiser's words stand.
 fn key_beside_a_variant(json: &serde_json::Value) -> Option<String> {
     use serde_json::Value as J;
+    let names = |error: &str| -> Vec<String> {
+        error.split_once("expected").map(|(_, e)| e.split('`').skip(1).step_by(2).map(str::to_string).collect()).unwrap_or_default()
+    };
     variant_objects(json).into_iter().find_map(|(path, obj, read)| {
         let J::Object(o) = obj else { return None };
         let error = read(obj).err()?;
+        // a key read alone as the part reads it: `{ V = … }`, or `V` where it holds an empty table
+        let alone = |k: &String| {
+            read(&J::Object([(k.clone(), o[k].clone())].into_iter().collect())).is_ok()
+                || (o[k].as_object().is_some_and(serde_json::Map::is_empty) && read(&J::String(k.clone())).is_ok())
+        };
         if let Some((_, rest)) = error.split_once("unknown variant `")
             && let Some((name, _)) = rest.split_once('`')
         {
-            return o.contains_key(name).then(|| format!("{path}.{name}"));
+            // the enum's own variants, as a name none of them is shows them
+            let own = read(&J::Object([("\u{1}".to_string(), J::Null)].into_iter().collect())).err().map(|e| names(&e)).unwrap_or_default();
+            return (o.contains_key(name) && !own.is_empty() && names(&error) == own).then(|| format!("{path}.{name}"));
+        }
+        if let [(k, J::Object(inner))] = o.iter().collect::<Vec<_>>().as_slice()
+            && !inner.is_empty()
+            && read(&J::String((*k).clone())).is_ok()
+        {
+            return inner.keys().next().map(|key| format!("{path}.{k}.{key}"));
         }
         if o.len() < 2 {
             return None;
         }
-        let alone = |k: &String| read(&J::Object([(k.clone(), o[k].clone())].into_iter().collect())).is_ok();
         let variants: Vec<&String> = o.keys().filter(|k| alone(k)).collect();
         match variants.as_slice() {
             [variant] => o.keys().find(|k| k != variant).map(|k| format!("{path}.{k}")),
@@ -1183,7 +1226,11 @@ fn key_replacing_in(obj: &serde_json::Value, read: TaggedReader, part_budget: &m
     let mut budget = 4096usize.min(*part_budget);
     let given = budget;
     explore_from(obj, obj, &error, 0, read, &mut budget, &mut outcomes);
-    *part_budget -= given - budget;
+    // a search that ended on a field deleted, no key unread, is no search to bound (refute round
+    // 17: hundreds of rules of deleted tags spent the part's readings)
+    if !outcomes.iter().any(Vec::is_empty) {
+        *part_budget -= given - budget;
+    }
     if budget == 0 {
         return None;
     }
@@ -1337,6 +1384,21 @@ fn insert_at(json: &mut serde_json::Value, path: &[String], field: &str, value: 
             true
         }
         _ => false,
+    }
+}
+
+/// The first place, in the order of the part, where the file holds another form than the value
+/// read written back: a list where it holds a table, or a table where it holds a text. The writer
+/// writes every value in the form it writes it back, so nothing it writes is refused.
+fn form_unlike(read: &serde_json::Value, back: &serde_json::Value, path: String) -> Option<(String, &'static str)> {
+    use serde_json::Value as J;
+    let at = |k: &str| if path.is_empty() { k.to_string() } else { format!("{path}.{k}") };
+    match (read, back) {
+        (J::Array(_), J::Object(_)) => Some((path, "a list where the file holds a table")),
+        (J::Object(_), J::String(_)) => Some((path, "a table where the file holds a text")),
+        (J::Object(r), J::Object(b)) => r.iter().find_map(|(k, v)| b.get(k).and_then(|bv| form_unlike(v, bv, at(k)))),
+        (J::Array(r), J::Array(b)) => r.iter().zip(b).enumerate().find_map(|(i, (v, bv))| form_unlike(v, bv, at(&i.to_string()))),
+        _ => None,
     }
 }
 

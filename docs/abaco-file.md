@@ -23,7 +23,12 @@ with the field given, as each kind of value and each variant of a tag, the readi
 fewest keys unread deciding, never by its spelling. So is a key beside an externally tagged
 variant, or in its place (a threshold's `cfvo`, `{ Percent = 33.0 }`, given a `note`, or a linked
 workbook's cached cell spelled `{ Numbr = 1.0 }`), each such object read alone. A field deleted, a
-tag too, no key standing for it, is refused in the reader's words (``missing field `min` ``). A tool's own records and state are tables whose keys
+tag too, no key standing for it, is refused in the reader's words (``missing field `min` ``).
+A variant is read as the part reads it (`{ Min = {} }` as `Min`), a rule's operator, period and
+icons among the variants read so. A structure is written as a table, a variant of no data as a
+text: a list where a table stands (serde reads a structure from its fields' values in order) or a
+table where a text does is refused by its path; in a part that does not read otherwise, in the
+reader's words. A tool's own records and state are tables whose keys
 the tool chooses.
 
 ## The parts

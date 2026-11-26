@@ -1737,3 +1737,79 @@ fn the_reader_knows_every_tagged_type_of_the_engine() {
     let body = &body[..body.find("\n}").unwrap()];
     assert!(!body.lines().skip(1).any(|l| l.trim_end().ends_with('{')), "a variant of `Color` holds keys:\n{body}");
 }
+
+#[test]
+fn a_structure_in_another_form_and_a_variant_read_as_the_part_reads_it_are_named() {
+    // refute round 17
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("forms.abaco");
+    let refusal = |parts: &[(String, Vec<u8>)], part: &str, edit: &dyn Fn(&str) -> String| -> String {
+        let edited: Vec<(String, Vec<u8>)> = parts
+            .iter()
+            .map(|(n, b)| if n == part || (part == "sheets/" && n.starts_with("sheets/")) { (n.clone(), edit(std::str::from_utf8(b).unwrap()).into_bytes()) } else { (n.clone(), b.clone()) })
+            .collect();
+        std::fs::write(&path, abacofile::zip_of(&edited).unwrap()).unwrap();
+        abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_else(|| "read, not refused".into())
+    };
+    // a structure written as a list, which serde reads (a tagged one with its tag first): its keys
+    // no reading here sees, refused by its path where the part reads
+    let mut example = worked_example();
+    example.book.ensure_calculated();
+    let parts = abacofile::parts(&example).unwrap();
+    let thresholds = r##"[{ cfvo = "Min", color = "#FF0000", colr = "x" }, { cfvo = "Max", color = "#00FF00" }]"##;
+    for (formats, want) in [
+        (format!(r#"[{{ range = "B1:B2", priority = 1, cf_rule = ["ColorScale", {thresholds}] }}]"#), "`conditional_formatting.0.cf_rule` is a list where the file holds a table"),
+        (format!(r#"[["B1:B2", {{ type = "ColorScale", thresholds = {thresholds} }}, 1]]"#), "`conditional_formatting.0` is a list where the file holds a table"),
+        (format!(r#"[{{ range = "B1:B2", priority = 1, cf_rule = {{ type = "ColorScale", thresholds = {thresholds} }} }}]"#), "`conditional_formatting.0.cf_rule.thresholds.0.colr` is a key nothing reads"),
+    ] {
+        let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replace("conditional_formatting = []", &format!("conditional_formatting = {formats}")));
+        assert!(got.contains(want), "{formats}: {got}");
+    }
+    // where the part does not read, serde's words (a limit the clause states)
+    let got = refusal(&parts, "sheets/01-Loads.toml", &|t| {
+        t.replace("conditional_formatting = []", &format!(r#"conditional_formatting = [["B1:B2", {{ kind = "ColorScale", thresholds = {thresholds} }}, 1]]"#))
+    });
+    assert!(got.contains("missing field `type`"), "{got}");
+    // a variant read alone as the part reads it (`{ Min = {} }` is `Min` to serde's buffer), and the
+    // enums of no data of a rule (an icon, an operator, a period)
+    let rules = AbacoFile::new(open(&corpus_dir().join("conditional_formatting/cf_tests.xlsx")));
+    let parts = abacofile::parts(&rules).unwrap();
+    let holding = |s: &str| parts.iter().find(|(n, b)| n.starts_with("sheets/") && std::str::from_utf8(b).unwrap().contains(s)).map(|(n, _)| n.clone()).unwrap_or_else(|| panic!("{s}"));
+    for (from, to, want) in [
+        ("cfvo = \"Min\"", "cfvo = { Min = {}, note = 1 }", ".cfvo.note` is a key nothing reads"),
+        ("cfvo = \"Min\"", "cfvo = { Min = { note = 1 } }", ".cfvo.Min.note` is a key nothing reads"),
+        ("cfvo = \"Min\"", "cfvo = { Min = {} }", ".cfvo` is a table where the file holds a text"),
+        ("icon = \"Circle\"", "icon = { Circle = {}, note = 1 }", ".icon.note` is a key nothing reads"),
+        ("icon = \"Circle\"", "icon = { Circlee = {} }", ".icon.Circlee` is a key nothing reads"),
+        ("operator = \"Contains\"", "operator = { Contains = {}, note = 1 }", ".cf_rule.operator.note` is a key nothing reads"),
+        ("time_period = \"Yesterday\"", "time_period = { Yesterday = {}, note = 1 }", ".cf_rule.time_period.note` is a key nothing reads"),
+        ("thresholds = [[{ Percent = 0.0 }, true]", "thresholds = [[{ Percent = 0.0, note = 1 }, true]", ".cf_rule.thresholds.0.0.note` is a key nothing reads"),
+    ] {
+        let got = refusal(&parts, &holding(from), &|t| t.replacen(from, to, 1));
+        assert!(got.contains(want), "{to}: {got}");
+    }
+    // a cached error is an inner enum's: its unknown code names no key
+    let linked = AbacoFile::new(open(&corpus_dir().join("link_test.xlsx")));
+    let linked_parts = abacofile::parts(&linked).unwrap();
+    let got = refusal(&linked_parts, "workbook.toml", &|t| t.replacen("cells = []", "cells = [[1, 1, { Error = \"Error\" }]]", 1));
+    assert!(!got.contains("is a key nothing reads") && got.contains("workbook.toml"), "{got}");
+    // a thousand rules of deleted tags before one whose tag is replaced: the replacing key named
+    // (a search ended on a field deleted is not charged to the part's readings)
+    let sheet = holding("type = \"DataBar\"");
+    let text = String::from_utf8(parts.iter().find(|(n, _)| *n == sheet).unwrap().1.clone()).unwrap();
+    let blocks: Vec<&str> = text.split("\n[[conditional_formatting]]\n").collect();
+    let data_bar = blocks.iter().find(|b| b.contains("type = \"DataBar\"")).unwrap().replacen("type = \"DataBar\"\n", "", 1);
+    let cell_is = blocks.iter().find(|b| b.contains("type = \"CellIs\"")).map(|b| b.replacen("type = \"CellIs\"", "kind = \"CellIs\"", 1));
+    let replaced = cell_is.unwrap_or_else(|| blocks.iter().find(|b| b.contains("type = \"Text\"")).unwrap().replacen("type = \"Text\"", "kind = \"Text\"", 1));
+    let first = text.find("\n[[conditional_formatting]]\n").unwrap();
+    let mut planted = text[..first].to_string();
+    for _ in 0..1000 {
+        planted.push_str("\n[[conditional_formatting]]\n");
+        planted.push_str(&data_bar);
+    }
+    planted.push_str("\n[[conditional_formatting]]\n");
+    planted.push_str(&replaced);
+    planted.push_str(&text[first..]);
+    let got = refusal(&parts, &sheet, &|_| planted.clone());
+    assert!(got.contains("`conditional_formatting.1000.cf_rule.kind` is a key nothing reads"), "{}", &got[..got.len().min(300)]);
+}
