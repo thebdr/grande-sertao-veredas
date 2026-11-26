@@ -1,0 +1,26 @@
+{
+  "clause": "C-156",
+  "command": "sh -c cargo test -p orcl-front --test shell && cargo +nightly-2026-11-21 test -p orcl-front --features driver --test lowering && cargo +nightly-2026-11-21 clippy -p orcl-front --features driver --all-targets -- -D warnings",
+  "commandArgv": [
+    "sh",
+    "-c",
+    "cargo test -p orcl-front --test shell && cargo +nightly-2026-11-21 test -p orcl-front --features driver --test lowering && cargo +nightly-2026-11-21 clippy -p orcl-front --features driver --all-targets -- -D warnings"
+  ],
+  "exitCode": 0,
+  "outputSha": "f5d1703695ba4cf1bdc5234594f67823e5107fbda847d4370bd9ab64837738ca",
+  "outputTail": "test a_statement_the_interpreter_does_not_have_is_refused_where_it_stands ... ok\ntest a_scan_s_program_error_names_its_place_in_the_source_map ... ok\ntest the_driver_takes_its_options_from_the_environment_as_a_wrapper_and_lowers_no_test_build ... ok\ntest arithmetic_bits_comparisons_and_casts_run_lowered_as_they_run_natively ... ok\ntest the_conveyor_runs_lowered_as_it_runs_natively ... ok\ntest enums_arrays_options_tuples_references_durations_and_constants_run_lowered_as_natively ... ok\ntest the_probe_of_every_block_of_orcl_std_runs_lowered_as_it_runs_natively ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running tests/shell.rs (target/debug/build/orcl-front/b84bf110bd17d9b6/out/shell-b84bf110bd17d9b6)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running tests/lowering.rs (target/debug/build/orcl-front/69721d5d8bf7b6f8/out/lowering-69721d5d8bf7b6f8)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s",
+  "ranAt": "2026-11-26T23:14:20.170Z",
+  "headCommit": "90d7cfa2e99991f2edb878507437280460ef6a3a",
+  "tests": [
+    {
+      "name": "crates/orcl-front/tests/shell.rs",
+      "file": "crates/orcl-front/tests/shell.rs",
+      "fileSha": "be91194cd2b4cf4dbaed69561029eb8f7e038c2c2eafe3cdd84290596820e455"
+    },
+    {
+      "name": "crates/orcl-front/tests/lowering.rs",
+      "file": "crates/orcl-front/tests/lowering.rs",
+      "fileSha": "ba2efd5484b91aa3016aae896db2aa554dbde70090a355dccdd425e1d8dbaef3"
+    }
+  ]
+}
