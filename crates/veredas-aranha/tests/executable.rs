@@ -214,9 +214,13 @@ fn a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did()
         let listening = started(&["listen", "a0", "a1", "--for", "3", "--identify", "--ports", "--out", before.to_str().unwrap()]);
         let run = bench::start("executable-before", BEFORE);
         let out = listening.wait_with_output().unwrap();
-        // Three seconds, the Identify inside them, the reads after: not a second more.
+        // Three seconds, the Identify inside them, the reads after: not a second and a half more to
+        // the scan's own stamp, made before it is written (a disk the machine's other work keeps
+        // busy may take seconds to write and sync it, no part of the listening).
         let took = clock.elapsed();
-        assert!(took >= std::time::Duration::from_secs(3) && took < std::time::Duration::from_millis(4500), "{took:?}");
+        assert!(took >= std::time::Duration::from_secs(3), "{took:?}");
+        let taken = std::time::Duration::from_nanos(Scan::read_file(&before).unwrap().taken_ns - t0);
+        assert!(taken >= std::time::Duration::from_secs(3) && taken < std::time::Duration::from_millis(4500), "{taken:?}");
         let (status, o, e) = bench::end(run);
         assert!(status.success(), "the bench: {o}\n{e}");
         assert_eq!(out.status.code(), Some(0), "{}\n{}", text(&out.stdout), text(&out.stderr));
@@ -350,12 +354,15 @@ fn a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did()
         assert!(said.lines().any(|l| l == "a0: 0 device(s) answered the Identify"), "{said}");
         assert!(said.lines().any(|l| l.starts_with("a1: the Identify was not asked: ")), "{said}");
         assert!(Scan::read_file(&downed).is_ok());
-        // Without --for: ten seconds.
+        // Without --for: ten seconds, to the scan's own stamp as above.
+        let t0 = veredas_aranha::wire::stamp(std::time::SystemTime::now());
         let clock = std::time::Instant::now();
         let ten = aranha(&["listen", "a0", "--out", d.join("ten.toml").to_str().unwrap()]);
         assert_eq!(ten.status.code(), Some(0), "{}", text(&ten.stderr));
         let took = clock.elapsed();
-        assert!(took >= std::time::Duration::from_secs(10) && took < std::time::Duration::from_millis(11500), "{took:?}");
+        assert!(took >= std::time::Duration::from_secs(10), "{took:?}");
+        let taken = std::time::Duration::from_nanos(Scan::read_file(&d.join("ten.toml")).unwrap().taken_ns - t0);
+        assert!(taken >= std::time::Duration::from_secs(10) && taken < std::time::Duration::from_millis(11500), "{taken:?}");
     });
 
     // The diff, outside the private network: the files are all it needs.
