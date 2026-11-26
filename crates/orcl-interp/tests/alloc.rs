@@ -533,3 +533,72 @@ fn the_larger_region_listed_first_and_copied_in_part_through_a_reference_allocat
     assert_eq!((got, asked), (Ok(vec![]), 0), "its copy");
     assert_eq!(m.region(RegionId(0)), Some(&state[..32].repeat(2)[..]), "prev is cur");
 }
+
+// The twenty-second refute round's tests: the largest of three, listed between the other two, for a callee, an
+// entry's result and a region.
+
+/// `main` calls `small`, `large` and `small` again: the largest in slots in the middle of its calls.
+#[test]
+fn a_function_whose_largest_callee_is_called_between_two_smaller_has_room_for_it() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let big = b.ty(Type::Array { element: u8t, len: 64 });
+    let leaf = |b: &mut Build, name: &str, extra: &[TypeId], v: i128| {
+        let mut types = vec![u8t];
+        types.extend_from_slice(extra);
+        b.function(Function { name: name.into(), params: 0, locals: locals(&types), blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, v)])), 1)], ret())] })
+    };
+    let small = leaf(&mut b, "small", &[], 1);
+    let large = leaf(&mut b, "large", &[big], 2);
+    let call = |f, dest, next| Terminator::Call { callee: Callee::Function(f), args: vec![], dest: place(dest), next: BlockId(next), at: at(1) };
+    let main = b.function(Function {
+        name: "main".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t, u8t]),
+        blocks: vec![block(vec![], call(small, 1, 1)), block(vec![], call(large, 2, 2)), block(vec![], call(small, 1, 3)), block(vec![assign(place(0), Value::Use(copy(2)), 2)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let got = m.call(main, &[]).map(|r| r.to_vec());
+    assert_eq!(got, Ok(vec![int(Int::U8, 2)]));
+}
+
+/// Three functions, the one returning the most slots in the middle, called as the entry with nothing allocated.
+#[test]
+fn an_entry_returning_the_most_slots_listed_between_two_others_allocates_nothing() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let wide = b.ty(Type::Array { element: u8t, len: 8 });
+    let c8 = |v| konst(u8t, vec![int(Int::U8, v)]);
+    b.function(Function { name: "first".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(c8(1)), 1)], ret())] });
+    let mid = b.function(Function {
+        name: "mid".into(),
+        params: 0,
+        locals: locals(&[wide]),
+        blocks: vec![block(vec![assign(place(0), Value::Aggregate(wide, None, (0..8).map(c8).collect()), 1)], ret())],
+    });
+    b.function(Function { name: "last".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(c8(1)), 1)], ret())] });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let (got, asked) = watching(|| m.call(mid, &[]).map(|r| r.len()));
+    assert_eq!((got, asked), (Ok(8), 0));
+}
+
+/// Four regions, the two largest in the middle, one copied whole into the other through references: nothing allocated.
+#[test]
+fn the_largest_of_three_regions_listed_in_the_middle_copied_whole_allocates_nothing() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let wide = b.ty(Type::Array { element: u8t, len: 8 });
+    let (rw, unit) = (b.reference(wide, true), b.unit());
+    // fn copy(a: &mut [u8; 8], b: &mut [u8; 8]) { *b = *a } with no local of the array's size
+    let f = b.function(Function {
+        name: "copy".into(),
+        params: 2,
+        locals: locals(&[unit, rw, rw]),
+        blocks: vec![block(vec![assign(proj(2, vec![Projection::Deref]), Value::Use(copy_at(proj(1, vec![Projection::Deref]))), 1)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[u8t, wide, wide, u8t]).unwrap();
+    m.set_region(RegionId(1), &(0..8).map(|v| int(Int::U8, v)).collect::<Vec<_>>()).unwrap();
+    let (got, asked) = watching(|| m.call(f, &[Arg::Ref(RegionId(1)), Arg::Ref(RegionId(2))]).map(|_| ()));
+    assert_eq!((got, asked), (Ok(()), 0));
+    assert_eq!(m.region(RegionId(2)), m.region(RegionId(1)));
+}

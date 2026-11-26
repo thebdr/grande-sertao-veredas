@@ -1705,3 +1705,162 @@ fn a_local_of_no_such_type_before_a_sound_one_is_refused() {
     println!("a local of type 99 before a u8: {got:?}");
     assert_eq!(got, Err(LoadError::Function { function: "f".into(), reason: "a local of no such type" }));
 }
+
+// The twenty-second refute round's tests: the lists the twenty-first missed, each met with a bad element before or
+// between sound ones (a switch's targets and values, a variant's deep field, a statement and a function before sound
+// ones, a region of no such type, a None's first payload slot, a bool's slot, a middle argument, part and field).
+
+fn refused_at_r22(function: &str, block: u32, statement: Option<u32>, reason: &'static str) -> Result<(), LoadError> {
+    Err(LoadError::Instruction { function: function.into(), block, statement, reason })
+}
+
+/// `switchInt(_1)` on a `u8` whose first target is bad and a later one sound, and one whose middle target is bad.
+#[test]
+fn a_switch_whose_first_or_middle_target_is_bad_is_refused() {
+    type Case = (&'static str, Vec<(i128, BlockId)>, &'static str);
+    let cases: Vec<Case> = vec![
+        ("first block", vec![(0, BlockId(9)), (1, BlockId(1))], "no such block"),
+        ("middle block", vec![(0, BlockId(1)), (1, BlockId(9)), (2, BlockId(1))], "no such block"),
+        ("first value", vec![(256, BlockId(1)), (1, BlockId(1))], "a switch's value outside its operand's type"),
+        ("middle value", vec![(0, BlockId(1)), (-1, BlockId(1)), (2, BlockId(1))], "a switch's value outside its operand's type"),
+    ];
+    for (name, targets, reason) in cases {
+        let mut b = Build::default();
+        let u8t = b.int(Int::U8);
+        b.function(Function {
+            name: "f".into(),
+            params: 1,
+            locals: locals(&[u8t, u8t]),
+            blocks: vec![
+                block(vec![], Terminator::SwitchInt { value: copy(1), targets: targets.clone(), otherwise: BlockId(1), at: at(1) }),
+                block(vec![assign(place(0), Value::Use(copy(1)), 2)], ret()),
+            ],
+        });
+        let got = Machine::load(b.program.clone(), &[]).map(|_| ());
+        assert_eq!(got, refused_at_r22("f", 0, None, reason), "{name}");
+    }
+}
+
+/// `E_k { A(E_{k-1}, u8), B(u8) }`, innermost first: a variant's deep field before a shallow field of its own.
+#[test]
+fn a_variant_whose_deep_field_comes_before_a_shallow_one_counts_the_deep_one() {
+    let program = |depth: u32| {
+        let mut b = Build::default();
+        b.program.types.push(Type::Int(Int::U8));
+        for k in 1..=depth {
+            b.program.types.push(Type::Enum {
+                name: format!("E{k}"),
+                discriminant: Int::U8,
+                variants: vec![
+                    Variant {
+                        name: "A".into(),
+                        discriminant: 0,
+                        fields: vec![Field { name: "0".into(), ty: TypeId(k - 1) }, Field { name: "1".into(), ty: TypeId(0) }],
+                    },
+                    Variant { name: "B".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: TypeId(0) }] },
+                ],
+            });
+        }
+        b.program
+    };
+    let got = Machine::load(program(300), &[]).map(|_| ());
+    assert!(matches!(got, Err(LoadError::Type { reason: "nested too deep", .. })), "{got:?}");
+    assert!(Machine::load(program(200), &[]).is_ok(), "200 deep loads");
+}
+
+/// A bad statement before a sound one in its block, and in a block before a sound block.
+#[test]
+fn a_bad_statement_before_a_sound_one_is_refused_where_it_stands() {
+    let mut b = Build::default();
+    let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
+    let good = |line| assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 1)])), line);
+    let bad = || assign(place(0), Value::Use(konst(u16t, vec![int(Int::U16, 1)])), 9);
+    let mut p = Build { program: b.program.clone() };
+    p.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![good(1), bad(), good(2)], ret())] });
+    let got = Machine::load(p.program.clone(), &[]).map(|_| ());
+    assert_eq!(got, refused_at_r22("f", 0, Some(1), "a value of another type than its place"), "a statement before a sound one");
+    let mut p = Build { program: b.program.clone() };
+    p.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![bad()], Terminator::Goto(BlockId(1))), block(vec![good(2)], ret())] });
+    let got = Machine::load(p.program, &[]).map(|_| ());
+    assert_eq!(got, refused_at_r22("f", 0, Some(0), "a value of another type than its place"), "a block before a sound one");
+    // a bad function listed before a sound one
+    let mut p = Build { program: Program { types: b.program.types.clone(), ..Program::default() } };
+    p.function(Function { name: "bad".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![bad()], ret())] });
+    p.function(Function { name: "good".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![good(1)], ret())] });
+    let got = Machine::load(p.program.clone(), &[]).map(|_| ());
+    assert_eq!(got, refused_at_r22("bad", 0, Some(0), "a value of another type than its place"), "a function before a sound one");
+}
+
+/// A region of no such type listed before a sound one.
+#[test]
+fn a_region_of_no_such_type_before_a_sound_one_is_refused() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let got = Machine::load(b.program.clone(), &[TypeId(40), u8t]).map(|_| ());
+    assert_eq!(got, Err(LoadError::Region { index: 0, reason: "a region of no such type" }));
+    let got = Machine::load(b.program, &[u8t, TypeId(40), u8t]).map(|_| ());
+    assert_eq!(got, Err(LoadError::Region { index: 1, reason: "a region of no such type" }));
+}
+
+/// An `Option<Duration>` `None` whose first payload slot is written, its second not: no value of the type.
+#[test]
+fn a_none_with_only_its_first_payload_slot_written_is_no_value() {
+    let mut b = Build::default();
+    let d = b.ty(Type::Duration);
+    let opt = b.option(d);
+    let unit = b.unit();
+    let stray = vec![int(Int::Isize, 0), int(Int::U64, 5), Scalar::Uninit];
+    let take = b.function(Function { name: "take".into(), params: 1, locals: locals(&[unit, opt]), blocks: vec![block(vec![], ret())] });
+    let mut m = Machine::load(b.program.clone(), &[opt]).unwrap();
+    let got = m.set_region(RegionId(0), &stray);
+    assert_eq!(got, Err(HostError::Slots), "as a region");
+    assert_eq!(m.start(take, &[Arg::Value(&stray)]), Err(HostError::Arguments), "as an argument");
+    let mut p = Build { program: b.program.clone() };
+    p.function(Function { name: "f".into(), params: 0, locals: locals(&[opt]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(opt, stray.clone())), 1)], ret())] });
+    assert_eq!(Machine::load(p.program, &[]).map(|_| ()), refused_at_r22("f", 0, Some(0), "a constant whose slots are not its type's"), "as a constant");
+}
+
+/// A `bool` given a slot of another kind (an integer, an unwritten slot): no value of the type.
+#[test]
+fn a_bool_given_a_slot_of_another_kind_is_no_value() {
+    let mut b = Build::default();
+    let boolean = b.bool();
+    let unit = b.unit();
+    let take = b.function(Function { name: "take".into(), params: 1, locals: locals(&[unit, boolean]), blocks: vec![block(vec![], ret())] });
+    let mut m = Machine::load(b.program.clone(), &[boolean]).unwrap();
+    for slot in [int(Int::U8, 1), Scalar::F32(1.0), Scalar::Uninit] {
+        let got = m.set_region(RegionId(0), &[slot]);
+        assert_eq!(got, Err(HostError::Slots), "{slot:?} as a region");
+        assert_eq!(m.start(take, &[Arg::Value(&[slot])]), Err(HostError::Arguments), "{slot:?} as an argument");
+        let mut p = Build { program: b.program.clone() };
+        p.function(Function { name: "f".into(), params: 0, locals: locals(&[boolean]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(boolean, vec![slot])), 1)], ret())] });
+        assert_eq!(Machine::load(p.program, &[]).map(|_| ()), refused_at_r22("f", 0, Some(0), "a constant whose slots are not its type's"), "{slot:?} as a constant");
+    }
+}
+
+/// A call whose middle argument is of another type, an aggregate whose middle part is, a structure value whose middle
+/// field is (the ends of each list sound).
+#[test]
+fn a_middle_argument_part_and_field_of_another_type_are_refused() {
+    let mut b = Build::default();
+    let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
+    let triple = b.tuple(&[u8t, u8t, u8t]);
+    let g = b.function(Function { name: "g".into(), params: 3, locals: locals(&[u8t, u8t, u8t, u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(2)), 1)], ret())] });
+    let mut p = Build { program: b.program.clone() };
+    p.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t, u16t]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(g), args: vec![copy(1), copy(2), copy(1)], dest: place(0), next: BlockId(1), at: at(2) }),
+            block(vec![], ret()),
+        ],
+    });
+    assert_eq!(Machine::load(p.program, &[]).map(|_| ()), refused_at_r22("f", 0, None, "an argument of another type than its parameter"), "a middle argument");
+    let mut p = Build { program: b.program.clone() };
+    p.function(Function { name: "f".into(), params: 0, locals: locals(&[triple, u8t, u16t]), blocks: vec![block(vec![assign(place(0), Value::Aggregate(triple, None, vec![copy(1), copy(2), copy(1)]), 1)], ret())] });
+    assert_eq!(Machine::load(p.program, &[]).map(|_| ()), refused_at_r22("f", 0, Some(0), "a part of another type than its place"), "a middle part");
+    let bad = vec![int(Int::U8, 1), int(Int::U16, 2), int(Int::U8, 3)];
+    let mut m = Machine::load(b.program.clone(), &[triple]).unwrap();
+    assert_eq!(m.set_region(RegionId(0), &bad), Err(HostError::Slots), "a middle field, as a region");
+}

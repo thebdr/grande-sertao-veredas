@@ -2737,3 +2737,65 @@ fn a_duration_whose_nanoseconds_were_never_written_is_uninit() {
     println!("min of a half-written duration: {got:?}");
     assert!(matches!(got, Err(CallError::Program(ProgramError { kind: ErrorKind::Uninit, statement: None, .. }))), "{got:?}");
 }
+
+// The twenty-second refute round's tests: an entry listed before its callees, its deepest call first or last, run to
+// its result; and a function refused for itself before a sound one, named.
+
+/// `scan` (function 0) calls `conveyor`, which calls `ton`, and `alarm`, in the order given; each listed after it.
+fn entry_first(deep_first: bool) -> Program {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let big = b.ty(Type::Array { element: u8t, len: 64 });
+    let c8 = |v| konst(u8t, vec![int(Int::U8, v)]);
+    let call = |f: u32, dest, next| Terminator::Call { callee: Callee::Function(FunctionId(f)), args: vec![], dest: place(dest), next: BlockId(next), at: at(1) };
+    // 0 scan, 1 conveyor, 2 ton, 3 alarm
+    let (first, second) = if deep_first { (1, 3) } else { (3, 1) };
+    b.function(Function {
+        name: "scan".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t, u8t]),
+        blocks: vec![
+            block(vec![], call(first, 1, 1)),
+            block(vec![], call(second, 2, 2)),
+            block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(1), copy(2)), 5)], ret()),
+        ],
+    });
+    b.function(Function {
+        name: "conveyor".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t, big]),
+        blocks: vec![block(vec![], call(2, 1, 1)), block(vec![assign(place(0), Value::Use(copy(1)), 3)], ret())],
+    });
+    b.function(Function { name: "ton".into(), params: 0, locals: locals(&[u8t, big]), blocks: vec![block(vec![assign(place(0), Value::Use(c8(5)), 2)], ret())] });
+    b.function(Function { name: "alarm".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(c8(1)), 4)], ret())] });
+    b.program
+}
+
+#[test]
+fn an_entry_listed_before_its_callees_has_room_for_its_deepest_call_first_or_last() {
+    for deep_first in [true, false] {
+        let mut m = Machine::load(entry_first(deep_first), &[]).unwrap();
+        let got = m.call(FunctionId(0), &[]).map(|r| r.to_vec());
+        assert_eq!(got, Ok(vec![int(Int::U8, 6)]), "deep call first: {deep_first}");
+        let mut copy = m.clone();
+        assert_eq!(copy.call(FunctionId(0), &[]).map(|r| r.to_vec()), Ok(vec![int(Int::U8, 6)]), "and in a copy");
+    }
+}
+
+/// A function with no block, or with more parameters than locals, listed before a sound one: refused naming it.
+#[test]
+fn a_function_refused_for_itself_before_a_sound_one_is_named() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let sound = Function { name: "sound".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 1)])), 1)], ret())] };
+    for (bad, reason) in [
+        (Function { name: "bad".into(), params: 0, locals: locals(&[u8t]), blocks: vec![] }, "no block"),
+        (Function { name: "bad".into(), params: 1, locals: locals(&[u8t]), blocks: vec![block(vec![], ret())] }, "no return value, or more parameters than locals"),
+    ] {
+        let mut p = Build { program: b.program.clone() };
+        p.function(bad);
+        p.function(sound.clone());
+        let got = Machine::load(p.program.clone(), &[]).map(|_| ());
+        assert_eq!(got, Err(LoadError::Function { function: "bad".into(), reason }), "{reason}");
+    }
+}
