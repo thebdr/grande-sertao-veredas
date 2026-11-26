@@ -288,18 +288,68 @@ fn a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did()
         assert!(Scan::read_file(&quiet).is_ok() && d.join("quiet.pcap").exists());
         // A name no device holds now: no answer.
         assert_eq!((nobody.status.code(), text(&nobody.stdout)), (Some(0), "0 answer(s) on a0, 0 other(s), 0 lost\n".to_string()));
-        // A write failing past the checks (a folder where the capture's own file is first
-        // written): refused, the scan and capture already there byte for byte as they were, and
-        // nothing left under another name.
+        // Files a user holds under the names a run might have taken (one a link to another file):
+        // a run that succeeds touches none of them.
         let (old_scan, old_capture) = (d.join("collide.toml"), d.join("collide.pcap"));
-        std::fs::write(&old_scan, "the baseline").unwrap();
-        std::fs::write(&old_capture, "its frames").unwrap();
-        std::fs::create_dir_all(d.join(".collide.pcap.partial")).unwrap();
+        std::fs::write(&old_capture, "old frames").unwrap();
+        std::fs::write(d.join(".collide.toml.partial"), "mine").unwrap();
+        std::fs::write(d.join("victim.txt"), "kept").unwrap();
+        std::os::unix::fs::symlink(d.join("victim.txt"), d.join(".collide.pcap.partial")).unwrap();
         let out = aranha(&["listen", "a0", "--for", "1", "--out", old_scan.to_str().unwrap()]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+        assert!(Scan::read_file(&old_scan).is_ok());
+        assert_eq!((std::fs::read(d.join(".collide.toml.partial")).unwrap(), std::fs::read(d.join("victim.txt")).unwrap()), (b"mine".to_vec(), b"kept".to_vec()));
+        // The capture that was there replaced, nothing of the run left beside it.
+        assert_ne!(std::fs::read(&old_capture).unwrap(), b"old frames");
+        let ours = |d: &Path| -> Vec<String> {
+            std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(".collide") && (n.ends_with(".partial") || n.ends_with(".kept") || n.ends_with(".probe")) && n.matches('.').count() > 3).collect()
+        };
+        assert_eq!(ours(&d), Vec::<String>::new());
+        // A write failing between the capture put in place and the scan (a folder made where the
+        // scan goes while it listens): refused, the capture that was there back byte for byte,
+        // nothing of the run left behind.
+        std::fs::write(&old_capture, "its frames").unwrap();
+        let listening = started(&["listen", "a0", "--for", "2", "--out", old_scan.to_str().unwrap()]);
+        std::fs::remove_file(&old_scan).unwrap();
+        std::fs::create_dir_all(old_scan.join("in-the-way")).unwrap();
+        let out = listening.wait_with_output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{}", text(&out.stderr));
-        assert!(text(&out.stderr).starts_with(&format!("veredas-aranha: {}: ", old_capture.display())), "{}", text(&out.stderr));
-        assert_eq!((std::fs::read(&old_scan).unwrap(), std::fs::read(&old_capture).unwrap()), (b"the baseline".to_vec(), b"its frames".to_vec()));
-        assert!(!d.join(".collide.toml.partial").exists());
+        assert!(text(&out.stderr).starts_with(&format!("veredas-aranha: {}: ", old_scan.display())), "{}", text(&out.stderr));
+        assert_eq!(std::fs::read(&old_capture).unwrap(), b"its frames");
+        assert_eq!(ours(&d), Vec::<String>::new());
+        // The capture's place made a folder while it listens: refused, the folder where it was, never
+        // moved aside, the scan there unchanged.
+        std::fs::remove_dir_all(&old_scan).unwrap();
+        std::fs::write(&old_scan, "the baseline").unwrap();
+        let listening = started(&["listen", "a0", "--for", "2", "--out", old_scan.to_str().unwrap()]);
+        std::fs::remove_file(&old_capture).unwrap();
+        std::fs::create_dir_all(old_capture.join("in-the-way")).unwrap();
+        let out = listening.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{}", text(&out.stderr));
+        assert!(text(&out.stderr).ends_with("there is something there that is no file\n"), "{}", text(&out.stderr));
+        assert!(old_capture.join("in-the-way").is_dir());
+        assert_eq!(std::fs::read(&old_scan).unwrap(), b"the baseline");
+        assert_eq!(ours(&d), Vec::<String>::new());
+        // Listening with its stdout closed: its lines go nowhere, the scan is written, status 0;
+        // identify's too.
+        let shut = d.join("shut.toml");
+        let out = closed(&[os("listen"), os("a0"), os("--for"), os("1"), os("--out"), shut.as_os_str()], true);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+        assert!(Scan::read_file(&shut).is_ok());
+        assert_eq!(closed(&[os("identify"), os("a0"), os("--wait"), os("300")], true).status.code(), Some(0));
+        // An interface whose Identify cannot be asked (set down as the listening runs): said on
+        // stderr, the other's count said, the scan written all the same, status 0.
+        let downed = d.join("downed.toml");
+        let listening = started(&["listen", "a0", "a1", "--for", "3", "--identify", "--out", downed.to_str().unwrap()]);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        netns::ip(&["link", "set", "a1", "down"]);
+        let out = listening.wait_with_output().unwrap();
+        netns::ip(&["link", "set", "a1", "up"]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+        let said = text(&out.stderr);
+        assert!(said.lines().any(|l| l == "a0: 0 device(s) answered the Identify"), "{said}");
+        assert!(said.lines().any(|l| l.starts_with("a1: the Identify was not asked: ")), "{said}");
+        assert!(Scan::read_file(&downed).is_ok());
         // Without --for: ten seconds.
         let clock = std::time::Instant::now();
         let ten = aranha(&["listen", "a0", "--out", d.join("ten.toml").to_str().unwrap()]);
@@ -346,7 +396,7 @@ fn a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did()
     );
     // A scan listened on a0 alone against one on both: the interface removed is said.
     let quiet = aranha(&["diff", before.to_str().unwrap(), d.join("quiet.toml").to_str().unwrap()]);
-    assert!(text(&quiet.stdout).lines().any(|l| l == "interface removed a1"), "{}", text(&quiet.stdout));
+    assert!(text(&quiet.stdout).lines().any(|l| l == "interface removed \"a1\""), "{}", text(&quiet.stdout));
     let same = aranha(&["diff", before.to_str().unwrap(), before.to_str().unwrap()]);
     assert_eq!((same.status.code(), text(&same.stdout)), (Some(0), "no change\n".to_string()));
     // A reader that stops reading (`diff a b | head -1`) changes neither status.
@@ -389,7 +439,7 @@ fn the_diff_prints_every_kind_of_change_a_line_each_its_texts_quoted() {
         Scan::new(&f, &stats, &topology::build(&f, &list, neighbours), 2_000, None)
     };
     let ten = Ipv4Addr::new(192, 168, 0, 10);
-    let baseline = scan(&[hello(a, "a", Some(ten), 1), lldp(a, "port-001", 2), arp(a, ten, 3), hello(b, "b", None, 4), hello(c, "dup", None, 5), hello(dd, "dup", None, 6)], &["eth1", "eth2"], &[]);
+    let baseline = scan(&[hello(a, "a", Some(ten), 1), lldp(a, "port-001", 2), arp(a, ten, 3), hello(b, "b", None, 4), hello(c, "dup", None, 5), hello(dd, "dup", None, 6)], &["eth1", "eth2", "lab 2\nno change"], &[]);
     let odd_port = "port 1 = \"x\"\nno change";
     let chassis = "sw 1 = x";
     let word = Neighbour { device: a, port: "port-003".into(), chassis: chassis.into(), peer_port: "port-009".into(), peer_mac: None, witnesses: 1 };
@@ -411,8 +461,9 @@ fn the_diff_prints_every_kind_of_change_a_line_each_its_texts_quoted() {
         format!("link removed {} \"port-001\" = \"if:eth1\" (heard)", dev(a)),
         format!("conflict new duplicate-ip \"192.168.0.10\": {a}, {e}"),
         format!("conflict cleared duplicate-name \"dup\": {c}, {dd}"),
-        "interface added eth3".to_string(),
-        "interface removed eth2".to_string(),
+        "interface added \"eth3\"".to_string(),
+        "interface removed \"eth2\"".to_string(),
+        "interface removed \"lab 2\\nno change\"".to_string(),
     ];
     let lines: Vec<&str> = std::str::from_utf8(&out.stdout).unwrap().lines().collect();
     assert_eq!(lines, want.iter().map(String::as_str).collect::<Vec<_>>());
@@ -450,6 +501,18 @@ fn a_scan_that_cannot_be_written_is_refused_before_anything_is_opened_or_replace
     refused(&kept, "kept.pcap: ");
     assert_eq!((std::fs::read(&kept).unwrap(), std::fs::read(&capture).unwrap()), (b"the baseline".to_vec(), b"its frames".to_vec()));
     std::fs::set_permissions(&capture, std::fs::Permissions::from_mode(0o644)).unwrap();
+    // A path ending in a separator names a folder: refused, the scan and capture there unchanged.
+    let mut slashed = kept.clone().into_os_string();
+    slashed.push("/");
+    refused(Path::new(&slashed), "a scan file is a file, and this path names a folder");
+    assert_eq!((std::fs::read(&kept).unwrap(), std::fs::read(&capture).unwrap()), (b"the baseline".to_vec(), b"its frames".to_vec()));
+    // A folder that is not there, or one that may not be written in: refused before anything.
+    refused(&d.join("nowhere").join("s.toml"), "nowhere: ");
+    let shut = d.join("shut");
+    std::fs::create_dir_all(&shut).unwrap();
+    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o555)).unwrap();
+    refused(&shut.join("s.toml"), "shut: ");
+    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o755)).unwrap();
     // A file name that is not UTF-8: the scan could not name its capture.
     let odd = d.join(not_utf8("odd.toml"));
     refused(&odd, "a scan file's name is UTF-8");
@@ -603,6 +666,13 @@ fn a_device_whose_walk_is_cut_keeps_what_was_read_of_it() {
             })
         };
         let out = aranha(&["listen", "a0", "--for", "2", "--ports", "--out", out_file.to_str().unwrap()]);
+        // The same with its stderr closed: the cut's line goes nowhere, the scan and its link are
+        // written all the same, status 0.
+        let shut = d.join("cut-shut.toml");
+        let quiet = closed(&[os("listen"), os("a0"), os("--for"), os("2"), os("--ports"), os("--out"), shut.as_os_str()], false);
+        // And with its stdout closed: the device's line goes nowhere, status 0, the scan written.
+        let mute = d.join("cut-mute.toml");
+        let silent = closed(&[os("listen"), os("a0"), os("--for"), os("1"), os("--out"), mute.as_os_str()], true);
         stop.store(true, Ordering::SeqCst);
         peer.join().unwrap();
         assert_eq!(out.status.code(), Some(0), "{}\n{}", text(&out.stdout), text(&out.stderr));
@@ -611,5 +681,10 @@ fn a_device_whose_walk_is_cut_keeps_what_was_read_of_it() {
         let links: Vec<(End, End, Confidence)> = scan.topology.links.iter().filter(|l| l.confidence != Confidence::Heard).map(|l| (l.a.clone(), l.b.clone(), l.confidence)).collect();
         let chassis = End { node: veredas_aranha::topology::chassis_id("sw-9"), port: "port-009".into() };
         assert_eq!(links, [(chassis, End { node: veredas_aranha::topology::device_id(DEVICE), port: "port-001".into() }, Confidence::Reported)]);
+        assert_eq!(quiet.status.code(), Some(0), "{}", text(&quiet.stdout));
+        assert_eq!(silent.status.code(), Some(0), "{}", text(&silent.stderr));
+        assert_eq!(Scan::read_file(&mute).unwrap().devices.len(), 1);
+        let again = Scan::read_file(&shut).unwrap();
+        assert!(again.topology.links.iter().any(|l| l.confidence == Confidence::Reported), "{:?}", again.topology.links);
     });
 }
