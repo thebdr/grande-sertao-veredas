@@ -1,0 +1,48 @@
+{
+  "clause": "C-153",
+  "verdict": "holds",
+  "ranAt": "2026-11-26T13:11:44.486Z",
+  "headCommit": "5bee68a93bd7ea26300e12d00f6c9492c8845391",
+  "tests": [
+    {
+      "name": "crates/orcl-interp/tests/ops.rs",
+      "file": "crates/orcl-interp/tests/ops.rs",
+      "symbolSha": "aa768a4780e2c8e0336b81da0d74ab955770e51d8e7d409e52c8447a502514fe"
+    },
+    {
+      "name": "crates/orcl-interp/tests/machine.rs",
+      "file": "crates/orcl-interp/tests/machine.rs",
+      "symbolSha": "271ae3dd7bca60df3d87a3bf8f2177ba4f2206fc83ca4714f41bc77bdd855b1f"
+    },
+    {
+      "name": "crates/orcl-interp/tests/load.rs",
+      "file": "crates/orcl-interp/tests/load.rs",
+      "symbolSha": "f67e64c4bec066e4bf3b15bd8de11c89ec3c5d0e2fccb72230b1c24ccd6af1d4"
+    },
+    {
+      "name": "crates/orcl-interp/tests/core_ops.rs",
+      "file": "crates/orcl-interp/tests/core_ops.rs",
+      "symbolSha": "8b9293d855a32528c842db0e3b7c88749d0b3e05a4c295ca2b52574cbd28b7ad"
+    },
+    {
+      "name": "crates/orcl-interp/tests/blocks.rs",
+      "file": "crates/orcl-interp/tests/blocks.rs",
+      "symbolSha": "9b8e536dc4ce3e23fde972728d766a7fd26e7aa1ce74320e019e1b097f8ef1ad"
+    },
+    {
+      "name": "crates/orcl-interp/tests/alloc.rs",
+      "file": "crates/orcl-interp/tests/alloc.rs",
+      "symbolSha": "b4834e002f1210ab1cdec9f1b533847bd0368ab580d349651fad14c779fbe75a"
+    },
+    {
+      "name": "crates/orcl-interp/tests/root.rs",
+      "file": "crates/orcl-interp/tests/root.rs",
+      "symbolSha": "a256c55c2333e81b8ea92d1158f0aa9bf01b0b7d06de865c6473f4b40042060c"
+    },
+    {
+      "name": "crates/orcl-interp/tests/common/mod.rs",
+      "file": "crates/orcl-interp/tests/common/mod.rs",
+      "symbolSha": "67b661dc60e4658620c7c200216413ff8b467c22a21774fa0a88039fd50ab435"
+    }
+  ]
+}
