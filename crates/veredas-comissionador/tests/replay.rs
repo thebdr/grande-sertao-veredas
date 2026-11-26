@@ -158,6 +158,21 @@ fn a_replay_s_write_moves_no_clock_where_the_live_one_moved_to_the_plant_s_answe
 }
 
 #[test]
+fn a_run_s_bound_passed_by_a_write_s_answer_replays_on_past_it() {
+    // A write's answer lands past the run's bound live and ends the run at the next step; replayed,
+    // the write moves no clock and the run goes on (Q318, the claim narrowed: a write whose answer
+    // passes the run's bound).
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    let c = checked(&format!("{HEAD}test \"t\" {{\n  id T\n  timeout 100ms\n  step a check plc_main.level > 0.5\n         write plc_main.run := 1\n  step b report \"done\"\n}}\n"));
+    let (live, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    assert_eq!((live.verdict, live.decided_at.as_deref(), live.reason.as_str()), (RunVerdict::Aborted, Some("b"), "the run's bound of 100ms passed"));
+    let (r, _) = run_with(&c, s.live(), &RunOptions::replay(live.start_ms, live.end_ms)).unwrap();
+    assert_eq!((r.verdict, r.decided_at.as_deref()), (RunVerdict::Passed, Some("b")));
+}
+
+#[test]
 fn a_replay_reads_the_plant_right_after_a_write_as_it_stood_before_it() {
     // The same lag, with a loose bound: an await right after the write takes a row stamped before
     // the write in the replay, where the live one took one after the plant's answer, and a read

@@ -183,16 +183,16 @@ pub fn gated_writes(c: &Checked) -> Vec<String> {
     c.test.steps.iter().flat_map(|s| s.actions.iter()).filter(|a| a.is_gated()).map(|a| squash(c.text.get(a.span.start..a.span.end).unwrap_or(""))).collect()
 }
 
-/// The fingerprint a person confirms a test's gated writes by: FNV-1a in 16 hex digits over the
-/// list ([`gated_writes`]), the test's whole text and every function file it uses, so an edit that
-/// could change what a write writes (a constant, a function, a string's blanks) asks again.
+/// The fingerprint a person confirms a test's gated writes by: the first 128 bits of SHA-256, in
+/// 32 hex digits, over the list ([`gated_writes`]), the test's whole text and every function file
+/// it uses, each ended by a zero byte, so an edit that could change what a write writes asks again
+/// and no pair of tests made to share one can be found.
 pub fn writes_fingerprint(c: &Checked) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
     let mut eat = |text: &str| {
-        for b in text.bytes().chain(std::iter::once(0)) {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+        h.update(text.as_bytes());
+        h.update([0u8]);
     };
     for w in gated_writes(c) {
         eat(&w);
@@ -202,7 +202,7 @@ pub fn writes_fingerprint(c: &Checked) -> String {
         eat(&f.path);
         eat(&f.text);
     }
-    format!("{h:016x}")
+    h.finalize().iter().take(16).map(|b| format!("{b:02x}")).collect()
 }
 
 // ---- binding -----------------------------------------------------------------------------------
@@ -1009,6 +1009,8 @@ impl Runner<'_> {
                 // The tables with more than one row at the stamp being applied.
                 let mut tied: BTreeSet<String> = BTreeSet::new();
                 for (i, row) in rows.iter().enumerate() {
+                    // The tester's stop looked at on every row, a replay's whole window walked at once.
+                    self.check_stop()?;
                     for ((t, c), slot) in cache.iter_mut() {
                         if *t == row.table
                             && let Some(Some(v)) = row.field(c)
@@ -1068,6 +1070,7 @@ impl Runner<'_> {
             first = false;
             if upto > cursor {
                 for row in self.rows(&[table.to_string()], cursor, upto)? {
+                    self.check_stop()?;
                     let at = row.time_ms;
                     if stamp != Some(at) {
                         (stamp, met) = (Some(at), 0);
@@ -1404,10 +1407,12 @@ impl Runner<'_> {
                 self.clock = self.clock.max(self.plant.now_ms());
                 match answer {
                     Ok(a) => (Flow::Pass(format!("{text}: {a}")), WriteRecord { step: step.to_string(), attempt, text, sent: true, answer: a, ok: true }),
-                    Err(e) => (
-                        Flow::Out(Outcome::Error, format!("{text}: {e}")),
-                        WriteRecord { step: step.to_string(), attempt, text, sent: true, answer: e.to_string(), ok: false },
-                    ),
+                    Err(e) => {
+                        // Sent when it left portal for the plant: the plant's own refusal, and a write
+                        // whose answer never came; not when portal refused it first.
+                        let sent = matches!(e, PlantError::Answered(_) | PlantError::Unconfirmed(_));
+                        (Flow::Out(Outcome::Error, format!("{text}: {e}")), WriteRecord { step: step.to_string(), attempt, text, sent, answer: e.to_string(), ok: false })
+                    }
                 }
             }
         };

@@ -359,7 +359,8 @@ fn a_write_the_switch_or_the_plant_refuses_mid_run_ends_its_step_in_error() {
         run_with(&c, l, &RunOptions::live()).unwrap().0
     });
     assert_eq!(steps(&r)[1], "w #1 error: plc_main.run := 1: writes are turned off for this project");
-    assert_eq!(writes(&r), [("plc_main.run := 1".to_string(), true, "writes are turned off for this project".to_string(), false)]);
+    // Refused by portal before it left: not sent.
+    assert_eq!(writes(&r), [("plc_main.run := 1".to_string(), false, "writes are turned off for this project".to_string(), false)]);
     assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Aborted, "`w`: plc_main.run := 1: writes are turned off for this project"));
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(tag(&bench, "run"), "Int32(0)");
@@ -369,7 +370,8 @@ fn a_write_the_switch_or_the_plant_refuses_mid_run_ends_its_step_in_error() {
     std::thread::sleep(Duration::from_millis(500));
     let (r, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
     let w = &r.writes[0];
-    assert!(w.sent && !w.ok, "{w:?}");
+    // Portal not reaching the server: refused before it left, not sent.
+    assert_eq!((w.sent, w.ok, w.answer.as_str()), (false, false, "not connected to the server"), "{w:?}");
     assert_eq!(r.steps[1].outcome, Some(Outcome::Error));
     assert_eq!(r.verdict, RunVerdict::Aborted);
 }
@@ -522,6 +524,12 @@ fn values_compute_and_compare_as_the_reference_says() {
     assert_eq!(one("9007199254740992.0 == \"9007199254740993\""), "e #1 pass: x = false");
     assert_eq!(one("-1 > -1.5"), "e #1 pass: x = true");
     assert_eq!(one("2 == 2.0"), "e #1 pass: x = true");
+    // A text holding a whole number past the 64 bits stands past every whole number.
+    assert_eq!(one("-9223372036854775807 - 1 == \"-9223372036854775809\""), "e #1 pass: x = false");
+    assert_eq!(one("-9223372036854775807 - 1 > \"-9223372036854775809\""), "e #1 pass: x = true");
+    assert_eq!(one("\"-9223372036854775809\" < -9223372036854775807 - 1"), "e #1 pass: x = true");
+    assert_eq!(one("9223372036854775807 < \"9223372036854775808\""), "e #1 pass: x = true");
+    assert_eq!(one("9223372036854775807 != \"99999999999999999999999\""), "e #1 pass: x = true");
     // A loop to the largest whole number ends there.
     let r = go("  step f script { for i in 9223372036854775806 .. 9223372036854775807 { x = i } }\n");
     assert_eq!(steps(&r), ["f #1 pass: i = 9223372036854775807, x = 9223372036854775807"]);
@@ -792,10 +800,12 @@ fn a_run_arms_the_switch_for_the_writes_it_was_confirmed_for_and_disarms_it_afte
     let c = checked(&test_of("  step go write plc_main.run := 1\n  step w wait plc_main.speed >= 2.0 timeout 5s\n"));
     let writes = gated_writes(&c);
     let fp = writes_fingerprint(&c);
-    assert_eq!((writes, fp.len()), (vec!["write plc_main.run := 1".to_string()], 16));
+    assert_eq!((writes, fp.len()), (vec!["write plc_main.run := 1".to_string()], 32));
     // An edit anywhere in the test, a constant the writes use or a blank in a string among them,
     // asks again: the fingerprint is of the list and of every text it depends on.
     let edited = |text: &str| writes_fingerprint(&checked(&test_of(text)));
+    // A pair made to share a 64-bit FNV-1a fingerprint (round 4): two fingerprints now.
+    assert_ne!(edited("  step go write plc_main.run := 1\n  # OOT9qXOfNdG\n"), edited("  step go write plc_main.run := 7\n  # lGfZxtuxBbD\n"));
     let base = edited("  let t = 1\n  step go write plc_main.run := t\n");
     assert_ne!(base, edited("  let t = 1000\n  step go write plc_main.run := t\n"));
     assert_ne!(edited("  step go send sorter.command(code: 1)\n  step r report \"a b\"\n"), edited("  step go send sorter.command(code: 1)\n  step r report \"a  b\"\n"));
@@ -831,4 +841,52 @@ fn a_run_arms_the_switch_for_the_writes_it_was_confirmed_for_and_disarms_it_afte
     let bare = veredas_comissionador::plant::LivePlant::new(s.live()).unwrap();
     let e = run(&c, &bare, &RunOptions::live().confirming(fp), &mut |_| {}).unwrap_err();
     assert_eq!(e.0, ["the test writes, and portal's write switch is off"]);
+}
+
+// ---- refute round 4 ------------------------------------------------------------------------
+
+#[test]
+fn a_write_is_sent_when_it_left_portal_and_not_when_portal_refused_it() {
+    // The project marks `level` writable where the bench's server keeps it read-only: the plant
+    // receives the write and refuses it, which is sent; a value portal cannot coerce is not.
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let text = project_text(&bench, true, 4).replacen("series = \"level\", type = \"float\" }", "series = \"level\", type = \"float\", writable = true }", 1);
+    let s = session(dir.path(), &text);
+    let (r, _) = run_with(&checked(&test_of("  step w write plc_main.level := 1.0\n")), s.live(), &RunOptions::live()).unwrap();
+    let w = &r.writes[0];
+    assert!(w.sent && !w.ok && w.answer.starts_with("the plant answered "), "{w:?}");
+    let (r, _) = run_with(&checked(&test_of("  step w write plc_main.run := 2.5\n")), s.live(), &RunOptions::live()).unwrap();
+    let w = &r.writes[0];
+    assert!(!w.sent && !w.ok, "{w:?}");
+    assert_eq!(tag(&bench, "run"), "Int32(0)");
+}
+
+#[test]
+fn a_long_replayed_window_stops_at_the_tester_s_word() {
+    // 1 500 stamps ten minutes back, two rows of `a` at each and one of `b`: a wait and an await
+    // over them walk the whole window at once, the stop looked at on every row.
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &with_rules(project_text(&bench, false, 4)));
+    let first = 600_000;
+    for k in 0..1_500 {
+        log_together(dir.path(), first - k * 10, &["x=1", "x=2", "y=1"]);
+    }
+    std::thread::sleep(Duration::from_millis(1500));
+    let now = veredas_portal::serve::store_now_ms();
+    let window = (now - first - 1, now - first + 15_010);
+    for body in ["  step w wait a.x == 9\n", "  step w await b where plc_main.level > 5.0 and e.y == 9 -> e\n"] {
+        let text = format!("{HEAD}test \"t\" {{\n  id T\n  timeout 1h\n  modes replay\n{body}}}\n");
+        let opts = RunOptions::replay(window.0, window.1);
+        let stop = opts.stop.clone();
+        let r = std::thread::scope(|sc| {
+            sc.spawn(|| {
+                std::thread::sleep(Duration::from_millis(200));
+                stop.store(true, Ordering::SeqCst);
+            });
+            run_with(&checked(&text), s.live(), &opts).unwrap().0
+        });
+        assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Aborted, "stopped by the tester"), "{body}");
+    }
 }

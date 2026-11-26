@@ -57,6 +57,9 @@ pub enum PlantError {
     /// A write that may or may not have reached the plant.
     #[error("{0}")]
     Unconfirmed(String),
+    /// A write the plant received and refused, in its words.
+    #[error("{0}")]
+    Answered(String),
 }
 
 pub trait Plant {
@@ -292,7 +295,7 @@ impl Plant for LivePlant {
         let answer = self.runtime.block_on(handle.write_tags(vec![(raw, variant)]));
         match answer {
             Ok(statuses) if statuses.iter().all(|s| s.is_good()) => Ok(statuses.first().map(|s| s.to_string()).unwrap_or_default()),
-            Ok(statuses) => Err(PlantError::Refused(format!(
+            Ok(statuses) => Err(PlantError::Answered(format!(
                 "the plant answered {}",
                 statuses.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ")
             ))),

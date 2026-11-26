@@ -536,7 +536,9 @@ is the plant's clock on the store's axis, `YYYY-MM-DD HH:MM:SS.mmm`.
 **A write** (`[[write]]`): every gated write and send, as made.
 - `step` (required), `attempt` (required).
 - `text` (required): `table.column := value` or `channel.message(field: value, ...)`.
-- `sent` (required): whether it went to the plant; a replay sends nothing.
+- `sent` (required): whether it left portal for the plant: the plant's answer, its own refusal
+  and a write whose answer never came were sent, a refusal portal made first (the switch, a tag
+  not writable, a value it cannot coerce, the server not reached) was not; a replay sends nothing.
 - `answer` (required): the plant's answer or portal's refusal, in their words; `not sent: replay`.
 - `ok` (required): whether it was taken.
 

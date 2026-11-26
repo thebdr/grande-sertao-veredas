@@ -470,8 +470,9 @@ fn files_are_reached_where_the_engine_keeps_its_own() {
     assert_eq!(named, FS_FILES);
 }
 
-/// Its normal dependencies, each reviewed: no OPC UA stack, no socket or HTTP crate of its own.
-const DEPENDENCIES: &[&str] = &["chrono", "serde", "serde_json", "thiserror", "tokio", "toml", "veredas-core", "veredas-portal"];
+/// Its normal dependencies, each reviewed: no OPC UA stack, no socket or HTTP crate of its own
+/// (`sha2` a hash over bytes held in memory, the fingerprint of a run's confirmed writes).
+const DEPENDENCIES: &[&str] = &["chrono", "serde", "serde_json", "sha2", "thiserror", "tokio", "toml", "veredas-core", "veredas-portal"];
 
 #[test]
 fn its_normal_dependencies_are_the_reviewed_ones() {

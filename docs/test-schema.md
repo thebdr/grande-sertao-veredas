@@ -367,7 +367,8 @@ run's own window therefore reads the rows the live run read. Plant data read rig
 (a read, a check, a report, a wait, an await) is read earlier in such a replay than it was live,
 by the time the live run took to send the write and have it answered (at least those 250 ms after
 a step that read the plant): it finds the plant as it stood before the write, a wait can time out
-where it held live and an await take an earlier row (`docs/questions.md` Q318). A replay's clock never passes its window: a step the window
+where it held live and an await take an earlier row; and a write whose answer, live, passes the
+run's bound ends the run at its next step where the replay goes on (`docs/questions.md` Q318). A replay's clock never passes its window: a step the window
 ends inside is cut short and the run aborted with the window's end named, before the run's bound
 or a call's.
 

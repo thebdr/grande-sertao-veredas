@@ -322,6 +322,19 @@ pub fn compare(op: CmpOp, l: &Value, r: &Value) -> Result<bool, EvalError> {
         (Int(i), Bool(b)) => Some(i.cmp(&(*b as i64))),
         (Text(a), Text(b)) => Some(a.cmp(b)),
         (Text(t), n @ (Int(_) | Float(_))) | (n @ (Int(_) | Float(_)), Text(t)) => {
+            // A whole number past the 64 bits stands past every whole number, by its sign.
+            if let Int(_) = n
+                && let Some(o) = whole_past_range(t)
+            {
+                return Ok(match op {
+                    CmpOp::Eq => false,
+                    CmpOp::Ne => true,
+                    _ => {
+                        let o = if matches!(l, Text(_)) { o } else { o.reverse() };
+                        matches!((op, o), (CmpOp::Lt | CmpOp::Le, std::cmp::Ordering::Less) | (CmpOp::Gt | CmpOp::Ge, std::cmp::Ordering::Greater))
+                    }
+                });
+            }
             let Some(x) = text_numeric(t) else {
                 return match op {
                     CmpOp::Eq => Ok(false),
@@ -377,6 +390,19 @@ fn int_float(i: i64, f: f64) -> Option<std::cmp::Ordering> {
     }
     let whole = f.trunc();
     Some(i.cmp(&(whole as i64)).then(if f > whole { Less } else if f < whole { Greater } else { Equal }))
+}
+
+/// A text holding a whole number past the 64 bits: how it stands against every whole number.
+fn whole_past_range(t: &str) -> Option<std::cmp::Ordering> {
+    let t = t.trim();
+    let (neg, digits) = match t.strip_prefix('-') {
+        Some(d) => (true, d),
+        None => (false, t.strip_prefix('+').unwrap_or(t)),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) || t.parse::<i64>().is_ok() {
+        return None;
+    }
+    Some(if neg { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater })
 }
 
 /// A text read as a number: a whole number when it is one, else a float.
