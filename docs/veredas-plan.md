@@ -41,11 +41,14 @@ scheme, one naming rule, and a clear role for each component.
   folder, the members and path packages it uses, what its sources name outside them, the lock
   file's entries of its dependencies, the workspace's manifest). A change to any of them bumps the
   component's version before the next release pins it; the release refuses one version at two
-  sets of inputs (`docs/alforge-plan.md`; Q442 and Q445 ask how far the manifest and the folder
-  reach).
+  sets of inputs (`docs/alforge-plan.md`; of the workspace's manifest only what cargo reads to
+  build the component counts, and a component's tests, benches and examples do not: Q442 and
+  Q445, ruled 2026-11-26).
 - **Versioned files.** Every plain-text config and project file is TOML and states its
   schema as `format` and `version`; a misspelled key is refused. Portal migrates it or
-  refuses it, and never guesses. Veredas 1's JSON project files are not carried as they are:
+  refuses it, and never guesses. The one named exception: a fieldbus vendor's description file
+  (GSDML, ESI, EDS) sits in a project as its vendor wrote it, an input read and never written
+  (the architect, 2026-11-25; `docs/questions.md` Q31, entry 23). Veredas 1's JSON project files are not carried as they are:
   what portal absorbs of them is read into TOML (`docs/questions.md` Q10; the pattern is in
   each `docs/*-schema.md`, from the channel file on: the worked example loaded by the test,
   every key statement the reader's, and, from the catalog on, the text held as the test's copy).
@@ -339,6 +342,39 @@ Q31–Q45; the list that was reviewed and its review are kept in `docs/briefing/
 6. Development builds carry line tables only, for every crate (2026-11-24: "Yes, line tables";
    `docs/questions.md` Q47): a panic names its place and a backtrace still names file and line,
    and a build folder grows about half as fast.
+
+2026-11-25 and 2026-11-26, the open questions put to the architect (`docs/questions.md`: the lines
+dated those days under each entry hold the question as it was put and the answer in the
+architect's words; each component's plan carries what binds it):
+1. The licence: every crate but Oficina states `MIT OR Apache-2.0` and carries its two texts,
+   Oficina `GPL-3.0-or-later`, the copyright holder thebdr, and no licence file at the root
+   claims the whole repository (Q35). It widens decision 7 of the briefing above.
+2. The release member is alforge, repo tooling still (`tools/alforge`, Q430). A release carries
+   a SemVer of its own and tags nothing (Q431, Q432); a component's version names every input
+   of its build but the toolchain (Q441, with Q442 to Q445 and Q448); the tester machine is
+   Debian 13 with Xfce, an OVA published nowhere yet, updated by a command inside it (Q433 to
+   Q440), and a bundle carries the Qt its Oficina loads (Q446).
+3. Oficina's window is built by default, so a build of the suite needs Qt 6.12 (Q370).
+4. On a host that runs both, Oficina and supervisão share one portal instance, started by
+   whichever comes first (Q31, entry 22, amending Q19 for such a host).
+5. A vendor's description file is a read-only input of a project, and its readers live in core
+   (Q31, entry 23; Q45; the contract's P-023).
+6. Nothing of Veredas 1's grid or of its Excel host is carried, and acerto stays outside this
+   repository, which keeps the extension point and a public example (Q341 to Q343, amending
+   decision 4 of 2026-11-05).
+7. The robustness round is ruled through (`docs/robustness.md`; Q36 to Q42 and Q234 to Q237),
+   with the specification of a live takeover (Q32, `docs/controlador/live-takeover.md`). Nothing
+   beyond the controller and its embedded portal counts as critical. On a controller's drive
+   the oldest record gives way at a size limit; a project's store on a PC keeps Q16's rule.
+8. The briefing review's majors and minors are ruled entry by entry (Q31), its security entries
+   among them: a session token with Host and Origin checks for portal and supervisão, Unix
+   sockets for controlador's engineering channel, a project that runs nothing when opened, text
+   from outside shown as plain text. A controller may be used without a credential, which
+   Oficina discourages by a warning. Three points wait for the security study: certificates
+   after 2038, a signed download, a keyed check on altering requests (Q43).
+9. Release 1 serves discrete IO, written as ORCL text with a completed standard library;
+   technology objects come later and ladder becomes editable in release 2 (Q31, entries 40 and
+   41).
 
 ## Next steps
 1. Record each decision above where it applies (component plans, `docs/questions.md`).

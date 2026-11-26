@@ -2,9 +2,11 @@
 
 A round of decisions the architect called on 2026-11-16, for the whole suite: what a machine built
 on Veredas needs in order to run unattended for decades. It began the same day, by the architect
-replying to single statements, and was paused on 2026-11-19 when development moved to a Linux
-environment. `docs/veredas-plan.md` wins on intent; `.zen/contract.md` (P-017) wins on status.
-Nothing of it is built.
+replying to single statements, was paused on 2026-11-19 when development moved to a Linux
+environment, and was taken up again and ruled through on 2026-11-25 and 2026-11-26, point by
+point ("The round resumed", below). `docs/veredas-plan.md` wins on intent; `.zen/contract.md`
+(P-017) wins on status. Of it only what portal built for a controller's store exists (C-090,
+C-091, C-093), and the rulings of 2026-11-25 change two of those.
 
 This file states what the architect ruled, in the architect's words where they carry the rule, and
 the facts the rulings rest on. What the assistant proposed and nobody ruled is not here: it is in
@@ -22,20 +24,20 @@ The round was called in these words: "we need parity data and that needs a whole
 definition round: robustness (overall, concerning all the suite's critical conponents)".
 
 ## The areas
-The assistant proposed ten areas. Where each stands:
+The assistant proposed ten areas. Where each stands since 2026-11-26:
 
 | Area | Standing |
 |---|---|
-| 1. What must survive | ruled; its border cases are Q38 |
-| 2. Detecting and repairing damage | ruled in principle |
-| 3. Power loss at any moment | ruled in principle |
-| 4. Wear and filling over decades | opened, three rulings; the rest is Q40 and Q41 |
-| 5. Time over decades | ruled; its details are Q39 |
-| 6. Running unattended (hardware watchdog, memory errors, slow leaks) | the cycle-time rule alone; Q42 |
-| 7. An old controller and a new Oficina (versions, migration, a rescue path) | not opened; Q42 |
-| 8. Replacing the hardware (backup, restore, what a stranger needs to rebuild) | not opened; Q42 |
-| 9. Which other components count as critical | not opened; Q42 |
-| 10. How each rule is proven by injecting faults on the bench | not opened; Q42 |
+| 1. What must survive | ruled, its border cases too (Q38) |
+| 2. Detecting and repairing damage | ruled |
+| 3. Power loss at any moment | ruled; the retained save in Q40 |
+| 4. Wear and filling over decades | ruled (Q40, Q41) |
+| 5. Time over decades | ruled (Q39) |
+| 6. Running unattended (hardware watchdog, memory errors, slow leaks) | ruled (Q226, Q234) |
+| 7. An old controller and a new Oficina (versions, migration, a rescue path) | ruled (Q235) |
+| 8. Replacing the hardware (backup, restore, what a stranger needs to rebuild) | ruled (Q236) |
+| 9. Which other components count as critical | ruled: none beyond the controller (Q42) |
+| 10. How each rule is proven by injecting faults on the bench | ruled (Q237) |
 
 ## Everything that alters the controller
 - **A download carries a hash.** "to download a software update, compiled on the sender's machine,
@@ -198,6 +200,53 @@ What gives way when a record on a controller's drive reaches its size limit was 
 hand when the round paused. The assistant's "oldest deleted first" departs from Q16, where the
 architect decided for a project's disk store that "nothing is refused, deleted or merged"; it is
 Q41.
+
+## The round resumed (2026-11-25 and 2026-11-26)
+The architect asked for the open questions and ruled them point by point. Each question as it was
+put and each answer in the architect's words is in `docs/questions.md`, in the lines dated those
+days under the entry named; the sections above keep the words of 2026-11-16 to 2026-11-19 as they
+were given, and where a line there says "proposed and not confirmed", "not ruled" or "the
+question in hand", the entry named here has since answered it.
+- **A download's integrity** (Q36): a SHA-256 manifest whose own hash is the download's identity;
+  stored, read back from the drive and verified before it is put in place; verified before every
+  load, a failed check the FAULT 506 and never a substitute; swap, start and rollback name the
+  identity.
+- **Every altering request** (Q37): a digest, a session and an increasing number, the
+  controller's and the download's identity and the state it expects to leave, the controller's
+  last clock value; a lost answer is unknown and asked for by number; a change is applied whole
+  and its answer read back; a command passes both switches; a write's answer says applied, then
+  saved. The rule binds the Oficina link only.
+- **What must survive** (Q38): the assistant's list of inside and outside stands; inside too are
+  the running program's source, what peers need when the project uses them, and the clock for a
+  program with time-of-day blocks; a dry run survives a power cycle without the protection meant
+  for decades.
+- **Time** (Q39): 64-bit covers the operating system; NTP counts as silent only after a waiting
+  time; a request's urgency follows the present; the clock chip and NTP are two maintenance
+  reasons; an unconfirmed date marks the controller's records and the store's samples and is a
+  condition of the state text; a start missed while powered off does not run; the year-ahead
+  request covers the controller's certificates and its peers'; the warning cycle time is a
+  request of its own and each task's longest cycle per day is kept.
+- **The retained save** (Q40): one successful cycle's end, never a mix; two copies with their
+  hashes, the variables reset with a request when both are lost; skipped when nothing changed;
+  the period and the shortest gap are the engineer's; the program may ask for a save, held to
+  that gap; a failing save never stops RUN.
+- **Wear and filling** (Q41): at a size limit on a controller's drive the oldest record is
+  deleted, a repeating fault counted and not written again, the running program and its fallback
+  never deleted; Q16's "nothing is refused, deleted or merged" keeps holding for a project's
+  store on a PC, which gets no default limit. Storage is of three kinds kept apart; wear is
+  watched; the memory window has a ceiling in bytes beside its span and holds everything the
+  embedded portal reads unless the project narrows it; the fault's copies are limited in number
+  and in rate; a failed data area never stops RUN.
+- **The other areas** (Q42, Q226, Q234 to Q237): the Linux study's eight choices are the plan's;
+  memory errors and slow leaks are counted and said; Oficina speaks a controller's old versions
+  and updates it before a download; a backup is one file with a rebuild sheet; each rule is
+  proven by a fault catalogue on the bench, a soak on virtual time and a few real power cuts.
+  Nothing beyond the controller and its embedded portal counts as critical.
+- **A live takeover** (Q32): `docs/controlador/live-takeover.md` is the specification, without
+  its S3 and with a ten-minute default for the fallback's time limit.
+
+Still open: what the security round left for the security study (Q43): certificates after 2038,
+a signature over a download's manifest, a keyed check on altering requests.
 
 ## The Linux study
 Owed before any rule on the operating system is written: "we need to study linux for rt
