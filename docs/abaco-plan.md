@@ -419,11 +419,13 @@ own to close in a fork change of its own:
   Excel reads it as a constant; rewritten as an inline string, it blocks the array (`#SPILL!`).
   Excel writes a spilled text as `t="str"`, and so does the patcher.
 - **A text test of volatility reads names where there are none**: the engine stores formulas in
-  R1C1, where `R[0]C[-2]` is a name `R`, and `RAND` is a substring of `GRANDTOTAL(`; a false
-  positive keeps a stale cache. Volatile calls and names are read as whole tokens of each formula's
-  A1 spelling, outside strings and quoted names, and a name is resolved as Excel does (the sheet
-  that qualifies it or the formula's own, its local name before the workbook's; a LAMBDA name is
-  read when called).
+  R1C1, where `R[0]C[-2]` is a name `R`, and `RAND` is a substring of `GRANDTOTAL(`; even read as
+  whole tokens of the A1 spelling, `YEAR(` is the built-in and not a name `Year`, `$D$1` no name `D`
+  and `#N/A` no name `N` (C-223's twenty-first round); a false positive keeps a stale cache.
+  Volatility is read from the engine's own parse: a cell's formula as `parsed_formulas` holds it,
+  a name's parsed where the engine parses it (a local name on its sheet, a workbook name on the
+  first), a volatile function by its kind, a defined name by the scope the parser resolved, a
+  LAMBDA name called as the engine finds it from the cell's sheet.
 - **A random draw moves what reads it, by chance** (C-223's second round): a measure over a few
   evaluations lets a two-valued draw repeat. Every evaluation the patcher compares is made with
   one seed and one pinned time, so a draw is the same before, after and in verification; the

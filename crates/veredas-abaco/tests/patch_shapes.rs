@@ -3269,3 +3269,51 @@ fn a_name_of_the_file_format_s_characters_is_read_whole_beside_a_volatile_name_o
         }
     }
 }
+
+#[test]
+fn a_built_in_s_call_a_reference_or_an_error_spelled_like_a_volatile_name_moves_with_its_edit() {
+    // the round at d7cb0b35: the volatile reading took a built-in's call (`YEAR(` beside a name
+    // `Year` of `TODAY()`), a reference's column (`$D$1` beside a name `D`) and an error constant
+    // (`#N/A` beside a name `N`) for the names, and left the cell's cache as it was; read from the
+    // engine's own parse, each moves with its edit
+    let dir = tempfile::tempdir().unwrap();
+    let names = concat!(
+        "<definedName name=\"Year\">YEAR(TODAY())</definedName>",
+        "<definedName name=\"Date\">TODAY()</definedName>",
+        "<definedName name=\"Time\">NOW()</definedName>",
+        "<definedName name=\"Day\">DAY(TODAY())</definedName>",
+        "<definedName name=\"N\">RAND()</definedName>",
+        "<definedName name=\"D\">TODAY()</definedName>",
+        "<definedName name=\"Ano\">YEAR(Sheet1!$A$1)</definedName>",
+        "<definedName name=\"Rate\">Sheet1!$D$1</definedName>",
+    );
+    // (the edited cell, its value before and after, B1's formula, its cache before, its value after)
+    let cases: [(&str, i64, i64, &str, i64, i64); 10] = [
+        ("A1", 45000, 46500, "YEAR(A1)", 2023, 2027),
+        ("A1", 1, 7, "DATE(2026,A1,1)", 46023, 46204),
+        ("A1", 1, 7, "ROUND(TIME(A1,0,0)*24,6)", 1, 7),
+        ("A1", 45000, 45005, "DAY(A1)", 15, 20),
+        ("A1", 1, 7, "N(A1)*2", 2, 14),
+        ("A1", 45000, 46500, "Ano+0", 2023, 2027),
+        ("D1", 1, 7, "$D$1+0", 1, 7),
+        ("D1", 1, 7, "Rate*2", 2, 14),
+        ("D1", 1, 7, "IFERROR(D1,#N/A)", 1, 7),
+        ("E1", 1, 7, "E$1*2", 2, 14),
+    ];
+    for (edited, was, now, formula, cached, want) in cases {
+        let src = dir.path().join("volatile.xlsx");
+        // the row's cells in their columns' order
+        let input = format!(r#"<c r="{edited}"><v>{was}</v></c>"#);
+        let b1 = format!(r#"<c r="B1"><f>{formula}</f><v>{cached}</v></c>"#);
+        let data = if edited == "A1" { format!(r#"<row r="1">{input}{b1}</row>"#) } else { format!(r#"<row r="1">{b1}{input}</row>"#) };
+        plain_book(&src, &[("Sheet1", worksheet(&data, ""))], names, &[]);
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let dst = dir.path().join("out.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            patch(&src, &dst, &[value("Sheet1", edited, serde_json::json!(now))], &options).unwrap();
+            let b1 = format!(r#"<c r="B1"><f>{formula}</f><v>{want}</v></c>"#);
+            assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B1"), Some(b1.as_str()), "{formula}");
+            assert_eq!(read_back(&dst, "Sheet1", "B1"), Value::Number(want as f64), "{formula}");
+        }
+    }
+}
