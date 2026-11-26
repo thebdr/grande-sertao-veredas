@@ -1375,3 +1375,44 @@ fn a_file_in_a_folder_denying_search_at_the_start_is_read_whole_when_it_opens() 
     assert_eq!(recv_line(&rx), "third");
     set.stop_all();
 }
+
+/// The processor time a thread of this process named `name` has used, in seconds (Linux).
+#[cfg(target_os = "linux")]
+fn thread_cpu_s(name: &str) -> Option<f64> {
+    for task in std::fs::read_dir("/proc/self/task").ok()?.flatten() {
+        if std::fs::read_to_string(task.path().join("comm")).ok()?.trim_end() != name {
+            continue;
+        }
+        let stat = std::fs::read_to_string(task.path().join("stat")).ok()?;
+        let fields: Vec<&str> = stat.rsplit_once(") ")?.1.split(' ').collect();
+        return Some((fields[11].parse::<u64>().ok()? + fields[12].parse::<u64>().ok()?) as f64 / 100.0);
+    }
+    None
+}
+
+/// Following a quiet file costs almost nothing: a file gaining a line every 200 ms, followed for
+/// three seconds with the watcher on, every line read, and the follower's thread using under a
+/// tenth of a second of processor time. The watcher wakes the loop for what writers do, never for
+/// the follower's own opens and reads: woken by them it opened its path again on every pass, and a
+/// quiet file held a whole core (2026-11-26, the reference plant, a single file and a family alike).
+#[cfg(target_os = "linux")]
+#[test]
+fn following_a_quiet_file_costs_almost_no_processor_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("quiet.log");
+    std::fs::write(&path, "").unwrap();
+    let (mut set, rx) = SourceSet::new();
+    let cfg = TailConfig { use_notify: Some(true), ..TailConfig::default() };
+    set.spawn(Box::new(FileTailSource::new("quiet", "quiet", &path, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let before = thread_cpu_s("tail:quiet").expect("the follower's thread");
+    for i in 0..15 {
+        append(&path, &format!("line {i}\n"));
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let used = thread_cpu_s("tail:quiet").expect("the follower's thread") - before;
+    let lines: Vec<String> = rx.try_iter().map(|e| e.line).collect();
+    set.stop_all();
+    assert_eq!(lines, (0..15).map(|i| format!("line {i}")).collect::<Vec<_>>(), "every line read");
+    assert!(used < 0.1, "three seconds of following a quiet file used {used:.2} s of processor time");
+}

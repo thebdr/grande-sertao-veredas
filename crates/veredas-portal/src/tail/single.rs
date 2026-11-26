@@ -106,16 +106,30 @@ pub(crate) fn attached(slot: &mut Option<Sender<()>>) {
     }
 }
 
-/// Watch the file's parent folder; any event wakes the poll loop early. Failing to set the
-/// watcher up is not an error: polling covers it.
+/// Watch the file's parent folder; what a writer does there wakes the poll loop early. Failing to
+/// set the watcher up is not an error: polling covers it.
 pub(crate) fn spawn_watcher(dir: &Path, wake: Sender<()>, recursive: bool) -> Option<RecommendedWatcher> {
-    let mut watcher = notify::recommended_watcher(move |_res| {
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if res.as_ref().is_ok_and(|e| woken_by_self(&e.kind)) {
+            return;
+        }
         let _ = wake.send(());
     })
     .ok()?;
     let mode = if recursive { RecursiveMode::Recursive } else { RecursiveMode::NonRecursive };
     watcher.watch(dir, mode).ok()?;
     Some(watcher)
+}
+
+/// Whether an event is one the follower makes itself: a file opened, read, or closed after
+/// reading. The loop opens its path on every pass (the path checked against the handle) and reads
+/// what it follows, and inotify reports a folder's opens (notify watches `IN_OPEN` and
+/// `IN_CLOSE_NOWRITE`): a wake on them woke the loop on its own pass, which opened the path again,
+/// a full core spent following one quiet file (2026-11-26). A writer's writes, creates, renames,
+/// deletes, attribute changes and close after writing still wake it.
+fn woken_by_self(kind: &notify::EventKind) -> bool {
+    use notify::event::{AccessKind, AccessMode};
+    matches!(kind, notify::EventKind::Access(a) if !matches!(a, AccessKind::Close(AccessMode::Write)))
 }
 
 /// Sleep until the next poll tick or a filesystem event, coalescing bursts.

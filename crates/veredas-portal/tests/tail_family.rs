@@ -838,3 +838,55 @@ fn a_second_rotation_inside_the_pre_read_sweep_keeps_the_order() {
     set.stop_all();
     assert_exact("fixed/two-rotations-in-a-sweep", &got, &expected_sequence(12));
 }
+
+/// The processor time a thread of this process named `name` has used, in seconds (Linux).
+#[cfg(target_os = "linux")]
+fn thread_cpu_s(name: &str) -> Option<f64> {
+    for task in std::fs::read_dir("/proc/self/task").ok()?.flatten() {
+        if std::fs::read_to_string(task.path().join("comm")).ok()?.trim_end() != name {
+            continue;
+        }
+        let stat = std::fs::read_to_string(task.path().join("stat")).ok()?;
+        let fields: Vec<&str> = stat.rsplit_once(") ")?.1.split(' ').collect();
+        return Some((fields[11].parse::<u64>().ok()? + fields[12].parse::<u64>().ok()?) as f64 / 100.0);
+    }
+    None
+}
+
+/// Following a quiet family costs almost nothing, in either mode: a family of one dated member (the
+/// reference plant's shape) and a fixed-name one, each active gaining a line every 200 ms for three
+/// seconds with the watcher on, every line read, the follower's thread using under a tenth of a
+/// second of processor time (the watcher's own wake on the follower's opens held a whole core).
+#[cfg(target_os = "linux")]
+#[test]
+fn following_a_quiet_family_costs_almost_no_processor_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let dated = dir.path().join("dated");
+    std::fs::create_dir_all(&dated).unwrap();
+    std::fs::write(dated.join("20261126_sorts1.log"), "").unwrap();
+    let fixed = dir.path().join("fixed");
+    std::fs::create_dir_all(&fixed).unwrap();
+    std::fs::write(fixed.join("current.log"), "").unwrap();
+    let cases = [
+        ("qdated", FamilySpec::new(&dated, r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d".into()), ActiveMode::NewestByOrder).unwrap(), dated.join("20261126_sorts1.log")),
+        ("qfixed", FamilySpec::new(&fixed, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap(), fixed.join("current.log")),
+    ];
+    for (id, spec, active) in cases {
+        let (mut set, rx) = SourceSet::new();
+        let cfg = FamilyTailConfig { use_notify: Some(true), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
+        set.spawn(Box::new(FamilyTailSource::new(id, id, spec, cfg))).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let name = format!("family:{id}");
+        let before = thread_cpu_s(&name).expect("the follower's thread");
+        for i in 0..15 {
+            let mut f = std::fs::OpenOptions::new().append(true).open(&active).unwrap();
+            std::io::Write::write_all(&mut f, format!("line {i}\n").as_bytes()).unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let used = thread_cpu_s(&name).expect("the follower's thread") - before;
+        let lines: Vec<String> = rx.try_iter().map(|e| e.line).collect();
+        set.stop_all();
+        assert_eq!(lines, (0..15).map(|i| format!("line {i}")).collect::<Vec<_>>(), "{id}: every line read");
+        assert!(used < 0.1, "{id}: three seconds of following a quiet family used {used:.2} s of processor time");
+    }
+}

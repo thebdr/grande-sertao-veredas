@@ -396,6 +396,12 @@ Recorded as the port meets them.
   build ones; a test build (nextest above all) started right after it failed four times with "crate
   `libduckdb_sys` required to be available in rlib format" and compiler internal errors, and a plain
   `cargo build --workspace --tests` healed it each time. Clippy runs after the suite, never before it.
+- **A watcher woken by the follower's own opens spins the loop.** notify 8 watches a folder's
+  `IN_OPEN` and reports `IN_CLOSE_NOWRITE`, and the live loop opens its path on every pass to check
+  it against its handle: woken by any event, each pass woke the next at once, a full core on a
+  quiet log since the crate's first commit (found on the reference plant, 2026-11-26). The
+  watcher wakes the loop only for what a writer does; the idle cost is pinned by the follower
+  thread's own processor time (C-035, C-036).
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
   read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a
