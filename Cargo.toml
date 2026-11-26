@@ -148,6 +148,9 @@ roxmltree = "0.20"
 # The Rust lexer, for supervisão's test that reads its own sources as tokens (tests/writes.rs):
 # a raw identifier read as its name, comments gone, so no spelling hides a path from the reading.
 proc-macro2 = "1"
+# Rust's literals unescaped as the derives read them (serde_derive and thiserror use syn 3): core's
+# test reads a string in an attribute as the code a derive may make of it (C-073).
+syn = "3"
 # Oficina's window (docs/oficina-plan.md, "Foundations"): Qt Quick with its logic in Rust through
 # the cxx-qt bridge, the versions its own-shell spike passed on. Optional in Oficina, behind its
 # `shell` feature: no member's default build compiles them (docs/questions.md Q370).

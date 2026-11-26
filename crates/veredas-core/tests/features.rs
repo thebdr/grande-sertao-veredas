@@ -909,12 +909,13 @@ impl Reading<'_> {
                     .filter_map(ident)
                     .collect();
                 let cfg = path == ["cfg"];
+                let doc = path == ["doc"];
                 if cfg {
                     self.gates.push(key.clone());
                 } else if path.iter().any(|w| w == "cfg" || w == "cfg_attr") {
                     self.refuse(&tokens[k], &format!("`{}`", path.join("::")));
                 }
-                self.attribute(&body, true, cfg);
+                self.attribute(&body, true, cfg, doc);
                 k = end + 1;
                 continue;
             }
@@ -937,16 +938,40 @@ impl Reading<'_> {
     }
 
     /// An attribute's tokens: `top` when they are its own, not those of a group inside it; `cfg`
-    /// when it is a `cfg`.
-    fn attribute(&mut self, tokens: &[TokenTree], top: bool, cfg: bool) {
+    /// when it is a `cfg`; `doc` when it is a doc comment, whose strings are prose.
+    fn attribute(&mut self, tokens: &[TokenTree], top: bool, cfg: bool, doc: bool) {
         for (k, t) in tokens.iter().enumerate() {
             match t {
                 TokenTree::Group(g) => {
                     let inner: Vec<TokenTree> = g.stream().into_iter().collect();
-                    self.attribute(&inner, false, cfg);
+                    self.attribute(&inner, false, cfg, doc);
                 }
                 TokenTree::Punct(p) if p.as_char() == '$' => {
                     self.refuse(t, "a macro's `$` in an attribute")
+                }
+                // A string a derive may read as code (serde's `deserialize_with = "path"`, `bound
+                // = "T: Trait"`): its value, unescaped as syn unescapes it for the derive, held to
+                // the code's rules wherever it reads as Rust tokens. One that does not cannot be
+                // code to a derive either.
+                TokenTree::Literal(l) if !doc => {
+                    if let syn::Lit::Str(s) = syn::Lit::new(l.clone())
+                        && let Ok(code) = s.value().parse::<TokenStream>()
+                    {
+                        let inner: Vec<TokenTree> = code.into_iter().collect();
+                        let at = format!(
+                            "{} (a string at line {}, read as code)",
+                            self.rel,
+                            l.span().start().line
+                        );
+                        let mut string = Reading {
+                            rel: &at,
+                            gates: Vec::new(),
+                            stray: Vec::new(),
+                        };
+                        string.code(&inner);
+                        self.gates.extend(string.gates);
+                        self.stray.extend(string.stray);
+                    }
                 }
                 _ => {
                     let Some(w) = ident(t) else { continue };

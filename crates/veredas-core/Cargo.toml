@@ -78,3 +78,6 @@ serde_json = { workspace = true }
 # The Rust lexer, for tests/features.rs's audit of core's own sources read as tokens (C-073): a
 # raw identifier read as its name, comments gone, every literal whole, each token's line known.
 proc-macro2 = { workspace = true, features = ["span-locations"] }
+# A string in an attribute, unescaped as serde's and thiserror's derives unescape it (syn 3), so
+# the audit reads the code a derive may make of it (`deserialize_with = "path"`, C-073).
+syn = { workspace = true }
