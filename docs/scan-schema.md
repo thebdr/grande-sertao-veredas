@@ -24,7 +24,8 @@ rather than repeating every type.
   heard in one frame (a frame says one value of a field); its topology's links each stored
   lesser end first and by their ends, each pair of ends once (a link is its two ends: one cable is
   one link); and no witness, nor a port's last
-  leaving or other frame, naming a frame past its capture's last record (`not a scan: ...`). A
+  leaving or other frame or its last frame `on` an interface, naming a frame past its capture's
+  last record (`not a scan: ...`). A
   witness may name a frame before its capture's first: one the listener let go past its bound
   (counted in `stats.let_go`), which the capture does not hold. A scan that is no scan is refused
   when written too.

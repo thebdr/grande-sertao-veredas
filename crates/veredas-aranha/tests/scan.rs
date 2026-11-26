@@ -402,3 +402,16 @@ fn two_values_of_a_field_from_one_frame_and_a_device_s_own_link_flipped_are_no_s
     own.topology.links = vec![Link { a: end("port-003"), b: end("port-004"), confidence: Confidence::Reported, witnesses: 1 }];
     assert!(own.check().is_ok());
 }
+
+/// A port's last frame on an interface is a frame the scan names like any (C-147's third refute
+/// round): past its capture's last, no scan.
+#[test]
+fn a_port_s_last_frame_on_an_interface_past_the_capture_is_no_scan() {
+    let mut scan = sample();
+    assert!(scan.check().is_ok());
+    let dev = scan.devices.iter().position(|d| !d.ports.is_empty()).unwrap();
+    let mac = scan.devices[dev].mac;
+    let port = scan.devices[dev].ports.values_mut().next().unwrap();
+    port.on.values_mut().next().unwrap().last.1 = 900;
+    assert_eq!(scan.check().unwrap_err().to_string(), format!("not a scan: device {mac} names frame 900, past its capture's last (3)"));
+}

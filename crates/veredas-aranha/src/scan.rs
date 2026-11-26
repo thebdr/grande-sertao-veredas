@@ -106,7 +106,8 @@ impl Scan {
     /// What makes it a scan beyond its keys: its devices by MAC, each once; no field holding two
     /// values last heard in one frame; its topology's links
     /// each stored lesser end first and by their ends, each pair of ends once (a link is its two
-    /// ends, so one cable is one link); no witness, and no port's last leaving or other frame,
+    /// ends, so one cable is one link); no witness, and no port's last leaving or other frame or last
+    /// frame on an interface,
     /// naming a frame past its capture's last record (one before its first is a frame the listener
     /// let go, counted in its stats, which the capture does not hold).
     pub fn check(&self) -> Result<(), ScanError> {
@@ -175,8 +176,8 @@ impl Scan {
     }
 }
 
-/// Every frame number a device names: its fields' witnesses and its ports' last leaving and
-/// other frames.
+/// Every frame number a device names: its fields' witnesses, and its ports' last leaving and other
+/// frames and their last frame on each interface.
 fn frames_of(d: &Device) -> impl Iterator<Item = u64> + '_ {
     fn of<T>(f: &Field<T>) -> impl Iterator<Item = u64> + '_ {
         f.candidates.iter().flat_map(|c| [c.first.frame, c.last.frame])
@@ -204,6 +205,7 @@ fn frames_of(d: &Device) -> impl Iterator<Item = u64> + '_ {
             .chain(of(&p.pvid))
             .chain(of(&p.mau_type))
             .chain(p.leaving.into_iter().chain(p.spoke).map(|(_, frame)| frame))
+            .chain(p.on.values().map(|on| on.last.1))
     });
     own.chain(ports)
 }

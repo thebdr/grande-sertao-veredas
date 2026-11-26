@@ -597,3 +597,299 @@ fn a_baseline_of_the_bench_and_the_bench_changed_since_are_told_apart() {
         }
     });
 }
+
+/// The third refute round's cases (its critic's probes, taken in): the value heard last where a
+/// lower frame carries a later stamp (two interfaces' workers), a suite at 0.0.0.0 whose mask or
+/// gateway alone differs, management addresses of 0.0.0.0 alone, listenings as two workers make them
+/// accepted and diffed alike in any order of a field's values, a tie refused in each field the diff
+/// reads, a conflict's value told apart by case.
+mod round_3 {
+    use std::net::Ipv4Addr;
+
+    use veredas_aranha::diff::{self, Change, OneSided, Said};
+    use veredas_aranha::fusion::Fusion;
+    use veredas_aranha::listen::{Interface as Account, Stats};
+    use veredas_aranha::observe::{Observation, Observed, Probe, Witness};
+    use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpSuite};
+    use veredas_aranha::profinet::lldp::{ChassisId, LldpPdu, MgmtAddr, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::scan::Scan;
+    use veredas_aranha::topology::{self, Interface, Neighbour};
+
+    /// One hearing to come: its stamp and frame given when it is kept.
+    type Hearing = Box<dyn Fn(u64, u64) -> Observation>;
+
+    const A: Mac = Mac([0x02, 0, 0, 0, 0, 0x0A]);
+    const T0: u64 = 1_764_000_000_000_000_000;
+
+    fn ip(last: u8) -> Ipv4Addr { Ipv4Addr::new(192, 168, 0, last) }
+    fn suite(address: Ipv4Addr) -> IpSuite { IpSuite { ip: address, mask: Ipv4Addr::new(255, 255, 255, 0), gateway: Ipv4Addr::UNSPECIFIED } }
+    fn w(probe: Probe, iface: &str, at: u64, frame: u64) -> Witness { Witness { probe, iface: iface.into(), at_ns: T0 + at, frame } }
+
+    fn hello(dev: Mac, name: Option<&str>, address: Option<IpSuite>, iface: &str, at: u64, frame: u64) -> Observation {
+        let identity = DeviceIdentity { name: name.map(String::from), ip: address, ..Default::default() };
+        Observation { witness: w(Probe::DcpHeard, iface, at, frame), observed: Observed::Dcp { mac: dev, service: dcp::Service::Hello, service_type: dcp::ServiceType::Request, identity } }
+    }
+    fn lldp(dev: Mac, port: u8, iface: &str, sys_name: Option<&str>, mgmt: &[Ipv4Addr], at: u64, frame: u64) -> Observation {
+        let mut pdu = LldpPdu::new(ChassisId::Mac { mac: dev }, PortId::Local { id: format!("port-{port:03}") }, 20);
+        pdu.pn.chassis_mac = Some(dev);
+        pdu.sys_name = sys_name.map(String::from);
+        pdu.mgmt_addrs = mgmt.iter().map(|a| MgmtAddr { subtype: 1, addr: a.octets().to_vec(), if_subtype: 1, if_number: 0, oid: vec![] }).collect();
+        Observation { witness: w(Probe::LldpHeard, iface, at, frame), observed: Observed::Lldp { src: Mac([0x02, 0, 0, 0, dev.0[5], port]), pdu } }
+    }
+    /// An LLDP PDU from a port's MAC naming no MAC for its chassis (a port known before its device).
+    fn lldp_bare(port_mac: Mac, port: u8, iface: &str, sys_name: Option<&str>, at: u64, frame: u64) -> Observation {
+        let mut pdu = LldpPdu::new(ChassisId::Local { id: "x".into() }, PortId::Local { id: format!("port-{port:03}") }, 20);
+        pdu.sys_name = sys_name.map(String::from);
+        Observation { witness: w(Probe::LldpHeard, iface, at, frame), observed: Observed::Lldp { src: port_mac, pdu } }
+    }
+    fn arp(dev: Mac, address: Ipv4Addr, iface: &str, at: u64, frame: u64) -> Observation {
+        Observation { witness: w(Probe::ArpHeard, iface, at, frame), observed: Observed::Arp { mac: dev, ip: address } }
+    }
+    fn scan_of(obs: &[Observation], interfaces: &[&str], neighbours: &[Neighbour]) -> Scan {
+        let mut fusion = Fusion::new();
+        for o in obs { fusion.apply(o); }
+        let stats = Stats { interfaces: interfaces.iter().map(|i| (i.to_string(), Account::default())).collect(), ..Stats::default() };
+        let ifaces: Vec<Interface> = interfaces.iter().map(|i| Interface { name: i.to_string(), mac: None }).collect();
+        let t = topology::build(&fusion, &ifaces, neighbours);
+        Scan::new(&fusion, &stats, &t, T0 + 1_000_000_000, None)
+    }
+    fn change(mac: Mac, what: Said, from: &str, to: &str) -> Change { Change { mac, what, from: from.into(), to: to.into() } }
+    fn back_and_forth(path: &str, s: &Scan) -> Scan {
+        let p = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(path);
+        s.write_file(&p).unwrap();
+        Scan::read_file(&p).unwrap()
+    }
+
+    /// Two workers keep frames in the order each reaches the lock, their stamps the wire's: a frame
+    /// of a lower index can carry a later stamp (a device heard on two interfaces, two captures
+    /// replayed at once). Fusion's value heard last is the later stamp's; the diff must say so.
+    #[test]
+    fn q01_a_later_stamp_on_a_lower_frame_is_the_value_heard_last() {
+        let base = scan_of(&[hello(A, Some("bomba-1"), Some(suite(ip(10))), "eth1", 1, 1), arp(A, ip(10), "eth1", 2, 2), lldp(A, 1, "eth1", Some("sw-1"), &[ip(10)], 3, 3)], &["eth1", "eth2"], &[]);
+        // In index order (as the listener applies them): the later-stamped values come first.
+        let now = scan_of(
+            &[
+                hello(A, Some("bomba-2"), Some(suite(ip(20))), "eth1", 200, 5),
+                hello(A, Some("bomba-1"), Some(suite(ip(10))), "eth2", 100, 6),
+                arp(A, ip(20), "eth1", 201, 7),
+                arp(A, ip(10), "eth2", 101, 8),
+                lldp(A, 1, "eth1", Some("sw-2"), &[ip(20)], 202, 9),
+                lldp(A, 2, "eth2", Some("sw-1"), &[ip(10)], 102, 10),
+            ],
+            &["eth1", "eth2"],
+            &[],
+        );
+        let a = &now.devices[0];
+        assert_eq!(a.name.current().map(String::as_str), Some("bomba-2"), "fusion's value heard last");
+        let d = diff::diff(&base, &now).unwrap();
+        assert_eq!(d.renamed, [change(A, Said::StationName, "bomba-1", "bomba-2"), change(A, Said::SystemName, "sw-1", "sw-2")]);
+        assert_eq!(
+            d.readdressed,
+            [
+                change(A, Said::IpSuite, "192.168.0.10 255.255.255.0 0.0.0.0", "192.168.0.20 255.255.255.0 0.0.0.0"),
+                change(A, Said::ArpAddress, "192.168.0.10", "192.168.0.20"),
+                change(A, Said::ManagementAddresses, "192.168.0.10", "192.168.0.20"),
+            ]
+        );
+        // Read back from its file, the same.
+        let read = back_and_forth("diff-round-3-q01.toml", &now);
+        assert_eq!(diff::diff(&base, &read).unwrap(), d);
+    }
+
+    /// An IP suite at 0.0.0.0 whose mask (or gateway) alone differs: a value, readdressed.
+    #[test]
+    fn q02_a_suite_at_zero_whose_mask_alone_differs_is_readdressed() {
+        let z = |mask: [u8; 4], gw: [u8; 4]| IpSuite { ip: Ipv4Addr::UNSPECIFIED, mask: mask.into(), gateway: gw.into() };
+        let b = scan_of(&[hello(A, None, Some(z([255, 255, 255, 0], [0, 0, 0, 0])), "eth1", 1, 1)], &["eth1"], &[]);
+        let s = scan_of(&[hello(A, None, Some(z([0, 0, 0, 0], [0, 0, 0, 0])), "eth1", 1, 1)], &["eth1"], &[]);
+        let g = scan_of(&[hello(A, None, Some(z([255, 255, 255, 0], [192, 168, 0, 1])), "eth1", 1, 1)], &["eth1"], &[]);
+        assert_eq!(diff::diff(&b, &s).unwrap().readdressed, [change(A, Said::IpSuite, "0.0.0.0 255.255.255.0 0.0.0.0", "0.0.0.0 0.0.0.0 0.0.0.0")]);
+        assert_eq!(diff::diff(&b, &g).unwrap().readdressed, [change(A, Said::IpSuite, "0.0.0.0 255.255.255.0 0.0.0.0", "0.0.0.0 255.255.255.0 192.168.0.1")]);
+    }
+
+    /// A management address set of 0.0.0.0 alone: a value.
+    #[test]
+    fn q03_management_addresses_of_zero_alone_are_a_value() {
+        let zero = scan_of(&[lldp(A, 1, "eth1", None, &[Ipv4Addr::UNSPECIFIED], 1, 1)], &["eth1"], &[]);
+        let ten = scan_of(&[lldp(A, 1, "eth1", None, &[ip(10)], 1, 1)], &["eth1"], &[]);
+        let none = scan_of(&[lldp(A, 1, "eth1", None, &[], 1, 1)], &["eth1"], &[]);
+        assert_eq!(diff::diff(&zero, &ten).unwrap().readdressed, [change(A, Said::ManagementAddresses, "0.0.0.0", "192.168.0.10")]);
+        assert_eq!(diff::diff(&none, &zero).unwrap().one_sided, [OneSided { mac: A, what: Said::ManagementAddresses, baseline: None, scan: Some("0.0.0.0".into()) }]);
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; self.0 }
+        fn below(&mut self, n: u64) -> u64 { self.next() % n }
+    }
+
+    /// A listening as two workers make one: frames numbered in the order kept, stamps per interface
+    /// (a worker's stamps rise, the two interleave in any order), ports known before their device.
+    fn listening(rng: &mut Rng) -> Scan {
+        let pool: Vec<Mac> = (1..=4).map(|i| Mac([0x02, 0, 0, 0, 0, i])).collect();
+        let names = [None, Some(""), Some("bomba-1"), Some("bomba-2")];
+        let suites = [None, Some(suite(ip(10))), Some(suite(ip(11))), Some(suite(Ipv4Addr::UNSPECIFIED)), Some(IpSuite { ip: Ipv4Addr::UNSPECIFIED, mask: Ipv4Addr::UNSPECIFIED, gateway: Ipv4Addr::UNSPECIFIED })];
+        // Each interface's own stream, its stamps rising.
+        let mut streams: [Vec<Hearing>; 2] = [Vec::new(), Vec::new()];
+        for mac in &pool {
+            if rng.below(4) == 0 { continue; }
+            let n = rng.below(7);
+            for _ in 0..n {
+                let iface = rng.below(2) as usize;
+                let name = if iface == 0 { "eth1" } else { "eth2" };
+                let mac = *mac;
+                let f: Hearing = match rng.below(4) {
+                    0 => {
+                        let (nm, su) = (names[rng.below(4) as usize], suites[rng.below(5) as usize].clone());
+                        Box::new(move |at, fr| hello(mac, nm, su.clone(), name, at, fr))
+                    }
+                    1 => {
+                        let a = ip(10 + rng.below(2) as u8);
+                        Box::new(move |at, fr| arp(mac, a, name, at, fr))
+                    }
+                    2 => {
+                        let (port, sys) = (1 + rng.below(2) as u8, [None, Some("sw-1"), Some("sw-2")][rng.below(3) as usize]);
+                        let mg: Vec<Ipv4Addr> = (0..rng.below(3)).map(|k| if k == 0 && rng.below(2) == 0 { Ipv4Addr::UNSPECIFIED } else { ip(10 + k as u8) }).collect();
+                        Box::new(move |at, fr| lldp(mac, port, name, sys, &mg, at, fr))
+                    }
+                    _ => {
+                        // A port's PDU naming no chassis MAC: kept at the port's MAC until its device's comes.
+                        let port = 1 + rng.below(2) as u8;
+                        let sys = [None, Some("sw-1"), Some("sw-3")][rng.below(3) as usize];
+                        let src = Mac([0x02, 0, 0, 0, mac.0[5], port]);
+                        Box::new(move |at, fr| lldp_bare(src, port, name, sys, at, fr))
+                    }
+                };
+                streams[iface].push(f);
+            }
+        }
+        // Stamps: each interface's rise from its own start; the two merged in a random interleaving.
+        let mut at = [rng.below(50), rng.below(50)];
+        let mut idx = [0usize, 0usize];
+        let mut obs = Vec::new();
+        let mut frame = 0u64;
+        while idx[0] < streams[0].len() || idx[1] < streams[1].len() {
+            let i = if idx[0] == streams[0].len() { 1 } else if idx[1] == streams[1].len() { 0 } else { rng.below(2) as usize };
+            frame += 1;
+            at[i] += 1 + rng.below(20);
+            obs.push((streams[i][idx[i]])(at[i], frame));
+            idx[i] += 1;
+        }
+        scan_of(&obs, &["eth1", "eth2"], &[])
+    }
+
+    /// Every listening such as two workers make is a scan (the new rule refuses none), and its diff
+    /// against another is the same with each field's values in any order, written and read back.
+    #[test]
+    fn q04_listenings_are_scans_and_the_diff_ignores_the_order_of_a_field_s_values() {
+        let mut rng = Rng(0xC147_0003);
+        let mut disagree = 0;
+        for k in 0..3000 {
+            let (b, s) = (listening(&mut rng), listening(&mut rng));
+            b.check().unwrap_or_else(|e| panic!("{k}: a listening refused: {e}"));
+            s.check().unwrap_or_else(|e| panic!("{k}: a listening refused: {e}"));
+            let d = diff::diff(&b, &s).unwrap();
+            // Each field's candidates reversed (out of the "first heard first" order).
+            let mut r = s.clone();
+            for dv in &mut r.devices {
+                dv.name.candidates.reverse();
+                dv.sys_name.candidates.reverse();
+                dv.ip.candidates.reverse();
+                dv.arp_ip.candidates.reverse();
+                dv.mgmt_ips.candidates.reverse();
+            }
+            assert_eq!(diff::diff(&b, &r).unwrap(), d, "{k}");
+            if k % 10 == 0 {
+                let read = back_and_forth("diff-round-3-q04.toml", &r);
+                assert_eq!(diff::diff(&b, &read).unwrap(), d, "{k}");
+            }
+            // How often index order and stamp order disagree on the value heard last.
+            for dv in &s.devices {
+                let by_frame = dv.name.candidates.iter().max_by_key(|c| c.last.frame).map(|c| &c.value);
+                if by_frame != dv.name.current() { disagree += 1; }
+            }
+        }
+        assert!(disagree > 100, "{disagree}");
+    }
+
+
+
+    /// Each of the diff's own fields holding two values last heard in one frame: refused, never a
+    /// diff of the order its list holds (the second round pinned the station name alone).
+    #[test]
+    fn q07_a_tie_in_each_field_the_diff_reads_is_refused() {
+        let s = scan_of(
+            &[hello(A, Some("bomba-1"), Some(suite(ip(10))), "eth1", 1, 1), arp(A, ip(10), "eth1", 2, 2), lldp(A, 1, "eth1", Some("sw-1"), &[ip(10)], 3, 3)],
+            &["eth1"],
+            &[],
+        );
+        let base = s.clone();
+        let mut seen = Vec::new();
+        // The system name.
+        let mut t = s.clone();
+        let mut c = t.devices[0].sys_name.candidates[0].clone();
+        c.value = "sw-9".into();
+        t.devices[0].sys_name.candidates.insert(0, c);
+        seen.push(("sys_name", diff::diff(&base, &t).map(|d| d.renamed)));
+        // The IP suite.
+        let mut t = s.clone();
+        let mut c = t.devices[0].ip.candidates[0].clone();
+        c.value = suite(ip(99));
+        t.devices[0].ip.candidates.insert(0, c);
+        seen.push(("ip", diff::diff(&base, &t).map(|d| d.renamed)));
+        // The ARP address.
+        let mut t = s.clone();
+        let mut c = t.devices[0].arp_ip.candidates[0].clone();
+        c.value = ip(99);
+        t.devices[0].arp_ip.candidates.insert(0, c);
+        seen.push(("arp_ip", diff::diff(&base, &t).map(|d| d.renamed)));
+        // The management addresses.
+        let mut t = s.clone();
+        let mut c = t.devices[0].mgmt_ips.candidates[0].clone();
+        c.value = [ip(99)].into_iter().collect();
+        t.devices[0].mgmt_ips.candidates.insert(0, c);
+        seen.push(("mgmt_ips", diff::diff(&base, &t).map(|d| d.renamed)));
+        for (field, got) in &seen {
+            match got {
+                Err(e) => assert!(e.to_string().contains(&format!("'s {field} holds two values last heard in frame")), "{field}: {e}"),
+                Ok(d) => panic!("{field}: a tie diffed: {d:?}"),
+            }
+        }
+    }
+
+    /// A conflict's value differing in case alone is another conflict: two devices sharing a name
+    /// renamed alike in case, the duplicate cleared and another new.
+    #[test]
+    fn q08_a_conflict_whose_value_differs_in_case_alone_is_cleared_and_new() {
+        use veredas_aranha::fusion::{Conflict, ConflictKind};
+        let bm = Mac([0x02, 0, 0, 0, 0, 0x0B]);
+        let b = scan_of(&[hello(A, Some("Bomba-1"), None, "eth1", 1, 1), hello(bm, Some("Bomba-1"), None, "eth1", 2, 2)], &["eth1"], &[]);
+        let s = scan_of(&[hello(A, Some("bomba-1"), None, "eth1", 1, 1), hello(bm, Some("bomba-1"), None, "eth1", 2, 2)], &["eth1"], &[]);
+        let d = diff::diff(&b, &s).unwrap();
+        let dup = |v: &str| Conflict { kind: ConflictKind::DuplicateName, value: v.into(), macs: vec![A, bm] };
+        assert_eq!(d.conflicts_cleared, [dup("Bomba-1")]);
+        assert_eq!(d.conflicts_new, [dup("bomba-1")]);
+    }
+
+    /// Whatever the check lets through in the diff's own fields, one diff whatever the order of a
+    /// field's values: a tie in each field, its list reversed.
+    #[test]
+    fn q09_a_tie_the_check_lets_through_gives_one_diff_in_either_order() {
+        let s = scan_of(
+            &[hello(A, Some("bomba-1"), Some(suite(ip(10))), "eth1", 1, 1), arp(A, ip(10), "eth1", 2, 2), lldp(A, 1, "eth1", Some("sw-1"), &[ip(10)], 3, 3)],
+            &["eth1"],
+            &[],
+        );
+        let base = scan_of(&[hello(A, Some("bomba-1"), Some(suite(ip(10))), "eth1", 1, 1), arp(A, ip(10), "eth1", 2, 2), lldp(A, 1, "eth1", Some("sw-1"), &[ip(10)], 3, 3)], &["eth1"], &[]);
+        let mut t = s.clone();
+        let mut c = t.devices[0].ip.candidates[0].clone();
+        c.value = suite(ip(99));
+        t.devices[0].ip.candidates.push(c);
+        let mut r = t.clone();
+        r.devices[0].ip.candidates.reverse();
+        if let (Ok(x), Ok(y)) = (diff::diff(&base, &t), diff::diff(&base, &r)) {
+            assert_eq!(x, y, "one scan, two diffs by the order of its IP suite's values");
+        }
+    }
+}
