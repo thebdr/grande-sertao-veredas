@@ -12,15 +12,15 @@
     "executable"
   ],
   "exitCode": 0,
-  "outputSha": "700319739de618ecac7e5670a263a041e64e07fc6c7143c69752f13d9892a867",
-  "outputTail": "\nrunning 2 tests\ntest every_usage_it_cannot_follow_is_refused_with_its_reason ... ok\ntest a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.39s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s\n     Running tests/executable.rs (target/debug/build/veredas-aranha/086f59243ef4a3c8/out/executable-086f59243ef4a3c8)",
-  "ranAt": "2026-11-26T09:29:30.688Z",
-  "headCommit": "336359d78abee302ba7bfb76681a58cf90d3a0d1",
+  "outputSha": "246e5d27355ff4b79cf291fefd70a9bc2a3d85bc9c1f3de5f43f8d587377f58b",
+  "outputTail": "\nrunning 2 tests\ntest every_usage_it_cannot_follow_is_refused_with_its_reason ... ok\ntest a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.99s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.93s\n     Running tests/executable.rs (target/debug/build/veredas-aranha/086f59243ef4a3c8/out/executable-086f59243ef4a3c8)",
+  "ranAt": "2026-11-26T09:47:59.472Z",
+  "headCommit": "84ef0a1a64704d4bb6c582f5f0627733febe418b",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/executable.rs",
       "file": "crates/veredas-aranha/tests/executable.rs",
-      "fileSha": "34198d35f50288aace1224e2821e82deec08b16c95aace2f1515efc772250fc3"
+      "fileSha": "6e03f640966678c12f9a33a18f3162f2e6cce1975da89e64675912609d5fbc5c"
     }
   ]
 }
