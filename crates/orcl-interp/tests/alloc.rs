@@ -501,3 +501,35 @@ fn a_copy_taken_after_a_small_value_was_built_allocates_nothing_building_a_large
         m.step().unwrap();
     }
 }
+
+// The twenty-first refute round's test: the larger region listed first, copied in part through a reference.
+
+#[test]
+fn the_larger_region_listed_first_and_copied_in_part_through_a_reference_allocates_nothing() {
+    // regions: S { cur: [u8; 32], prev: [u8; 32] } first, then a u8; fn keep(s: &mut S, n: &mut u8) { (*s).prev = (*s).cur }
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let arr = b.ty(Type::Array { element: u8t, len: 32 });
+    let s = b.tuple(&[arr, arr]);
+    let unit = b.unit();
+    let (rs, rn) = (b.reference(s, true), b.reference(u8t, true));
+    let keep = b.function(Function {
+        name: "keep".into(),
+        params: 2,
+        locals: locals(&[unit, rs, rn]),
+        blocks: vec![block(
+            vec![assign(proj(1, vec![Projection::Deref, Projection::Field(1)]), Value::Use(copy_at(proj(1, vec![Projection::Deref, Projection::Field(0)]))), 1)],
+            ret(),
+        )],
+    });
+    let mut m = Machine::load(b.program, &[s, u8t]).unwrap();
+    let state: Vec<Scalar> = (0..64).map(|i| int(Int::U8, i % 32)).collect();
+    m.set_region(RegionId(0), &state).unwrap();
+    m.set_region(RegionId(1), &[int(Int::U8, 0)]).unwrap();
+    let mut copy = m.clone();
+    let (got, asked) = watching(|| m.call(keep, &[Arg::Ref(RegionId(0)), Arg::Ref(RegionId(1))]).map(|r| r.to_vec()));
+    assert_eq!((got, asked), (Ok(vec![]), 0), "the machine");
+    let (got, asked) = watching(|| copy.call(keep, &[Arg::Ref(RegionId(0)), Arg::Ref(RegionId(1))]).map(|r| r.to_vec()));
+    assert_eq!((got, asked), (Ok(vec![]), 0), "its copy");
+    assert_eq!(m.region(RegionId(0)), Some(&state[..32].repeat(2)[..]), "prev is cur");
+}

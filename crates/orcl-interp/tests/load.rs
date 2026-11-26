@@ -1512,3 +1512,196 @@ fn an_enum_s_aggregate_that_names_no_variant_is_refused() {
         assert_eq!(got, want, "Option<u8> built as variant {variant:?}");
     }
 }
+
+// The twenty-first refute round's tests: each check over a list met with a bad element before a sound one, and each
+// greatest value fed first (an enum's deep variant, a value's first field of another type, a first argument or part,
+// a start's first region, a discriminant outside its type, a local of no such type).
+
+/// `E_k { A(E_{k-1}), B(u8) }`, innermost first: the deep part first, a shallow one after it.
+fn enums_deep_first(depth: u32) -> Program {
+    let mut b = Build::default();
+    b.program.types.push(Type::Int(Int::U8));
+    for k in 1..=depth {
+        b.program.types.push(Type::Enum {
+            name: format!("E{k}"),
+            discriminant: Int::U8,
+            variants: vec![
+                Variant { name: "A".into(), discriminant: 0, fields: vec![Field { name: "0".into(), ty: TypeId(k - 1) }] },
+                Variant { name: "B".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: TypeId(0) }] },
+            ],
+        });
+    }
+    b.program
+}
+
+#[test]
+fn an_enum_whose_deep_variant_comes_before_a_shallow_one_counts_the_deep_one() {
+    let got = Machine::load(enums_deep_first(300), &[]).map(|_| ());
+    println!("300 enums, the deep variant first: {got:?}");
+    assert!(matches!(got, Err(LoadError::Type { reason: "nested too deep", .. })), "{got:?}");
+    assert!(Machine::load(enums_deep_first(200), &[]).is_ok(), "200 deep loads");
+}
+
+/// `(u8, u16)` given a `u16` in its first field: no value of the type, as a region, an argument and a constant.
+#[test]
+fn a_structure_whose_first_field_is_of_another_type_is_no_value() {
+    let mut b = Build::default();
+    let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
+    let pair = b.tuple(&[u8t, u16t]);
+    let rp = b.reference(pair, true);
+    // fn first(p: &mut (u8, u16)) -> u8 { (*p).0 + 1 }
+    let first = b.function(Function {
+        name: "first".into(),
+        params: 1,
+        locals: locals(&[u8t, rp]),
+        blocks: vec![block(vec![assign(place(0), Value::Binary(BinOp::Add, copy_at(proj(1, vec![Projection::Deref, Projection::Field(0)])), konst(u8t, vec![int(Int::U8, 1)])), 1)], ret())],
+    });
+    let take = b.function(Function { name: "take".into(), params: 1, locals: locals(&[u8t, pair]), blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Field(0)]))), 1)], ret())] });
+    let bad = vec![int(Int::U16, 7), int(Int::U16, 2)];
+    let mut m = Machine::load(b.program.clone(), &[pair]).unwrap();
+    let got = m.set_region(RegionId(0), &bad);
+    println!("set_region((u16, u16) into (u8, u16)): {got:?}");
+    if got.is_ok() {
+        println!("  and the program reads it: {:?}", m.call(first, &[Arg::Ref(RegionId(0))]));
+        m.abort();
+    }
+    assert_eq!(got, Err(HostError::Slots), "as a region");
+    assert_eq!(m.start(take, &[Arg::Value(&bad)]), Err(HostError::Arguments), "as an argument");
+    let mut p = Build { program: b.program.clone() };
+    p.function(Function { name: "f".into(), params: 0, locals: locals(&[pair]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(pair, bad.clone())), 1)], ret())] });
+    assert_eq!(
+        Machine::load(p.program, &[]).map(|_| ()),
+        Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" }),
+        "as a constant"
+    );
+    // a u8 of 300 in the first field, the second right
+    let wide = vec![Scalar::Int(Int::U8, 300), int(Int::U16, 2)];
+    let got = m.set_region(RegionId(0), &wide);
+    if got.is_ok() {
+        println!("  a u8 of 300 taken, the program reads: {:?}", m.call(first, &[Arg::Ref(RegionId(0))]));
+        m.abort();
+    }
+    assert_eq!(got, Err(HostError::Slots), "a u8 of 300 in the first field");
+}
+
+/// `E { A, B(u8, u16) }` given `B` with a `u16` in its first field: no value of the type.
+#[test]
+fn a_variant_whose_first_field_is_of_another_type_is_no_value() {
+    let mut b = Build::default();
+    let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
+    let e = b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::Isize,
+        variants: vec![
+            Variant { name: "A".into(), discriminant: 0, fields: vec![] },
+            Variant { name: "B".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: u8t }, Field { name: "1".into(), ty: u16t }] },
+        ],
+    });
+    let unit = b.unit();
+    let take = b.function(Function { name: "take".into(), params: 1, locals: locals(&[unit, e]), blocks: vec![block(vec![], ret())] });
+    let bad = vec![int(Int::Isize, 1), int(Int::U16, 7), int(Int::U16, 2)];
+    let mut m = Machine::load(b.program.clone(), &[e]).unwrap();
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 1), int(Int::U8, 7), int(Int::U16, 2)]), Ok(()), "B(7, 2)");
+    let got = m.set_region(RegionId(0), &bad);
+    println!("set_region(B(u16, u16)): {got:?}");
+    assert_eq!(got, Err(HostError::Slots), "as a region");
+    assert_eq!(m.start(take, &[Arg::Value(&bad)]), Err(HostError::Arguments), "as an argument");
+    let mut p = Build { program: b.program.clone() };
+    p.function(Function { name: "f".into(), params: 0, locals: locals(&[e]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(e, bad.clone())), 1)], ret())] });
+    assert_eq!(
+        Machine::load(p.program, &[]).map(|_| ()),
+        Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" }),
+        "as a constant"
+    );
+}
+
+/// `g(a: u8, b: u8)` called with a `u16` first: refused at load; `(u8, u8)` built from a `u16` first: refused.
+#[test]
+fn a_first_argument_and_a_first_part_of_another_type_are_refused() {
+    let mut b = Build::default();
+    let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
+    let pair = b.tuple(&[u8t, u8t]);
+    let g = b.function(Function { name: "g".into(), params: 2, locals: locals(&[u8t, u8t, u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
+    let mut p = Build { program: b.program.clone() };
+    p.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[u8t, u16t, u8t]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(g), args: vec![copy(1), copy(2)], dest: place(0), next: BlockId(1), at: at(2) }),
+            block(vec![], ret()),
+        ],
+    });
+    let got = Machine::load(p.program, &[]).map(|_| ());
+    println!("g(u16, u8): {got:?}");
+    assert_eq!(got, Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "an argument of another type than its parameter" }));
+    let mut p = Build { program: b.program.clone() };
+    p.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[pair, u16t, u8t]),
+        blocks: vec![block(vec![assign(place(0), Value::Aggregate(pair, None, vec![copy(1), copy(2)]), 1)], ret())],
+    });
+    let got = Machine::load(p.program, &[]).map(|_| ());
+    println!("(u16, u8) as (u8, u8): {got:?}");
+    assert_eq!(got, Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a part of another type than its place" }));
+}
+
+/// A start whose first value, or first region, is of another type than its parameter: refused, nothing started.
+#[test]
+fn a_start_whose_first_argument_is_of_another_type_is_refused() {
+    let mut b = Build::default();
+    let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
+    let (r8, r16) = (b.reference(u8t, true), b.reference(u16t, true));
+    let g = b.function(Function { name: "g".into(), params: 2, locals: locals(&[u8t, u8t, u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
+    let h = b.function(Function { name: "h".into(), params: 2, locals: locals(&[u8t, r8, r8]), blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Deref]))), 1)], ret())] });
+    let _ = r16;
+    let mut m = Machine::load(b.program, &[u8t, u16t]).unwrap();
+    m.set_region(RegionId(0), &[int(Int::U8, 3)]).unwrap();
+    m.set_region(RegionId(1), &[int(Int::U16, 300)]).unwrap();
+    let (wide, small) = ([int(Int::U16, 300)], [int(Int::U8, 2)]);
+    let got = m.start(g, &[Arg::Value(&wide), Arg::Value(&small)]);
+    println!("g(u16 value, u8 value): {got:?}");
+    if got.is_ok() {
+        println!("  runs to {:?}", m.run(u64::MAX).map(|_| m.result().to_vec()));
+        m.abort();
+    }
+    assert_eq!(got, Err(HostError::Arguments), "a first value of another type");
+    assert!(!m.running());
+    let got = m.start(h, &[Arg::Ref(RegionId(1)), Arg::Ref(RegionId(0))]);
+    println!("h(&mut u16 region, &mut u8 region): {got:?}");
+    if got.is_ok() {
+        println!("  runs to {:?}", m.run(u64::MAX).map(|_| m.result().to_vec()));
+        m.abort();
+    }
+    assert_eq!(got, Err(HostError::Arguments), "a first region of another type");
+    assert!(!m.running());
+}
+
+/// `enum E: u8 { A = 256, B = 1 }`: refused, the bad variant first.
+#[test]
+fn a_discriminant_outside_its_type_before_a_sound_one_is_refused() {
+    let mut b = Build::default();
+    b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::U8,
+        variants: vec![
+            Variant { name: "A".into(), discriminant: 256, fields: vec![] },
+            Variant { name: "B".into(), discriminant: 1, fields: vec![] },
+        ],
+    });
+    let got = Machine::load(b.program, &[]).map(|_| ());
+    println!("E: u8 {{ A = 256, B = 1 }}: {got:?}");
+    assert_eq!(got, Err(LoadError::Type { ty: 0, reason: "a discriminant outside its type" }));
+}
+
+/// `fn f() -> u8 { let _1: <no such type>; let _2: u8; ... }`: refused, the bad local before a sound one.
+#[test]
+fn a_local_of_no_such_type_before_a_sound_one_is_refused() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    b.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t, TypeId(99), u8t]), blocks: vec![block(vec![], ret())] });
+    let got = Machine::load(b.program, &[]).map(|_| ());
+    println!("a local of type 99 before a u8: {got:?}");
+    assert_eq!(got, Err(LoadError::Function { function: "f".into(), reason: "a local of no such type" }));
+}

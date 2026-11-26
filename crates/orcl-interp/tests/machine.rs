@@ -2626,3 +2626,114 @@ fn a_duration_s_slots_of_another_integer_type_read_through_another_variant_are_a
     assert_eq!(read_through_another_variant((Int::I64, 5), (Int::U32, 7)), internal(FunctionId(0)), "seconds of an i64");
     assert_eq!(read_through_another_variant((Int::U64, 5), (Int::U16, 7)), internal(FunctionId(0)), "nanoseconds of a u16");
 }
+
+// The twenty-first refute round's tests: an entry whose first call is the deepest in frames, a None with its second
+// payload slot alone written, a float cast as a bool, and a duration whose nanoseconds were never written.
+
+/// `scan` calls `conveyor` (which calls `ton`) in its first block and `alarm` in its second, the shape of an entry
+/// running its blocks in turn: three frames deep along its first call, one along its last.
+#[test]
+fn an_entry_whose_first_call_is_the_deepest_in_frames_has_room_for_it() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let c8 = |v| konst(u8t, vec![int(Int::U8, v)]);
+    let call = |f, dest, next| Terminator::Call { callee: Callee::Function(f), args: vec![], dest: place(dest), next: BlockId(next), at: at(1) };
+    let ton = b.function(Function { name: "ton".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(c8(5)), 2)], ret())] });
+    let conveyor = b.function(Function {
+        name: "conveyor".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t]),
+        blocks: vec![block(vec![], call(ton, 1, 1)), block(vec![assign(place(0), Value::Use(copy(1)), 3)], ret())],
+    });
+    let alarm = b.function(Function { name: "alarm".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(c8(1)), 4)], ret())] });
+    let scan = b.function(Function {
+        name: "scan".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t, u8t]),
+        blocks: vec![
+            block(vec![], call(conveyor, 1, 1)),
+            block(vec![], call(alarm, 2, 2)),
+            block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(1), copy(2)), 5)], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let got = m.call(scan, &[]).map(|r| r.to_vec());
+    println!("scan(): {got:?}");
+    assert_eq!(got, Ok(vec![int(Int::U8, 6)]), "conveyor() + alarm(), three frames deep along the first call");
+    let mut copy = m.clone();
+    assert_eq!(copy.call(scan, &[]).map(|r| r.to_vec()), Ok(vec![int(Int::U8, 6)]), "and in a copy");
+}
+
+/// An `Option<Duration>` `None` whose second payload slot is written, its first not: no value of the type, as a
+/// region, an argument and a constant.
+#[test]
+fn a_none_with_only_its_second_payload_slot_written_is_no_value() {
+    let mut b = Build::default();
+    let d = b.ty(Type::Duration);
+    let opt = b.option(d);
+    let unit = b.unit();
+    let stray = vec![int(Int::Isize, 0), Scalar::Uninit, int(Int::U32, 5)];
+    let none = vec![int(Int::Isize, 0), Scalar::Uninit, Scalar::Uninit];
+    let take = b.function(Function { name: "take".into(), params: 1, locals: locals(&[unit, opt]), blocks: vec![block(vec![], ret())] });
+    let _ = take;
+    let program = b.program.clone();
+    let mut m = Machine::load(program, &[opt]).unwrap();
+    assert_eq!(m.set_region(RegionId(0), &none), Ok(()), "a None");
+    let got = m.set_region(RegionId(0), &stray);
+    println!("set_region(None with a stray nanosecond): {got:?}, region now {:?}", m.region(RegionId(0)));
+    assert_eq!(got, Err(HostError::Slots), "as a region");
+    assert_eq!(m.start(take, &[Arg::Value(&stray)]), Err(HostError::Arguments), "as an argument");
+    let mut p = Build { program: b.program.clone() };
+    p.function(Function { name: "f".into(), params: 0, locals: locals(&[opt]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(opt, stray.clone())), 1)], ret())] });
+    assert_eq!(
+        Machine::load(p.program, &[]).map(|_| ()),
+        Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" }),
+        "as a constant"
+    );
+}
+
+/// `x as bool` of an `f32` or an `f64`: no cast Rust's `as` makes.
+#[test]
+fn a_float_cast_as_bool_is_refused() {
+    for float in [Type::F32, Type::F64] {
+        let mut b = Build::default();
+        let (f, boolean) = (b.ty(float.clone()), b.bool());
+        b.function(Function { name: "f".into(), params: 1, locals: locals(&[boolean, f]), blocks: vec![block(vec![assign(place(0), Value::Cast(copy(1), boolean), 1)], ret())] });
+        let got = Machine::load(b.program, &[]).map(|_| ());
+        println!("{float:?} as bool: {got:?}");
+        assert_eq!(got, Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a cast `as` does not make" }), "{float:?} as bool");
+    }
+}
+
+/// `enum F { P(u64), Q(Duration) }` written as `P(5)` and read as `Q`'s duration by `Ord::min`: its seconds' slot
+/// holds P's `u64`, its nanoseconds' slot nothing, so the read is `Uninit` (a value read before anything wrote it).
+#[test]
+fn a_duration_whose_nanoseconds_were_never_written_is_uninit() {
+    let mut b = Build::default();
+    let (u64t, d) = (b.int(Int::U64), b.ty(Type::Duration));
+    let f_ty = b.ty(Type::Enum {
+        name: "F".into(),
+        discriminant: Int::Isize,
+        variants: vec![
+            Variant { name: "P".into(), discriminant: 0, fields: vec![Field { name: "0".into(), ty: u64t }] },
+            Variant { name: "Q".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: d }] },
+        ],
+    });
+    let q = proj(1, vec![Projection::Downcast(1), Projection::Field(0)]);
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[d, f_ty]),
+        blocks: vec![
+            block(
+                vec![assign(place(1), Value::Aggregate(f_ty, Some(0), vec![konst(u64t, vec![int(Int::U64, 5)])]), 1)],
+                Terminator::Call { callee: Callee::Core(CoreOp::DurationMin), args: vec![copy_at(q.clone()), copy_at(q)], dest: place(0), next: BlockId(1), at: at(2) },
+            ),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let got = m.call(f, &[]);
+    println!("min of a half-written duration: {got:?}");
+    assert!(matches!(got, Err(CallError::Program(ProgramError { kind: ErrorKind::Uninit, statement: None, .. }))), "{got:?}");
+}
