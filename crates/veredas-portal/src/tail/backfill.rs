@@ -145,18 +145,12 @@ fn decode_line(bytes: &[u8], enc: DetectedEncoding) -> std::borrow::Cow<'_, str>
 /// snapshot, a concurrent truncate a slightly shorter one; both fine for a heuristic peek and an
 /// inclusive-offset scan.
 fn read_whole(path: &Path) -> Result<Option<(Vec<u8>, u64)>, SourceError> {
-    Ok(read_whole_identified(path)?.map(|(bytes, len, _)| (bytes, len)))
-}
-
-/// `read_whole` with the file's identity, the bytes and the identity of one handle.
-#[allow(clippy::type_complexity)]
-fn read_whole_identified(path: &Path) -> Result<Option<(Vec<u8>, u64, Option<std::sync::Arc<crate::tail::cursor::Identity>>)>, SourceError> {
-    let (bytes, identity) = crate::tail::cursor::read_whole_identified(path).map_err(|e| SourceError::io(path, e))?;
+    let (bytes, _) = crate::tail::cursor::read_whole_identified(path).map_err(|e| SourceError::io(path, e))?;
     if bytes.is_empty() {
         return Ok(None);
     }
     let len = bytes.len() as u64;
-    Ok(Some((bytes, len, identity)))
+    Ok(Some((bytes, len)))
 }
 
 /// The first and last parseable line stamps (a buffered read); the scan is capped at
@@ -164,9 +158,14 @@ fn read_whole_identified(path: &Path) -> Result<Option<(Vec<u8>, u64, Option<std
 /// under a tail that does is scanned forward to its first stamp: a long unstamped header must
 /// not hide the file from the locate. No encoding for a file with no bytes to detect it from.
 pub(crate) fn peek_span(path: &Path, ts: &TimestampSpec) -> Result<FilePeek, SourceError> {
-    let Some((bytes, len, identity)) = read_whole_identified(path)? else {
-        return Ok(FilePeek { first_ts: None, last_ts: None, encoding: None, len: 0, reach: crate::tail::cursor::Reach::of_bytes(&[]), identity: None });
-    };
+    // The identity through the same handle as the bytes, an empty file's too: one deleted before
+    // the backfill reaches it is then known gone, not a search that cannot tell (C-096's
+    // eighteenth refute round).
+    let (bytes, identity) = crate::tail::cursor::read_whole_identified(path).map_err(|e| SourceError::io(path, e))?;
+    if bytes.is_empty() {
+        return Ok(FilePeek { first_ts: None, last_ts: None, encoding: None, len: 0, reach: crate::tail::cursor::Reach::of_bytes(&[]), identity });
+    }
+    let len = bytes.len() as u64;
     let reach = crate::tail::cursor::Reach::of_bytes(&bytes);
     let encoding = detect(&bytes[..bytes.len().min(4096)]);
     let lines = split_lines_raw(&bytes, encoding);

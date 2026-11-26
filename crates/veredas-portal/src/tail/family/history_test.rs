@@ -799,3 +799,43 @@ fn a_recursive_family_s_unlistable_subfolder_loses_the_history() {
         std::fs::set_permissions(fam.join("b"), std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
+
+/// C-096's eighteenth refute round. An empty member keeps its identity from the locate's peek: one
+/// deleted before the backfill reaches it is known gone, nothing of the history left in it, said
+/// read at the lines before it, a replayed member, a newest-by-order planned active and a fixed
+/// name's planned active alike, never lost for a search that cannot tell.
+#[test]
+fn an_empty_member_deleted_before_the_backfill_reaches_it_is_read() {
+    let start = NaiveDateTime::parse_from_str("2026-07-19 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+    let stamps = || TimestampSpec::new(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ["%Y-%m-%d %H:%M:%S"]).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut hooked: Vec<std::path::PathBuf> = Vec::new();
+    for (name, mode, members, deleted, lines) in [
+        ("mid", ActiveMode::NewestByOrder, vec![("done_1.log", 0..100), ("done_2.log", 0..0), ("done_3.log", 100..200)], "done_2.log", 200u64),
+        ("newest", ActiveMode::NewestByOrder, vec![("done_1.log", 0..100), ("done_2.log", 0..0)], "done_2.log", 100),
+        ("fixed", ActiveMode::Fixed("current.log".into()), vec![("done_1.log", 0..100), ("current.log", 0..0)], "current.log", 100),
+    ] {
+        let fam = dir.path().join(name);
+        std::fs::create_dir_all(&fam).unwrap();
+        for (file, range) in members {
+            write(&fam.join(file), range);
+        }
+        once(&fam.join(deleted), |p| std::fs::remove_file(p).unwrap());
+        hooked.push(fam.join(deleted));
+        let spec = FamilySpec::new(&fam, r"done_(?P<idx>\d+)\.log", None, mode).unwrap();
+        let history = Arc::new(AtomicU64::new(u64::MAX));
+        let source = FamilyTailSource::new(name, name, spec, FamilyTailConfig { start: FamilyStart::Backfill(start), ..FamilyTailConfig::default() })
+            .with_timestamps(stamps())
+            .with_history_read(Arc::clone(&history));
+        let (tx, rx) = channel();
+        let handle = Box::new(source).start(tx).unwrap();
+        let started = Instant::now();
+        while history.load(Ordering::SeqCst) == u64::MAX && started.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        handle.request_stop();
+        handle.join().unwrap();
+        assert_eq!((rx.try_iter().count() as u64, history.load(Ordering::SeqCst)), (lines, lines), "{name}");
+    }
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+}
