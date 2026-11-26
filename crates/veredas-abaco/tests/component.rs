@@ -297,9 +297,12 @@ const SUITE_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows
 /// API bindings of windows-sys others call; and, with the `.abaco` file's SHA-256 (2026-11-23),
 /// digest's `oid` and `mac` (object identifiers, `const-oid` with its database, and `subtle`'s
 /// constant-time comparison) and crypto-common's random keys (`getrandom`, `rand_core` 0.6 and
-/// their `std`), which others' cryptography turns on. None changes what the engine computes or a
-/// digest; the engine's
-/// own two crates gain none. A feature joining fails until it is reviewed and added.
+/// their `std`), which others' cryptography turns on; and (2026-11-26, Oficina's window built by
+/// default, Q370) proc-macro2's `span-locations`, which cxx-qt-build's C++ code generator turns on,
+/// spans' lines and columns tracked at compile time (the derives' output unchanged), and
+/// foldhash's `std`, its seed from the system, a hasher Ábaco's crates never call (indexmap's table
+/// is hasher-free). None changes what the engine computes or a digest; the engine's own two crates
+/// gain none. A feature joining fails until it is reviewed and added.
 const REVIEWED_FEATURES: [(&str, &[(&str, &[&str])]); 2] = [
     ("x86_64-unknown-linux-gnu", &[
         ("chrono", &["serde"]),
@@ -307,12 +310,14 @@ const REVIEWED_FEATURES: [(&str, &[(&str, &[&str])]); 2] = [
         ("crypto-common", &["getrandom", "rand_core"]),
         ("digest", &["const-oid", "mac", "oid", "subtle"]),
         ("flate2", &["miniz_oxide", "rust_backend"]),
+        ("foldhash", &["std"]),
         ("getrandom", &["std"]),
         ("hashbrown", &["default-hasher"]),
         ("indexmap", &["serde"]),
         ("libc", &["extra_traits"]),
         ("miniz_oxide", &["default", "simd", "simd-adler32", "with-alloc"]),
         ("num-traits", &["i128"]),
+        ("proc-macro2", &["span-locations"]),
         ("rand_core", &["alloc", "getrandom", "std"]),
         ("serde", &["alloc"]),
         ("serde_core", &["alloc"]),
@@ -326,11 +331,13 @@ const REVIEWED_FEATURES: [(&str, &[(&str, &[&str])]); 2] = [
         ("crypto-common", &["getrandom", "rand_core"]),
         ("digest", &["const-oid", "mac", "oid", "subtle"]),
         ("flate2", &["miniz_oxide", "rust_backend"]),
+        ("foldhash", &["std"]),
         ("getrandom", &["std"]),
         ("hashbrown", &["default-hasher"]),
         ("indexmap", &["serde"]),
         ("miniz_oxide", &["default", "simd", "simd-adler32", "with-alloc"]),
         ("num-traits", &["i128"]),
+        ("proc-macro2", &["span-locations"]),
         ("rand_core", &["alloc", "getrandom", "std"]),
         ("serde", &["alloc"]),
         ("serde_core", &["alloc"]),
@@ -885,7 +892,13 @@ fn built() -> Built {
     // script reruns on every build (its `rerun-if-changed=.git/HEAD` names no file from base's
     // folder), and another test's build rewrote the output this one read (found empty, the suite
     // red at f407829b).
-    let lock = std::fs::File::create(root().join("target").join("abaco-built.lock")).unwrap();
+    // The lock stands in the folder the build below builds into, as cargo resolves it
+    // (`CARGO_TARGET_DIR`, a configuration's `build.target-dir`, else `target`), made if it is not
+    // there yet: a build into a folder outside the checkout found no `target` to hold it (the
+    // orchestrator's whole-suite run, 2026-11-26)
+    let folder = PathBuf::from(metadata()["target_directory"].as_str().expect("cargo names its target directory"));
+    std::fs::create_dir_all(&folder).unwrap();
+    let lock = std::fs::File::create(folder.join("abaco-built.lock")).unwrap();
     lock.lock().unwrap();
     let json = cargo(&["build", "-p", "veredas-abaco", "--lib", "--message-format=json"]);
     let messages: Vec<serde_json::Value> = json.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).collect();
