@@ -328,3 +328,43 @@ fn witnesses_before_a_bounded_capture_are_frames_let_go_and_none_lies_past_it() 
     let text = scan.to_toml().unwrap().replacen("frames = 2\n", "frames = 1\n", 1);
     assert!(Scan::read(&text).unwrap_err().to_string().starts_with("not a scan: device 02:00:00:00:00:02 names frame 3, past its capture's last (2)"), "{}", Scan::read(&text).unwrap_err());
 }
+
+/// A link is its two ends, so a scan stores each lesser end first, by their ends, each pair once:
+/// otherwise one cable could be two links, or a diff depend on the order a list holds (C-147's
+/// first refute round). Refused when written and when read.
+#[test]
+fn links_stored_otherwise_than_lesser_end_first_and_each_pair_once_are_no_scan() {
+    let scan = full();
+    assert!(scan.topology.links.len() >= 2);
+    let written = |s: &Scan| toml::to_string(s).unwrap();
+    let refused = |s: Scan, says: &str| {
+        let e = s.to_toml().unwrap_err().to_string();
+        assert!(e.starts_with("a scan cannot be written: not a scan: link ") && e.ends_with(says), "{e}");
+        let e = Scan::read(&written(&s)).unwrap_err().to_string();
+        assert!(e.starts_with("not a scan: link ") && e.ends_with(says), "{e}");
+    };
+    let mut flipped = scan.clone();
+    let l = &mut flipped.topology.links[0];
+    std::mem::swap(&mut l.a, &mut l.b);
+    refused(flipped, "is stored greater end first");
+    let mut twice = scan.clone();
+    let again = twice.topology.links[0].clone();
+    twice.topology.links.insert(1, again);
+    refused(twice, "is in it twice");
+    // Twice by its ends alone, its confidence and witnesses aside.
+    let mut twice = scan.clone();
+    let mut again = twice.topology.links[0].clone();
+    again.witnesses += 1;
+    twice.topology.links.insert(1, again);
+    refused(twice, "is in it twice");
+    let mut swapped = scan.clone();
+    swapped.topology.links.swap(0, 1);
+    refused(swapped, "is out of the order by its ends");
+    // A link of one end twice (a device's word on its own port) is lesser end first.
+    let mut own = scan.clone();
+    let l = own.topology.links[0].clone();
+    own.topology.links[0].b = l.a.clone();
+    if own.topology.links.windows(2).all(|w| (&w[0].a, &w[0].b) < (&w[1].a, &w[1].b)) {
+        assert!(own.to_toml().is_ok());
+    }
+}

@@ -103,15 +103,27 @@ impl Scan {
         toml::to_string(self).map_err(|e| ScanError::Write(e.to_string()))
     }
 
-    /// What makes it a scan beyond its keys: its devices by MAC, each once; no witness, and no
-    /// port's last leaving or other frame, naming a frame past its capture's last record (one
-    /// before its first is a frame the listener let go, counted in its stats, which the capture
-    /// does not hold).
+    /// What makes it a scan beyond its keys: its devices by MAC, each once; its topology's links
+    /// each stored lesser end first and by their ends, each pair of ends once (a link is its two
+    /// ends, so one cable is one link); no witness, and no port's last leaving or other frame,
+    /// naming a frame past its capture's last record (one before its first is a frame the listener
+    /// let go, counted in its stats, which the capture does not hold).
     pub fn check(&self) -> Result<(), ScanError> {
         for pair in self.devices.windows(2) {
             if pair[0].mac >= pair[1].mac {
                 let why = if pair[0].mac == pair[1].mac { "is in it twice" } else { "is out of the order by MAC" };
                 return Err(ScanError::Invalid(format!("device {} {why}", pair[1].mac)));
+            }
+        }
+        let ends = |l: &crate::topology::Link| format!("{} {} = {} {}", l.a.node, l.a.port, l.b.node, l.b.port);
+        if let Some(l) = self.topology.links.iter().find(|l| l.a > l.b) {
+            return Err(ScanError::Invalid(format!("link {} is stored greater end first", ends(l))));
+        }
+        for pair in self.topology.links.windows(2) {
+            let (x, y) = ((&pair[0].a, &pair[0].b), (&pair[1].a, &pair[1].b));
+            if x >= y {
+                let why = if x == y { "is in it twice" } else { "is out of the order by its ends" };
+                return Err(ScanError::Invalid(format!("link {} {why}", ends(&pair[1]))));
             }
         }
         if let Some(c) = &self.capture {

@@ -33,6 +33,11 @@ fn suite(address: Ipv4Addr) -> IpSuite {
     IpSuite { ip: address, mask: Ipv4Addr::new(255, 255, 255, 0), gateway: Ipv4Addr::UNSPECIFIED }
 }
 
+/// A suite of this prefix length and gateway.
+fn suite_of(address: Ipv4Addr, prefix: u32, gateway: Ipv4Addr) -> IpSuite {
+    IpSuite { ip: address, mask: Ipv4Addr::from(u32::MAX << (32 - prefix)), gateway }
+}
+
 fn witness(probe: Probe, iface: &str, frame: u64) -> Witness {
     Witness { probe, iface: iface.into(), at_ns: T0 + frame, frame }
 }
@@ -210,41 +215,40 @@ fn random_scan(rng: &mut Rng) -> Scan {
     };
     let pool: Vec<Mac> = (1..=6).map(|i| Mac([0x02, 0, 0, 0, 0, i])).collect();
     let mut neighbours = Vec::new();
+    // Up to four hearings of each kind, so a value heard x, y then x, or x, x then y, is common;
+    // suites whose mask or gateway alone differ; system names alike but for their case; a
+    // management address of 0.0.0.0; reports from and to two ports.
+    let suites = [None, Some(suite(ip(10))), Some(suite(ip(11))), Some(suite(Ipv4Addr::UNSPECIFIED)), Some(suite_of(ip(10), 16, Ipv4Addr::UNSPECIFIED)), Some(suite_of(ip(10), 24, ip(1)))];
     for mac in &pool {
         if rng.below(3) == 0 {
             continue;
         }
-        for _ in 0..rng.below(3) {
+        for _ in 0..rng.below(5) {
             let name = NAMES[rng.below(4) as usize];
-            let address = [None, Some(suite(ip(10))), Some(suite(ip(11))), Some(suite(Ipv4Addr::UNSPECIFIED))][rng.below(4) as usize].clone();
-            obs.push(hello(*mac, name, address, next()));
+            obs.push(hello(*mac, name, suites[rng.below(6) as usize].clone(), next()));
         }
-        if rng.below(2) == 0 {
+        for _ in 0..rng.below(4) {
             obs.push(arp(*mac, ip(10 + rng.below(2) as u8), next()));
         }
-        for _ in 0..rng.below(3) {
+        for _ in 0..rng.below(5) {
             let iface = ["eth1", "eth2", "eth3"][rng.below(3) as usize];
-            let sys = [None, Some("sw-1"), Some("sw-2")][rng.below(3) as usize];
-            let mgmt: Vec<Ipv4Addr> = (0..rng.below(3)).map(|k| ip(10 + k as u8)).collect();
+            let sys = [None, Some("sw-1"), Some("Sw-1"), Some("sw-2")][rng.below(4) as usize];
+            let mgmt: Vec<Ipv4Addr> = (0..rng.below(3)).map(|k| if k == 0 && rng.below(3) == 0 { Ipv4Addr::UNSPECIFIED } else { ip(10 + k as u8) }).collect();
             obs.push(lldp(*mac, 1 + rng.below(2) as u8, iface, sys, &mgmt, next()));
         }
         if rng.below(3) == 0 {
             let peer = pool[rng.below(6) as usize];
-            neighbours.push(neighbour(*mac, 3, peer, 3));
+            neighbours.push(neighbour(*mac, 3 + rng.below(2) as u8, peer, 3 + rng.below(2) as u8));
         }
     }
     let interfaces: Vec<&str> = ["eth1", "eth2", "eth3", "eth4"].into_iter().filter(|_| rng.below(4) != 0).collect();
     scan_of(&obs, &interfaces, &neighbours)
 }
 
-/// The same scan, its links and conflicts (and each conflict's devices) in another order: none of
-/// them is ordered by what makes a scan.
+/// The same scan, its conflicts (and each conflict's devices) in another order: neither is ordered
+/// by what makes a scan (its devices and its links are: C-146).
 fn shuffled(mut s: Scan, rng: &mut Rng) -> Scan {
     for _ in 0..8 {
-        let n = s.topology.links.len();
-        if n > 1 {
-            s.topology.links.swap(rng.below(n as u64) as usize, rng.below(n as u64) as usize);
-        }
         let n = s.conflicts.len();
         if n > 1 {
             s.conflicts.swap(rng.below(n as u64) as usize, rng.below(n as u64) as usize);
@@ -313,11 +317,17 @@ fn check_against_the_words(b: &Scan, s: &Scan, d: &Diff) {
 fn every_pair_of_scans_gives_the_diff_the_words_say_in_any_order_and_mirrored() {
     let mut rng = Rng(0x5EED_D1FF);
     let mut changes = [0usize; 6];
-    for _ in 0..2000 {
+    for _ in 0..3000 {
         let (b, s) = (random_scan(&mut rng), random_scan(&mut rng));
         let d = diff::diff(&b, &s).unwrap();
         check_against_the_words(&b, &s, &d);
         assert_eq!(diff::diff(&shuffled(b.clone(), &mut rng), &shuffled(s.clone(), &mut rng)).unwrap(), d);
+        // Links in another order make no scan: refused, never a diff of whatever order they hold.
+        if s.topology.links.len() > 1 {
+            let mut reordered = s.clone();
+            reordered.topology.links.reverse();
+            assert!(matches!(diff::diff(&b, &reordered), Err(DiffError::Scan(ScanError::Invalid(_)))));
+        }
         assert_eq!(diff::diff(&s, &b).unwrap(), mirror(d.clone()));
         assert!(diff::diff(&b, &b).unwrap().is_empty());
         for (i, n) in [d.appeared.len(), d.renamed.len(), d.readdressed.len(), d.one_sided.len(), d.links_added.len(), d.conflicts_new.len()].into_iter().enumerate() {
@@ -342,6 +352,77 @@ fn a_baseline_or_a_scan_that_is_no_scan_is_refused_by_name() {
         Err(e @ DiffError::Scan(ScanError::Invalid(_))) => assert!(e.to_string().starts_with("the scan: not a scan: device "), "{e}"),
         other => panic!("{other:?}"),
     }
+}
+
+/// The first refute round's cases: values heard more than twice, a suite's mask or gateway alone,
+/// a link's far port, an address of 0.0.0.0 among others, a name's case; links a scan cannot hold.
+#[test]
+fn what_a_device_states_now_is_its_value_heard_last_each_part_of_it_compared() {
+    let one = |obs: &[Observation]| scan_of(obs, &["eth1"], &[]);
+    let station = |d: &Diff| d.renamed.iter().filter(|c| c.what == Said::StationName).map(|c| (c.from.clone(), c.to.clone())).collect::<Vec<_>>();
+    let base = one(&[hello(A, Some("bomba-1"), None, 1)]);
+    // Renamed and back within the scan: what it states now is its old name, no rename (the
+    // name change within the scan is a conflict of its own).
+    let back = one(&[hello(A, Some("bomba-1"), None, 1), hello(A, Some("bomba-2"), None, 2), hello(A, Some("bomba-1"), None, 3)]);
+    let d = diff::diff(&base, &back).unwrap();
+    assert_eq!(station(&d), Vec::<(String, String)>::new());
+    assert_eq!(d.conflicts_new.iter().map(|c| c.kind).collect::<Vec<_>>(), [ConflictKind::NameChanged]);
+    // Heard twice by its old name, then once by the new one: renamed, the most heard aside.
+    let renamed = one(&[hello(A, Some("bomba-1"), None, 1), hello(A, Some("bomba-1"), None, 2), hello(A, Some("bomba-2"), None, 3)]);
+    assert_eq!(station(&diff::diff(&base, &renamed).unwrap()), [("bomba-1".to_string(), "bomba-2".to_string())]);
+    // The same for the ARP address, the system name, the management addresses and the IP suite.
+    let b = one(&[arp(A, ip(10), 1), lldp(A, 1, "eth1", Some("sw-1"), &[ip(10)], 2), hello(A, None, Some(suite(ip(10))), 3)]);
+    let s = one(&[
+        arp(A, ip(11), 1),
+        arp(A, ip(10), 2),
+        arp(A, ip(11), 3),
+        lldp(A, 1, "eth1", Some("sw-2"), &[ip(11)], 4),
+        lldp(A, 1, "eth1", Some("sw-1"), &[ip(10)], 5),
+        lldp(A, 1, "eth1", Some("sw-2"), &[ip(11)], 6),
+        hello(A, None, Some(suite(ip(11))), 7),
+        hello(A, None, Some(suite(ip(10))), 8),
+        hello(A, None, Some(suite(ip(11))), 9),
+    ]);
+    let d = diff::diff(&b, &s).unwrap();
+    assert_eq!(d.renamed, [change(A, Said::SystemName, "sw-1", "sw-2")]);
+    assert_eq!(
+        d.readdressed,
+        [
+            change(A, Said::IpSuite, "192.168.0.10 255.255.255.0 0.0.0.0", "192.168.0.11 255.255.255.0 0.0.0.0"),
+            change(A, Said::ArpAddress, "192.168.0.10", "192.168.0.11"),
+            change(A, Said::ManagementAddresses, "192.168.0.10", "192.168.0.11"),
+        ]
+    );
+    // A mask alone, a gateway alone: readdressed.
+    let mask = one(&[hello(A, None, Some(suite_of(ip(10), 16, Ipv4Addr::UNSPECIFIED)), 1)]);
+    let gateway = one(&[hello(A, None, Some(suite_of(ip(10), 24, ip(1))), 1)]);
+    let plain = one(&[hello(A, None, Some(suite(ip(10))), 1)]);
+    assert_eq!(diff::diff(&plain, &mask).unwrap().readdressed, [change(A, Said::IpSuite, "192.168.0.10 255.255.255.0 0.0.0.0", "192.168.0.10 255.255.0.0 0.0.0.0")]);
+    assert_eq!(diff::diff(&plain, &gateway).unwrap().readdressed, [change(A, Said::IpSuite, "192.168.0.10 255.255.255.0 0.0.0.0", "192.168.0.10 255.255.255.0 192.168.0.1")]);
+    // 0.0.0.0 among the management addresses is one of them; a name differing in case alone is
+    // another name.
+    let zero = one(&[lldp(A, 1, "eth1", Some("Sw-1"), &[Ipv4Addr::UNSPECIFIED, ip(10)], 1)]);
+    let ten = one(&[lldp(A, 1, "eth1", Some("sw-1"), &[ip(10)], 1)]);
+    let d = diff::diff(&zero, &ten).unwrap();
+    assert_eq!(d.renamed, [change(A, Said::SystemName, "Sw-1", "sw-1")]);
+    assert_eq!(d.readdressed, [change(A, Said::ManagementAddresses, "0.0.0.0, 192.168.0.10", "192.168.0.10")]);
+    // A link's far port changed: the link removed and another added.
+    let fused = [hello(A, Some("a"), None, 1), hello(B, Some("b"), None, 2)];
+    let to3 = scan_of(&fused, &["eth1"], &[neighbour(A, 3, B, 3)]);
+    let to4 = scan_of(&fused, &["eth1"], &[neighbour(A, 3, B, 4)]);
+    let d = diff::diff(&to3, &to4).unwrap();
+    let (a, b) = (topology::device_id(A), topology::device_id(B));
+    assert_eq!(ends(&d.links_removed), [(end(&a, "port-003"), end(&b, "port-003"), Confidence::Reported)]);
+    assert_eq!(ends(&d.links_added), [(end(&a, "port-003"), end(&b, "port-004"), Confidence::Reported)]);
+    // One cable stored the other way round, or twice: no scan, refused, never a rewiring.
+    let mut flipped = to3.clone();
+    let l = &mut flipped.topology.links[0];
+    std::mem::swap(&mut l.a, &mut l.b);
+    assert!(matches!(diff::diff(&to3, &flipped), Err(DiffError::Scan(ScanError::Invalid(why))) if why.ends_with("is stored greater end first")));
+    let mut twice = to3.clone();
+    let again = Link { confidence: Confidence::Confirmed, witnesses: 2, ..twice.topology.links[0].clone() };
+    twice.topology.links.push(again);
+    assert!(matches!(diff::diff(&twice, &to3), Err(DiffError::Baseline(ScanError::Invalid(why))) if why.ends_with("is in it twice")));
 }
 
 #[cfg(target_os = "linux")]
