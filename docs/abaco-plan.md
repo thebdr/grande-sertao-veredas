@@ -435,7 +435,11 @@ own to close in a fork change of its own:
 - **A random draw moves what reads it, by chance** (C-223's second round): a measure over a few
   evaluations lets a two-valued draw repeat. Every evaluation the patcher compares is made with
   one seed and one pinned time, so a draw is the same before, after and in verification; the
-  measure compares with other seeds on other days.
+  measure compares with other seeds on other days. A generator of one sequence a thread is not
+  enough (C-223's twenty-second round): a `RAND()` an edit removes shifts every draw after it, and
+  a cell reading one through a threshold looks constant to the measure. Each cell draws its own
+  (fork change 40), keyed after the edits by where it stood ([`draw_keys`] in the patcher), and
+  every evaluation, a rename's recalculation too, starts from the seed.
 - **Empty is neither 0 nor `""`**: a comparison that let them meet skipped a 0 written into an
   empty cell and hid an array's cell left as a constant. Values are compared as Excel tells them
   apart, numbers to 15 significant digits; only a formula's cache may hold an empty value as

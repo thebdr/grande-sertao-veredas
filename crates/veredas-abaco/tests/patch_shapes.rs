@@ -3317,3 +3317,79 @@ fn a_built_in_s_call_a_reference_or_an_error_spelled_like_a_volatile_name_moves_
         }
     }
 }
+
+/// Sixty rows each drawing a random number (`A<r>`), one cell reading it through a threshold
+/// (`B<r>`, 1 one time in ten) and one reading it whole (`C<r>`), cached 0.5, 0 and 1.
+fn sixty_draws(path: &Path) {
+    let rows: String = (1..=60)
+        .map(|r| format!(r#"<row r="{r}"><c r="A{r}"><f>RAND()</f><v>0.5</v></c><c r="B{r}"><f>IF(A{r}&lt;0.1,1,0)</f><v>0</v></c><c r="C{r}"><f>A{r}*2</f><v>1</v></c></row>"#))
+        .collect();
+    plain_book(path, &[("Sheet1", worksheet(&rows, ""))], "", &[]);
+}
+
+#[test]
+fn a_draw_an_edit_removes_or_moves_and_the_destination_s_name_move_no_other_cell() {
+    // the round at b6dc3602: the evaluation before the edits drew on from `links::open`'s when the
+    // destination is named otherwise than the source, and the generator's one sequence shifted
+    // every later draw when an edit removed a `RAND()`; a cell reading a draw through a threshold,
+    // which the measure over other seeds missed, was rewritten though nothing it reads was edited
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("mc.xlsx");
+    sixty_draws(&src);
+    std::fs::create_dir(dir.path().join("same")).unwrap();
+    let clear = Edit::Clear { sheet: "Sheet1".into(), area: "A1".into() };
+    let delete = Edit::DeleteRows { sheet: "Sheet1".into(), at: 1, count: 1 };
+    // (the edit, the first row it leaves alone, how many rows it moves them up)
+    let cases: [(Edit, i32, i32); 4] =
+        [(value("Sheet1", "D1", serde_json::json!(7)), 1, 0), (clear, 2, 0), (value("Sheet1", "A1", serde_json::json!(0.5)), 2, 0), (delete, 2, 1)];
+    for (edit, first, up) in cases {
+        for dst in [dir.path().join("out.xlsx"), dir.path().join("same/mc.xlsx")] {
+            for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+                let _ = std::fs::remove_file(&dst);
+                patch(&src, &dst, std::slice::from_ref(&edit), &options).unwrap_or_else(|e| panic!("{edit:?} {}: {e}", dst.display()));
+                for r in first..=60 {
+                    for (col, cached) in [("A", Value::Number(0.5)), ("B", Value::Number(0.0)), ("C", Value::Number(1.0))] {
+                        let at = format!("{col}{}", r - up);
+                        assert_eq!(stored(&dst, "Sheet1", &at).2, cached, "{edit:?} {}: {at}, row {r} before", dst.display());
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_call_a_let_or_a_lambda_binds_is_no_volatile_name_of_its_spelling() {
+    // the round at b6dc3602: a LET-bound `f` (or a LAMBDA's parameter `g`) in a workbook name,
+    // evaluated from a sheet holding a volatile local `f` (`g`), was read as that name: the cell's
+    // cache was kept while the engine read 14
+    let dir = tempfile::tempdir().unwrap();
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>FORMULA</f><v>2</v></c></row>"#;
+    for (names, formula) in [
+        (
+            concat!(
+                r#"<definedName name="f" localSheetId="1">_xlfn.LAMBDA(_xlpm.x,_xlpm.x+RAND())</definedName>"#,
+                r#"<definedName name="W">_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.f(Data!$A$1))</definedName>"#
+            ),
+            "W",
+        ),
+        (
+            concat!(
+                r#"<definedName name="g" localSheetId="1">_xlfn.LAMBDA(_xlpm.x,_xlpm.x+RAND())</definedName>"#,
+                r#"<definedName name="Apply">_xlfn.LAMBDA(_xlpm.g,_xlpm.v,_xlpm.g(_xlpm.v))</definedName>"#
+            ),
+            "Apply(_xlfn.LAMBDA(_xlpm.y,_xlpm.y*2),A1)",
+        ),
+    ] {
+        let src = dir.path().join("bound.xlsx");
+        plain_book(&src, &[("Sheet1", worksheet("", "")), ("Data", worksheet(&data.replace("FORMULA", formula), ""))], names, &[]);
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let dst = dir.path().join("out.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            patch(&src, &dst, &[value("Data", "A1", serde_json::json!(7))], &options).unwrap();
+            let b1 = format!(r#"<c r="B1"><f>{formula}</f><v>14</v></c>"#);
+            assert_eq!(element(&part(&dst, "xl/worksheets/sheet2.xml"), "B1"), Some(b1.as_str()), "{formula}");
+            assert_eq!(read_back(&dst, "Data", "B1"), Value::Number(14.0), "{formula}");
+        }
+    }
+}

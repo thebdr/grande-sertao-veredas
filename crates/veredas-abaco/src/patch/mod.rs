@@ -440,28 +440,68 @@ impl ParsedNames {
 /// Whether a formula as the engine parsed it, evaluated for a cell of `sheet`, calls a volatile
 /// function or reads a name `volatile` marks: a defined name by the scope the parser resolved it
 /// to, a name called (a LAMBDA) as the engine finds it then, the cell's sheet's own and else the
-/// workbook's (a LET's or a LAMBDA's own variable none); a built-in's call, a reference and an
-/// error constant are never names.
+/// workbook's, unless a LET or a LAMBDA around the call binds its name (the engine evaluates the
+/// binding; the parser marks it nowhere: the round at b6dc3602); a built-in's call, a reference and
+/// an error constant are never names.
 fn node_volatile(node: &Node, sheet: u32, names: &ParsedNames, volatile: &[bool]) -> bool {
-    let go = |n: &Node| node_volatile(n, sheet, names, volatile);
+    node_volatile_bound(node, sheet, names, volatile, &mut Vec::new())
+}
+
+/// A LET's or a LAMBDA's own name as the parser holds it, its `_xlpm.` passed over, by the
+/// engine's fold.
+fn bound_key(name: &str) -> String {
+    name_key(name.trim_start_matches("_xlpm."))
+}
+
+/// A LAMBDA parameter's name, which the engine keeps private but prints: `NamedVariable { name: "x", … }`.
+fn parameter_name(p: &impl std::fmt::Debug) -> Option<String> {
+    let text = format!("{p:?}");
+    let start = text.find("name: \"")? + "name: \"".len();
+    Some(text[start..start + text[start..].find('"')?].to_string())
+}
+
+fn node_volatile_bound(node: &Node, sheet: u32, names: &ParsedNames, volatile: &[bool], bound: &mut Vec<String>) -> bool {
     let marked = |i: Option<usize>| i.is_some_and(|i| volatile[i]);
+    let go = |n: &Node, bound: &mut Vec<String>| node_volatile_bound(n, sheet, names, volatile, bound);
     match node {
-        Node::FunctionKind { kind, args } => volatile_function(kind) || args.iter().any(go),
+        // the engine keeps its function list private: LET is told by its name
+        Node::FunctionKind { kind, args } if format!("{kind:?}") == "Let" && args.len() >= 3 && args.len() % 2 == 1 => {
+            let depth = bound.len();
+            let pairs = (args.len() - 1) / 2;
+            let mut found = false;
+            for i in 0..pairs {
+                if let Node::NamedVariableKind { name, .. } = &args[2 * i] {
+                    bound.push(bound_key(name));
+                }
+                found = found || go(&args[2 * i + 1], bound);
+            }
+            found = found || go(&args[2 * pairs], bound);
+            bound.truncate(depth);
+            found
+        }
+        Node::FunctionKind { kind, args } => volatile_function(kind) || args.iter().any(|a| go(a, bound)),
         Node::DefinedNameKind { name, scope, .. } => marked(names.find(*scope, &name_key(name))),
         Node::NamedFunctionKind { name, args, id } => {
             let key = name_key(name);
-            (id.is_none() && marked(names.find(Some(sheet), &key).or_else(|| names.find(None, &key)))) || args.iter().any(go)
+            let own = id.is_some() || bound.contains(&bound_key(name));
+            (!own && marked(names.find(Some(sheet), &key).or_else(|| names.find(None, &key)))) || args.iter().any(|a| go(a, bound))
         }
-        Node::LambdaDefKind { body, .. } => go(body),
-        Node::LambdaCallKind { lambda, args } => go(lambda) || args.iter().any(go),
+        Node::LambdaDefKind { parameters, body } => {
+            let depth = bound.len();
+            bound.extend(parameters.iter().filter_map(parameter_name).map(|p| bound_key(&p)));
+            let found = go(body, bound);
+            bound.truncate(depth);
+            found
+        }
+        Node::LambdaCallKind { lambda, args } => go(lambda, bound) || args.iter().any(|a| go(a, bound)),
         Node::OpRangeKind { left, right }
         | Node::OpConcatenateKind { left, right }
         | Node::OpSumKind { left, right, .. }
         | Node::OpProductKind { left, right, .. }
         | Node::OpPowerKind { left, right }
-        | Node::CompareKind { left, right, .. } => go(left) || go(right),
-        Node::UnaryKind { right, .. } => go(right),
-        Node::ImplicitIntersection { child, .. } | Node::SpillRangeOperator { child } => go(child),
+        | Node::CompareKind { left, right, .. } => go(left, bound) || go(right, bound),
+        Node::UnaryKind { right, .. } => go(right, bound),
+        Node::ImplicitIntersection { child, .. } | Node::SpillRangeOperator { child } => go(child, bound),
         _ => false,
     }
 }
@@ -517,8 +557,10 @@ const REFERENCE_SEED: u64 = 1;
 
 /// While the patcher evaluates: the engine's random functions seeded and its clock pinned, so the
 /// evaluation before the edits, the one after them and verification's all draw the same numbers
-/// and read the same time (the engine evaluates in a fixed order), and a cell that only reads a
-/// random one is moved by an edit or by nothing. The measure of what moves with a volatile
+/// and read the same time, and a cell that only reads a random one is moved by an edit or by
+/// nothing. Each cell draws its own sequence (fork change 40), keyed after the edits by where it
+/// stood before them ([`draw_keys`]): a draw an edit removed, added or moved changes no other
+/// cell's (C-223's twenty-second round), and every evaluation starts from the seed. The measure of what moves with a volatile
 /// function evaluates with other seeds, on other days. When it drops, the thread's own clock pin
 /// comes back, and the random functions go back to chance unless the host had seeded them.
 struct Fixed {
@@ -557,6 +599,7 @@ impl Fixed {
 
 impl Drop for Fixed {
     fn drop(&mut self) {
+        ironcalc_base::key_random_draws(None);
         ironcalc_base::pin_clock(self.host_clock);
         if !self.host_seeded {
             ironcalc_base::seed_random(None);
@@ -858,6 +901,27 @@ fn forward(shifts: &[(String, Shift)], from: usize, sheet: &str, mut row: i32, m
 
 /// Where the cell now at `(row, col)` of `sheet` was in the source, back through every shift so
 /// far; `None` for a cell an insertion made.
+/// The key of each formula cell's seeded draws after the edits (fork change 40): its place now
+/// (sheet index, row, column) to where it stood before them, through the rows and columns the
+/// edits moved, on the sheet of its name; a cell the edits added (a row inserted, a sheet added)
+/// is no key of the map and draws as no cell of the workbook before them.
+fn draw_keys(wb: &Workbook, original: &[String], shifts: &[(String, Shift)]) -> std::collections::HashMap<(u32, i32, i32), (u32, i32, i32)> {
+    let mut keys = std::collections::HashMap::new();
+    for (i, ws) in wb.model().workbook.worksheets.iter().enumerate() {
+        let name = ws.get_name();
+        let Some(was) = original.iter().position(|n| *n == name) else { continue };
+        for (row, col, cell) in ws.sheet_data.cells() {
+            if cell.get_formula().is_none() {
+                continue;
+            }
+            if let Some((r, c)) = backward(shifts, &name, row, col) {
+                keys.insert((i as u32, row, col), (was as u32, r, c));
+            }
+        }
+    }
+    keys
+}
+
 fn backward(shifts: &[(String, Shift)], sheet: &str, mut row: i32, mut col: i32) -> Option<(i32, i32)> {
     for (s, sh) in shifts.iter().rev() {
         if !s.eq_ignore_ascii_case(sheet) {
@@ -910,12 +974,6 @@ fn spelled_as_in_the_source(
 fn unknown_call(node: &Node, bound: &mut Vec<String>, names: &[String]) -> Option<String> {
     fn any<'n>(nodes: impl IntoIterator<Item = &'n Node>, bound: &mut Vec<String>, names: &[String]) -> Option<String> {
         nodes.into_iter().find_map(|n| unknown_call(n, bound, names))
-    }
-    // a LAMBDA parameter's name, which the engine keeps private but prints: `NamedVariable { name: "x", … }`
-    fn parameter_name(p: &impl std::fmt::Debug) -> Option<String> {
-        let text = format!("{p:?}");
-        let start = text.find("name: \"")? + "name: \"".len();
-        Some(text[start..start + text[start..].find('"')?].to_string())
     }
     match node {
         Node::NamedFunctionKind { name, args, .. } => {
@@ -1312,6 +1370,9 @@ pub fn patch(
         && stem != wb.model().workbook.name
     {
         wb.model_mut().workbook.name = stem;
+        // from the seed again: the evaluation `links::open` made drew the first numbers (the round
+        // at b6dc3602)
+        fixed.reference();
         wb.recalc();
     }
     if crate::files::contents(source).map_err(|e| io_err(source, e))? != fingerprint {
@@ -1320,6 +1381,8 @@ pub fn patch(
     // the engine's value of every formula BEFORE the edits: a cache is
     // re-written only where the edits moved it (see `Before`)
     let before = Before::take(&mut wb, &fixed);
+    // the sheets as they stood, which key each cell's draws after the edits
+    let original_order = wb.sheet_names();
 
     let mut report = PatchReport::default();
     let mut shifts: Vec<(String, Shift)> = Vec::new();
@@ -1733,6 +1796,8 @@ pub fn patch(
         ));
     }
 
+    // each cell draws as where it stood before the edits (fork change 40), through verification too
+    ironcalc_base::key_random_draws(Some(draw_keys(&wb, &original_order, &shifts)));
     fixed.reference();
     wb.recalc();
     // what is unstable after the edits, by final position, measured as before them
@@ -3004,6 +3069,7 @@ fn verify(
     // formula reading its name (`CELL("filename")`) reads what the destination will hold
     if back.model().workbook.name != wb.model().workbook.name {
         back.model_mut().workbook.name = wb.model().workbook.name.clone();
+        fixed.reference();
         back.recalc();
     }
     // a volatile cell (and what reads it) has a new value on every
@@ -3217,6 +3283,22 @@ mod tests {
         assert!(v("LET(x,RAND(),x)", data));
         assert!(v("TODAY()+1", data) && v("NOW()", data) && v("RANDBETWEEN(1,6)", data));
         assert!(!v("\"RAND()\"", data));
+        // a call a LET or a LAMBDA binds is the binding's, not a volatile name of its spelling on
+        // the evaluating sheet (the round at b6dc3602): a formula parsed where no `f` is a name
+        // (a workbook name's, on the first sheet) and evaluated from a sheet holding a volatile
+        // local `f` (where `f` is a name to the parser, the engine reads a LET binding it as
+        // `#VALUE!`, C-222's parity question)
+        wb.set_name("f", "LAMBDA(x,x+RAND())", Some("Data")).unwrap();
+        let names = ParsedNames::of(&wb);
+        let v = |f: &str, parsed: u32, sheet: u32| {
+            let node = parsed_at(&wb, parsed, Addr::new(2, 2), f).unwrap_or_else(|| panic!("{f}"));
+            node_volatile(&node, sheet, &names, &names.volatile_from(sheet))
+        };
+        assert!(v("f(1)", other, data), "Data's own f");
+        assert!(!v("f(1)", other, other), "Other has no f");
+        assert!(!v("LET(f,LAMBDA(x,x*2),f(1))", other, data), "the LET's f");
+        assert!(!v("LAMBDA(f,f(1))(LAMBDA(y,y*2))", other, data), "the LAMBDA's parameter f");
+        assert!(v("LET(g,LAMBDA(x,x*2),f(1))", other, data), "a LET binding another name");
     }
 
     #[test]
