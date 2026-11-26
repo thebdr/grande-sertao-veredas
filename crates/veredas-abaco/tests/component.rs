@@ -1054,6 +1054,60 @@ fn string_at(code: &str, i: usize) -> Option<(usize, String)> {
     None
 }
 
+/// The value of the string literal opening at `i`, as rustc and a derive (syn's `LitStr::value`)
+/// read it: a raw string's text as written, any other's escapes decoded (`\x73`, `\u{73}`, `\n`, a
+/// `\` before a line break and the white space after it gone; the round at 8736f277).
+fn string_value_at(code: &str, i: usize) -> Option<String> {
+    let (_, text) = string_at(code, i)?;
+    let b = code.as_bytes();
+    let j = if matches!(b.get(i), Some(b'b' | b'c')) { i + 1 } else { i };
+    if b.get(j) == Some(&b'r') {
+        return Some(text);
+    }
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('0') => out.push('\0'),
+            Some(q @ ('\\' | '\'' | '"')) => out.push(q),
+            Some('x') => {
+                let hex: String = chars.by_ref().take(2).collect();
+                out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+            }
+            Some('u') => {
+                let mut hex = String::new();
+                if chars.next_if_eq(&'{').is_some() {
+                    for d in chars.by_ref() {
+                        if d == '}' {
+                            break;
+                        }
+                        if d != '_' {
+                            hex.push(d);
+                        }
+                    }
+                }
+                out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+            }
+            Some('\n' | '\r') => {
+                while chars.next_if(|c| c.is_whitespace()).is_some() {}
+            }
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    Some(out)
+}
+
 /// The string literal opening at `i` as rustc reads one: at every `"` (after a number too: `1"/*"`
 /// is the number 1 and the string `/*`), and at a `b`, `c` or `r` prefix that starts a token: not
 /// the `r` ending `attr`, nor the one of a raw identifier (`r#r"\"…"` is `r#r` and a plain string)
@@ -1735,7 +1789,7 @@ fn socket_route_in(text: &str, build_script: bool) -> Option<String> {
             // every such string but a `doc`'s and the reviewed `inline_js` text is read as code
             if !matches!(w.as_str(), "doc" | "inline_js")
                 && let Some(value) = rest.strip_prefix('=').map(str::trim_start)
-                && let Some((_, text)) = string_at(value, 0)
+                && let Some(text) = string_value_at(value, 0)
                 && let Some(route) = socket_route_in(&text, build_script)
             {
                 return Some(format!("an attribute's `{w}` string, which a derive reads as code: {route}"));
@@ -1862,6 +1916,12 @@ fn every_route_the_critics_found_is_a_socket_route() {
         ("serde's getter", "#[derive(serde::Serialize)] #[serde(remote = \"String\")] struct Run { #[serde(getter = \"js_sys::eval\", serialize_with = \"nothing\")] done: Result<JsValue, JsValue> }"),
         ("serde's with", "#[derive(serde::Serialize)] struct H(#[serde(with = \"libc :: connect\")] String);"),
         ("serde's default", "#[derive(serde::Deserialize)] struct D { #[serde(default = \"plant::Command::new\")] x: u8 }"),
+        // the round at 8736f277: the string's value, its escapes decoded as the derive reads it
+        ("an escaped remote", "#[derive(serde::Serialize)] #[serde(remote = \"\\x73td::\\x6e\\x65\\x74::Shutdown\")] enum P { Read }"),
+        ("a getter in hex", "#[serde(getter = \"\\x6a\\x73_sys::eval\")] struct R;"),
+        ("a getter in a Unicode escape", "#[serde(getter = \"js_\\u{73}ys::eval\")] struct R;"),
+        ("a getter across a line break", "#[serde(getter = \"js_\\\n    sys::eval\")] struct R;"),
+        ("a with in hex", "#[serde(with = \"\\x6cibc\")] struct R;"),
         // the round at 36bd57e3: a dependency's macro writing the block, a system crate's path
         ("windows_link's link!", "windows_link::link!(\"c\" \"C\" fn rexec(ahost: *mut *mut c_char, inport: i32) -> i32);"),
         ("a spaced link! call", "link ! (\"c\" \"C\" fn rcmd() -> i32);"),
@@ -2118,7 +2178,7 @@ fn the_fork_s_own_suite_passes_on_the_versions_abaco_builds() {
 /// three columns of spaces and tabs, one to six `#`, a space or a tab, its closing `#`s passed
 /// over) or a setext one (the paragraph its `===` or `---` underlines), in a quote or a list item
 /// too, none in a fence, an HTML block (a comment among them) or indented code; its text read as
-/// GitHub shows it, entities decoded and inline markup dropped ([`heading_words`]). The record
+/// GitHub shows it, entities decoded and inline markup dropped ([`heading_words_with`]). The record
 /// holds exactly one heading that reads `Local changes`, an ATX heading of level 2 outside every
 /// container, spelled plainly: `##  Local changes` with two spaces is that heading; a second, or one
 /// that reads so through markup (`## Local&#32;changes`, `## *Local changes*`), is refused, so no
@@ -2132,6 +2192,9 @@ fn local_changes_heading(record: &str) -> Result<usize, String> {
             Some((start, l.trim_end_matches(['\n', '\r'])))
         })
         .collect();
+    // the lines a list item holds, at its content column or beyond (the round at 8736f277)
+    let texts: Vec<&str> = lines.iter().map(|(_, l)| *l).collect();
+    let items = list_items(&texts);
     // each heading that reads `Local changes`: whether it is the section's own, and its line's end
     let mut found: Vec<(bool, usize)> = Vec::new();
     let mut paragraph: Vec<String> = Vec::new();
@@ -2141,11 +2204,16 @@ fn local_changes_heading(record: &str) -> Result<usize, String> {
     };
     let mut k = 0;
     while k < lines.len() {
-        let (start, raw) = lines[k];
-        let end = start + raw.len();
+        let (start, whole) = lines[k];
+        let end = start + whole.len();
+        // a line a list item holds is read from the item's content column, inside a container
+        let (raw, in_item) = match items[k] {
+            Some(column) => (after_columns(whole, column), true),
+            None => (whole, false),
+        };
         // a setext heading's underline, the paragraph above it its text
         if !paragraph.is_empty() && (underline(raw) || underline(without_containers(raw).0)) {
-            if heading_words(&paragraph.join(" ")) == "local changes" {
+            if reads_as_local_changes(&paragraph.join(" ")) {
                 found.push((false, end));
             }
             paragraph.clear();
@@ -2184,6 +2252,7 @@ fn local_changes_heading(record: &str) -> Result<usize, String> {
             _ => {}
         }
         let (inner, contained) = without_containers(raw);
+        let contained = contained || in_item;
         let t = inner.trim_start_matches([' ', '\t']);
         let hashes = t.chars().take_while(|c| *c == '#').count();
         let rest = &t[hashes..];
@@ -2192,7 +2261,7 @@ fn local_changes_heading(record: &str) -> Result<usize, String> {
             let text = rest.trim_matches([' ', '\t']);
             let closed = text.trim_end_matches('#');
             let text = if closed.is_empty() || closed.ends_with([' ', '\t']) { closed.trim_matches([' ', '\t']) } else { text };
-            if heading_words(text) == "local changes" {
+            if reads_as_local_changes(text) {
                 found.push((!contained && hashes == 2 && text == "Local changes", end));
             }
             paragraph.clear();
@@ -2243,11 +2312,21 @@ fn without_containers(line: &str) -> (&str, bool) {
     }
 }
 
+/// Whether a heading's text reads `Local changes` as GitHub shows it ([`heading_words_with`]): an entity
+/// the reading does not decode read both as nothing and as a space, so one that shows as white
+/// space or as nothing (`&Tab;`, `&lrm;`) is caught whatever its name (the round at 8736f277).
+fn reads_as_local_changes(text: &str) -> bool {
+    [None, Some(""), Some(" ")].iter().any(|unknown| heading_words_with(text, *unknown) == "local changes")
+}
+
 /// A heading's text as GitHub shows it, for comparing: HTML comments and tags dropped, a link's
-/// target dropped and its brackets, backslash escapes and entities read (`&#32;`, `&#x20;`, `&nbsp;`
-/// and their kin), emphasis and code markers dropped, white space of every kind one space, in
-/// lower case.
-fn heading_words(text: &str) -> String {
+/// target (balanced parentheses) or its reference label dropped and its brackets, backslash escapes
+/// and entities read (numeric ones, and the named ones that show as white space or nothing or as
+/// `&`, `<`, `>` and quotes), emphasis and code markers dropped, every format character (Unicode's
+/// `Cf`: `&lrm;`, U+200B to U+200F, U+2060 to U+2064, U+180E, U+061C and their kin) dropped, white
+/// space of every kind one space, in lower case; an entity it does not decode kept as written
+/// (`unknown` `None`) or read as `unknown`.
+fn heading_words_with(text: &str, unknown: Option<&str>) -> String {
     let mut s = text.to_string();
     // comments, then tags
     while let Some(a) = s.find("<!--") {
@@ -2264,14 +2343,32 @@ fn heading_words(text: &str) -> String {
             _ => {}
         }
     }
-    // a link's target after its text
+    // a link's target after its text (its parentheses balanced), or its reference label
+    let chars: Vec<char> = out.chars().collect();
     let mut s = String::new();
-    let mut rest = out.as_str();
-    while let Some(at) = rest.find("](") {
-        s.push_str(&rest[..at]);
-        rest = rest[at + 2..].find(')').map(|e| &rest[at + 2 + e + 1..]).unwrap_or("");
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == ']' && matches!(chars.get(i + 1), Some('(' | '[')) {
+            let (open, close) = if chars[i + 1] == '(' { ('(', ')') } else { ('[', ']') };
+            let mut depth = 0;
+            let mut j = i + 1;
+            while j < chars.len() {
+                if chars[j] == open {
+                    depth += 1;
+                } else if chars[j] == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                j += 1;
+            }
+            i = j + 1;
+            continue;
+        }
+        s.push(chars[i]);
+        i += 1;
     }
-    s.push_str(rest);
     let mut words = String::new();
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
@@ -2286,24 +2383,27 @@ fn heading_words(text: &str) -> String {
             let end = chars[i..].iter().take(34).position(|c| *c == ';');
             if let Some(end) = end {
                 let name: String = chars[i + 1..i + end].iter().collect();
-                let decoded = if let Some(hex) = name.strip_prefix("#x").or_else(|| name.strip_prefix("#X")) {
-                    u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+                let decoded: Option<String> = if let Some(hex) = name.strip_prefix("#x").or_else(|| name.strip_prefix("#X")) {
+                    u32::from_str_radix(hex, 16).ok().and_then(char::from_u32).map(String::from)
                 } else if let Some(dec) = name.strip_prefix('#') {
-                    dec.parse::<u32>().ok().and_then(char::from_u32)
+                    dec.parse::<u32>().ok().and_then(char::from_u32).map(String::from)
                 } else {
                     match name.as_str() {
-                        "nbsp" | "ensp" | "emsp" | "thinsp" | "numsp" | "puncsp" | "hairsp" | "MediumSpace" | "ThinSpace" | "NoBreak" => Some(' '),
-                        "amp" => Some('&'),
-                        "lt" => Some('<'),
-                        "gt" => Some('>'),
-                        "quot" => Some('"'),
-                        "apos" => Some('\''),
-                        "shy" | "zwnj" | "zwj" | "ZeroWidthSpace" => Some('\u{200B}'),
+                        "nbsp" | "NonBreakingSpace" | "ensp" | "emsp" | "emsp13" | "emsp14" | "thinsp" | "ThinSpace" | "numsp" | "puncsp" | "hairsp"
+                        | "VeryThinSpace" | "MediumSpace" | "ThickSpace" | "NoBreak" | "Tab" | "NewLine" | "Space" => Some(" ".into()),
+                        "amp" | "AMP" => Some("&".into()),
+                        "lt" | "LT" => Some("<".into()),
+                        "gt" | "GT" => Some(">".into()),
+                        "quot" | "QUOT" => Some("\"".into()),
+                        "apos" => Some("'".into()),
+                        "shy" | "zwnj" | "zwj" | "lrm" | "rlm" | "ZeroWidthSpace" | "NegativeVeryThinSpace" | "NegativeThinSpace" | "NegativeMediumSpace"
+                        | "NegativeThickSpace" | "InvisibleTimes" | "it" | "InvisibleComma" | "ic" | "ApplyFunction" | "af" => Some(String::new()),
+                        _ if name.chars().all(|c| c.is_ascii_alphanumeric()) && !name.is_empty() => unknown.map(String::from),
                         _ => None,
                     }
                 };
                 if let Some(d) = decoded {
-                    words.push(d);
+                    words.push_str(&d);
                     i += end + 1;
                     continue;
                 }
@@ -2314,8 +2414,17 @@ fn heading_words(text: &str) -> String {
         }
         i += 1;
     }
-    let words: String = words.chars().filter(|c| !matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{00AD}' | '\u{2060}' | '\u{FEFF}')).collect();
+    let words: String = words.chars().filter(|c| !is_format_char(*c)).collect();
     words.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// Whether `c` is a format character (Unicode's general category `Cf`), which GitHub shows as
+/// nothing.
+fn is_format_char(c: char) -> bool {
+    matches!(c as u32,
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2 | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E
+        | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3
+        | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
 }
 
 /// The rows of every table of the record's `## Local changes` section (to the next heading of level 1
@@ -2329,6 +2438,8 @@ fn change_rows(record: &str) -> Vec<String> {
     let at = local_changes_heading(record).unwrap_or_else(|e| panic!("{e}"));
     let section = &record[at..];
     let lines: Vec<&str> = section.lines().collect();
+    // the lines a list item holds (at its content column or beyond): a table there is the item's
+    let items = list_items(&lines);
     let delimiter = |l: &str| {
         column_of(l) <= 3 && {
             let cells = gfm_cells(l);
@@ -2403,6 +2514,7 @@ fn change_rows(record: &str) -> Vec<String> {
                 in_paragraph = false;
             }
             None if !in_container_paragraph
+                && items[i].is_none()
                 && i + 1 < lines.len()
                 && delimiter(lines[i + 1])
                 && gfm_cells(l).len() == gfm_cells(lines[i + 1]).len() =>
@@ -2431,11 +2543,11 @@ fn change_rows(record: &str) -> Vec<String> {
         loop {
             if let Some(r) = t.strip_prefix('>') {
                 t = r.trim_start();
-            } else if let Some(r) = t.strip_prefix(['-', '+', '*']).filter(|r| r.starts_with(' ')) {
+            } else if let Some(r) = t.strip_prefix(['-', '+', '*']).filter(|r| r.starts_with([' ', '\t'])) {
                 t = r.trim_start();
             } else {
                 let digits = t.chars().take_while(char::is_ascii_digit).count();
-                match t[digits..].strip_prefix(['.', ')']).filter(|r| digits > 0 && r.starts_with(' ')) {
+                match t[digits..].strip_prefix(['.', ')']).filter(|r| digits > 0 && r.starts_with([' ', '\t'])) {
                     Some(r) => t = r.trim_start(),
                     None => break,
                 }
@@ -2449,7 +2561,7 @@ fn change_rows(record: &str) -> Vec<String> {
         // one indented is a list item's, whatever its marker's width, `10. ` and `-   ` holding their
         // content four columns in, so no indent is taken for code; a delimiter of `-` alone could be
         // a setext heading's underline, so a pipe or a colon marks one)
-        let nested = lines[k].trim_start().starts_with('>') || column_of(lines[k]) >= 1;
+        let nested = lines[k].trim_start().starts_with('>') || column_of(lines[k]) >= 1 || items[k].is_some();
         if !read[k]
             && nested
             && delim.contains(['|', ':'])
@@ -2460,6 +2572,81 @@ fn change_rows(record: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// For each line, the content column of the innermost list item holding it as GFM nests them,
+/// `None` outside every item (the round at 8736f277): a marker (`-`, `+`, `*`, `1.`, `1)`, then a
+/// space or a tab) opens an item whose content starts after the marker and the white space after it
+/// (one column past the marker when that is more than four or the line ends there); a later line at
+/// that column or beyond is the item's, a blank line too, and a line left of it closes the item. A
+/// paragraph's lazy continuation left of the column is the paragraph's, which opens no table and
+/// is read as `change_rows` reads one: `None` here.
+fn list_items(lines: &[&str]) -> Vec<Option<usize>> {
+    let mut open: Vec<usize> = Vec::new();
+    let mut paragraph = false;
+    let mut out = Vec::with_capacity(lines.len());
+    for l in lines {
+        if l.trim_matches([' ', '\t']).is_empty() {
+            paragraph = false;
+            out.push(open.last().copied());
+            continue;
+        }
+        let col = column_of(l);
+        let inside = open.last().is_some_and(|c| col >= *c);
+        let lazy = !inside && paragraph && matches!(block_start(l), None | Some(Block::IndentedCode));
+        if lazy {
+            out.push(None);
+            continue;
+        }
+        while open.last().is_some_and(|c| col < *c) {
+            open.pop();
+        }
+        let base = open.last().copied().unwrap_or(0);
+        let inner = after_columns(l, base);
+        match block_start(inner) {
+            Some(Block::ListItem) => {
+                let lead = inner.len() - inner.trim_start_matches([' ', '\t']).len();
+                let t = &inner[lead..];
+                let marker = if t.starts_with(['-', '+', '*']) { 1 } else { t.chars().take_while(char::is_ascii_digit).count() + 1 };
+                let rest = &t[marker..];
+                let marker_end = base + columns_to(inner, lead + marker);
+                let text_at = base + columns_to(inner, lead + marker + (rest.len() - rest.trim_start_matches([' ', '\t']).len()));
+                let blank = rest.trim_matches([' ', '\t']).is_empty();
+                open.push(if blank || text_at - marker_end > 4 { marker_end + 1 } else { text_at });
+                paragraph = !blank;
+            }
+            None => paragraph = true,
+            Some(Block::IndentedCode) if paragraph => {}
+            _ => paragraph = false,
+        }
+        out.push(open.last().copied());
+    }
+    out
+}
+
+/// A line with its first `n` columns of white space passed over (its text when it has fewer).
+fn after_columns(line: &str, n: usize) -> &str {
+    let mut col = 0;
+    for (i, ch) in line.char_indices() {
+        if col >= n {
+            return &line[i..];
+        }
+        match ch {
+            ' ' => col += 1,
+            '\t' => col += 4 - col % 4,
+            _ => return &line[i..],
+        }
+    }
+    ""
+}
+
+/// The columns `line[..end]` spans, a tab advancing to the next multiple of four.
+fn columns_to(line: &str, end: usize) -> usize {
+    let mut col = 0;
+    for ch in line[..end].chars() {
+        col += if ch == '\t' { 4 - col % 4 } else { 1 };
+    }
+    col
 }
 
 /// The column a line's text starts at, a tab advancing to the next multiple of four.
@@ -2702,7 +2889,7 @@ fn the_record_s_rows_are_read_as_markdown_reads_a_table() {
     // the round at c0de423e: headings GFM reads as `Local changes` through markup or inside a
     // container, each beside the plain one, refused; lines GFM reads as none of a heading, passed over
     let plain = "\n\n## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n";
-    for decoy in ["## Local&#32;changes", "## Local&#x20;changes", "## Local&nbsp;changes", "## Local changes<!-- -->", "## *Local changes*", "## `Local` changes", "## [Local changes](#x)", "Local\nchanges\n---", "> ## Local changes", "- ## Local changes", "1. ## Local changes", "## Local\u{a0}changes", "# Local changes"] {
+    for decoy in ["## Local&Tab;changes", "## Local&NewLine;changes", "## Local&NonBreakingSpace;changes", "## Local&emsp13;changes", "## Local changes&lrm;", "## Local changes\u{200E}", "## \u{200F}Local changes", "## Local changes\u{2061}", "## Local\u{180E} changes", "## [Local changes][x]\n\n[x]: #a", "## [Local changes](a(b))", "## Local&UnknownSpace;changes", "10. A note:\n\n    ## Local changes", "- a\n  - b\n\n    ## Local changes", "- a\n\n  ## Local changes", "## Local&#32;changes", "## Local&#x20;changes", "## Local&nbsp;changes", "## Local changes<!-- -->", "## *Local changes*", "## `Local` changes", "## [Local changes](#x)", "Local\nchanges\n---", "> ## Local changes", "- ## Local changes", "1. ## Local changes", "## Local\u{a0}changes", "# Local changes"] {
         let record = format!("{decoy}\n| # | Change |\n|---|---|\n| 36 | no commit names it |{plain}");
         assert!(local_changes_heading(&record).is_err(), "{decoy:?}");
     }
@@ -2766,9 +2953,18 @@ fn the_record_s_rows_are_read_as_markdown_reads_a_table() {
     assert_eq!(change_rows(record), ["1"]);
     let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n> | # | Change |\n> |---|---|\n> | 31 | quoted |\n";
     assert!(change_rows(record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{:?}", change_rows(record));
-    // (a list item's table after a blank line stands where a table may: its row is read)
+    // (a list item's table after a blank line is the item's, at its content column: GitHub shows it
+    // in the item, and the reading fails, the round at 8736f277; rounds before read its row)
     let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n- More:\n\n  | # | Change |\n  |---|---|\n  | 33 | listed |\n";
-    assert_eq!(change_rows(record), ["1", "33"]);
+    assert!(change_rows(record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{:?}", change_rows(record));
+    // a table after a tab marker, `-\t` and `1)\t`, the item's too
+    for marker in ["-\t", "1)\t"] {
+        let record = format!("## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n{marker}| # | Change | Where | Upstream |\n\t|---|---|---|---|\n\t| 38 | no commit names it | base | none |\n");
+        assert!(change_rows(&record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{marker:?}: {:?}", change_rows(&record));
+    }
+    // the item's table at its content column, a line at the margin after it a paragraph: no row
+    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n- a\n\n  | # | Change |\n  |---|---|\n  | 1 | a |\n| 34 | x |\n";
+    assert!(!change_rows(record).contains(&"34".to_string()), "{:?}", change_rows(record));
     let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n- More:\n  | # | Change |\n  |---|---|\n  | 34 | in the item |\n";
     assert!(change_rows(record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{:?}", change_rows(record));
     let record = "## Local changes\nSome text\n<span class=\"x\">\n| # | Change |\n|---|---|\n| 32 | after a span |\n";
