@@ -947,9 +947,16 @@ fn run_family(
                 if let Some(look) = at_look.clone() {
                     // The held file retired unopened (a member of its identity, no longer the
                     // active, whatever its name): read from where it stood at the look.
-                    let retired = held.as_ref().and_then(|(_, _, id)| id.as_ref()).and_then(|id| {
-                        files.iter().find(|f| !f.is_active && crate::tail::cursor::identity_at(&f.path).as_ref() == Some(id)).cloned()
-                    });
+                    // With no identity from the look, the member under the held name that is no
+                    // longer the active (a newest-by-order active keeps its name as it retires),
+                    // read whole.
+                    let retired = match held.as_ref() {
+                        Some((_, _, Some(id))) => {
+                            files.iter().find(|f| !f.is_active && crate::tail::cursor::identity_at(&f.path).as_ref() == Some(id)).cloned()
+                        }
+                        Some((name, _, None)) => files.iter().find(|f| !f.is_active && f.file_name == *name).cloned(),
+                        None => None,
+                    };
                     if let (Some(f), Some((_, len, identity))) = (&retired, &held) {
                         let Ok(mut c) = TailedFile::open_held(&f.path, *len, identity.as_ref()) else {
                             wait_tick(&wake_rx, cfg.poll_interval);
@@ -1062,9 +1069,14 @@ fn run_family(
                             let after = crate::tail::cursor::identity_at(&active.path);
                             // A rotation inside the look (the identities either side of its length
                             // differ) is no look: taken again next round, against a new listing.
-                            if after == before {
+                            // A rotation between the round's listing and the look (another name
+                            // made, the active renamed away) leaves the listing other than the
+                            // family's: the names are listed again, and only when they agree is
+                            // the look taken.
+                            let names = member_names(&files);
+                            if after == before && spec.resolve().ok().is_some_and(|again| member_names(&again) == names) {
                                 held = Some((active.file_name.clone(), len, after));
-                                at_look = Some(member_names(&files));
+                                at_look = Some(names);
                                 attached(&mut attached_slot);
                             }
                         }

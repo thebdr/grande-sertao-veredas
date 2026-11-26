@@ -1007,3 +1007,86 @@ fn a_held_active_at_its_end_is_followed_in_order_through_every_rotation() {
     });
     assert_eq!(lines, (40..70).collect::<Vec<u32>>(), "deleted, a generation after it");
 }
+
+/// C-098's second refute round. The look's names are listed again after it, and a rotation
+/// between the round's listing and the look (the active renamed into a retiree and a held file
+/// made at its path; a new member made) makes it no look, taken again against the new listing: the
+/// renamed file is then history, never read, the held one read from where it stood (50 to 100);
+/// a newest-by-order family then has a readable newest active and is followed from its end (45 to
+/// 50). A held active whose identity the look could not read (its folder listable, its files not
+/// to be looked up) is found by its name once it retires under it, and read whole (0 to 50). And
+/// on a filesystem that hands a deleted file's inode number to the next file (ext4), a new file
+/// made at the held active's path after it is deleted is another file, its birth time apart, read
+/// whole (50 to 80).
+#[cfg(unix)]
+#[test]
+fn a_held_look_is_retaken_when_the_family_moves_and_a_reused_inode_is_another_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let fixed = |d: &std::path::Path| FamilySpec::new(d, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let newest = |d: &std::path::Path| FamilySpec::new(d, r"plant_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let mut hooked: Vec<std::path::PathBuf> = Vec::new();
+
+    // Fixed name: the active renamed into a retiree and a held file made at its path, between
+    // the listing and the look.
+    let d = dir.path().join("moved-fixed");
+    std::fs::create_dir_all(&d).unwrap();
+    write(&d.join("done_1.log"), 0..10);
+    write(&d.join("current.log"), 10..20);
+    once(&d.join("current.log"), |p| {
+        std::fs::rename(p, p.with_file_name("done_2.log")).unwrap();
+        make_held(p, 0..0);
+    });
+    hooked.push(d.join("current.log"));
+    let p = d.join("current.log");
+    let (lines, _) = at_end(fixed(&d), 50, move || {
+        append(&p, 50..100);
+        mode(&p, 0o644);
+    });
+    assert_eq!(lines, (50..100).collect::<Vec<u32>>(), "fixed name, moved before the look");
+
+    // Newest by order: a new member made between the listing and the look.
+    let d = dir.path().join("moved-newest");
+    std::fs::create_dir_all(&d).unwrap();
+    write(&d.join("plant_1.log"), 0..10);
+    mode(&d.join("plant_1.log"), 0o200);
+    once(&d.join("plant_1.log"), |p| write(&p.with_file_name("plant_2.log"), 40..45));
+    hooked.push(d.join("plant_1.log"));
+    let dd = d.clone();
+    let (lines, _) = at_end(newest(&d), 5, move || {
+        append(&dd.join("plant_2.log"), 45..50);
+    });
+    assert_eq!(lines, (45..50).collect::<Vec<u32>>(), "newest by order, moved before the look");
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+
+    // No identity at the look: found by its name once it retires under it, read whole.
+    let d = dir.path().join("unknown");
+    std::fs::create_dir_all(&d).unwrap();
+    write(&d.join("plant_1.log"), 0..10);
+    mode(&d.join("plant_1.log"), 0o200);
+    mode(&d, 0o600);
+    let dd = d.clone();
+    let (lines, _) = at_end(newest(&d), 50, move || {
+        mode(&dd, 0o700);
+        append(&dd.join("plant_1.log"), 10..40);
+        write(&dd.join("plant_2.log"), 40..50);
+        mode(&dd.join("plant_1.log"), 0o644);
+    });
+    assert_eq!(lines, (0..50).collect::<Vec<u32>>(), "no identity at the look");
+
+    // A reused inode number, on a filesystem that reuses them: the build's folder, not /tmp.
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/history-reuse");
+    std::fs::create_dir_all(&base).unwrap();
+    let reuse = tempfile::tempdir_in(&base).unwrap();
+    let d = reuse.path().to_path_buf();
+    write(&d.join("done_1.log"), 0..10);
+    write(&d.join("current.log"), 10..20);
+    mode(&d.join("current.log"), 0o200);
+    let p = d.join("current.log");
+    let (lines, _) = at_end(fixed(&d), 30, move || {
+        std::fs::remove_file(&p).unwrap();
+        let aside = p.with_extension("stage");
+        write(&aside, 50..80);
+        std::fs::rename(&aside, &p).unwrap();
+    });
+    assert_eq!(lines, (50..80).collect::<Vec<u32>>(), "a new file at the held path, its inode number reused");
+}

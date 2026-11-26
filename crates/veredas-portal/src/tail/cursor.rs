@@ -24,11 +24,41 @@ pub(crate) const READ_CHUNK: usize = 64 * 1024;
 
 /// What tells one file from another without opening it for reading: on Windows a handle opened
 /// with no access at all (a hold that refuses every read still lets that through); elsewhere the
-/// device and inode the directory entry carries, which no mode on the file denies.
+/// device and inode the directory entry carries, which no mode on the file denies, with the
+/// file's birth time where the system gives one: a filesystem that hands a deleted file's inode
+/// number to the next file (ext4 does, at once) would else take the new file for the old (C-098's
+/// second refute round).
 #[cfg(windows)]
 pub(crate) type Identity = Handle;
 #[cfg(not(windows))]
-pub(crate) type Identity = (u64, u64);
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Identity {
+    dev: u64,
+    ino: u64,
+    born: Option<std::time::SystemTime>,
+}
+
+/// The same file: its device and inode the same, and its birth time where both sides have one.
+#[cfg(not(windows))]
+impl PartialEq for Identity {
+    fn eq(&self, other: &Self) -> bool {
+        self.dev == other.dev && self.ino == other.ino && born_agree(self.born, other.born)
+    }
+}
+
+#[cfg(not(windows))]
+fn born_agree(a: Option<std::time::SystemTime>, b: Option<std::time::SystemTime>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    }
+}
+
+#[cfg(unix)]
+fn identity_of(meta: &std::fs::Metadata) -> Identity {
+    use std::os::unix::fs::MetadataExt;
+    Identity { dev: meta.dev(), ino: meta.ino(), born: meta.created().ok() }
+}
 
 /// The identity of the file at `path` without opening it for reading. `None` when nothing is
 /// there, or when even that is refused (an access-control list denying the attributes): an
@@ -43,8 +73,7 @@ pub(crate) fn identity_at(path: &Path) -> Option<Identity> {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+        std::fs::metadata(path).ok().map(|m| identity_of(&m))
     }
     #[cfg(not(any(windows, unix)))]
     {
@@ -61,7 +90,8 @@ fn is_identity(handle: &Handle, id: &Identity) -> bool {
     }
     #[cfg(not(windows))]
     {
-        *id == (handle.dev(), handle.ino())
+        let born = handle.as_file().metadata().ok().and_then(|m| m.created().ok());
+        *id == Identity { dev: handle.dev(), ino: handle.ino(), born }
     }
 }
 
@@ -141,9 +171,14 @@ pub(crate) fn find_identity(dir: &Path, identity: Option<&Identity>, recursive: 
             }
             #[cfg(unix)]
             {
+                // The inode from the listing itself; on a match, the birth time by a lookup (an
+                // entry gone at it means the folder changed under the search).
                 use std::os::unix::fs::DirEntryExt;
-                if (dev, entry.ino()) == *id {
-                    return Ok(true);
+                if dev == id.dev && entry.ino() == id.ino {
+                    let meta = entry.metadata().map_err(|_| ())?;
+                    if born_agree(meta.created().ok(), id.born) {
+                        return Ok(true);
+                    }
                 }
             }
             #[cfg(not(unix))]
@@ -176,7 +211,7 @@ pub(crate) fn read_whole_identified(path: &Path) -> std::io::Result<(Vec<u8>, Op
     #[cfg(windows)]
     let identity = Some(std::sync::Arc::new(handle));
     #[cfg(unix)]
-    let identity = Some(std::sync::Arc::new((handle.dev(), handle.ino())));
+    let identity = Some(std::sync::Arc::new(Identity { dev: handle.dev(), ino: handle.ino(), born: handle.as_file().metadata().ok().and_then(|m| m.created().ok()) }));
     #[cfg(not(any(windows, unix)))]
     let identity = None;
     Ok((bytes, identity))
