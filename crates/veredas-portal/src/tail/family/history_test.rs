@@ -839,3 +839,171 @@ fn an_empty_member_deleted_before_the_backfill_reaches_it_is_read() {
     }
     BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
 }
+
+/// Starts `spec` at its end, runs `act` once the start has returned, and collects the `temp=` of
+/// every line sent until `n` have come (or ten seconds), then stops: the lines in order, and how
+/// long the start took.
+#[cfg(unix)]
+fn at_end(spec: FamilySpec, n: usize, act: impl FnOnce()) -> (Vec<u32>, Duration) {
+    let cfg = FamilyTailConfig { start: FamilyStart::ActiveEnd, use_notify: Some(false), ..FamilyTailConfig::default() };
+    let (tx, rx) = channel();
+    let begun = Instant::now();
+    let handle = Box::new(FamilyTailSource::new("held", "held", spec, cfg)).start(tx).unwrap();
+    let took = begun.elapsed();
+    act();
+    let mut temps: Vec<u32> = Vec::new();
+    let started = Instant::now();
+    while temps.len() < n && started.elapsed() < Duration::from_secs(10) {
+        temps.extend(rx.try_iter().map(|e| e.line.split("temp=").nth(1).and_then(|r| r.split(' ').next()).and_then(|t| t.parse::<u32>().ok()).unwrap()));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    handle.request_stop();
+    handle.join().unwrap();
+    temps.extend(rx.try_iter().map(|e| e.line.split("temp=").nth(1).and_then(|r| r.split(' ').next()).and_then(|t| t.parse::<u32>().ok()).unwrap()));
+    (temps, took)
+}
+
+#[cfg(unix)]
+fn append(path: &std::path::Path, range: std::ops::Range<u32>) {
+    use std::io::Write;
+    let body: String = range.map(|i| format!("2026-07-19 {:02}:{:02}:{:02} temp={i} state=run\n", 1 + i / 3600, (i / 60) % 60, i % 60)).collect();
+    std::fs::OpenOptions::new().append(true).open(path).unwrap().write_all(body.as_bytes()).unwrap();
+}
+
+#[cfg(unix)]
+fn mode(path: &std::path::Path, m: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(m)).unwrap();
+}
+
+/// A file made at `path` already held (written aside, write alone allowed, renamed in).
+#[cfg(unix)]
+fn make_held(path: &std::path::Path, range: std::ops::Range<u32>) {
+    let aside = path.with_extension("stage");
+    write(&aside, range);
+    mode(&aside, 0o200);
+    std::fs::rename(&aside, path).unwrap();
+}
+
+/// C-098's first refute round. A family started at its end whose active is held at the first
+/// look reads what is written after the look in order, none of it lost and nothing of the
+/// history: the held active retired with no active after it, then the next active held in turn
+/// and retiring while held (its lines awaited, never dropped after a patience); a rotation inside
+/// the held look (the look taken again, the renamed file history, the new one whole); a first open
+/// that finds nothing then a held active (the look taken when it is there, the start returning at
+/// once); two generations after a retired held active, in order; and a held active deleted with a
+/// generation after it, that generation and the next active read whole.
+#[cfg(unix)]
+#[test]
+fn a_held_active_at_its_end_is_followed_in_order_through_every_rotation() {
+    use super::DURING_LOOK;
+    let dir = tempfile::tempdir().unwrap();
+    let fixed = |d: &std::path::Path| FamilySpec::new(d, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let newest = |d: &std::path::Path| FamilySpec::new(d, r"plant_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let mut hooked: Vec<std::path::PathBuf> = Vec::new();
+
+    // Retired with no active after it, then the next active held in turn, retiring while held.
+    let d = dir.path().join("chain");
+    std::fs::create_dir_all(&d).unwrap();
+    write(&d.join("done_1.log"), 0..10);
+    write(&d.join("current.log"), 10..20);
+    mode(&d.join("current.log"), 0o200);
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 45, move || {
+        append(&p, 20..50);
+        std::fs::rename(&p, dd.join("done_2.log")).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        mode(&dd.join("done_2.log"), 0o644);
+        std::thread::sleep(Duration::from_millis(1000));
+        make_held(&p, 50..60);
+        std::thread::sleep(Duration::from_millis(1000));
+        std::fs::rename(&p, dd.join("done_3.log")).unwrap();
+        write(&p, 60..65);
+        std::thread::sleep(Duration::from_millis(2000));
+        mode(&dd.join("done_3.log"), 0o644);
+    });
+    assert_eq!(lines, (20..65).collect::<Vec<u32>>(), "the chain");
+
+    // A rotation inside the held look.
+    let d = dir.path().join("inside");
+    std::fs::create_dir_all(&d).unwrap();
+    write(&d.join("done_1.log"), 0..10);
+    write(&d.join("current.log"), 10..20);
+    mode(&d.join("current.log"), 0o200);
+    let (p, retired, mut done) = (d.join("current.log"), d.join("done_2.log"), false);
+    DURING_LOOK.lock().unwrap().push((
+        p.clone(),
+        Box::new(move || {
+            if !done {
+                done = true;
+                std::fs::rename(&p, &retired).unwrap();
+                make_held(&p, 0..0);
+            }
+        }),
+    ));
+    hooked.push(d.join("current.log"));
+    let p = d.join("current.log");
+    let (lines, _) = at_end(fixed(&d), 50, move || {
+        append(&p, 50..100);
+        mode(&p, 0o644);
+    });
+    assert_eq!(lines, (50..100).collect::<Vec<u32>>(), "a rotation inside the look");
+    DURING_LOOK.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+
+    // A first open that finds nothing, then a held active.
+    let d = dir.path().join("first");
+    std::fs::create_dir_all(&d).unwrap();
+    write(&d.join("done_1.log"), 0..10);
+    write(&d.join("current.log"), 10..20);
+    once(&d.join("current.log"), |p| {
+        std::fs::rename(p, p.with_file_name("done_2.log")).unwrap();
+        let p = p.to_path_buf();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            make_held(&p, 0..0);
+        });
+    });
+    hooked.push(d.join("current.log"));
+    let p = d.join("current.log");
+    let (lines, took) = at_end(fixed(&d), 50, move || {
+        while !p.exists() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        append(&p, 50..100);
+        mode(&p, 0o644);
+    });
+    assert!(took < Duration::from_secs(3), "the start took {took:?}");
+    assert_eq!(lines, (50..100).collect::<Vec<u32>>(), "not found, then held");
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+
+    // Two generations after a retired held active, in order.
+    let d = dir.path().join("order");
+    std::fs::create_dir_all(&d).unwrap();
+    write(&d.join("plant_1.log"), 0..10);
+    mode(&d.join("plant_1.log"), 0o200);
+    let dd = d.clone();
+    let (lines, _) = at_end(newest(&d), 80, move || {
+        append(&dd.join("plant_1.log"), 10..40);
+        write(&dd.join("plant_2.log"), 40..60);
+        write(&dd.join("plant_3.log"), 60..80);
+        write(&dd.join("plant_4.log"), 80..90);
+        std::thread::sleep(Duration::from_millis(1000));
+        mode(&dd.join("plant_1.log"), 0o644);
+    });
+    assert_eq!(lines, (10..90).collect::<Vec<u32>>(), "two generations in order");
+
+    // A held active deleted with a generation after it.
+    let d = dir.path().join("deleted");
+    std::fs::create_dir_all(&d).unwrap();
+    write(&d.join("plant_1.log"), 0..10);
+    mode(&d.join("plant_1.log"), 0o200);
+    let dd = d.clone();
+    let (lines, _) = at_end(newest(&d), 30, move || {
+        append(&dd.join("plant_1.log"), 10..40);
+        write(&dd.join("plant_2.log"), 40..60);
+        write(&dd.join("plant_3.log"), 60..70);
+        std::fs::remove_file(dd.join("plant_1.log")).unwrap();
+    });
+    assert_eq!(lines, (40..70).collect::<Vec<u32>>(), "deleted, a generation after it");
+}
