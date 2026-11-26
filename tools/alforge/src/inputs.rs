@@ -324,7 +324,7 @@ impl Workspace<'_> {
         // A package's folder without its test folders and without the packages a build uses
         // inside it, each of which has a key of its own.
         let mut skip: Vec<String> = left.clone();
-        skip.extend(dirs.iter().map(|d| format!("{}", prefix(d))));
+        skip.extend(dirs.iter().map(|d| prefix(d)));
         for m in &used {
             let own = prefix(&m.dir);
             let skip: Vec<String> = skip.iter().filter(|s| **s != own).cloned().collect();
