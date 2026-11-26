@@ -1,0 +1,26 @@
+{
+  "clause": "C-148",
+  "command": "cargo test -j 8 -p veredas-aranha --test read",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-j",
+    "8",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "read"
+  ],
+  "exitCode": 0,
+  "outputSha": "3c2deaccb20941d1f4b54941c8e08db9ed968717f5ca1bf28966b320070dc1a8",
+  "outputTail": "\nrunning 4 tests\ntest a_read_is_refused_where_it_cannot_be_heard_sent_or_answered ... ok\ntest a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked ... ok\ntest a_datagram_is_written_whole_and_read_back_only_when_whole ... ok\ntest the_bench_s_devices_report_each_other_by_their_port_data_read_through_the_listener ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.51s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.06s\n     Running tests/read.rs (target/debug/build/veredas-aranha/dac2399b65f5e262/out/read-dac2399b65f5e262)",
+  "ranAt": "2026-11-26T09:29:23.838Z",
+  "headCommit": "336359d78abee302ba7bfb76681a58cf90d3a0d1",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/read.rs",
+      "file": "crates/veredas-aranha/tests/read.rs",
+      "fileSha": "6deeb17c055769b734bdc5adf4bebecd9e293eabf2a05ff7ad677a0dd019b3ad"
+    }
+  ]
+}
