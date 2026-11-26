@@ -11,15 +11,15 @@
     "reflexo"
   ],
   "exitCode": 0,
-  "outputSha": "5bc8a5ced88189dea4f9ae1c593591e9bc36e9aae7ebdc217b3445385c018eae",
-  "outputTail": "        PASS [   0.026s] (39/51) veredas-maquinar::reflexo round_4::an_actuator_moves_every_coordinate_and_angle_evenly\n        PASS [   0.011s] (40/51) veredas-maquinar::reflexo round_4::every_point_key_refuses_a_point_not_there_and_one_of_the_other_kind\n        PASS [   0.032s] (41/51) veredas-maquinar::reflexo round_4::the_bench_binds_a_model_to_an_adapter_s_points\n        PASS [   1.012s] (42/51) veredas-maquinar::reflexo round_4::the_bench_steps_a_part_without_a_scene_every_4_ms\n        PASS [   0.007s] (43/51) veredas-maquinar::reflexo round_5::a_reversal_whose_zero_time_is_past_f64_goes_on_at_its_rate\n        PASS [   0.008s] (44/51) veredas-maquinar::reflexo round_5::an_actuator_and_a_sensor_model_count_the_scene_s_own_step\n        PASS [   0.019s] (45/51) veredas-maquinar::reflexo round_5::an_actuator_between_two_accepted_poses_reaches_its_extended_end\n        PASS [   0.010s] (46/51) veredas-maquinar::reflexo round_5::an_actuator_between_two_accepted_yaws_moves_its_mover\n        PASS [   0.007s] (47/51) veredas-maquinar::reflexo round_5::an_actuator_pose_whose_centre_a_scene_refuses_is_refused\n        PASS [   0.009s] (48/51) veredas-maquinar::reflexo round_5::an_actuator_whose_place_fails_writes_no_switch\n        PASS [   0.007s] (49/51) veredas-maquinar::reflexo round_5::every_integer_type_holds_to_both_ends_and_writes_nan_as_0\n        PASS [   0.014s] (50/51) veredas-maquinar::reflexo round_5::that_reversal_goes_on_10_000_steps_later\n        PASS [   4.585s] (51/51) veredas-maquinar::reflexo the_reference_s_conveyor_line_is_driven_by_a_modbus_client_as_a_controller_drives_it\n────────────\n     Summary [  10.550s] 51 tests run: 51 passed, 0 skipped",
-  "ranAt": "2026-11-25T10:26:31.744Z",
-  "headCommit": "1624c00c1897acd6bfb1a774e97af98fa811ba65",
+  "outputSha": "869e676bbc7aa4ea33f5a2852f5ac0b971ccd58e6f181441b4e5439124a4380d",
+  "outputTail": "        PASS [   0.008s] (47/59) veredas-maquinar::reflexo round_5::an_actuator_pose_whose_centre_a_scene_refuses_is_refused\n        PASS [   0.009s] (48/59) veredas-maquinar::reflexo round_5::an_actuator_whose_place_fails_writes_no_switch\n        PASS [   0.007s] (49/59) veredas-maquinar::reflexo round_5::every_integer_type_holds_to_both_ends_and_writes_nan_as_0\n        PASS [   0.013s] (50/59) veredas-maquinar::reflexo round_5::that_reversal_goes_on_10_000_steps_later\n        PASS [   6.592s] (51/59) veredas-maquinar::reflexo round_6::a_long_reversal_s_exact_zero_step_is_on_0\n        PASS [   0.008s] (52/59) veredas-maquinar::reflexo round_6::a_normally_closed_sensor_model_keeps_its_delays\n        PASS [   0.005s] (53/59) veredas-maquinar::reflexo round_6::a_ramp_at_a_10_ms_step_lands_at_its_step\n        PASS [   0.009s] (54/59) veredas-maquinar::reflexo round_6::a_refused_place_leaves_both_switches_as_they_were\n        PASS [   0.008s] (55/59) veredas-maquinar::reflexo round_6::a_sensor_model_at_a_100_ms_step_counts_its_delay\n        PASS [   0.009s] (56/59) veredas-maquinar::reflexo round_6::an_actuator_s_end_is_its_pose_to_the_bit\n        PASS [   0.009s] (57/59) veredas-maquinar::reflexo round_6::two_models_moving_one_belt_or_one_mover_are_refused\n        PASS [   0.009s] (58/59) veredas-maquinar::reflexo round_6::yaws_past_f64_s_difference_turn_evenly_not_at_once\n        PASS [   4.528s] (59/59) veredas-maquinar::reflexo the_reference_s_conveyor_line_is_driven_by_a_modbus_client_as_a_controller_drives_it\n────────────\n     Summary [  17.186s] 59 tests run: 59 passed, 0 skipped",
+  "ranAt": "2026-11-26T13:52:18.226Z",
+  "headCommit": "4aec49dabce2b7826c247b05c79cebb9e5c4afe1",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/reflexo.rs",
       "file": "crates/veredas-maquinar/tests/reflexo.rs",
-      "fileSha": "15d7cb2b1ca94e1777684e15a4baededfa9b98319f6403a4f9033dcf1934d433"
+      "fileSha": "6af9c0057145c88f0f5ee180a1434cbf325263bfd6d783307bd51c0b2e222b35"
     }
   ]
 }
