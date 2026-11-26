@@ -261,7 +261,7 @@ fn interpreted(total: u32) -> Interpreted<In, Out> {
 }
 
 // The plant: inputs drawn from the read's index, a divisor of zero on the reads it is told, and the time each read
-// takes, so scans run late, overrun and skip; every write logged by its time.
+// takes, so scans overrun and skip (each starting on its deadline); every write logged by its time.
 
 struct Plant {
     clock: VirtualClock,
@@ -306,8 +306,7 @@ fn seen<P: TaskProgram<Inputs = In, Outputs = Out>>(task: &mut Task<P>, plant: &
 #[test]
 fn an_interpreted_program_and_its_native_twin_write_the_same_outputs_at_the_same_times() {
     // 2000 scans of each, from a state of 100: on every scan the same cycle, time, length, time error, outputs and
-    // state, and the same writes reach the plant; scans run late, overrun and skip on the way, none past twice the
-    // period
+    // state, and the same writes reach the plant; scans overrun and skip on the way, none past twice the period
     let (mut native_clock, mut interp_clock) = (VirtualClock::new(), VirtualClock::new());
     let (mut native_plant, mut interp_plant) = (Plant::new(&native_clock, &[]), Plant::new(&interp_clock, &[]));
     let mut native = Task::new(config(), Acc { total: 100 }).unwrap();
@@ -916,4 +915,114 @@ fn after_a_program_fault_the_regions_hold_what_the_failing_scan_left() {
     assert_eq!(m.region(orcl_runtime::interpreted::STATE).unwrap(), &[Scalar::Int(Int::U32, total.into())][..]);
     assert_eq!(m.region(orcl_runtime::interpreted::OUTPUTS).unwrap()[0], Scalar::Int(Int::U32, sum.into()));
     assert_eq!((m.position(), m.steps()), (Some((FunctionId(0), BlockId(0), 4)), 4));
+}
+
+// The fourth refute round's tests: inputs of another type of the same length refused when made, a scan whose image
+// is refused running nothing of the program, the task's period in the scan region on skipping and late scans, and a
+// program error in a callee's statement named where it failed.
+
+#[test]
+fn inputs_of_another_type_of_the_same_length_are_refused_when_made() {
+    // a `Duration` (u64, u32) for inputs whose image writes two u32s
+    let state = [Scalar::Int(Int::U32, 0)];
+    let made = Interpreted::<In, Out>::new(code(), FunctionId(0), Regions { inputs: DURATION, ..REGIONS }, &state, SAFE);
+    assert_eq!(made.map(|_| ()), Err(MakeError::Inputs));
+}
+
+#[test]
+fn a_scan_whose_image_is_refused_runs_nothing_of_the_program() {
+    // the inputs refused on the second scan; the state as the first scan left it
+    let state = [Scalar::Int(Int::U32, 0)];
+    let p = Interpreted::<Wrong, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE).unwrap();
+    let mut task = Task::new(config(), p).unwrap();
+    let mut feed = Feed(vec![Wrong(In { x: 1, y: 1 }), Wrong(In { x: 13, y: 1 })]);
+    let mut clock = VirtualClock::new();
+    task.step(&mut feed, &mut clock);
+    let r = task.step(&mut feed, &mut clock);
+    assert!(matches!(r.state, RunState::Faulted { fault: Fault::Program { error: ScanError::Host(HostError::Slots) }, .. }));
+    let m = task.program().machine();
+    assert_eq!(m.region(orcl_runtime::interpreted::STATE).unwrap(), &[Scalar::Int(Int::U32, 1)][..], "inputs refused");
+
+    // the output image refused on the second scan; the state as the first scan left it
+    let p = Interpreted::<In, WrongOut>::new(code(), FunctionId(0), REGIONS, &state, WrongOut(SAFE)).unwrap();
+    let mut task = Task::new(config(), p).unwrap();
+    let mut feed = Feed(vec![In { x: 13, y: 1 }, In { x: 1, y: 1 }]);
+    let mut clock = VirtualClock::new();
+    task.step(&mut feed, &mut clock);
+    let r = task.step(&mut feed, &mut clock);
+    assert!(matches!(r.state, RunState::Faulted { fault: Fault::Program { error: ScanError::Host(HostError::Slots) }, .. }));
+    let m = task.program().machine();
+    assert_eq!(m.region(orcl_runtime::interpreted::STATE).unwrap(), &[Scalar::Int(Int::U32, 13)][..], "outputs refused");
+}
+
+#[test]
+fn the_scan_region_holds_the_task_s_period_on_skipping_scans() {
+    // the 2000 scans of the twin's plant, the scan region slot for slot after each
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, &[]);
+    let mut task = Task::new(config(), interpreted(100)).unwrap();
+    for k in 0..2_000 {
+        let r = task.step(&mut plant, &mut clock);
+        let scan = r.scan;
+        let region = task.program().machine().region(orcl_runtime::interpreted::SCAN).unwrap();
+        assert_eq!(region, &scan_region_slots(scan.now, config().period, scan.cycle)[..], "scan {k}");
+    }
+    assert!(task.stats().skipped > 100, "the run skips");
+}
+
+#[test]
+fn the_scan_region_holds_the_task_s_period_on_a_late_scan() {
+    // the first scan due at 0 and started at 15 ms, the scan region slot for slot
+    let mut clock = VirtualClock::new();
+    clock.advance(Duration::from_millis(15));
+    let mut task = Task::new(config(), interpreted(0)).unwrap();
+    let r = task.step(&mut Feed(vec![In { x: 1, y: 1 }]), &mut clock);
+    assert_eq!((r.scan.now, r.scan.cycle), (Duration::from_millis(15), 0));
+    let region = task.program().machine().region(orcl_runtime::interpreted::SCAN).unwrap();
+    assert_eq!(region, &scan_region_slots(Duration::from_millis(15), config().period, 0)[..]);
+}
+
+#[test]
+fn a_program_error_in_a_callee_s_statement_is_named_where_it_failed() {
+    // the entry calls function 1, whose division by zero is its first statement
+    let local = |ty| LocalDecl { ty, name: None };
+    let entry = Function {
+        name: "scan".into(),
+        params: 4,
+        locals: vec![local(UNIT), local(TypeId(9)), local(TypeId(10)), local(TypeId(11)), local(TypeId(12)), local(U32)],
+        blocks: vec![
+            Block {
+                statements: vec![],
+                terminator: Terminator::Call {
+                    callee: orcl_interp::Callee::Function(FunctionId(1)),
+                    args: vec![copy(deref(3, &[0])), copy(deref(3, &[1]))],
+                    dest: Place::local(5),
+                    next: BlockId(1),
+                    at: at(2),
+                },
+            },
+            Block { statements: vec![], terminator: Terminator::Return { at: at(3) } },
+        ],
+    };
+    let div = Function {
+        name: "div".into(),
+        params: 2,
+        locals: vec![local(U32), local(U32), local(U32)],
+        blocks: vec![Block {
+            statements: vec![assign(Place::local(0), Value::Binary(BinOp::Div, copy(Place::local(1)), copy(Place::local(2))), 7)],
+            terminator: Terminator::Return { at: at(8) },
+        }],
+    };
+    let program = Code { types: types(&[]), functions: vec![entry, div], files: vec!["div.rs".into()] };
+    let p = Interpreted::<In, Out>::new(program, FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE).unwrap();
+    let mut task = Task::new(config(), p).unwrap();
+    let r = task.step(&mut Feed(vec![In { x: 1, y: 0 }]), &mut VirtualClock::new());
+    let error = ProgramError {
+        function: FunctionId(1),
+        block: BlockId(0),
+        statement: Some(0),
+        at: at(7),
+        kind: ErrorKind::Check(Check::DivisionByZero),
+    };
+    assert_eq!(r.state, RunState::Faulted { at: Duration::ZERO, fault: Fault::Program { error: ScanError::Program(error) } });
 }
