@@ -344,3 +344,36 @@ fn a_sheet_renamed_or_deleted_carries_its_tables() {
     model.delete_sheet(1).unwrap();
     assert!(model.workbook.tables.is_empty());
 }
+
+/// Veredas fork change 39: the model finds a sheet by its own spelling first, then in any case,
+/// as the parser does, so a name local to `Maß` reads `Maß` and not `MASS`, the sheet its upper
+/// case folds to.
+#[test]
+fn the_model_finds_a_sheet_by_its_own_spelling_first() {
+    let mut model = new_empty_model();
+    model.rename_sheet("Sheet1", "MASS").unwrap();
+    // a second sheet whose name folds to the first's (a file may hold such a pair; the engine's
+    // own API refuses it)
+    let mut sheet = model.workbook.worksheets[0].clone();
+    sheet.name = "Maß".to_string();
+    sheet.sheet_id = 2;
+    model.workbook.worksheets.push(sheet);
+    model.workbook.defined_names.push(crate::types::DefinedName {
+        name: "N".to_string(),
+        formula: "Maß!$A$1".to_string(),
+        sheet_id: Some(2),
+        hidden: false,
+        comment: String::new(),
+    });
+    model.reset_parsed_structures();
+    model.set_user_input(0, 1, 1, "1".to_string()).unwrap();
+    model.set_user_input(1, 1, 1, "5".to_string()).unwrap();
+    assert_eq!(model.get_sheet_index_by_name("Maß"), Some(1));
+    assert_eq!(model.get_sheet_index_by_name("MASS"), Some(0));
+    assert_eq!(model.get_sheet_index_by_name("maß"), Some(0));
+    model.set_user_input(0, 2, 1, "=Maß!N*2".to_string()).unwrap();
+    model.set_user_input(0, 3, 1, "=Maß!A1*3".to_string()).unwrap();
+    model.evaluate();
+    assert_eq!(model.get_formatted_cell_value(0, 2, 1).unwrap(), "10");
+    assert_eq!(model.get_formatted_cell_value(0, 3, 1).unwrap(), "15");
+}

@@ -1144,9 +1144,11 @@ fn move_view_tag(text: &str, own: &[Shift]) -> String {
     text
 }
 
-/// The moves of the sheet named `sheet` (a `dataRef`'s), in any case.
+/// The moves of the sheet a `dataRef` names, found as the engine finds a sheet: its own spelling,
+/// then upper case (the round at fd142cb0: `MASS` beside `Maß` is `MASS`).
 fn shifts_of(job: &SheetJob, sheet: &str) -> Vec<Shift> {
-    job.shifts.iter().filter(|(s, _)| s.to_uppercase() == sheet.to_uppercase()).map(|(_, s)| *s).collect()
+    let own = super::refs::sheet_position(sheet, job.order).and_then(|i| job.order.get(i)).map_or(sheet, String::as_str);
+    job.shifts.iter().filter(|(s, _)| s == own).map(|(_, s)| *s).collect()
 }
 
 /// What of the tail a move would delete that nothing can drop in its place: a scenario's changing

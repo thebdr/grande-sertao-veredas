@@ -2154,13 +2154,15 @@ impl<'a> Model<'a> {
     }
 
     pub(crate) fn get_sheet_index_by_name(&self, name: &str) -> Option<u32> {
+        // the sheet of that very spelling first, then one in any case, as the parser finds a sheet
+        // (Veredas fork changes 37 and 39: `Maß` beside `MASS` is `Maß`)
         let worksheets = &self.workbook.worksheets;
-        for (index, worksheet) in worksheets.iter().enumerate() {
-            if worksheet.get_name().to_uppercase() == name.to_uppercase() {
-                return Some(index as u32);
-            }
-        }
-        None
+        let upper = name.to_uppercase();
+        worksheets
+            .iter()
+            .position(|w| w.get_name() == name)
+            .or_else(|| worksheets.iter().position(|w| w.get_name().to_uppercase() == upper))
+            .map(|i| i as u32)
     }
 
     /// Returns a model from an internal binary representation of a workbook

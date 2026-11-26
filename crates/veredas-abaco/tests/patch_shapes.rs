@@ -3107,3 +3107,113 @@ fn two_sheets_the_engine_tells_apart_each_take_their_edit() {
         assert_eq!(element(&second, "B1"), Some(r#"<c r="B1"><f>A1*2</f><v>14</v></c>"#), "{second}");
     }
 }
+
+// ---- refute round 19 --------------------------------------------------------------------------
+
+#[test]
+fn a_local_name_set_over_the_file_s_own_is_written() {
+    // its scope compared one way on both sides (round 18 left one side in lower case and one in
+    // upper: the name was reported applied and never written)
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("local.xlsx");
+    let s1 = worksheet(r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>50</v></c></row>"#, "");
+    let t = worksheet(r#"<row r="1"><c r="A1"><f>Rate*2</f><v>2</v></c></row>"#, "");
+    let names = r#"<definedName name="Other" localSheetId="0">Sheet1!$A$1</definedName><definedName name="Rate" localSheetId="1">Sheet1!$A$1</definedName>"#;
+    plain_book(&src, &[("Sheet1", s1), ("T", t)], names, &[]);
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        for scope in ["T", "t"] {
+            let dst = dir.path().join("rate.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            let report = patch(&src, &dst, &[Edit::SetName { name: "Rate".into(), formula: "=Sheet1!$B$1".into(), scope: Some(scope.into()) }], &options).unwrap();
+            assert_eq!(report.outcomes[0].status, Status::Applied, "{scope}");
+            let book = part(&dst, "xl/workbook.xml");
+            assert!(book.contains(r#"<definedName name="Rate" localSheetId="1">Sheet1!$B$1</definedName>"#), "{scope}: {book}");
+            assert!(book.contains(r#"<definedName name="Other" localSheetId="0">Sheet1!$A$1</definedName>"#), "{book}");
+            assert_eq!(element(&part(&dst, "xl/worksheets/sheet2.xml"), "A1"), Some(r#"<c r="A1"><f>Rate*2</f><v>100</v></c>"#));
+            assert_eq!(read_back(&dst, "T", "A1"), Value::Number(100.0));
+        }
+        // a local name no cell reads, set: written too
+        let dst = dir.path().join("other.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[Edit::SetName { name: "Other".into(), formula: "=Sheet1!$B$1".into(), scope: Some("Sheet1".into()) }], &options).unwrap();
+        assert!(part(&dst, "xl/workbook.xml").contains(r#"<definedName name="Other" localSheetId="0">Sheet1!$B$1</definedName>"#));
+    }
+}
+
+#[test]
+fn names_local_to_two_sheets_the_engine_tells_apart_are_each_their_own() {
+    // `Kx` with the Kelvin sign and `kx`, each with a local `N`: set and deleted on one sheet, the
+    // other's kept byte for byte
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("pair.xlsx");
+    let data = worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row>"#, "");
+    let kelvin = "<definedName name=\"N\" localSheetId=\"0\">\u{212A}x!$A$1</definedName>";
+    let names = format!("{kelvin}<definedName name=\"N\" localSheetId=\"1\">kx!$A$1</definedName>");
+    plain_book(&src, &[("\u{212A}x", data.clone()), ("kx", data)], &names, &[]);
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        let dst = dir.path().join("deleted.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[Edit::DeleteName { name: "N".into(), scope: Some("kx".into()) }], &options).unwrap();
+        let book = part(&dst, "xl/workbook.xml");
+        assert!(book.contains(kelvin) && book.matches("<definedName ").count() == 1, "{book}");
+        let dst = dir.path().join("set.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[Edit::SetName { name: "N".into(), formula: "=kx!$A$2".into(), scope: Some("kx".into()) }], &options).unwrap();
+        let book = part(&dst, "xl/workbook.xml");
+        assert!(book.contains(kelvin) && book.contains("<definedName name=\"N\" localSheetId=\"1\">kx!$A$2</definedName>"), "{book}");
+        let dst = dir.path().join("kelvin.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[Edit::DeleteName { name: "N".into(), scope: Some("\u{212A}x".into()) }], &options).unwrap();
+        let book = part(&dst, "xl/workbook.xml");
+        assert!(!book.contains(kelvin) && book.contains("<definedName name=\"N\" localSheetId=\"1\">kx!$A$1</definedName>"), "{book}");
+    }
+}
+
+#[test]
+fn of_two_sheets_folding_to_one_each_is_found_by_its_own_spelling() {
+    // `MASS` and `Maß` (whose upper case is `MASS`): a consolidation's source on `MASS` moves with
+    // `MASS` alone, and a name local to `Maß` reads `Maß` (fork change 39)
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("mass.xlsx");
+    let cells = |v: i32| worksheet(&format!(r#"<row r="1"><c r="A1"><v>{v}</v></c></row><row r="5"><c r="A5"><v>3</v></c></row><row r="6"><c r="A6"><v>4</v></c></row>"#), "");
+    let s = worksheet(
+        r#"<row r="1"><c r="A1"><f>MASS!A5</f><v>3</v></c><c r="B1"><f>Maß!N*2</f><v>2</v></c></row>"#,
+        r#"<dataConsolidate><dataRefs count="1"><dataRef ref="A5:A6" sheet="MASS"/></dataRefs></dataConsolidate>"#,
+    );
+    plain_book(&src, &[("MASS", cells(7)), ("Maß", cells(1)), ("S", s)], "<definedName name=\"N\" localSheetId=\"1\">Maß!$A$1</definedName>", &[]);
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        // a row on `Maß` moves nothing of `MASS`'s
+        let dst = dir.path().join("mass-rows.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[rows("Maß", 1, 1)], &options).unwrap();
+        let sheet = part(&dst, "xl/worksheets/sheet3.xml");
+        assert!(sheet.contains(r#"<dataRef ref="A5:A6" sheet="MASS"/>"#), "{sheet}");
+        // a row on `MASS` moves its source and the formula reading it
+        let dst = dir.path().join("upper-rows.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[rows("MASS", 1, 1)], &options).unwrap();
+        let sheet = part(&dst, "xl/worksheets/sheet3.xml");
+        assert!(sheet.contains(r#"<dataRef ref="A6:A7" sheet="MASS"/>"#) && sheet.contains("<f>MASS!A6</f>"), "{sheet}");
+        // a value on `Maß` moves what its local name reads
+        let dst = dir.path().join("value.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[value("Maß", "A1", serde_json::json!(5))], &options).unwrap();
+        assert_eq!(element(&part(&dst, "xl/worksheets/sheet3.xml"), "B1"), Some(r#"<c r="B1"><f>Maß!N*2</f><v>10</v></c>"#));
+        assert_eq!(read_back(&dst, "S", "B1"), Value::Number(10.0));
+    }
+}
+
+#[test]
+fn a_name_set_in_a_scope_spelled_in_another_case_calls_that_sheet_s_lambda() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("lambda.xlsx");
+    let names = r#"<definedName name="Sq" localSheetId="0">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*_xlpm.x)</definedName>"#;
+    plain_book(&src, &[("Área", worksheet(r#"<row r="1"><c r="A1"><v>3</v></c></row>"#, ""))], names, &[]);
+    for scope in ["Área", "área"] {
+        let dst = dir.path().join("set.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        let report = patch(&src, &dst, &[Edit::SetName { name: "L".into(), formula: "=Sq(4)".into(), scope: Some(scope.into()) }], &verified()).unwrap();
+        assert_eq!(report.outcomes[0].status, Status::Applied, "{scope}");
+        assert!(part(&dst, "xl/workbook.xml").contains(r#"<definedName name="L" localSheetId="0">"#), "{scope}");
+    }
+}

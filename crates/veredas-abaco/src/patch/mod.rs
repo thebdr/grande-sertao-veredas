@@ -465,26 +465,23 @@ fn resolve(names: &[Name], token: &Token, sheet: Option<&str>) -> Option<usize> 
     // a name by the engine's fold (`Kx` with the Kelvin sign is `kx`), the first of two the file
     // holds, as the engine reads it; a sheet by its own
     let key = name_key(token.text);
-    // a sheet by the engine's fold, upper case (the round at 340e3e2e: one fold for every sheet key)
-    let same_sheet = |a: &str, b: &str| a == b || a.to_uppercase() == b.to_uppercase();
+    // a sheet as the engine finds one: its own spelling, then upper case (the rounds at 340e3e2e
+    // and fd142cb0)
     let scope = token.sheet.as_deref().or(sheet);
-    scope
-        .and_then(|sc| {
-            names.iter().position(|n| name_key(&n.name) == key && n.scope.as_deref().is_some_and(|ns| same_sheet(ns, sc)))
-        })
+    let local = |same: &dyn Fn(&str, &str) -> bool| {
+        scope.and_then(|sc| names.iter().position(|n| name_key(&n.name) == key && n.scope.as_deref().is_some_and(|ns| same(ns, sc))))
+    };
+    local(&|a, b| a == b)
+        .or_else(|| local(&|a, b| a.to_uppercase() == b.to_uppercase()))
         .or_else(|| names.iter().position(|n| name_key(&n.name) == key && n.scope.is_none()))
 }
 
 /// Deletes every name of `scope` the engine reads as `name` (a file may hold two that fold to one,
 /// `Kx` with the Kelvin sign and `kx`; the engine reads the first and deletes one at a time).
 fn delete_every_name(wb: &mut Workbook, name: &str, scope: Option<&str>) -> Result<(), String> {
+    // `scope` is a sheet's own name (an edit's, resolved), as every name's scope is
     let key = name_key(name);
-    let lower = scope.map(str::to_lowercase);
-    let count = wb
-        .names()
-        .iter()
-        .filter(|n| name_key(&n.name) == key && n.scope.as_deref().map(str::to_lowercase) == lower)
-        .count();
+    let count = wb.names().iter().filter(|n| name_key(&n.name) == key && n.scope.as_deref() == scope).count();
     for _ in 0..count {
         wb.delete_name(name, scope).map_err(|e| e.to_string())?;
     }
@@ -1035,7 +1032,7 @@ fn calls_unknown(wb: &Workbook, sheet: u32, a: Addr, formula: &str, scope: Optio
         .into_iter()
         .filter(|n| match (&n.scope, scope) {
             (None, _) => true,
-            (Some(local), Some(here)) => local.eq_ignore_ascii_case(here),
+            (Some(local), Some(here)) => local == here,
             (Some(_), None) => false,
         })
         .map(|n| n.name)
@@ -1628,6 +1625,12 @@ pub fn patch(
                 formula,
                 scope,
             } => {
+                // the scope as the sheet spells its name, found as the engine finds a sheet: every
+                // scope below is compared exactly (the round at fd142cb0)
+                let scope = match scope {
+                    Some(s) => Some(wb.sheet_index(s).and_then(|i| wb.sheet_name(i)).map_err(|e| fail(e.to_string()))?),
+                    None => None,
+                };
                 let body = formula.trim().trim_start_matches('=');
                 let at = scope.as_deref().and_then(|sc| wb.sheet_index(sc).ok()).unwrap_or(0);
                 if let Some(error) = engine_only_error(body) {
@@ -1647,27 +1650,27 @@ pub fn patch(
                 }
                 // the engine stores user spelling; give it that
                 let user = strip_file_prefixes(body);
-                let exists = wb.names().iter().any(|n| {
-                    name_key(&n.name) == name_key(name)
-                        && n.scope.as_deref().map(str::to_lowercase)
-                            == scope.as_deref().map(str::to_lowercase)
-                });
+                let exists = wb.names().iter().any(|n| name_key(&n.name) == name_key(name) && n.scope == scope);
                 if exists {
                     delete_every_name(&mut wb, name, scope.as_deref()).map_err(fail)?;
                 }
                 wb.set_name(name, &user, scope.as_deref())
                     .map_err(|e| fail(e.to_string()))?;
-                let key = (name_key(name), scope.as_ref().map(|s| s.to_uppercase()));
+                let key = (name_key(name), scope.clone());
                 deleted_names.retain(|k| *k != key);
                 set_names.push(key);
                 names_touched = true;
             }
             Edit::DeleteName { name, scope } => {
+                let scope = match scope {
+                    Some(s) => Some(wb.sheet_index(s).and_then(|i| wb.sheet_name(i)).map_err(|e| fail(e.to_string()))?),
+                    None => None,
+                };
                 wb.delete_name(name, scope.as_deref())
                     .map_err(|e| fail(e.to_string()))?;
                 // the file's other names the engine reads as this one go with it
                 delete_every_name(&mut wb, name, scope.as_deref()).map_err(fail)?;
-                let key = (name_key(name), scope.as_ref().map(|s| s.to_uppercase()));
+                let key = (name_key(name), scope.clone());
                 set_names.retain(|k| *k != key);
                 deleted_names.push(key);
                 names_touched = true;
@@ -1818,7 +1821,7 @@ pub fn patch(
         if w.content.is_some()
             && let Some((row, col)) = map_pos(&w.sheet, w.after, w.row, w.col)
         {
-            last_content.insert((w.sheet.to_uppercase(), row, col), i);
+            last_content.insert((w.sheet.clone(), row, col), i);
         }
     }
     for (index, w) in writes.iter().enumerate() {
@@ -1831,7 +1834,7 @@ pub fn patch(
             .entry((row, col))
             .or_default();
         entry.style.extend(w.style.iter().copied());
-        let last = last_content.get(&(w.sheet.to_uppercase(), row, col)) == Some(&index);
+        let last = last_content.get(&(w.sheet.clone(), row, col)) == Some(&index);
         if let Some(c) = w.content.as_ref().filter(|_| last) {
             let s = wb
                 .sheet_index(&w.sheet)
@@ -1918,7 +1921,7 @@ pub fn patch(
                 .into_iter()
                 .map(|(name, _, cells)| {
                     let at = cells.keys().filter_map(|&(r, c)| map_pos(&name, 0, r, c)).collect();
-                    (name.to_uppercase(), at)
+                    (name.clone(), at)
                 })
                 .collect(),
         )
@@ -1926,7 +1929,7 @@ pub fn patch(
         None
     };
     let holds_cell = |name: &str, at: (i32, i32)| {
-        in_file.as_ref().is_none_or(|f| f.get(&name.to_uppercase()).is_some_and(|s| s.contains(&at)))
+        in_file.as_ref().is_none_or(|f| f.get(name).is_some_and(|s| s.contains(&at)))
     };
     // exempt: unstable before the edits and, where it is now, after them
     let unstable = |i: usize, orig: &(i32, i32), now: (i32, i32)| {
@@ -2809,21 +2812,18 @@ fn rewrite_defined_names(
                 .is_some_and(|e| !e.is_worksheet());
             // still in the model? (a deleted name goes; a built-in one the engine may not hold,
             // `_xlnm._FilterDatabase`, stays unless an edit deleted it)
-            let key = (name_key(&name), scope.as_ref().map(|s| s.to_uppercase()));
+            // a scope is a sheet's own name on both sides, compared exactly (the round at fd142cb0)
+            let key = (name_key(&name), scope.clone());
             let in_model = (on_a_chart_sheet
                 || model_names.iter().any(|n| {
                 name_key(&n.name) == name_key(&name)
-                    && n.scope.as_deref().map(str::to_lowercase)
-                        == scope.as_deref().map(str::to_lowercase)
+                    && n.scope == scope
             }) || name.starts_with("_xlnm."))
                 && !deleted_names.contains(&key);
             if !in_model {
                 continue;
             }
-            seen.push((
-                name_key(&name),
-                scope.as_ref().map(|s| s.to_uppercase()),
-            ));
+            seen.push((name_key(&name), scope.clone()));
             let element = &inner[a..b];
             let body_raw = if t.self_closing {
                 ""
@@ -2839,14 +2839,11 @@ fn rewrite_defined_names(
                 }
             }
             // a name the edits set: its new formula, from the model
-            let key = (
-                name_key(&name),
-                scope.as_ref().map(|s| s.to_uppercase()),
-            );
+            let key = (name_key(&name), scope.clone());
             if set_names.contains(&key)
                 && let Some(m) = model_names.iter().find(|n| {
                     name_key(&n.name) == name_key(&name)
-                        && n.scope.as_deref().map(str::to_lowercase) == key.1
+                        && n.scope == key.1
                 }) {
                     let user = strip_file_prefixes(&text);
                     // the engine reads `DAYS(…)` and `_xlfn.DAYS(…)` alike; Excel does not
@@ -2873,10 +2870,7 @@ fn rewrite_defined_names(
     }
     // names only the model has: added by the edits
     for n in &model_names {
-        let key = (
-            name_key(&n.name),
-            n.scope.as_ref().map(|s| s.to_uppercase()),
-        );
+        let key = (name_key(&n.name), n.scope.clone());
         if seen.contains(&key) {
             continue;
         }
@@ -2952,7 +2946,7 @@ fn move_model_names(wb: &mut Workbook, sheet: &str, shift: Shift) -> Result<(), 
         // of two names of a scope that fold to one, the engine reads, sets and deletes the first
         // alone (fork change 34): the second moves in the file's text and nowhere else, since
         // setting it would set the first
-        let key = (name_key(&n.name), n.scope.as_ref().map(|s| s.to_uppercase()));
+        let key = (name_key(&n.name), n.scope.clone());
         if moved_keys.contains(&key) {
             continue;
         }
@@ -3047,11 +3041,11 @@ fn verify(
     // engine recomputes the rest, so its reading of the file cannot show a stale cache)
     let caches: std::collections::HashMap<(String, i32, i32), Value> = cached::read(dest)?
         .into_iter()
-        .map(|((s, r, c), cell)| ((s.to_uppercase(), r, c), cell.value))
+        .map(|((s, r, c), cell)| ((s, r, c), cell.value))
         .collect();
     let mut stale: Vec<String> = Vec::new();
     for (sheet, row, col, want) in expected {
-        let cached = caches.get(&(sheet.to_uppercase(), *row, *col)).cloned().unwrap_or(Value::Empty);
+        let cached = caches.get(&(sheet.clone(), *row, *col)).cloned().unwrap_or(Value::Empty);
         if !cache_holds(&cached, want) {
             stale.push(format!("{sheet}!{}: cached {cached:?}, the engine {want:?}", Addr::new(*row, *col)));
         }
