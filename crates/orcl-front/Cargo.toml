@@ -1,0 +1,37 @@
+[package]
+name = "orcl-front"
+# ORCL's own SemVer, as orcl-std's (docs/orcl/README.md).
+version = "2.0.0-alpha.1"
+edition.workspace = true
+publish = false
+license = "MIT OR Apache-2.0"
+description = "ORCL's front end: on stable a shell naming its nightly; on that nightly the compiler of a program's crates that writes the program orcl-interp runs"
+
+# On stable the crate is a shell: the library names the pinned nightly and holds nothing else, so the workspace
+# builds and tests on stable (docs/questions.md Q221). The driver needs `rustc_private`, which only the nightly in
+# `rust-toolchain` builds: `cargo +nightly-2026-11-21 build -p orcl-front --features driver`.
+[features]
+driver = ["dep:orcl-interp", "dep:orcl-std"]
+
+# The program file's model and codec, and the language's version a header names (law L5: orcl-* use each other
+# and core); neither reaches a stable build.
+[dependencies]
+orcl-interp = { path = "../orcl-interp", optional = true }
+orcl-std = { path = "../orcl-std", optional = true }
+
+# The conformance suite runs each program natively and lowered on the engine of a scan.
+[dev-dependencies]
+orcl-interp = { path = "../orcl-interp" }
+orcl-runtime = { path = "../orcl-runtime" }
+orcl-std = { path = "../orcl-std" }
+
+[[bin]]
+name = "orcl-front-driver"
+path = "src/bin/orcl-front-driver.rs"
+required-features = ["driver"]
+
+# The conformance suite and the refusals, run by the nightly alone:
+# `cargo +nightly-2026-11-21 test -p orcl-front --features driver --test lowering`.
+[[test]]
+name = "lowering"
+required-features = ["driver"]
