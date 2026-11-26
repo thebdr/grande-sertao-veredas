@@ -501,11 +501,26 @@ fn a_scan_that_cannot_be_written_is_refused_before_anything_is_opened_or_replace
     refused(&kept, "kept.pcap: ");
     assert_eq!((std::fs::read(&kept).unwrap(), std::fs::read(&capture).unwrap()), (b"the baseline".to_vec(), b"its frames".to_vec()));
     std::fs::set_permissions(&capture, std::fs::Permissions::from_mode(0o644)).unwrap();
-    // A path ending in a separator names a folder: refused, the scan and capture there unchanged.
-    let mut slashed = kept.clone().into_os_string();
-    slashed.push("/");
-    refused(Path::new(&slashed), "a scan file is a file, and this path names a folder");
-    assert_eq!((std::fs::read(&kept).unwrap(), std::fs::read(&capture).unwrap()), (b"the baseline".to_vec(), b"its frames".to_vec()));
+    // A path ending in a separator, or in `.` (which `Path` reads as the scan's own name), names a
+    // folder: refused, the scan and capture there unchanged.
+    for tail in ["/", "/.", "//."] {
+        let mut slashed = kept.clone().into_os_string();
+        slashed.push(tail);
+        refused(Path::new(&slashed), "a scan file is a file, and this path names a folder");
+        assert_eq!((std::fs::read(&kept).unwrap(), std::fs::read(&capture).unwrap()), (b"the baseline".to_vec(), b"its frames".to_vec()), "{tail}");
+    }
+    let mut dotted = d.join("n.toml").into_os_string();
+    dotted.push("/.");
+    refused(Path::new(&dotted), "a scan file is a file, and this path names a folder");
+    // A link where the scan or the capture would be, even to a file: no file of its own, refused,
+    // the link and its file as they were.
+    std::fs::write(d.join("real.txt"), "real").unwrap();
+    std::os::unix::fs::symlink(d.join("real.txt"), d.join("linked.toml")).unwrap();
+    refused(&d.join("linked.toml"), "linked.toml: there is something there that is no file");
+    std::os::unix::fs::symlink(d.join("real.txt"), d.join("viacap.pcap")).unwrap();
+    refused(&d.join("viacap.toml"), "viacap.pcap: there is something there that is no file");
+    assert!(std::fs::symlink_metadata(d.join("linked.toml")).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(d.join("real.txt")).unwrap(), b"real");
     // A folder that is not there, or one that may not be written in: refused before anything.
     refused(&d.join("nowhere").join("s.toml"), "nowhere: ");
     let shut = d.join("shut");
@@ -580,6 +595,10 @@ fn a_scan_with_the_ports_read_draws_the_devices_own_word_on_their_cables() {
         let listening = started(&["listen", "a0", "a1", "--for", "3", "--identify", "--ports", "--out", seg.to_str().unwrap()]);
         let run = bench::start("executable-segment", SEGMENT);
         let out = listening.wait_with_output().unwrap();
+        // Named the other way round: each device read on the interface it was heard on that holds
+        // an address on its network (a0), never on a1, named first, which holds none.
+        let reversed_path = d.join("reversed.toml");
+        let reversed = aranha(&["listen", "a1", "a0", "--for", "3", "--identify", "--ports", "--out", reversed_path.to_str().unwrap()]);
         let (status, o, e) = bench::end(run);
         assert!(status.success(), "the bench: {o}\n{e}");
         assert_eq!(out.status.code(), Some(0), "{}\n{}", text(&out.stdout), text(&out.stderr));
@@ -593,6 +612,11 @@ fn a_scan_with_the_ports_read_draws_the_devices_own_word_on_their_cables() {
         let end = |m: Mac, p: &str| End { node: veredas_aranha::topology::device_id(m), port: p.into() };
         let links: Vec<(End, End, Confidence)> = scan.topology.links.iter().map(|l| (l.a.clone(), l.b.clone(), l.confidence)).collect();
         assert_eq!(links, [(end(FIRST, "port-001"), end(SECOND, "port-002"), Confidence::Confirmed)], "{:#?}", scan.topology);
+        assert_eq!(reversed.status.code(), Some(0), "{}\n{}", text(&reversed.stdout), text(&reversed.stderr));
+        assert_eq!(text(&reversed.stderr), "a1: 3 device(s) answered the Identify\na0: 3 device(s) answered the Identify\n");
+        let scan = Scan::read_file(&reversed_path).unwrap();
+        let again: Vec<(End, End, Confidence)> = scan.topology.links.iter().map(|l| (l.a.clone(), l.b.clone(), l.confidence)).collect();
+        assert_eq!(again, links, "{:#?}", scan.topology);
     });
 }
 
@@ -686,5 +710,136 @@ fn a_device_whose_walk_is_cut_keeps_what_was_read_of_it() {
         assert_eq!(Scan::read_file(&mute).unwrap().devices.len(), 1);
         let again = Scan::read_file(&shut).unwrap();
         assert!(again.topology.links.iter().any(|l| l.confidence == Confidence::Reported), "{:?}", again.topology.links);
+    });
+}
+
+/// The writing's third round: a write failing past the checks, something other than a file made
+/// at either place while it listens, the scan's place refusing its rename after the capture is in
+/// place, names of the run's own a user takes while it listens, one interface under two names, a
+/// scan file's name of the longest a system takes.
+#[cfg(target_os = "linux")]
+#[test]
+fn places_taken_or_failing_while_it_listens_leave_everything_as_it_was() {
+    use std::os::unix::fs::FileTypeExt;
+    use veredas_aranha::netns;
+    const HERE: Mac = Mac([0x02, 0x00, 0x5E, 0xB3, 0x00, 0xA0]);
+    let bin = env!("CARGO_BIN_EXE_veredas-aranha");
+    let d = dir("places");
+    let pairs = [("a0", "b0")];
+    netns::isolated("places_taken_or_failing_while_it_listens_leave_everything_as_it_was", &pairs, || {
+        bench::pin(&[("a0", HERE)], &pairs);
+        // The run's own files beside a scan named `stem`, those a user made aside.
+        let ours = |stem: &str, users: &[String]| -> Vec<String> {
+            std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(&format!(".{stem}.")) && !users.contains(n)).collect()
+        };
+        let baseline = |stem: &str| {
+            let (scan, capture) = (d.join(format!("{stem}.toml")), d.join(format!("{stem}.pcap")));
+            std::fs::write(&scan, "the baseline").unwrap();
+            std::fs::write(&capture, "its frames").unwrap();
+            (scan, capture)
+        };
+        let unchanged = |scan: &Path, capture: &Path| (std::fs::read(scan).unwrap(), std::fs::read(capture).unwrap()) == (b"the baseline".to_vec(), b"its frames".to_vec());
+
+        // A write failing past the checks (no file may grow past nothing, as on a full disk): refused,
+        // the scan and capture there as they were, or none where there was none, nothing of the run
+        // left behind.
+        let (scan, capture) = baseline("full");
+        let fail = |out: &Path| Command::new("sh").args(["-c", "trap '' XFSZ; ulimit -f 0; exec \"$0\" listen a0 --for 1 --out \"$1\"", bin]).arg(out).output().unwrap();
+        let o = fail(&scan);
+        assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
+        assert!(text(&o.stderr).starts_with(&format!("veredas-aranha: {}: ", scan.display())) && text(&o.stderr).contains("File too large"), "{}", text(&o.stderr));
+        assert!(unchanged(&scan, &capture));
+        assert_eq!(ours("full", &[]), Vec::<String>::new());
+        let o = fail(&d.join("none.toml"));
+        assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
+        assert!(!d.join("none.toml").exists() && !d.join("none.pcap").exists());
+        assert_eq!(ours("none", &[]), Vec::<String>::new());
+
+        // Something other than a file made at either place while it listens (a pipe, a link to a
+        // folder, a link to nothing): refused, it where it was, the other place as it was.
+        std::fs::create_dir_all(d.join("a-folder")).unwrap();
+        for (stem, at_scan, what) in [("pipe", false, "pipe"), ("tofolder", true, "folder link"), ("dangling", false, "dangling link")] {
+            let (scan, capture) = baseline(stem);
+            let at = if at_scan { scan.clone() } else { capture.clone() };
+            let listening = started(&["listen", "a0", "--for", "2", "--out", scan.to_str().unwrap()]);
+            std::fs::remove_file(&at).unwrap();
+            match what {
+                "pipe" => assert!(Command::new("mkfifo").arg(&at).status().unwrap().success()),
+                "folder link" => std::os::unix::fs::symlink(d.join("a-folder"), &at).unwrap(),
+                _ => std::os::unix::fs::symlink(d.join("nothing-there"), &at).unwrap(),
+            }
+            let o = listening.wait_with_output().unwrap();
+            assert_eq!(o.status.code(), Some(2), "{what}: {}", text(&o.stderr));
+            assert!(text(&o.stderr).ends_with(&format!("{}: there is something there that is no file\n", at.display())), "{what}: {}", text(&o.stderr));
+            let kind = std::fs::symlink_metadata(&at).unwrap().file_type();
+            assert!(if what == "pipe" { kind.is_fifo() } else { kind.is_symlink() }, "{what}");
+            let other = if at_scan { &capture } else { &scan };
+            assert_eq!(std::fs::read(other).unwrap(), if at_scan { b"its frames".to_vec() } else { b"the baseline".to_vec() }, "{what}");
+            assert_eq!(ours(stem, &[]), Vec::<String>::new(), "{what}");
+        }
+
+        // The scan's place refusing its rename once the capture is in place (a mount point, in a
+        // mount namespace of the run's own): refused, the capture there back byte for byte, the scan
+        // there as it was, nothing of the run left.
+        let (scan, capture) = baseline("busy");
+        std::fs::create_dir_all(d.join("elsewhere")).unwrap();
+        std::fs::write(d.join("elsewhere").join("bound.toml"), "bound").unwrap();
+        let o = Command::new("unshare").args(["-m", "sh", "-c", "mount --bind \"$2\" \"$1\" && exec \"$0\" listen a0 --for 1 --out \"$1\"", bin]).arg(&scan).arg(d.join("elsewhere").join("bound.toml")).output().unwrap();
+        assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
+        assert!(text(&o.stderr).starts_with(&format!("veredas-aranha: {}: ", scan.display())) && text(&o.stderr).contains("busy"), "{}", text(&o.stderr));
+        assert!(unchanged(&scan, &capture));
+        assert_eq!(ours("busy", &[]), Vec::<String>::new());
+        // And with no capture there before: none left after.
+        std::fs::remove_file(&capture).unwrap();
+        let o = Command::new("unshare").args(["-m", "sh", "-c", "mount --bind \"$2\" \"$1\" && exec \"$0\" listen a0 --for 1 --out \"$1\"", bin]).arg(&scan).arg(d.join("elsewhere").join("bound.toml")).output().unwrap();
+        assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
+        assert!(!capture.exists() && std::fs::read(&scan).unwrap() == b"the baseline");
+        assert_eq!(ours("busy", &[]), Vec::<String>::new());
+
+        // Names of the run's own taken by a user while it listens (its process known): passed over
+        // for others, the run written, every file the user made as they made it. (Its names count
+        // on from the folder's probe: the first partials meet the user's, then the name the capture
+        // there is kept under does.)
+        let (scan, capture) = baseline("taken");
+        let listening = started(&["listen", "a0", "--for", "2", "--out", scan.to_str().unwrap()]);
+        let pid = listening.id();
+        let mut users = Vec::new();
+        for n in 0..41 {
+            let mut names = vec![format!(".taken.pcap.{pid}-{n}.kept")];
+            if n < 13 {
+                names.extend([format!(".taken.toml.{pid}-{n}.partial"), format!(".taken.pcap.{pid}-{n}.partial")]);
+            }
+            for name in names {
+                std::fs::write(d.join(&name), "mine").unwrap();
+                users.push(name);
+            }
+        }
+        let o = listening.wait_with_output().unwrap();
+        assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+        assert!(Scan::read_file(&scan).is_ok());
+        assert_ne!(std::fs::read(&capture).unwrap(), b"its frames");
+        for name in &users {
+            assert_eq!(std::fs::read(d.join(name)).unwrap(), b"mine", "{name}");
+        }
+        assert_eq!(ours("taken", &users), Vec::<String>::new());
+
+        // One interface under two of its names: named twice, nothing opened or written.
+        netns::ip(&["link", "property", "add", "dev", "a0", "altname", "alt0"]);
+        let twice = d.join("twice.toml");
+        for (args, says) in [(["a0", "alt0"], "alt0 is named twice (as a0 too)"), (["alt0", "a0"], "a0 is named twice (as alt0 too)")] {
+            let o = aranha(&["listen", args[0], args[1], "--for", "1", "--out", twice.to_str().unwrap()]);
+            assert_eq!((o.status.code(), text(&o.stderr)), (Some(2), format!("veredas-aranha: {says}\n")));
+        }
+        assert!(!twice.exists());
+
+        // A scan file's name of the longest a system takes (255 bytes, its capture's as long):
+        // written, its names of the run's own cut to fit.
+        let long = d.join(format!("{}.toml", "l".repeat(250)));
+        let o = aranha(&["listen", "a0", "--for", "1", "--out", long.to_str().unwrap()]);
+        assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+        assert!(Scan::read_file(&long).is_ok() && long.with_extension("pcap").is_file());
+        assert_eq!(ours(&"l".repeat(250), &[]), Vec::<String>::new());
+        let left: Vec<String> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(".l") && n.len() > 200).collect();
+        assert_eq!(left, Vec::<String>::new());
     });
 }

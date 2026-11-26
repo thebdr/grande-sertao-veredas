@@ -169,26 +169,87 @@ fn lines(d: &Diff) -> Vec<String> {
     out
 }
 
-/// A name of this run's own beside `p`: `.<its name>.<process>-<count>.<what>`.
+/// The longest file name the systems take, in bytes.
+const NAME_MAX: usize = 255;
+
+/// A name of this run's own beside `p`: `.<its name>.<process>-<count>.<what>`, its name cut to
+/// fit the longest a system takes (the scan's name is UTF-8 by then, checked before any is made).
 fn own_name(p: &Path, what: &str) -> PathBuf {
     static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut name = OsString::from(".");
-    name.push(p.file_name().unwrap_or_default());
-    name.push(format!(".{}-{n}.{what}", std::process::id()));
-    p.with_file_name(name)
+    let tail = format!(".{}-{n}.{what}", std::process::id());
+    let name = p.file_name().unwrap_or_default().to_string_lossy();
+    let mut cut = name.len().min(NAME_MAX.saturating_sub(1 + tail.len()));
+    while !name.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    p.with_file_name(format!(".{}{tail}", &name[..cut]))
 }
+
+/// How many names of its own a run tries for one file before it gives up: a name taken (a user's
+/// file made there while it listened) is passed over for the next.
+const TRIES: usize = 64;
 
 /// A failure on `p`, named.
 fn on(p: &Path) -> impl Fn(std::io::Error) -> Refused + '_ {
     move |e| Refused(format!("{}: {e}", p.display()))
 }
 
-/// A file made new at `p`, never one that is there and never through a link, holding `bytes`.
-fn create_new(p: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(p)?;
+/// A file made new under a name of this run's own beside `p`, never one that is there and never
+/// through a link, holding `bytes`; its name in `made` the moment it is made, so a write failing
+/// after leaves nothing behind once `made` is removed.
+fn create_new(p: &Path, what: &str, bytes: &[u8], made: &mut Vec<PathBuf>) -> std::io::Result<PathBuf> {
+    let mut tries = 0;
+    let (name, mut f) = loop {
+        let name = own_name(p, what);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&name) {
+            Ok(f) => break (name, f),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries + 1 < TRIES => tries += 1,
+            Err(e) => return Err(e),
+        }
+    };
+    made.push(name.clone());
     f.write_all(bytes)?;
-    f.sync_all()
+    f.sync_all()?;
+    Ok(name)
+}
+
+/// The file at `p` kept aside under a name of this run's own made new (a second link to it, the
+/// first removed), never over a file a user holds there; where links cannot be made (a FAT
+/// stick), moved to a name of the run's own not there.
+fn keep_aside(p: &Path) -> std::io::Result<PathBuf> {
+    let mut tries = 0;
+    let kept = loop {
+        let kept = own_name(p, "kept");
+        match std::fs::hard_link(p, &kept) {
+            Ok(()) => break kept,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries + 1 < TRIES => tries += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Err(e),
+            Err(_) => {
+                if std::fs::symlink_metadata(&kept).is_ok() {
+                    return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+                }
+                std::fs::rename(p, &kept)?;
+                return Ok(kept);
+            }
+        }
+    };
+    if let Err(e) = std::fs::remove_file(p) {
+        let _ = std::fs::remove_file(&kept);
+        return Err(e);
+    }
+    Ok(kept)
+}
+
+/// What is at `p`: nothing (false), or a file (true; a regular one, not a link); anything else
+/// refused.
+fn file_or_nothing(p: &Path) -> Result<bool, Refused> {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.is_file() => Ok(true),
+        Ok(_) => Err(Refused(format!("{}: there is something there that is no file", p.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(on(p)(e)),
+    }
 }
 
 /// The scan and its capture written under names of this run's own beside them, then put in place,
@@ -198,41 +259,36 @@ fn create_new(p: &Path, bytes: &[u8]) -> std::io::Result<()> {
 fn put_in_place(out: &Path, capture: &Path, scan: &Scan, frames: &[veredas_aranha::wire::Frame]) -> Result<(), Refused> {
     let text = scan.to_toml()?;
     let bytes = veredas_aranha::wire::pcap::write(frames).map_err(|e| Refused(format!("{}: {e}", capture.display())))?;
-    // What is there now, again: something other than a file (made while it listened) is never
-    // moved aside or replaced.
+    // What is there now, again: something other than a file (made while it listened: a folder, a
+    // link, a pipe) is never moved aside or replaced.
     for p in [out, capture] {
-        if std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir()) {
-            return Err(Refused(format!("{}: there is something there that is no file", p.display())));
-        }
+        file_or_nothing(p)?;
     }
-    let (scan_tmp, capture_tmp, kept) = (own_name(out, "partial"), own_name(capture, "partial"), own_name(capture, "kept"));
-    let mut made: Vec<&Path> = Vec::new();
+    let mut made: Vec<PathBuf> = Vec::new();
     let written = (|| -> Result<(), Refused> {
-        create_new(&scan_tmp, text.as_bytes()).map_err(on(out))?;
-        made.push(&scan_tmp);
-        create_new(&capture_tmp, &bytes).map_err(on(capture))?;
-        made.push(&capture_tmp);
-        let had = std::fs::symlink_metadata(capture).is_ok();
-        if had {
-            std::fs::rename(capture, &kept).map_err(on(capture))?;
-        }
+        let scan_tmp = create_new(out, "partial", text.as_bytes(), &mut made).map_err(on(out))?;
+        let capture_tmp = create_new(capture, "partial", &bytes, &mut made).map_err(on(capture))?;
+        let kept = if file_or_nothing(capture)? { Some(keep_aside(capture).map_err(on(capture))?) } else { None };
         let back = || {
-            if had {
-                let _ = std::fs::rename(&kept, capture);
+            if let Some(kept) = &kept {
+                let _ = std::fs::rename(kept, capture);
             }
         };
         if let Err(e) = std::fs::rename(&capture_tmp, capture) {
             back();
             return Err(on(capture)(e));
         }
+        // (A name put in place is no longer the run's to remove.)
+        made.retain(|p| *p != capture_tmp);
         if let Err(e) = std::fs::rename(&scan_tmp, out) {
             // The new capture out, the one that was there back.
             let _ = std::fs::remove_file(capture);
             back();
             return Err(on(out)(e));
         }
-        if had {
-            let _ = std::fs::remove_file(&kept);
+        made.clear();
+        if let Some(kept) = &kept {
+            let _ = std::fs::remove_file(kept);
         }
         Ok(())
     })();
@@ -245,6 +301,18 @@ fn put_in_place(out: &Path, capture: &Path, scan: &Scan, frames: &[veredas_aranh
 /// A kind as the scan file spells it (`duplicate-name`, `heard`).
 fn spelled<T: serde::Serialize>(v: T) -> String {
     toml::Value::try_from(v).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default()
+}
+
+/// The system's index of an interface by any of its names (0: none).
+#[cfg(target_os = "linux")]
+fn index_of(name: &str) -> u32 {
+    // SAFETY: if_nametoindex reads the NUL-terminated name it is given and nothing else.
+    std::ffi::CString::new(name).map_or(0, |c| unsafe { libc::if_nametoindex(c.as_ptr()) })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn index_of(_name: &str) -> u32 {
+    0
 }
 
 #[cfg(target_os = "linux")]
@@ -338,12 +406,21 @@ fn listen(args: &[OsString]) -> Result<(), Refused> {
     if ifaces.is_empty() {
         return Err(Refused(format!("listen needs an interface\n{USAGE}")));
     }
+    // One interface under two of its names (an altname) is named twice as well.
+    let indexes: Vec<u32> = ifaces.iter().map(|n| index_of(n)).collect();
+    for (k, (name, x)) in ifaces.iter().zip(&indexes).enumerate() {
+        if let Some(j) = indexes[..k].iter().position(|y| *x != 0 && y == x) {
+            return Err(Refused(format!("{name} is named twice (as {} too)", ifaces[j])));
+        }
+    }
     if out.extension().is_none_or(|e| e != "toml") {
         return Err(Refused(format!("{}: a scan file is .toml", out.display())));
     }
     // The scan names its capture, so its file name is text the scan can hold; both are checked
     // before anything is opened, and an existing one is replaced only once both are written.
-    if out.as_os_str().to_string_lossy().chars().last().is_some_and(std::path::is_separator) {
+    // (Its last part as given: a path ending in a separator, `.` or `..` names a folder, though
+    // `Path` reads `s.toml/.` as `s.toml`.)
+    if out.as_os_str().to_string_lossy().rsplit(std::path::is_separator).next().is_some_and(|last| ["", ".", ".."].contains(&last)) {
         return Err(Refused(format!("{}: a scan file is a file, and this path names a folder", out.display())));
     }
     if out.file_name().and_then(|n| n.to_str()).is_none() {
@@ -351,18 +428,18 @@ fn listen(args: &[OsString]) -> Result<(), Refused> {
     }
     let capture_path = out.with_extension("pcap");
     for p in [&out, &capture_path] {
-        if p.exists() {
-            if !p.is_file() {
-                return Err(Refused(format!("{}: there is something there that is no file", p.display())));
-            }
+        if file_or_nothing(p)? {
             std::fs::OpenOptions::new().write(true).open(p).map_err(|e| Refused(format!("{}: {e}", p.display())))?;
         }
     }
     // The folder they go in, a file of this run's own made there and removed.
     let folder = out.parent().filter(|f| !f.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let probe = own_name(&out, "probe");
-    create_new(&probe, b"").map_err(|e| Refused(format!("{}: {e}", folder.display())))?;
-    let _ = std::fs::remove_file(&probe);
+    let mut made = Vec::new();
+    let probed = create_new(&out, "probe", b"", &mut made);
+    for p in made {
+        let _ = std::fs::remove_file(p);
+    }
+    probed.map_err(|e| Refused(format!("{}: {e}", folder.display())))?;
     let wires = ifaces.iter().map(|n| open(n)).collect::<Result<Vec<_>, _>>()?;
     let l = Listener::start(wires, Options::default())?;
     // Listening first; an Identify on every interface at once a second in, so the wire's own
@@ -393,10 +470,11 @@ fn listen(args: &[OsString]) -> Result<(), Refused> {
     if ports {
         let s = l.snapshot();
         for d in s.fusion.devices.values() {
-            let Some(iface) = ifaces.iter().find(|i| d.heard_on.contains(*i)) else { continue };
-            if d.ip.current().is_none_or(|s| s.ip.is_unspecified()) {
-                continue;
-            }
+            let Some(suite) = d.ip.current().filter(|s| !s.ip.is_unspecified()) else { continue };
+            // An interface it was heard on that holds an address on its network (the first named),
+            // else the first it was heard on, whose read then says why it cannot be.
+            let heard: Vec<&String> = ifaces.iter().filter(|i| d.heard_on.contains(*i)).collect();
+            let Some(iface) = heard.iter().find(|i| read::address_for(i, suite.ip, suite.mask).is_some()).or(heard.first()) else { continue };
             match read::ports(&l, iface, d, &read::Options::default()) {
                 Ok(p) => neighbours.extend(p.neighbours),
                 Err(cut) => {

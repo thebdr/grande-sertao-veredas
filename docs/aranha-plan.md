@@ -410,3 +410,8 @@ is pinned by a test when its phase lands.
   from the first address listed goes unanswered: the read goes from the interface's address on the
   device's network by the device's mask, and is refused, nothing sent, where the interface holds
   none there (C-148's third refute round).
+- **`Path` reads `s.toml/.` as `s.toml`**: its file name, extension and parent drop a trailing
+  `.`, while the system's calls resolve it (a folder, or no such file); a check on the scan's path
+  reads its last part as given. Renaming onto a mount point fails (busy): the one way a test makes
+  the scan's rename fail after the capture's without a race, a file bound over the scan's place in
+  a mount namespace of the run's own (C-149's third refute round).
