@@ -47,7 +47,9 @@ pub enum CoreOp {
     OptionIsNone,
     /// `Option::<T>::is_some(&self) -> bool`.
     OptionIsSome,
-    /// `Default::default()` of `bool`, an integer, a float or `Duration`: false, zero, zero, zero.
+    /// `Default::default()` of `bool`, an integer, a float, `Duration` or an `Option` of any type: false, zero, zero,
+    /// zero, `None` (its discriminant 0, its other slots unwritten). `orcl-std`'s timers derive their `Default`
+    /// over an `Option<Duration>`.
     Default,
 }
 
@@ -126,10 +128,10 @@ impl CoreOp {
             (CoreOp::OptionIsNone | CoreOp::OptionIsSome, [a]) => {
                 reference(types, *a, false).and_then(|o| option_of(types, o)).is_some() && is(types, dest, &Type::Bool)
             }
-            (CoreOp::Default, []) => matches!(
-                types.get(dest.0 as usize),
-                Some(Type::Bool | Type::Int(_) | Type::F32 | Type::F64 | Type::Duration)
-            ),
+            (CoreOp::Default, []) => {
+                matches!(types.get(dest.0 as usize), Some(Type::Bool | Type::Int(_) | Type::F32 | Type::F64 | Type::Duration))
+                    || option_of(types, dest).is_some()
+            }
             _ => false,
         }
     }

@@ -293,6 +293,16 @@ fn a_default_is_false_zero_or_no_time() {
     fns.push((caller(&mut b, CoreOp::Default, f32t, &[]), vec![Scalar::F32(f32::default())]));
     fns.push((caller(&mut b, CoreOp::Default, f64t, &[]), vec![Scalar::F64(f64::default())]));
     fns.push((caller(&mut b, CoreOp::Default, d, &[]), dur(Duration::default())));
+    // an `Option` of a duration, a byte and a pair: `None`, its discriminant 0 and its other slots unwritten, as
+    // `Option::<T>::default()` is natively whatever `T` is
+    assert_eq!(Option::<Duration>::default(), None);
+    let pair = b.tuple(&[d, boolean]);
+    for (inner, rest) in [(d, 2), (b.int(Int::U8), 1), (pair, 3)] {
+        let opt = b.option(inner);
+        let mut want = vec![Scalar::Int(Int::Isize, 0)];
+        want.resize(1 + rest, Scalar::Uninit);
+        fns.push((caller(&mut b, CoreOp::Default, opt, &[]), want));
+    }
     let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
     for (f, want) in fns {
         let got = call(&mut m, f, &[]);

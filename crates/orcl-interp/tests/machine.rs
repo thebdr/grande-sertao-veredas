@@ -1683,7 +1683,7 @@ fn an_option_of_another_shape_is_no_option_to_a_core_operation() {
         ("Option { None = 0, Some(u8) = 1, Other = 2 }", Box::new(|b, u| opt_like(b, "Option", vec![(0, vec![]), (1, vec![u]), (2, vec![])])), false),
     ];
     for (shape, make, good) in &shapes {
-        for op in [CoreOp::OptionIsNone, CoreOp::OptionIsSome, CoreOp::OptionGetOrInsert, CoreOp::CheckedShl(Int::U8)] {
+        for op in [CoreOp::OptionIsNone, CoreOp::OptionIsSome, CoreOp::OptionGetOrInsert, CoreOp::CheckedShl(Int::U8), CoreOp::Default] {
             let mut b = Build::default();
             let (u8t, u32t, boolean) = (b.int(Int::U8), b.int(Int::U32), b.bool());
             let opt = make(&mut b, u8t);
@@ -1696,6 +1696,7 @@ fn an_option_of_another_shape_is_no_option_to_a_core_operation() {
                     let (ropt, ru8) = (b.reference(opt, true), b.reference(u8t, true));
                     core_call(&mut b, op, ru8, &[ropt, u8t]);
                 }
+                CoreOp::Default => core_call(&mut b, op, opt, &[]),
                 _ => core_call(&mut b, op, opt, &[u8t, u32t]),
             }
             let got = Machine::load(b.program, &[], LIMITS).map(|_| ());

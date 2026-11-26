@@ -389,9 +389,9 @@ fn a_core_operation_called_with_any_type_it_does_not_take_is_refused() {
                     if a[i] == other { continue; }
                     a[i] = other;
                 } else {
-                    // a default is any scalar's or a duration's: only another kind of destination is wrong
+                    // a default is any scalar's, a duration's or an option's: only another kind of destination is wrong
                     let scalar = matches!(b.program.types[other.0 as usize], Type::Bool | Type::Int(_) | Type::Duration);
-                    if t == other || (*op == CoreOp::Default && scalar) { continue; }
+                    if t == other || (*op == CoreOp::Default && (scalar || other == optu8)) { continue; }
                     t = other;
                 }
                 cases.push((*op, a, t, false));
@@ -402,7 +402,7 @@ fn a_core_operation_called_with_any_type_it_does_not_take_is_refused() {
         cases.push((*op, more, *dest, false));
     }
     cases.push((CoreOp::DurationCompare(BinOp::Add), vec![sd, sd], boolean, false));
-    cases.push((CoreOp::Default, vec![], optu8, false));
+    cases.push((CoreOp::Default, vec![], optu8, true));
     let (mut accepted, mut refusals) = (0, 0);
     for (op, args, dest, good) in cases {
         let mut p = Build { program: b.program.clone() };
@@ -427,7 +427,7 @@ fn a_core_operation_called_with_any_type_it_does_not_take_is_refused() {
             refusals += 1;
         }
     }
-    assert!(accepted == 10 && refusals > 150, "{accepted} accepted, {refusals} refused");
+    assert!(accepted == 11 && refusals > 150, "{accepted} accepted, {refusals} refused");
 }
 
 #[test]

@@ -654,6 +654,8 @@ impl State {
                     result = duration_slots(Duration::ZERO);
                     len = 2;
                 }
+                // an `Option`, as the load checked: `None`, its discriminant 0, the rest unwritten
+                Type::Enum { discriminant, .. } => result[0] = Scalar::Int(*discriminant, 0),
                 _ => return Err(ErrorKind::Internal("no default")),
             },
         }
