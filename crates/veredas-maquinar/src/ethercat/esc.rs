@@ -97,6 +97,9 @@ impl Esc {
         mem[reg::RAM_SIZE as usize] = 8;
         mem[reg::PORT_DESCRIPTOR as usize] = 0x0F;
         mem[reg::FEATURES as usize..reg::FEATURES as usize + 2].copy_from_slice(&0x01FCu16.to_le_bytes());
+        // The SII interface's read size from power-up: 8-byte reads (bit 6), as an ESC's own pins set
+        // it, so a master reading the register before its first command (SOEM) sees it (round 7).
+        mem[reg::SII_CONTROL as usize..reg::SII_CONTROL as usize + 2].copy_from_slice(&0x0040u16.to_le_bytes());
         mem[reg::AL_STATUS as usize] = state::INIT;
         let mut esc = Esc { mem, sii, clock_origin_ns };
         esc.set_link(false);

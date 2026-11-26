@@ -1624,6 +1624,9 @@ mod round_6 {
         assert_eq!(f & 0x0004, 0x0004, "distributed clocks available (the clause: its distributed clock): {f:#06x}");
         assert_eq!(f & 0x0008, 0x0008, "64-bit system time: {f:#06x}");
         assert_eq!(f & 0x0600, 0, "LRW and the read-write commands supported (the clause counts them): {f:#06x}");
+        // And no bit more (round 7: 0x09FC, a fixed FMMU and SyncManager configuration, and 0x01FE
+        // passed the bits above).
+        assert_eq!(f, 0x01FC);
     }
 
     const PDU_DATA: usize = PduStorage::element_size(1100);
@@ -1680,5 +1683,90 @@ mod round_6 {
         let cfg: EthercatConfig = toml::from_str("interface = \"b0\"\ndevices = [ { name = \" d\" } ]\n").unwrap();
         assert_eq!(validate(&cfg).unwrap_err().to_string(), "ethercat.devices[0]: a device's name is not empty and has no surrounding whitespace");
         assert_eq!(start(&cfg).err().unwrap().to_string(), "ethercat.devices[0]: a device's name is not empty and has no surrounding whitespace");
+    }
+}
+
+/// C-113's seventh refute round: the critic's probes (`~/.cache/veredas/critic-c113-r7/probes`),
+/// kept as pins: every configuration bound refused both ways; a read-multiple-write counted 1 a
+/// device, the reader and each writer; the EEPROM's SyncManager starts, lengths and enables; the SII
+/// interface's 8-byte reads stated before any command.
+mod round_7 {
+    use veredas_maquinar::ethercat::esc::{self, Datagram, Esc, Identity, PdoEntry};
+    use veredas_maquinar::ethercat::*;
+
+    /// `n` devices in a line, each at station 0x1000 + its place, the last with its port 1 open.
+    fn line(n: u16) -> Vec<Esc> {
+        (0..n)
+            .map(|i| {
+                let id = Identity { vendor_id: 7, product_code: u32::from(i), revision: 1, serial: 0, name: format!("d{i}"), alias: 0 };
+                let mut e = Esc::new(esc::sii_image(&id, &[], &[]), u64::from(i) * 1_000);
+                e.mem[0x10..0x12].copy_from_slice(&(0x1000 + i).to_le_bytes());
+                e.set_link(i + 1 < n);
+                e
+            })
+            .collect()
+    }
+
+    /// One frame's datagrams through the line: each one's data and working counter.
+    fn pass(line: &mut [Esc], now: u64, dgs: &[(u8, u32, Vec<u8>)]) -> Vec<(Vec<u8>, u16)> {
+        let mut d: Vec<Datagram> = dgs.iter().map(|(cmd, address, data)| Datagram { cmd: *cmd, idx: 0, address: *address, circulating: false, more: false, irq: 0, data: data.clone(), wkc: 0 }).collect();
+        esc::process(line, &mut d, now);
+        d.into_iter().map(|x| (x.data, x.wkc)).collect()
+    }
+
+    fn fp(station: u16, ado: u16) -> u32 {
+        (u32::from(ado) << 16) | u32::from(station)
+    }
+
+    fn ap(position: u16, ado: u16) -> u32 {
+        (u32::from(ado) << 16) | u32::from(0u16.wrapping_sub(position))
+    }
+
+    #[test]
+    fn every_bound_is_refused_both_ways() {
+        let device = |extra: &str| format!("interface = \"b0\"\ndevices = [ {{ name = \"d\"{extra} }} ]\n");
+        let entries = |n: usize, bits: u8| (0..n).map(|i| format!("{{ index = 0x7000, subindex = {}, bits = {bits} }}", i % 256)).collect::<Vec<_>>().join(", ");
+        let cases = [
+            (device(&format!(", inputs = [ {} ]", entries(129, 64))), "ethercat.devices[0] (`d`).inputs: 1032 bytes, over 1024"),
+            (device(&format!(", outputs = [ {} ]", entries(256, 1))), "ethercat.devices[0] (`d`).outputs: 256 entries, over 255"),
+            (device(&format!(", inputs = [ {} ]", entries(1, 0))), "ethercat.devices[0] (`d`).inputs[0]: 0 bit(s), not 1 to 64"),
+            (device(&format!(", outputs = [ {} ]", entries(1, 65))), "ethercat.devices[0] (`d`).outputs[0]: 65 bit(s), not 1 to 64"),
+        ];
+        for (text, want) in &cases {
+            let cfg: EthercatConfig = toml::from_str(text).unwrap();
+            assert_eq!(validate(&cfg).err().map(|e| e.to_string()).as_deref(), Some(*want));
+        }
+    }
+
+    /// An ARMW (13) and an FRMW (14) on two devices, and each addressed to no device: the reader
+    /// counted 1 and the writer 1 (2), and with no reader both devices writing (2).
+    #[test]
+    fn a_read_multiple_write_counts_each_device_once() {
+        let mut l = line(2);
+        let r = pass(&mut l, 10_000, &[(13, ap(0, 0x0910), vec![0; 8]), (14, fp(0x1000, 0x0910), vec![0; 8]), (13, ap(5, 0x0910), vec![0; 8]), (14, fp(0x7777, 0x0910), vec![0; 8])]);
+        assert_eq!(r.iter().map(|x| x.1).collect::<Vec<_>>(), [2, 2, 2, 2]);
+    }
+
+    /// SM2 at 0x1000 of the outputs' 3 bytes, SM3 where the inputs begin, of their 5, both enabled.
+    #[test]
+    fn the_eeprom_s_syncmanagers_have_the_file_s_lengths() {
+        let id = Identity { vendor_id: 1, product_code: 2, revision: 3, serial: 4, name: "x".into(), alias: 0 };
+        let w = esc::sii_image(&id, &[PdoEntry { index: 0x7000, subindex: 1, bits: 24 }], &[PdoEntry { index: 0x6000, subindex: 1, bits: 40 }]);
+        let mut at = 0x40;
+        while w[at] != 41 {
+            assert_ne!(w[at], 0xFFFF, "a SyncManager category");
+            at += 2 + w[at + 1] as usize;
+        }
+        let sm: Vec<u8> = w[at + 2..at + 2 + w[at + 1] as usize].iter().flat_map(|x| x.to_le_bytes()).collect();
+        let word = |o: usize| u16::from_le_bytes([sm[o], sm[o + 1]]);
+        assert_eq!((word(16), word(18), sm[22], word(24), word(26), sm[30]), (0x1000, 3, 1, esc::inputs_at(3), 5, 1));
+    }
+
+    /// The SII control register says 8-byte reads (bit 6) from power-up, as SOEM reads it before
+    /// its first command to choose 4- or 8-byte reads (it read 0 until one).
+    #[test]
+    fn the_sii_interface_states_8_byte_reads_before_any_command() {
+        let l = line(1);
+        assert_eq!(l[0].get16(0x0502), 0x0040);
     }
 }
