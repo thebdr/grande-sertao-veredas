@@ -389,3 +389,85 @@ fn a_history_cut_and_written_past_its_old_end_is_lost() {
     let cut: Vec<std::path::PathBuf> = [file, fixed.join("current.log"), fam.join("plant_1.log")].into();
     BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !cut.contains(at));
 }
+
+/// A plant log's constant first line, longer than the reach's 64 bytes of head.
+const HEADER: &str = "Datum;Uhrzeit;Temperatur_Reaktor_1;Druck_Reaktor_1;Durchfluss_Kuehlwasser_1;Status\n";
+
+fn write_with_header(path: &std::path::Path, range: std::ops::Range<u32>) {
+    let body: String = range.map(|i| format!("2026-07-19 {:02}:{:02}:{:02} temp={i} state=run\n", 1 + i / 3600, (i / 60) % 60, i % 60)).collect();
+    std::fs::write(path, format!("{HEADER}{body}")).unwrap();
+}
+
+/// A hook running `act` on `path` once.
+fn once(path: &std::path::Path, act: impl FnOnce(&std::path::Path) + Send + 'static) {
+    let at = path.to_path_buf();
+    let mut act = Some(act);
+    BEFORE_OPEN.lock().unwrap().push((
+        path.to_path_buf(),
+        Box::new(move || {
+            if let Some(a) = act.take() {
+                a(&at);
+            }
+        }),
+    ));
+}
+
+/// C-096's twelfth refute round. A log whose first line is a constant header longer than the
+/// reach's head, cut in place and written again from its top past its old end (a writer opening
+/// afresh), has the same head but other bytes at its old end: lost, a file before its first read
+/// and a fixed-name family's active before the seam. A planned active deleted and made again under
+/// its name before the seam is another file: nothing of the history is left in it, said read at the
+/// 100 lines before it, a fixed-name family's and a newest-by-order family's alike.
+#[test]
+fn a_history_rewritten_under_its_header_is_lost_and_one_deleted_is_read() {
+    use crate::tail::{FileStart, FileTailSource, TailConfig};
+    let start = NaiveDateTime::parse_from_str("2026-07-19 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+    let stamps = || TimestampSpec::new(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ["%Y-%m-%d %H:%M:%S"]).unwrap();
+    let backfill = || FamilyTailConfig { start: FamilyStart::Backfill(start), ..FamilyTailConfig::default() };
+    let lost = crate::tail::HISTORY_LOST;
+    let dir = tempfile::tempdir().unwrap();
+    let mut hooked: Vec<std::path::PathBuf> = Vec::new();
+
+    // Rewritten under the same header, a file before its first read.
+    let file = dir.path().join("csv.log");
+    write_with_header(&file, 0..1_000);
+    once(&file, |p| write_with_header(p, 90_000..92_000));
+    hooked.push(file.clone());
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let path = file.to_string_lossy().into_owned();
+    let source = FileTailSource::new("csv", "csv", &path, TailConfig { start: FileStart::Begin, ..TailConfig::default() }).with_history_read(Arc::clone(&history));
+    assert_eq!(run_cut(Box::new(source), &history, 2_001), (2_001, lost), "the file");
+
+    // The same, a fixed-name family's active before the seam.
+    let fixed = dir.path().join("fixed");
+    std::fs::create_dir_all(&fixed).unwrap();
+    write_with_header(&fixed.join("done_1.log"), 0..100);
+    write_with_header(&fixed.join("current.log"), 100..1_000);
+    once(&fixed.join("current.log"), |p| write_with_header(p, 90_000..92_000));
+    hooked.push(fixed.join("current.log"));
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let spec = FamilySpec::new(&fixed, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let source = FamilyTailSource::new("fixed", "fixed", spec, backfill()).with_timestamps(stamps()).with_history_read(Arc::clone(&history));
+    assert_eq!(run_cut(Box::new(source), &history, 2_102), (2_102, lost), "the fixed family's active");
+
+    // Deleted and made again before the seam: read at the 100 lines before it.
+    for (name, mode, member, active) in [
+        ("gone-fixed", ActiveMode::Fixed("current.log".into()), "done_1.log", "current.log"),
+        ("gone-newest", ActiveMode::NewestByOrder, "done_1.log", "done_2.log"),
+    ] {
+        let fam = dir.path().join(name);
+        std::fs::create_dir_all(&fam).unwrap();
+        write(&fam.join(member), 0..100);
+        write(&fam.join(active), 100..1_000);
+        once(&fam.join(active), |p| {
+            std::fs::remove_file(p).unwrap();
+            write(p, 90_000..90_010);
+        });
+        hooked.push(fam.join(active));
+        let history = Arc::new(AtomicU64::new(u64::MAX));
+        let spec = FamilySpec::new(&fam, r"done_(?P<idx>\d+)\.log", None, mode).unwrap();
+        let source = FamilyTailSource::new(name, name, spec, backfill()).with_timestamps(stamps()).with_history_read(Arc::clone(&history));
+        assert_eq!(run_cut(Box::new(source), &history, 110), (110, 100), "{name}");
+    }
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+}

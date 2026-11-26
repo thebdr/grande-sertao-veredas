@@ -69,19 +69,45 @@ fn is_identity(handle: &Handle, id: &Identity) -> bool {
 pub(crate) const HEAD_BYTES: usize = 64;
 
 /// Where a read-in of history must reach: the file's length when the start found it, and its
-/// first bytes then. A file cut in place and written again has another head whatever its length
-/// now: a writer without `O_APPEND` writes past the old end into a hole that reads as NULs, and
-/// one with it starts again at the top (C-096).
+/// first and last bytes then, taken from one state of the file. A log grows at its end and never
+/// rewrites what it holds: a file cut in place and written again has another head or another tail
+/// at the old end, whatever its length now (a writer without `O_APPEND` writes past the old end
+/// into a hole that reads as NULs; one with it, or a writer opening afresh, starts again at the
+/// top, perhaps with the same header) (C-096).
 #[derive(Clone, Debug)]
 pub(crate) struct Reach {
     pub len: u64,
     pub head: Vec<u8>,
+    /// The bytes just before `len`.
+    pub tail: Vec<u8>,
 }
 
-/// The first `n` bytes of `file` (fewer if it is shorter), read from its top; the position is
-/// left wherever the read ended.
-fn read_head(file: &mut File, n: usize) -> std::io::Result<Vec<u8>> {
-    file.seek(SeekFrom::Start(0))?;
+impl Reach {
+    /// The reach of a file whose whole content is `bytes`.
+    pub(crate) fn of_bytes(bytes: &[u8]) -> Reach {
+        let n = bytes.len().min(HEAD_BYTES);
+        Reach { len: bytes.len() as u64, head: bytes[..n].to_vec(), tail: bytes[bytes.len() - n..].to_vec() }
+    }
+}
+
+/// A file's whole content and its identity, read through one handle: one state of one file.
+pub(crate) fn read_whole_identified(path: &Path) -> std::io::Result<(Vec<u8>, Option<std::sync::Arc<Identity>>)> {
+    let mut handle = Handle::from_path(path)?;
+    let mut bytes = Vec::new();
+    handle.as_file_mut().read_to_end(&mut bytes)?;
+    #[cfg(windows)]
+    let identity = Some(std::sync::Arc::new(handle));
+    #[cfg(unix)]
+    let identity = Some(std::sync::Arc::new((handle.dev(), handle.ino())));
+    #[cfg(not(any(windows, unix)))]
+    let identity = None;
+    Ok((bytes, identity))
+}
+
+/// The `n` bytes of `file` at `pos` (fewer if it ends sooner); the position is left wherever the
+/// read ended.
+fn read_at(file: &mut File, pos: u64, n: usize) -> std::io::Result<Vec<u8>> {
+    file.seek(SeekFrom::Start(pos))?;
     let mut head = vec![0u8; n];
     let mut got = 0;
     while got < n {
@@ -92,12 +118,6 @@ fn read_head(file: &mut File, n: usize) -> std::io::Result<Vec<u8>> {
     }
     head.truncate(got);
     Ok(head)
-}
-
-/// The first bytes of the file at `path`, through a handle of its own: empty when it cannot be
-/// read (no head to compare, the length alone kept).
-pub(crate) fn head_of(path: &Path) -> Vec<u8> {
-    File::open(path).and_then(|mut f| read_head(&mut f, HEAD_BYTES)).unwrap_or_default()
 }
 
 /// The outcome of one `read_new` pass.
@@ -322,24 +342,28 @@ impl TailedFile {
         &self.handle
     }
 
-    /// The file's reach now: its length and first bytes, the cursor's position kept.
+    /// The file's reach now: its length and its first and last bytes, the cursor's position kept.
     pub(crate) fn reach_now(&mut self) -> Result<Reach, SourceError> {
-        Ok(Reach { len: self.disk_len()?, head: self.head(HEAD_BYTES)? })
+        let len = self.disk_len()?;
+        let n = (len.min(HEAD_BYTES as u64)) as usize;
+        Ok(Reach { len, head: self.bytes_at(0, n)?, tail: self.bytes_at(len - n as u64, n)? })
     }
 
-    /// Whether this file's read reached `reach`: past the length the start found, its head the
-    /// same. A head that cannot be read now reached nothing.
+    /// Whether this file's read reached `reach`: past the length the start found, its first bytes
+    /// and the bytes before that length the same. Bytes that cannot be read now reached nothing.
     pub(crate) fn reached(&mut self, reach: &Reach) -> bool {
-        self.offset >= reach.len && self.head(reach.head.len()).is_ok_and(|h| h == reach.head)
+        self.offset >= reach.len
+            && self.bytes_at(0, reach.head.len()).is_ok_and(|h| h == reach.head)
+            && self.bytes_at(reach.len - reach.tail.len() as u64, reach.tail.len()).is_ok_and(|t| t == reach.tail)
     }
 
-    /// The file's first `n` bytes, the cursor's position kept.
-    fn head(&mut self, n: usize) -> Result<Vec<u8>, SourceError> {
+    /// The file's `n` bytes at `pos`, the cursor's position kept.
+    fn bytes_at(&mut self, pos: u64, n: usize) -> Result<Vec<u8>, SourceError> {
         let offset = self.offset;
         let file = self.handle.as_file_mut();
-        let head = read_head(file, n).map_err(|e| SourceError::io(&self.path, e))?;
+        let bytes = read_at(file, pos, n).map_err(|e| SourceError::io(&self.path, e))?;
         file.seek(SeekFrom::Start(offset)).map_err(|e| SourceError::io(&self.path, e))?;
-        Ok(head)
+        Ok(bytes)
     }
 
     /// How many in-place truncations this cursor has reread from the top.

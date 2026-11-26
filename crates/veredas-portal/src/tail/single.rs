@@ -191,7 +191,7 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
         if let Some(tf) = active.as_mut() {
             history_to = Some(tf.reach_now()?);
         } else if let Some((len, _)) = &held {
-            history_to = Some(crate::tail::cursor::Reach { len: *len, head: Vec::new() });
+            history_to = Some(crate::tail::cursor::Reach { len: *len, head: Vec::new(), tail: Vec::new() });
         }
     }
     let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };

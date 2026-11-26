@@ -583,13 +583,18 @@ fn attach_backfill(
                 }
             };
             match opened {
-                Some(cursor) => Ok(BackfillAttach::Attached {
-                    cursor: Box::new(cursor),
-                    key: planned.key,
-                    name: planned.name.clone(),
-                    known: consumed,
-                    history_to: Some(planned.reach.clone()),
-                }),
+                Some(cursor) => {
+                    // Another file at the planned path (the planned one deleted, a new one made
+                    // under its name): nothing of the history is left in it to read, as when it
+                    // is gone, and what it holds is new.
+                    let history_to = if planned.identity.as_ref().is_some_and(|id| !cursor.has_identity(id)) {
+                        swept();
+                        None
+                    } else {
+                        Some(planned.reach.clone())
+                    };
+                    Ok(BackfillAttach::Attached { cursor: Box::new(cursor), key: planned.key, name: planned.name.clone(), known: consumed, history_to })
+                }
                 None => {
                     // Vanished before it was reached: read any remnant, then converge on the
                     // newest by rank. Gone (names are stable in this mode: deleted) or read to its
@@ -666,7 +671,16 @@ fn attach_backfill(
                             // Never rotated, the fixed path is the planned active: its history
                             // ends where the locate found it; rotated, its remains were read and
                             // what sits at the path is new.
-                            let history_to = pending.map(|_| planned.reach.clone());
+                            // Another file there (the planned one deleted and the fixed name made
+                            // again): the history in it is gone, as when it is not there.
+                            let history_to = match pending {
+                                Some(_) if planned.identity.as_ref().is_some_and(|id| !cursor.has_identity(id)) => {
+                                    swept();
+                                    None
+                                }
+                                Some(_) => Some(planned.reach.clone()),
+                                None => None,
+                            };
                             return Ok(BackfillAttach::Attached {
                                 cursor: Box::new(cursor),
                                 key: OrderKey::NONE,

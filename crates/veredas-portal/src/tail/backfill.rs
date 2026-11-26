@@ -30,9 +30,11 @@ pub(crate) struct PlanFile {
     pub path: PathBuf,
     pub name: String,
     pub key: OrderKey,
-    /// Its length and first bytes when the locate peeked it: where the start's history in it
-    /// ends, and what it began with.
+    /// Its length, first and last bytes when the locate peeked it, from the peek's one read:
+    /// where the start's history in it ends, and what it held.
     pub reach: crate::tail::cursor::Reach,
+    /// Its identity then: a file of another identity at its path later is another file.
+    pub identity: Option<std::sync::Arc<crate::tail::cursor::Identity>>,
 }
 
 #[derive(Debug)]
@@ -55,6 +57,9 @@ pub(crate) struct FilePeek {
     pub last_ts: Option<NaiveDateTime>,
     pub encoding: Option<DetectedEncoding>,
     pub len: u64,
+    /// Its length and ends, and its identity, from the same read.
+    pub reach: crate::tail::cursor::Reach,
+    pub identity: Option<std::sync::Arc<crate::tail::cursor::Identity>>,
 }
 
 /// How many lines from each end a peek scans for a parseable stamp before giving up on that
@@ -140,12 +145,18 @@ fn decode_line(bytes: &[u8], enc: DetectedEncoding) -> std::borrow::Cow<'_, str>
 /// snapshot, a concurrent truncate a slightly shorter one; both fine for a heuristic peek and an
 /// inclusive-offset scan.
 fn read_whole(path: &Path) -> Result<Option<(Vec<u8>, u64)>, SourceError> {
-    let bytes = std::fs::read(path).map_err(|e| SourceError::io(path, e))?;
+    Ok(read_whole_identified(path)?.map(|(bytes, len, _)| (bytes, len)))
+}
+
+/// `read_whole` with the file's identity, the bytes and the identity of one handle.
+#[allow(clippy::type_complexity)]
+fn read_whole_identified(path: &Path) -> Result<Option<(Vec<u8>, u64, Option<std::sync::Arc<crate::tail::cursor::Identity>>)>, SourceError> {
+    let (bytes, identity) = crate::tail::cursor::read_whole_identified(path).map_err(|e| SourceError::io(path, e))?;
     if bytes.is_empty() {
         return Ok(None);
     }
     let len = bytes.len() as u64;
-    Ok(Some((bytes, len)))
+    Ok(Some((bytes, len, identity)))
 }
 
 /// The first and last parseable line stamps (a buffered read); the scan is capped at
@@ -153,9 +164,10 @@ fn read_whole(path: &Path) -> Result<Option<(Vec<u8>, u64)>, SourceError> {
 /// under a tail that does is scanned forward to its first stamp: a long unstamped header must
 /// not hide the file from the locate. No encoding for a file with no bytes to detect it from.
 pub(crate) fn peek_span(path: &Path, ts: &TimestampSpec) -> Result<FilePeek, SourceError> {
-    let Some((bytes, len)) = read_whole(path)? else {
-        return Ok(FilePeek { first_ts: None, last_ts: None, encoding: None, len: 0 });
+    let Some((bytes, len, identity)) = read_whole_identified(path)? else {
+        return Ok(FilePeek { first_ts: None, last_ts: None, encoding: None, len: 0, reach: crate::tail::cursor::Reach::of_bytes(&[]), identity: None });
     };
+    let reach = crate::tail::cursor::Reach::of_bytes(&bytes);
     let encoding = detect(&bytes[..bytes.len().min(4096)]);
     let lines = split_lines_raw(&bytes, encoding);
     let stamp = |r: &Range<usize>| ts.extract(&decode_line(&bytes[r.clone()], encoding));
@@ -164,7 +176,7 @@ pub(crate) fn peek_span(path: &Path, ts: &TimestampSpec) -> Result<FilePeek, Sou
     if first_ts.is_none() && last_ts.is_some() {
         first_ts = lines.iter().skip(PEEK_LINE_CAP).find_map(|(_, r)| stamp(r));
     }
-    Ok(FilePeek { first_ts, last_ts, encoding: Some(encoding), len })
+    Ok(FilePeek { first_ts, last_ts, encoding: Some(encoding), len, reach, identity })
 }
 
 /// The byte offset of the first line whose stamp is at or after `start`. Unstamped lines before
@@ -352,7 +364,8 @@ fn locate_once(
             path: files[i].path.clone(),
             name: files[i].file_name.clone(),
             key: files[i].key,
-            reach: crate::tail::cursor::Reach { len: peek.len, head: crate::tail::cursor::head_of(&files[i].path) },
+            reach: peek.reach.clone(),
+            identity: peek.identity.clone(),
         })
         .collect();
     let plan_names: std::collections::HashSet<&str> = plan_files.iter().map(|f| f.name.as_str()).collect();
