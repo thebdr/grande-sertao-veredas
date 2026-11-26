@@ -484,7 +484,9 @@ impl Evaluation {
     /// See `Model::record_seen`. Here so that a read can be put on record
     /// while the sheet it was made in is still borrowed.
     pub(crate) fn record_seen(&mut self, position: CellReferenceIndex, seen: Seen) {
-        if !self.in_pass || !self.record_reads {
+        // A read in a run the recursion abandons, or in a pass being abandoned, was not made: it
+        // is nobody's dependency (Veredas fork change 42).
+        if !self.in_pass || !self.record_reads || self.unwinding || self.restart.is_some() {
             return;
         }
         if let Some(root) = self.root {
@@ -1061,8 +1063,14 @@ impl<'a> Model<'a> {
         row2: i32,
         column2: i32,
     ) {
+        // An empty range read in a run the recursion abandons (every read there is empty, so a
+        // branch no real run takes may read a whole row) or in a pass being abandoned was not
+        // read: put on record, the anchor's own spill into it later read as contradicting it, a
+        // cycle, as deep as the build's stack let the unwind come (Veredas fork change 42).
         if !self.evaluation.in_pass
             || !self.evaluation.record_reads
+            || self.evaluation.unwinding
+            || self.evaluation.restart.is_some()
             || row1 > row2
             || column1 > column2
         {

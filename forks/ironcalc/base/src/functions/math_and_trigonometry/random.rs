@@ -298,4 +298,31 @@ mod seeded_tests {
         assert_eq!(values(&mut shallow, &["A1"])[0], default[0]);
         crate::seed_random(None);
     }
+
+    #[test]
+    fn a_read_of_an_abandoned_run_puts_nothing_on_record() {
+        // Veredas fork change 42: a run the recursion abandons reads every cell empty, so it may
+        // take a branch no real run takes and read a whole row; put on record for the anchor, its
+        // own spill into that row was read as contradicting it, `#CIRC!`, as deep as the limits
+        // (which turn on the build's stack) let the unwind come
+        for reads in ["SUM(1:1)", "SUM(INDIRECT(\"1:1\"))", "SUMIFS(1:1,1:1,\">0\")"] {
+            let anchor = format!("=RANDARRAY(1,3)+IF(Z1=1,0,{reads})*0");
+            let mut plain = new_empty_model();
+            plain._set("Z1", "1");
+            plain._set("AA1", &anchor);
+            let want = values(&mut plain, &["AA1", "AB1", "AC1"]);
+            assert!(want.iter().all(|v| v.parse::<f64>().is_ok()), "{reads}: {want:?}");
+            let mut deep = new_empty_model();
+            for r in 1..40 {
+                deep._set(&format!("Z{r}"), &format!("=Z{}", r + 1));
+            }
+            deep._set("Z40", "1");
+            deep._set("AA1", &anchor);
+            for depth in [64, 16, 4, 1] {
+                deep.set_max_evaluation_depth(depth);
+                assert_eq!(values(&mut deep, &["AA1", "AB1", "AC1"]), want, "{reads} at depth {depth}");
+            }
+        }
+        crate::seed_random(None);
+    }
 }

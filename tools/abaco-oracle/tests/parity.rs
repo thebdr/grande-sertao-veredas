@@ -1482,3 +1482,54 @@ fn a_seeded_draw_is_the_same_however_deep_its_cell_reads() {
         assert_eq!((m.formula_cells, m.matched), (100, 100), "{links:?}: {missed:?}");
     }
 }
+
+#[test]
+fn a_random_anchor_reading_a_row_no_real_run_reads_is_the_same_however_deep_it_reads() {
+    // the round at 119f14c1: a run the evaluator abandons to an unwind reads every cell empty, so
+    // `IF(Z1=1,0,SUM(1:1))` read the whole row there and put it on record for the anchor, whose
+    // spill then contradicted it: `#CIRC!`, as deep as the build's stack let the unwind come, a
+    // draw that equalled Excel's cache in a release build and not in a debug one (fork change 42)
+    let dir = tempfile::tempdir().unwrap();
+    let source = corpus_dir(&baseline()).join("DynamicArrays.xlsx");
+    let part = sheet_part(&source, "DynamicArrays");
+    let sheet_data = regex::Regex::new(r"(?s)<sheetData>.*?</sheetData>|<sheetData/>").unwrap();
+    let dimension = regex::Regex::new(r"<dimension[^>]*/>").unwrap();
+    let with_rows = |rows: String| {
+        let (sheet_data, dimension) = (sheet_data.clone(), dimension.clone());
+        move |text: &str| {
+            let text = dimension.replace(text, "").to_string();
+            sheet_data.replace(&text, regex::NoExpand(&format!("<sheetData>{rows}</sheetData>"))).to_string()
+        }
+    };
+    let anchor = |reads: &str, cached: &str| {
+        format!(r#"<c r="AA1" cm="1"><f t="array" ref="AA1" aca="1" ca="1">_xlfn.RANDARRAY(1,3)+IF(Z1=1,0,{reads})*0</f><v>{cached}</v></c>"#)
+    };
+    let mut probe = Probe::default();
+    for reads in ["SUM(1:1)", "SUM(INDIRECT(&quot;1:1&quot;))"] {
+        // the anchor's draw where Z1 is a constant, measured against a cache it is not
+        let shallow = dir.path().join("shallow.xlsx");
+        rewrite_part(&source, &shallow, &part, with_rows(format!(r#"<row r="1"><c r="Z1"><v>1</v></c>{}</row>"#, anchor(reads, "2"))));
+        let mut opts = options(LinksMode::Cached);
+        opts.max_examples = 1_000;
+        let report = run_file(&shallow, &opts, &mut probe);
+        let draw = report.examples.values().flatten().find(|e| e.reference == "AA1").map(|e| e.actual.clone()).unwrap_or_else(|| panic!("{reads}"));
+        // the same anchor reading a chain of 99 formulas, past the evaluator's 64 in every build
+        let mut rows = format!(r#"<row r="1"><c r="Z1"><f>Z2</f><v>1</v></c>{}</row>"#, anchor(reads, &draw));
+        for r in 2..100 {
+            rows.push_str(&format!(r#"<row r="{r}"><c r="Z{r}"><f>Z{}</f><v>1</v></c></row>"#, r + 1));
+        }
+        rows.push_str(r#"<row r="100"><c r="Z100"><v>1</v></c></row>"#);
+        let deep = dir.path().join("deep.xlsx");
+        rewrite_part(&source, &deep, &part, with_rows(rows));
+        for links in [LinksMode::Cached, LinksMode::Linked] {
+            let mut o = options(links);
+            o.max_examples = 1_000;
+            let report = run_file(&deep, &o, &mut probe);
+            let m = report.measure().unwrap();
+            let missed: Vec<String> = report.examples.values().flatten().map(|e| format!("{} {} {}", e.reference, e.expected, e.actual)).collect();
+            // every formula cell the oracle counts matched, the anchor's among them
+            assert_eq!((m.formula_cells, m.matched), (101, 101), "{reads}, {links:?}: {missed:?}");
+            assert!(missed.is_empty(), "{reads}, {links:?}: {missed:?}");
+        }
+    }
+}
