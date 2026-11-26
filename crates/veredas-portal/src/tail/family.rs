@@ -602,7 +602,13 @@ fn attach_backfill(
     // missed.
     let located = locate_start(spec, ts, start_at);
     attached(attached_slot);
-    let Some(plan) = located? else {
+    let (plan, whole) = located?;
+    // A listing that could not see everything (a subfolder or an entry skipped) leaves members
+    // the plan never had: the history cannot be shown whole, and the live read goes on.
+    if !whole {
+        lost();
+    }
+    let Some(plan) = plan else {
         return Ok(BackfillAttach::FamilyEmpty);
     };
 

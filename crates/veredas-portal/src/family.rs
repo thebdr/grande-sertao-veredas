@@ -144,6 +144,13 @@ impl FamilySpec {
     /// Scan the folder (the subtree when recursive) and return the family in resolved order:
     /// retirees ascending by (key, mtime, name), the active file, per the mode, last.
     pub fn resolve(&self) -> Result<Vec<FamilyFile>, SourceError> {
+        self.resolve_whole().map(|(files, _)| files)
+    }
+
+    /// `resolve`, and whether the listing saw everything: false when a subfolder or an entry it
+    /// met could not be listed or looked at (skipped, as a live rescan skips it). A start's history
+    /// gets no next look, so the backfill's plan asks (C-096's seventeenth refute round).
+    pub(crate) fn resolve_whole(&self) -> Result<(Vec<FamilyFile>, bool), SourceError> {
         let fixed_name = match &self.active {
             ActiveMode::Fixed(name) => Some(name.as_str()),
             ActiveMode::NewestByOrder => None,
@@ -152,7 +159,8 @@ impl FamilySpec {
         let mut members: Vec<FamilyFile> = Vec::new();
         let mut fixed_active: Option<FamilyFile> = None;
 
-        for (name, path, mtime) in self.collect_entries()? {
+        let (entries, whole) = self.collect_entries()?;
+        for (name, path, mtime) in entries {
             let name = name.as_str();
             if Some(name) == fixed_name {
                 fixed_active = Some(FamilyFile {
@@ -188,28 +196,39 @@ impl FamilySpec {
             }
         }
 
-        Ok(members)
+        Ok((members, whole))
     }
 
     /// `(candidate name, absolute path, mtime)` for every file in scope. Flat: one `read_dir`,
     /// the name is the file name. Recursive: a bounded walk, the name the `/`-separated path
     /// relative to the family's folder. An entry or a subfolder that vanishes or errors mid-scan
     /// is skipped (a rotation in progress; the next rescan sees the settled state); only an
-    /// unreadable root is an error.
-    fn collect_entries(&self) -> Result<Vec<(String, PathBuf, Option<SystemTime>)>, SourceError> {
+    /// unreadable root is an error. The flag says whether nothing was skipped.
+    #[allow(clippy::type_complexity)]
+    fn collect_entries(&self) -> Result<(Vec<(String, PathBuf, Option<SystemTime>)>, bool), SourceError> {
         let mut out = Vec::new();
+        let mut whole = true;
         let mut stack: Vec<(PathBuf, usize)> = vec![(self.dir.clone(), 0)];
         let mut first = true;
         while let Some((dir, depth)) = stack.pop() {
             let entries = match std::fs::read_dir(&dir) {
                 Ok(entries) => entries,
                 Err(e) if first => return Err(SourceError::io(&dir, e)),
-                Err(_) => continue,
+                Err(_) => {
+                    whole = false;
+                    continue;
+                }
             };
             first = false;
             for entry in entries {
-                let Ok(entry) = entry else { continue };
-                let Ok(file_type) = entry.file_type() else { continue };
+                let Ok(entry) = entry else {
+                    whole = false;
+                    continue;
+                };
+                let Ok(file_type) = entry.file_type() else {
+                    whole = false;
+                    continue;
+                };
                 let path = entry.path();
                 if file_type.is_dir() {
                     if self.recursive && depth < MAX_RECURSION_DEPTH {
@@ -245,6 +264,6 @@ impl FamilySpec {
                 out.push((name, path, mtime));
             }
         }
-        Ok(out)
+        Ok((out, whole))
     }
 }

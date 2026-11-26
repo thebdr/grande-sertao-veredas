@@ -768,3 +768,34 @@ fn a_member_renamed_outside_the_pattern_is_lost_and_the_search_holds_under_a_ren
     DURING_WALK.lock().unwrap().retain(|(at, _)| *at != walked);
     BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
 }
+
+/// C-096's seventeenth refute round. A recursive family whose subfolder cannot be listed when the
+/// start locates its history (`b/`, no listing allowed, holding 1 000 lines of it) leaves the plan
+/// without that subfolder's members: the history cannot be shown whole, lost, never said read at
+/// the 200 lines the replay read, a fixed-name family and a newest-by-order one alike; the live
+/// read goes on.
+#[cfg(unix)]
+#[test]
+fn a_recursive_family_s_unlistable_subfolder_loses_the_history() {
+    use std::os::unix::fs::PermissionsExt;
+    let start = NaiveDateTime::parse_from_str("2026-07-19 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+    let stamps = || TimestampSpec::new(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ["%Y-%m-%d %H:%M:%S"]).unwrap();
+    let lost = crate::tail::HISTORY_LOST;
+    let dir = tempfile::tempdir().unwrap();
+    for (name, mode, active) in [("fixed", ActiveMode::Fixed("current.log".into()), "current.log"), ("newest", ActiveMode::NewestByOrder, "done_3.log")] {
+        let fam = dir.path().join(name);
+        std::fs::create_dir_all(fam.join("a")).unwrap();
+        std::fs::create_dir_all(fam.join("b")).unwrap();
+        write(&fam.join("a/done_1.log"), 0..100);
+        write(&fam.join("b/done_2.log"), 100..1_100);
+        write(&fam.join(active), 1_100..1_200);
+        std::fs::set_permissions(fam.join("b"), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let spec = FamilySpec::new(&fam, r"(?:[ab]/)?done_(?P<idx>\d+)\.log", None, mode).unwrap().with_recursive(true);
+        let history = Arc::new(AtomicU64::new(u64::MAX));
+        let source = FamilyTailSource::new(name, name, spec, FamilyTailConfig { start: FamilyStart::Backfill(start), ..FamilyTailConfig::default() })
+            .with_timestamps(stamps())
+            .with_history_read(Arc::clone(&history));
+        assert_eq!(run_cut(Box::new(source), &history, 200), (200, lost), "{name}");
+        std::fs::set_permissions(fam.join("b"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}

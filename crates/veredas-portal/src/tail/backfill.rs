@@ -207,11 +207,13 @@ const LOCATE_PATIENCE: Duration = Duration::from_millis(500);
 
 /// Build the replay plan for `start`. `None` when the family has no members, or none with a
 /// line in it (nothing to backfill; live tailing decides what to do with whatever appears).
+/// The plan, and whether the locate's listings saw the whole family (no subfolder or entry
+/// skipped): a plan from a listing that could not see everything cannot show the history whole.
 pub(crate) fn locate_start(
     spec: &FamilySpec,
     ts: &TimestampSpec,
     start: NaiveDateTime,
-) -> Result<Option<BackfillPlan>, SourceError> {
+) -> Result<(Option<BackfillPlan>, bool), SourceError> {
     locate_start_with(spec, ts, start, &mut |_| {})
 }
 
@@ -221,11 +223,11 @@ pub(crate) fn locate_start_with(
     ts: &TimestampSpec,
     start: NaiveDateTime,
     before_peek: &mut dyn FnMut(&Path),
-) -> Result<Option<BackfillPlan>, SourceError> {
+) -> Result<(Option<BackfillPlan>, bool), SourceError> {
     let deadline = Instant::now() + LOCATE_PATIENCE;
     loop {
         match locate_once(spec, ts, start, before_peek) {
-            Ok(Located::Plan(plan)) => return Ok(plan),
+            Ok(Located::Plan(plan, whole)) => return Ok((plan, whole)),
             // A rotation during the locate: a member renamed away between the listing and its
             // peek (the fixed-name mode above all, whose active retires under a new name), or the
             // members changed under the peeks, so what was read may not be what was listed. The
@@ -247,7 +249,8 @@ pub(crate) fn locate_start_with(
 
 /// One pass of the locate: a plan, or the finding that the family changed under it.
 enum Located {
-    Plan(Option<BackfillPlan>),
+    /// The plan, and whether both listings saw the whole family.
+    Plan(Option<BackfillPlan>, bool),
     Changed,
 }
 
@@ -257,9 +260,9 @@ fn locate_once(
     start: NaiveDateTime,
     before_peek: &mut dyn FnMut(&Path),
 ) -> Result<Located, SourceError> {
-    let files = spec.resolve()?;
+    let (files, whole) = spec.resolve_whole()?;
     if files.is_empty() {
-        return Ok(Located::Plan(None));
+        return Ok(Located::Plan(None, whole));
     }
 
     // The file-name token prefilter (a hint): when a file's successor carries a date from a day
@@ -287,7 +290,7 @@ fn locate_once(
     // No line in any member yet: nothing to locate in, the live attach reads what is born whole.
     let all_kept_empty = peeks.iter().all(|p| p.len == 0);
     if all_kept_empty && candidates.len() == files.len() {
-        return Ok(Located::Plan(None));
+        return Ok(Located::Plan(None, whole));
     }
 
     // The index into `candidates` where the replay begins, and the byte offset into that file.
@@ -352,7 +355,7 @@ fn locate_once(
     // The peeks and the scan read files by the names the listing gave; a rotation meanwhile
     // (every rotation adds a name) may have put another file under a listed name. The listing
     // is taken again, and a plan stands only when the members are the ones it was computed for.
-    let after = spec.resolve()?;
+    let (after, whole_after) = spec.resolve_whole()?;
     if after.len() != files.len() || after.iter().zip(&files).any(|(a, b)| a.file_name != b.file_name) {
         return Ok(Located::Changed);
     }
@@ -372,7 +375,7 @@ fn locate_once(
     let skipped =
         files.iter().filter(|f| !plan_names.contains(f.file_name.as_str())).map(|f| f.file_name.clone()).collect();
 
-    Ok(Located::Plan(Some(BackfillPlan { files: plan_files, first_offset, first_encoding: peeks[begin].encoding, skipped })))
+    Ok(Located::Plan(Some(BackfillPlan { files: plan_files, first_offset, first_encoding: peeks[begin].encoding, skipped }), whole && whole_after))
 }
 
 /// The plan as a test reads it: the file names in order, the first offset, the skipped names.
@@ -381,13 +384,13 @@ pub type PlanView = (Vec<String>, u64, Vec<String>);
 /// The plan, for a test.
 #[doc(hidden)]
 pub fn plan_for(spec: &FamilySpec, ts: &TimestampSpec, start: NaiveDateTime) -> Result<Option<PlanView>, SourceError> {
-    Ok(locate_start(spec, ts, start)?.map(|p| (p.files.iter().map(|f| f.name.clone()).collect(), p.first_offset, p.skipped)))
+    Ok(locate_start(spec, ts, start)?.0.map(|p| (p.files.iter().map(|f| f.name.clone()).collect(), p.first_offset, p.skipped)))
 }
 
 /// The plan, for a test that rotates the family before a peek.
 #[doc(hidden)]
 pub fn plan_for_with(spec: &FamilySpec, ts: &TimestampSpec, start: NaiveDateTime, before_peek: &mut dyn FnMut(&Path)) -> Result<Option<PlanView>, SourceError> {
-    Ok(locate_start_with(spec, ts, start, before_peek)?.map(|p| (p.files.iter().map(|f| f.name.clone()).collect(), p.first_offset, p.skipped)))
+    Ok(locate_start_with(spec, ts, start, before_peek)?.0.map(|p| (p.files.iter().map(|f| f.name.clone()).collect(), p.first_offset, p.skipped)))
 }
 
 /// The raw line table, for a test: (offset, content) per line.
