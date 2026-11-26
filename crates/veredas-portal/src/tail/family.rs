@@ -628,7 +628,12 @@ fn attach_backfill(
                                 if stop.load(Ordering::Relaxed) {
                                     return Ok(BackfillAttach::Stopped);
                                 }
-                                true // the listing is out of patience: proceed
+                                // The listing out of patience cannot tell whether a rotation
+                                // renamed the active into a retiree before this open: proceed, so
+                                // the live read goes on, but the history cannot be shown whole and
+                                // is never said read (C-096).
+                                lost();
+                                true
                             }
                         };
                         if clean {

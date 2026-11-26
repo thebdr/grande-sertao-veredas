@@ -447,10 +447,11 @@ struct Stats {
     /// store's window let go of some of them: the history is not whole in the store, and the log
     /// never says it read.
     history_lost: bool,
-    /// The arrival of the log's oldest line drained since the last flush, and of its oldest line
-    /// stored: what a window lets go of first.
-    pending_first_ms: Option<i64>,
-    first_stored_ms: Option<i64>,
+    /// The oldest arrival among the log's lines drained since the last flush, and among those
+    /// stored: what a window lets go of first. The least, not the first: arrivals are read from
+    /// the wall clock, which may step back.
+    pending_oldest_ms: Option<i64>,
+    oldest_stored_ms: Option<i64>,
     /// The history said read in the health the session publishes: what a reader has seen.
     said: bool,
 }
@@ -569,10 +570,13 @@ fn settle_lines(stats: &mut BTreeMap<String, Stats>, history_read: &HashMap<Stri
         if failed && !history_is_read(history_read.get(id), st) {
             st.history_lost = true;
         }
-        if !failed && st.first_stored_ms.is_none() {
-            st.first_stored_ms = st.pending_first_ms;
+        if !failed {
+            st.oldest_stored_ms = match (st.oldest_stored_ms, st.pending_oldest_ms) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
         }
-        st.pending_first_ms = None;
+        st.pending_oldest_ms = None;
         st.stored += st.pending;
         st.pending = 0;
     }
@@ -586,7 +590,7 @@ fn settle_lines(stats: &mut BTreeMap<String, Stats>, history_read: &HashMap<Stri
 /// history's rows like any others.
 fn window_marks(stats: &mut BTreeMap<String, Stats>, cutoff: i64) {
     for st in stats.values_mut() {
-        if st.first_stored_ms.is_some_and(|t| t < cutoff) && !st.said {
+        if st.oldest_stored_ms.is_some_and(|t| t < cutoff) && !st.said {
             st.history_lost = true;
         }
     }
@@ -893,7 +897,7 @@ impl Session {
                 return Err(SessionError::Spawn { id, source: e });
             }
             time_formats.insert(SourceId::new(&id), formats);
-            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None, said: false });
+            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_oldest_ms: None, oldest_stored_ms: None, said: false });
             sources.push(SourceInfo { id, display_name: display, kind: "log", has_timestamp: has_ts });
         }
 
@@ -911,7 +915,7 @@ impl Session {
                     return Err(SessionError::Spawn { id: spec.source_id.clone(), source: e });
                 }
             };
-            stats.insert(spec.source_id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None, said: false });
+            stats.insert(spec.source_id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_oldest_ms: None, oldest_stored_ms: None, said: false });
             sources.push(SourceInfo { id: spec.source_id.clone(), display_name: spec.display_name.clone(), kind: "opc", has_timestamp: false });
             opc_handles.push(worker.writer.clone());
             opc_runtimes.push(OpcRuntime { handle: worker.handle, spec, base, seq: 0, state: ConnState::Connecting, dedup: DedupState::default() });
@@ -936,7 +940,7 @@ impl Session {
                     return Err(SessionError::Channel(e));
                 }
             };
-            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None, said: false });
+            stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_oldest_ms: None, oldest_stored_ms: None, said: false });
             sources.push(SourceInfo { id, display_name: display, kind: "channel", has_timestamp: false });
             channel_handles.push(worker.writer.clone());
             channel_runtimes.push(ChannelRuntime { handle: worker.handle, writer: worker.writer, tables, state: LinkState::Waiting });
@@ -950,7 +954,7 @@ impl Session {
                 let closed = Arc::new(Mutex::new(false));
                 let id = c.source_id.trim().to_string();
                 let display = if c.display_name.trim().is_empty() { id.clone() } else { c.display_name.trim().to_string() };
-                stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_first_ms: None, first_stored_ms: None, said: false });
+                stats.insert(id.clone(), Stats { count: 0, last_arrival_ms: 0, last_ts: None, pending: 0, stored: 0, history_lost: false, pending_oldest_ms: None, oldest_stored_ms: None, said: false });
                 sources.push(SourceInfo { id: id.clone(), display_name: display, kind: "controller", has_timestamp: false });
                 let runtime = ControllerRuntime {
                     source: SourceId::new(&id),
@@ -1166,7 +1170,7 @@ impl Inner {
             if let Some(st) = self.stats.get_mut(ev.source.as_str()) {
                 st.count += 1;
                 st.pending += 1;
-                st.pending_first_ms.get_or_insert(ev.arrival_unix_ms);
+                st.pending_oldest_ms = Some(st.pending_oldest_ms.map_or(ev.arrival_unix_ms, |t| t.min(ev.arrival_unix_ms)));
                 st.last_arrival_ms = ev.arrival_unix_ms;
                 if ev.parsed_ts.is_some() {
                     st.last_ts = ev.parsed_ts;

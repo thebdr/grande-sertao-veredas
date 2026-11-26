@@ -178,3 +178,60 @@ fn a_held_fixed_active_renamed_before_its_open_is_read_first() {
     handle.join().unwrap();
     BEFORE_OPEN.lock().unwrap().retain(|(at, _)| *at != fixed);
 }
+
+/// The backfill's open of the fixed path followed by a listing that runs out of patience (the
+/// folder denying its listing for two seconds, a share's hiccup) cannot tell whether a rotation
+/// renamed the active just before the open: the live read goes on, but the history is never said
+/// read, never at the 20 010 lines sent while the renamed active's 40 000 are unread (C-096's
+/// ninth refute round).
+#[cfg(unix)]
+#[test]
+fn a_listing_out_of_patience_after_the_fixed_open_never_says_the_history_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("fam");
+    std::fs::create_dir_all(&folder).unwrap();
+    write(&folder.join("done_1.log"), 0..20_000);
+    let fixed = folder.join("current.log");
+    write(&fixed, 20_000..60_000);
+    let (from, to, again, shut) = (fixed.clone(), folder.join("done_2.log"), fixed.clone(), folder.clone());
+    let mut done = false;
+    BEFORE_OPEN.lock().unwrap().push((
+        fixed.clone(),
+        Box::new(move || {
+            if !done {
+                done = true;
+                std::fs::rename(&from, &to).unwrap();
+                write(&again, 60_000..60_010);
+                std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o300)).unwrap();
+                let shut = shut.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(2));
+                    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o755)).unwrap();
+                });
+            }
+        }),
+    ));
+    let spec = FamilySpec::new(&folder, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let start = NaiveDateTime::parse_from_str("2026-07-19 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+    let stamps = TimestampSpec::new(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ["%Y-%m-%d %H:%M:%S"]).unwrap();
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let source = FamilyTailSource::new("fixed", "fixed", spec, FamilyTailConfig { start: FamilyStart::Backfill(start), ..FamilyTailConfig::default() })
+        .with_timestamps(stamps)
+        .with_history_read(Arc::clone(&history));
+    let (tx, rx) = channel();
+    let handle = Box::new(source).start(tx).unwrap();
+    let started = Instant::now();
+    let mut lines = 0u64;
+    while started.elapsed() < Duration::from_secs(6) {
+        lines += rx.try_iter().count() as u64;
+        let mark = history.load(Ordering::SeqCst);
+        assert!(mark == u64::MAX || mark == crate::tail::HISTORY_LOST, "said read at {mark} of the 60 000 lines of history ({lines} sent)");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(history.load(Ordering::SeqCst), crate::tail::HISTORY_LOST, "the history cannot be shown whole");
+    handle.request_stop();
+    handle.join().unwrap();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| *at != fixed);
+}

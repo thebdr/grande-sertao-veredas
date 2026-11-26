@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicU64;
 use super::{Stats, history_is_read, settle_lines, window_marks};
 
 fn stats(pending: u64, stored: u64) -> Stats {
-    Stats { count: pending + stored, last_arrival_ms: 0, last_ts: None, pending, stored, history_lost: false, pending_first_ms: None, first_stored_ms: None, said: false }
+    Stats { count: pending + stored, last_arrival_ms: 0, last_ts: None, pending, stored, history_lost: false, pending_oldest_ms: None, oldest_stored_ms: None, said: false }
 }
 
 #[test]
@@ -46,9 +46,9 @@ fn a_window_lets_go_of_a_history_only_once_it_is_said() {
     let marks: HashMap<String, Arc<AtomicU64>> = ["counted", "said", "young"].iter().map(|id| (id.to_string(), Arc::clone(&at))).collect();
     let mut all: BTreeMap<String, Stats> = ["counted", "said", "young"].iter().map(|id| (id.to_string(), stats(100, 0))).collect();
     for st in all.values_mut() {
-        st.pending_first_ms = Some(1_000);
+        st.pending_oldest_ms = Some(1_000);
     }
-    all.get_mut("young").unwrap().pending_first_ms = Some(5_000);
+    all.get_mut("young").unwrap().pending_oldest_ms = Some(5_000);
     settle_lines(&mut all, &marks, false);
     assert!(all.iter().all(|(id, st)| history_is_read(marks.get(id), st)), "every history counted read");
     all.get_mut("said").unwrap().said = true;
@@ -56,4 +56,24 @@ fn a_window_lets_go_of_a_history_only_once_it_is_said() {
     assert!(!history_is_read(marks.get("counted"), &all["counted"]), "counted, not said: lost to the pass");
     assert!(history_is_read(marks.get("said"), &all["said"]), "said: kept");
     assert!(history_is_read(marks.get("young"), &all["young"]), "nothing of it let go");
+}
+
+/// The window compares a log's oldest stored arrival, not its first (C-096's ninth refute round):
+/// arrivals are read from the wall clock, which may step back, so a later flush may hold rows older
+/// than the first one's; a pass whose cutoff is past them loses the history unsaid.
+#[test]
+fn a_window_reads_a_log_s_oldest_arrival_whatever_the_order() {
+    let at = Arc::new(AtomicU64::new(200));
+    let marks: HashMap<String, Arc<AtomicU64>> = HashMap::from([("log".to_string(), Arc::clone(&at))]);
+    let mut all: BTreeMap<String, Stats> = BTreeMap::from([("log".to_string(), stats(100, 0))]);
+    all.get_mut("log").unwrap().pending_oldest_ms = Some(1_000);
+    settle_lines(&mut all, &marks, false);
+    // The clock stepped back: the next flush's lines arrived before the first's.
+    let st = all.get_mut("log").unwrap();
+    st.pending = 100;
+    st.pending_oldest_ms = Some(500);
+    settle_lines(&mut all, &marks, false);
+    assert!(history_is_read(marks.get("log"), &all["log"]), "counted read, not said");
+    window_marks(&mut all, 800);
+    assert!(!history_is_read(marks.get("log"), &all["log"]), "its rows of 500 let go: lost");
 }
