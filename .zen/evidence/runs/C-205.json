@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(executable)"
   ],
   "exitCode": 0,
-  "outputSha": "35d33e53b3938b0bd597a6ec7122ea2ee2377702eb85d737c538c72263012a86",
-  "outputTail": "────────────\n Nextest run ID a38ac708-a916-4f0c-b293-e5f6564e10c9 with nextest profile: default\n    Starting 10 tests across 1 binary (150 binaries skipped)\n        PASS [   0.033s] ( 1/10) veredas-comissionador::executable the_folders_made_for_a_refused_run_are_removed_and_no_other\n        PASS [   0.102s] ( 2/10) veredas-comissionador::executable check_reads_a_file_and_names_its_problems\n        PASS [   0.214s] ( 3/10) veredas-comissionador::executable a_log_with_no_stamps_written_live_does_not_hold_a_replay\n        PASS [   0.814s] ( 4/10) veredas-comissionador::executable a_replay_starts_once_its_window_is_read_however_the_plant_keeps_writing\n        PASS [   0.997s] ( 5/10) veredas-comissionador::executable replay_reads_the_window_the_project_s_start_fills\n        PASS [   1.286s] ( 6/10) veredas-comissionador::executable a_late_line_in_a_rotated_member_does_not_end_the_read_in\n        PASS [   5.958s] ( 7/10) veredas-comissionador::executable a_replay_waits_for_portal_to_say_each_history_is_read\n        PASS [   6.881s] ( 8/10) veredas-comissionador::executable a_stdout_nobody_reads_ends_no_run_and_an_argument_not_utf_8_is_a_wrong_command_line\n        PASS [  12.644s] ( 9/10) veredas-comissionador::executable a_replay_waits_until_the_store_holds_what_the_start_reads\n        PASS [  22.685s] (10/10) veredas-comissionador::executable run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict\n────────────\n     Summary [  22.686s] 10 tests run: 10 passed, 0 skipped",
-  "ranAt": "2026-11-26T21:40:28.897Z",
-  "headCommit": "938b5c9eb7348e68f29beddb41af7da89ce802d3",
+  "outputSha": "91a5f39acb4d5aa254146580770ccb96ba8dda6a26c2015ae3d5c7978caa5b83",
+  "outputTail": " Nextest run ID 03808ab5-28a0-452e-b228-8843b0b9455b with nextest profile: default\n    Starting 11 tests across 1 binary (151 binaries skipped)\n        PASS [   0.040s] ( 1/11) veredas-comissionador::executable the_folders_made_for_a_refused_run_are_removed_and_no_other\n        PASS [   0.053s] ( 2/11) veredas-comissionador::executable a_window_opening_before_the_session_s_start_is_refused\n        PASS [   0.109s] ( 3/11) veredas-comissionador::executable check_reads_a_file_and_names_its_problems\n        PASS [   0.315s] ( 4/11) veredas-comissionador::executable a_log_with_no_stamps_written_live_does_not_hold_a_replay\n        PASS [   0.816s] ( 5/11) veredas-comissionador::executable a_replay_starts_once_its_window_is_read_however_the_plant_keeps_writing\n        PASS [   1.101s] ( 6/11) veredas-comissionador::executable replay_reads_the_window_the_project_s_start_fills\n        PASS [   1.324s] ( 7/11) veredas-comissionador::executable a_late_line_in_a_rotated_member_does_not_end_the_read_in\n        PASS [   5.966s] ( 8/11) veredas-comissionador::executable a_replay_waits_for_portal_to_say_each_history_is_read\n        PASS [   6.667s] ( 9/11) veredas-comissionador::executable a_stdout_nobody_reads_ends_no_run_and_an_argument_not_utf_8_is_a_wrong_command_line\n        PASS [  18.654s] (10/11) veredas-comissionador::executable a_replay_waits_until_the_store_holds_what_the_start_reads\n        PASS [  28.192s] (11/11) veredas-comissionador::executable run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict\n────────────\n     Summary [  28.193s] 11 tests run: 11 passed, 0 skipped",
+  "ranAt": "2026-11-26T22:49:59.635Z",
+  "headCommit": "70ce8a0e9cc138ab788f148430381e7b44b82f8d",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/executable.rs",
       "file": "crates/veredas-comissionador/tests/executable.rs",
-      "fileSha": "bd10c1adc813542ba09ededdfafba740588648eaa3d30e3a6fb74a180ac3db47"
+      "fileSha": "ec9299d9e56ddd0f9c1524a0dd6ccaec362199546c9ec0b4a3f334ba8c28541b"
     }
   ]
 }
