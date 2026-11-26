@@ -20,7 +20,8 @@ rather than repeating every type.
   file holds, written back as TOML's own values, or the file is refused, naming the first place it
   differs (an element past what its list takes, a table written as a list, a word written as a
   table, a repeat a set keeps once: `a scan file's `capture` is not what its reader keeps`).
-- Read whole, it must be a scan: its devices by MAC, each once; its topology's links each stored
+- Read whole, it must be a scan: its devices by MAC, each once; no field holding two values last
+  heard in one frame (a frame says one value of a field); its topology's links each stored
   lesser end first and by their ends, each pair of ends once (a link is its two ends: one cable is
   one link); and no witness, nor a port's last
   leaving or other frame, naming a frame past its capture's last record (`not a scan: ...`). A

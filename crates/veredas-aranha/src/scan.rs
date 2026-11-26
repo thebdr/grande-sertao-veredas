@@ -103,7 +103,8 @@ impl Scan {
         toml::to_string(self).map_err(|e| ScanError::Write(e.to_string()))
     }
 
-    /// What makes it a scan beyond its keys: its devices by MAC, each once; its topology's links
+    /// What makes it a scan beyond its keys: its devices by MAC, each once; no field holding two
+    /// values last heard in one frame; its topology's links
     /// each stored lesser end first and by their ends, each pair of ends once (a link is its two
     /// ends, so one cable is one link); no witness, and no port's last leaving or other frame,
     /// naming a frame past its capture's last record (one before its first is a frame the listener
@@ -113,6 +114,13 @@ impl Scan {
             if pair[0].mac >= pair[1].mac {
                 let why = if pair[0].mac == pair[1].mac { "is in it twice" } else { "is out of the order by MAC" };
                 return Err(ScanError::Invalid(format!("device {} {why}", pair[1].mac)));
+            }
+        }
+        // One frame says one value of a field: two values last heard in one frame would leave the
+        // value heard last to the order the list holds (C-147's second refute round).
+        for d in &self.devices {
+            if let Some((field, frame)) = one_frame_twice(d) {
+                return Err(ScanError::Invalid(format!("device {}'s {field} holds two values last heard in frame {frame}", d.mac)));
             }
         }
         let ends = |l: &crate::topology::Link| format!("{} {} = {} {}", l.a.node, l.a.port, l.b.node, l.b.port);
@@ -198,6 +206,49 @@ fn frames_of(d: &Device) -> impl Iterator<Item = u64> + '_ {
             .chain(p.leaving.into_iter().chain(p.spoke).map(|(_, frame)| frame))
     });
     own.chain(ports)
+}
+
+/// A field of `d` (or of one of its ports) holding two values whose last witness is one frame, and
+/// that frame.
+fn one_frame_twice(d: &Device) -> Option<(String, u64)> {
+    fn twice<T>(f: &Field<T>) -> Option<u64> {
+        let mut seen = std::collections::BTreeSet::new();
+        f.candidates.iter().map(|c| c.last.frame).find(|frame| !seen.insert(*frame))
+    }
+    let own = [
+        ("name", twice(&d.name)),
+        ("alias", twice(&d.alias)),
+        ("ip", twice(&d.ip)),
+        ("ip_status", twice(&d.ip_status)),
+        ("pn_id", twice(&d.pn_id)),
+        ("vendor", twice(&d.vendor)),
+        ("role", twice(&d.role)),
+        ("instance", twice(&d.instance)),
+        ("chassis", twice(&d.chassis)),
+        ("sys_name", twice(&d.sys_name)),
+        ("sys_desc", twice(&d.sys_desc)),
+        ("sys_caps", twice(&d.sys_caps)),
+        ("mgmt_ips", twice(&d.mgmt_ips)),
+        ("arp_ip", twice(&d.arp_ip)),
+    ];
+    if let Some((field, Some(frame))) = own.into_iter().find(|(_, t)| t.is_some()) {
+        return Some((field.to_string(), frame));
+    }
+    for p in d.ports.values() {
+        let port = [
+            ("port_mac", twice(&p.port_mac)),
+            ("desc", twice(&p.desc)),
+            ("pn_status", twice(&p.pn_status)),
+            ("delays", twice(&p.delays)),
+            ("mrp", twice(&p.mrp)),
+            ("pvid", twice(&p.pvid)),
+            ("mau_type", twice(&p.mau_type)),
+        ];
+        if let Some((field, Some(frame))) = port.into_iter().find(|(_, t)| t.is_some()) {
+            return Some((format!("port {}'s {field}", p.id), frame));
+        }
+    }
+    None
 }
 
 /// The first place, as a key path in backticks, where what the file holds and what was kept of it

@@ -368,3 +368,37 @@ fn links_stored_otherwise_than_lesser_end_first_and_each_pair_once_are_no_scan()
         assert!(own.to_toml().is_ok());
     }
 }
+
+/// One frame says one value of a field: a field holding two values last heard in one frame is no
+/// scan (the value heard last would be the list's order), written or read (C-147's second refute
+/// round); and a link between two ports of one device is stored lesser end first like any.
+#[test]
+fn two_values_of_a_field_from_one_frame_and_a_device_s_own_link_flipped_are_no_scan() {
+    use veredas_aranha::topology::{Confidence, End, Link};
+    let scan = full();
+    let written = |s: &Scan| toml::to_string(s).unwrap();
+    let mut tie = scan.clone();
+    let mut again = tie.devices[0].name.candidates[0].clone();
+    again.value = format!("{}-other", again.value);
+    let frame = again.last.frame;
+    tie.devices[0].name.candidates.push(again);
+    let says = format!("device {}'s name holds two values last heard in frame {frame}", tie.devices[0].mac);
+    assert_eq!(tie.to_toml().unwrap_err().to_string(), format!("a scan cannot be written: not a scan: {says}"));
+    assert_eq!(Scan::read(&written(&tie)).unwrap_err().to_string(), format!("not a scan: {says}"));
+    // A port's field too.
+    let mut tie = scan.clone();
+    let port = tie.devices[0].ports.values_mut().next().unwrap();
+    let mut again = port.port_mac.candidates[0].clone();
+    again.value = veredas_aranha::profinet::mac::Mac([0x02, 0, 0, 0, 0x99, 0x99]);
+    let (id, frame) = (port.id.clone(), again.last.frame);
+    port.port_mac.candidates.push(again);
+    assert_eq!(tie.check().unwrap_err().to_string(), format!("not a scan: device {}'s port {id}'s port_mac holds two values last heard in frame {frame}", tie.devices[0].mac));
+    // A device's word on its own port 3 as its port 4's neighbour, stored port 4 first: refused.
+    let dev = veredas_aranha::topology::device_id(scan.devices[0].mac);
+    let end = |p: &str| End { node: dev.clone(), port: p.into() };
+    let mut own = scan.clone();
+    own.topology.links = vec![Link { a: end("port-004"), b: end("port-003"), confidence: Confidence::Reported, witnesses: 1 }];
+    assert!(own.check().unwrap_err().to_string().ends_with("is stored greater end first"));
+    own.topology.links = vec![Link { a: end("port-003"), b: end("port-004"), confidence: Confidence::Reported, witnesses: 1 }];
+    assert!(own.check().is_ok());
+}

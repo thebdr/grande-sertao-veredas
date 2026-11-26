@@ -425,6 +425,51 @@ fn what_a_device_states_now_is_its_value_heard_last_each_part_of_it_compared() {
     assert!(matches!(diff::diff(&twice, &to3), Err(DiffError::Baseline(ScanError::Invalid(why))) if why.ends_with("is in it twice")));
 }
 
+/// The second refute round's cases.
+#[test]
+fn a_station_name_s_case_a_stamp_shared_by_two_frames_every_conflict_kind_and_an_ended_account() {
+    use veredas_aranha::profinet::dcp::IpStatus;
+    let one = |obs: &[Observation]| scan_of(obs, &["eth1"], &[]);
+    let at = |dev: Mac, name: &str, address: Option<IpSuite>, conflict: Option<bool>, stamp: u64, frame: u64| {
+        let identity = DeviceIdentity { name: Some(name.into()), ip: address, ip_status: conflict.map(|c| IpStatus { set: 1, conflict: c }), ..Default::default() };
+        Observation { witness: Witness { probe: Probe::DcpHeard, iface: "eth9".into(), at_ns: T0 + stamp, frame }, observed: Observed::Dcp { mac: dev, service: dcp::Service::Hello, service_type: dcp::ServiceType::Request, identity } }
+    };
+    // A station name differing in case alone is another name.
+    let d = diff::diff(&one(&[at(A, "bomba-1", None, None, 1, 1)]), &one(&[at(A, "Bomba-1", None, None, 1, 1)])).unwrap();
+    assert_eq!(d.renamed, [change(A, Said::StationName, "bomba-1", "Bomba-1")]);
+    // Two frames at one stamp: the later frame is heard last.
+    let base = one(&[at(A, "bomba-1", Some(suite(ip(10))), None, 1, 1)]);
+    let later = one(&[at(A, "bomba-2", Some(suite(ip(20))), None, 1, 1), at(A, "bomba-1", Some(suite(ip(10))), None, 2, 2), at(A, "bomba-1", Some(suite(ip(10))), None, 5, 3), at(A, "bomba-2", Some(suite(ip(20))), None, 5, 4)]);
+    let d = diff::diff(&base, &later).unwrap();
+    assert_eq!(d.renamed, [change(A, Said::StationName, "bomba-1", "bomba-2")]);
+    assert_eq!(d.readdressed, [change(A, Said::IpSuite, "192.168.0.10 255.255.255.0 0.0.0.0", "192.168.0.20 255.255.255.0 0.0.0.0")]);
+    let back = one(&[at(A, "bomba-2", Some(suite(ip(20))), None, 1, 1), at(A, "bomba-1", Some(suite(ip(10))), None, 2, 2), at(A, "bomba-2", Some(suite(ip(20))), None, 5, 3), at(A, "bomba-1", Some(suite(ip(10))), None, 5, 4)]);
+    assert_eq!((diff::diff(&base, &back).unwrap().renamed, diff::diff(&base, &back).unwrap().readdressed), (vec![], vec![]));
+    // A device flagging its own address in conflict: new, and cleared the other way round; at
+    // 0.0.0.0 its value is empty and it is new all the same.
+    let calm = one(&[at(A, "a", Some(suite(ip(10))), Some(false), 1, 1)]);
+    let flagged = one(&[at(A, "a", Some(suite(ip(10))), Some(true), 1, 1)]);
+    let reports = |value: &str| Conflict { kind: ConflictKind::ReportsIpConflict, value: value.into(), macs: vec![A] };
+    assert_eq!(diff::diff(&calm, &flagged).unwrap().conflicts_new, [reports("192.168.0.10")]);
+    assert_eq!(diff::diff(&flagged, &calm).unwrap().conflicts_cleared, [reports("192.168.0.10")]);
+    let unaddressed = one(&[at(A, "a", Some(suite(Ipv4Addr::UNSPECIFIED)), Some(true), 1, 1)]);
+    assert_eq!(diff::diff(&calm, &unaddressed).unwrap().conflicts_new, [reports("")]);
+    // An interface whose account says its capture was read to the end was listened on all the
+    // same: no interface added or removed against one still live.
+    let mut replayed = calm.clone();
+    replayed.stats.interfaces.get_mut("eth1").unwrap().ended = Some("its capture is read to the end".into());
+    let d = diff::diff(&replayed, &calm).unwrap();
+    assert_eq!((d.interfaces_added.len(), d.interfaces_removed.len()), (0, 0));
+    // Two values of one field last heard in one frame: no scan, refused, never a diff of the
+    // order they are listed in.
+    let mut tie = later.clone();
+    let mut again = tie.devices[0].name.candidates[0].clone();
+    again.value = "bomba-3".into();
+    again.last = tie.devices[0].name.candidates[1].last.clone();
+    tie.devices[0].name.candidates.push(again);
+    assert!(matches!(diff::diff(&base, &tie), Err(DiffError::Scan(ScanError::Invalid(why))) if why.contains("'s name holds two values last heard in frame")));
+}
+
 #[cfg(target_os = "linux")]
 mod bench;
 
