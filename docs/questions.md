@@ -3762,7 +3762,7 @@ writes, and disarms it at its end. Two things the ruling leaves open:
 
 1. **How the person confirms, with no screen** (Oficina's designer is not built). Options:
    - (a) A fingerprint of the list: the executable, refusing a run whose switch is off, prints the
-     test's gated writes as written and their fingerprint (16 hex digits); the person runs again
+     test's gated writes as written and their fingerprint (32 hex digits: 128 bits of SHA-256 over the list, the test's whole text and the function files it uses, since C-202's round 4 found two tests made to share a 64-bit FNV-1a one); the person runs again
      with `--arm <fingerprint>`, which confirms that list and no other: an edited test asks again.
      Oficina's screen later shows the list and confirms it the same way, through the library.
    - (b) An interactive prompt in the executable (`arm the switch for these 3 writes? [y/N]`).
