@@ -965,7 +965,10 @@ impl Reading<'_> {
                     .filter_map(ident)
                     .collect();
                 let cfg = path == ["cfg"];
-                let doc = path == ["doc"];
+                // A doc comment's strings are prose, and thiserror's `#[error]` strings format
+                // strings naming fields alone, which thiserror never reads as code; its format
+                // arguments are code, held to the rules below with every attribute's tokens.
+                let prose = path == ["doc"] || path == ["error"];
                 if cfg {
                     self.gates.push(key.clone());
                 } else if path.iter().any(|w| w == "cfg" || w == "cfg_attr") {
@@ -974,25 +977,23 @@ impl Reading<'_> {
                 if args {
                     self.refuse(&tokens[k], "an attribute inside a macro's arguments");
                 }
-                self.attribute(&body, true, cfg, doc);
+                self.attribute(&body, true, cfg, prose);
                 k = end + 1;
                 continue;
             }
             let t = &tokens[k];
-            let after_colon =
-                k > 0 && matches!(&tokens[k - 1], TokenTree::Punct(p) if p.as_char() == ':');
             if let TokenTree::Group(g) = t {
                 let inner: Vec<TokenTree> = g.stream().into_iter().collect();
                 // A group right after `!` is a macro's arguments (`#![..]` is an attribute,
                 // read above, and `macro_rules! name { .. }` has the name between).
                 let invoked =
                     k > 0 && matches!(&tokens[k - 1], TokenTree::Punct(p) if p.as_char() == '!');
+                if invoked && self.in_string {
+                    self.refuse(t, "a macro called in a string read as code");
+                }
                 self.code(&inner, args || invoked);
-            } else if matches!(t, TokenTree::Punct(p) if p.as_char() == '#')
-                && !(self.in_string && after_colon)
-            {
-                // A `#` that starts no attribute: a macro may set a bracket group behind it. In a
-                // string, one right after `:` is a format's flag (`{status:#06x}`).
+            } else if matches!(t, TokenTree::Punct(p) if p.as_char() == '#') {
+                // A `#` that starts no attribute: a macro may set a bracket group behind it.
                 self.refuse(t, "a `#` that starts no attribute");
             } else if self.in_string && matches!(t, TokenTree::Punct(p) if p.as_char() == '$') {
                 self.refuse(t, "a macro's `$` in a string read as code");
@@ -1014,18 +1015,30 @@ impl Reading<'_> {
     }
 
     /// An attribute's tokens: `top` when they are its own, not those of a group inside it; `cfg`
-    /// when it is a `cfg`; `doc` when it is a doc comment, whose strings are prose.
-    fn attribute(&mut self, tokens: &[TokenTree], top: bool, cfg: bool, doc: bool) {
+    /// when it is a `cfg`; `prose` when its strings are no code (a doc comment's, thiserror's
+    /// format strings). No `#` stands in one, and no macro is called in one: a derive may emit its
+    /// tokens as code (thiserror's format arguments), and a macro there could set a `#` behind a
+    /// bracket group.
+    fn attribute(&mut self, tokens: &[TokenTree], top: bool, cfg: bool, prose: bool) {
         for (k, t) in tokens.iter().enumerate() {
             match t {
                 TokenTree::Group(g) => {
                     let inner: Vec<TokenTree> = g.stream().into_iter().collect();
-                    self.attribute(&inner, false, cfg, doc);
+                    self.attribute(&inner, false, cfg, prose);
                 }
                 TokenTree::Punct(p) if p.as_char() == '$' => {
                     self.refuse(t, "a macro's `$` in an attribute")
                 }
-                TokenTree::Literal(l) if !doc => self.string(l),
+                TokenTree::Punct(p) if p.as_char() == '#' => {
+                    self.refuse(t, "a `#` inside an attribute")
+                }
+                TokenTree::Punct(p)
+                    if p.as_char() == '!'
+                        && matches!(tokens.get(k + 1), Some(TokenTree::Group(_))) =>
+                {
+                    self.refuse(t, "a macro called inside an attribute")
+                }
+                TokenTree::Literal(l) if !prose => self.string(l),
                 _ => {
                     let Some(w) = ident(t) else { continue };
                     match w.as_str() {
