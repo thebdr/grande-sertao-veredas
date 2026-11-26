@@ -12,15 +12,15 @@
     "read"
   ],
   "exitCode": 0,
-  "outputSha": "49f18ac7f0e6757307f27849a3d4c483f295eb2df915e96e41057222b945345e",
-  "outputTail": "running 9 tests\ntest a_read_is_refused_where_it_cannot_be_heard_sent_or_answered ... ok\ntest round_1::the_datagram_reader_is_total ... ok\ntest round_1::a_checksum_of_zero_travels_as_ffff ... ok\ntest round_1::a_header_of_24_bytes_is_read_through_and_a_datagram_to_its_own_length ... ok\ntest round_1::a_read_holds_its_port_open_and_takes_its_answer_whole ... ok\ntest a_datagram_is_written_whole_and_read_back_only_when_whole ... ok\ntest the_bench_s_devices_report_each_other_by_their_port_data_read_through_the_listener ... ok\ntest a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked ... ok\ntest round_1::a_read_goes_in_its_turn_or_is_taken_back_never_sent ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.40s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s\n     Running tests/read.rs (target/debug/build/veredas-aranha/dac2399b65f5e262/out/read-dac2399b65f5e262)",
-  "ranAt": "2026-11-26T11:56:01.206Z",
-  "headCommit": "efc92644b5328c73c676d5b03121018c1ba41e4e",
+  "outputSha": "7ca15c5bd6ea6e29f6273097c1c0fba7edee9ed8da36669523f641dbcb71a7f7",
+  "outputTail": "test a_read_is_refused_where_it_cannot_be_heard_sent_or_answered ... ok\ntest round_1::the_datagram_reader_is_total ... ok\ntest round_1::a_checksum_of_zero_travels_as_ffff ... ok\ntest round_1::a_header_of_24_bytes_is_read_through_and_a_datagram_to_its_own_length ... ok\ntest round_1::a_read_holds_its_port_open_and_takes_its_answer_whole ... ok\ntest a_datagram_is_written_whole_and_read_back_only_when_whole ... ok\ntest the_bench_s_devices_report_each_other_by_their_port_data_read_through_the_listener ... ok\ntest a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked ... ok\ntest round_1::a_read_goes_in_its_turn_or_is_taken_back_never_sent ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.41s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.56s\n     Running tests/read.rs (target/debug/build/veredas-aranha/dac2399b65f5e262/out/read-dac2399b65f5e262)",
+  "ranAt": "2026-11-26T12:47:57.553Z",
+  "headCommit": "d42c4174fd02a6aee6188cfee60b17d40496d602",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/read.rs",
       "file": "crates/veredas-aranha/tests/read.rs",
-      "fileSha": "191581f1f1466b887b6a058ec99b60d3ede951a4ec1c43031bca6be43fbaf4d8"
+      "fileSha": "c49aa3eff019399624d10e08cc46560b6e4fe8714c2fba3bb0f7035e9a404c50"
     }
   ]
 }

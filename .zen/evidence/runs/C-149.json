@@ -12,15 +12,15 @@
     "executable"
   ],
   "exitCode": 0,
-  "outputSha": "246e5d27355ff4b79cf291fefd70a9bc2a3d85bc9c1f3de5f43f8d587377f58b",
-  "outputTail": "\nrunning 2 tests\ntest every_usage_it_cannot_follow_is_refused_with_its_reason ... ok\ntest a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.99s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.93s\n     Running tests/executable.rs (target/debug/build/veredas-aranha/086f59243ef4a3c8/out/executable-086f59243ef4a3c8)",
-  "ranAt": "2026-11-26T09:47:59.472Z",
-  "headCommit": "84ef0a1a64704d4bb6c582f5f0627733febe418b",
+  "outputSha": "24e93b564b8fb75436df33e10e2475c921f5211601bbec559a622f08be154fde",
+  "outputTail": "\nrunning 6 tests\ntest a_scan_that_cannot_be_written_is_refused_before_anything_is_opened_or_replaced ... ok\ntest the_diff_prints_every_kind_of_change_a_line_each_its_texts_quoted ... ok\ntest every_usage_it_cannot_follow_is_refused_with_its_reason ... ok\ntest a_device_whose_walk_is_cut_keeps_what_was_read_of_it ... ok\ntest a_scan_with_the_ports_read_draws_the_devices_own_word_on_their_cables ... ok\ntest a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 29.23s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.60s\n     Running tests/executable.rs (target/debug/build/veredas-aranha/086f59243ef4a3c8/out/executable-086f59243ef4a3c8)",
+  "ranAt": "2026-11-26T12:47:45.484Z",
+  "headCommit": "d42c4174fd02a6aee6188cfee60b17d40496d602",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/executable.rs",
       "file": "crates/veredas-aranha/tests/executable.rs",
-      "fileSha": "6e03f640966678c12f9a33a18f3162f2e6cce1975da89e64675912609d5fbc5c"
+      "fileSha": "f8c2b560d1556cff259d17fe17a817e3e9c366ad4b983ca8b2c67bc01f771b5f"
     }
   ]
 }
