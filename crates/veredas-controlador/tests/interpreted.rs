@@ -1,7 +1,8 @@
 //! An interpreted program on the controller (C-152): a program lowered by hand as rustc's MIR has it, made at
 //! power-on and afresh at every start from what its host hands in, run beside its native twin; one that cannot be
-//! made the load fault 506, its own error where Rust would panic the program's 502 `program(at)`, and what safe Rust
-//! cannot reach or a failure of the adapter or the host the runtime's 507 `internal`.
+//! made leaving it in STOP 104 `no_program` (Q233), its own error where Rust would panic the program's 502
+//! `program(at)`, and what safe Rust cannot reach or a failure of the adapter or the host the runtime's 507
+//! `internal`.
 use std::time::Duration;
 
 use orcl_interp::{
@@ -377,26 +378,25 @@ fn while_no_program_runs_the_safe_outputs_handed_in_are_written() {
 }
 
 #[test]
-fn a_program_that_cannot_be_made_leaves_the_controller_in_fault_load_exchanging_the_safe_outputs() {
+fn a_program_that_cannot_be_made_leaves_the_controller_in_stop_no_program_exchanging_the_safe_outputs() {
     let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
     let mut clock = VirtualClock::new();
     let mut plant = Plant::new(&clock, steady);
     let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).unwrap();
-    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
     assert_eq!(c.load_error(), Some(&MakeError::State));
     step(&mut c, &mut plant, &mut clock, 3);
     assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)]);
-    // acknowledged and started, its load fails again, the safe outputs going on
-    c.acknowledge(OFICINA, &Key).unwrap();
+    // started, its load fails again, the safe outputs going on
     c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
     step(&mut c, &mut plant, &mut clock, 2);
-    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
     assert_eq!(plant.writes.len(), 5);
     assert!(plant.writes.iter().all(|w| w.1 == SAFE.value), "{:?}", plant.writes);
     // whatever the state it would come back to; from its own failure, FAULT internal
     for restart in [Restart::PowerCycle { was: StateWord::Run }, Restart::PowerCycle { was: StateWord::Stop }] {
         let c = Controller::power_on_from(config(), SIM, restart, loaded(&two)).unwrap();
-        assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()", "{restart:?}");
+        assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()", "{restart:?}");
     }
     let c = Controller::power_on_from(config(), SIM, Restart::Crash, loaded(&two)).unwrap();
     assert_eq!(text(&c), "FAULT internal(id=507) sim() no_realtime()");
@@ -571,11 +571,9 @@ fn a_program_s_fault_keeps_its_exchange_on_the_program_s_own_periods() {
 }
 
 #[test]
-fn an_acknowledge_of_a_load_fault_leaves_stop_acknowledged_and_a_start_shows_its_load() {
+fn a_start_with_no_program_shows_its_load() {
     let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
     let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).unwrap();
-    c.acknowledge(OFICINA, &Key).unwrap();
-    assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()");
     c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
     assert_eq!(text(&c), "STARTUP cold(id=202) load() sim() no_realtime()");
 }
@@ -612,19 +610,19 @@ fn a_start_s_failed_load_keeps_its_own_reason() {
     let mut plant = Plant::new(&clock, steady);
     c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
     step(&mut c, &mut plant, &mut clock, 3);
-    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
     assert_eq!(c.load_error(), Some(&MakeError::Scan));
     assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)]);
 }
 
 #[test]
-fn a_program_that_cannot_be_made_is_the_load_fault_after_a_power_cycle_from_every_state() {
+fn a_program_that_cannot_be_made_is_stop_no_program_after_a_power_cycle_from_every_state() {
     let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
     for was in [StateWord::Run, StateWord::Startup, StateWord::Stop, StateWord::Hold, StateWord::Fault] {
-        for target in [SIM, Target { production: true, realtime: false, simulated: false }] {
+        let production = Target { production: true, realtime: false, simulated: false };
+        for (target, shown) in [(SIM, "STOP no_program(id=104) sim() no_realtime()"), (production, "STOP no_program(id=104)")] {
             let c = Controller::power_on_from(config(), target, Restart::PowerCycle { was }, loaded(&two)).unwrap();
-            assert_eq!(c.state().state.word(), StateWord::Fault, "{was:?} {target:?}");
-            assert!(text(&c).starts_with("FAULT load(id=506, download=0)"), "{was:?}: {}", text(&c));
+            assert_eq!(text(&c), shown, "{was:?} {target:?}");
         }
     }
 }
@@ -636,30 +634,31 @@ fn a_start_s_failed_load_exchanges_on_the_next_period_once() {
     let mut plant = Plant::new(&clock, steady);
     let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).unwrap();
     step(&mut c, &mut plant, &mut clock, 3);
-    c.acknowledge(OFICINA, &Key).unwrap();
     c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
     step(&mut c, &mut plant, &mut clock, 2);
     assert_eq!(plant.writes, [0, 10, 20, 30, 40].map(|t| (ms(t), SAFE.value)));
 }
 
 #[test]
-fn in_a_load_fault_and_a_program_fault_a_start_and_a_stop_are_refused_by_the_state() {
+fn with_no_program_a_stop_and_an_acknowledge_are_refused_by_the_state_and_in_a_program_fault_a_start_and_a_stop() {
     let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
     let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).unwrap();
     let before = c.state().clone();
-    let refused = |command| Err(Refusal::State { command, state: StateWord::Fault });
-    assert_eq!(c.start(StartupReason::Cold, OFICINA, &Key), refused(Command::Start(StartupReason::Cold)));
-    assert_eq!(c.stop(OFICINA), refused(Command::Stop));
+    let in_stop = |command| Err(Refusal::State { command, state: StateWord::Stop });
+    assert_eq!(c.stop(OFICINA), in_stop(Command::Stop));
+    assert_eq!(c.acknowledge(OFICINA, &Key), in_stop(Command::Acknowledge));
     struct Off;
     impl Switch for Off {
         fn armed(&self) -> bool {
             false
         }
     }
-    assert_eq!(c.acknowledge(OFICINA, &Off), Err(Refusal::Switch { command: Command::Acknowledge }));
+    assert_eq!(c.start(StartupReason::Cold, OFICINA, &Off), Err(Refusal::Switch { command: Command::Start(StartupReason::Cold) }));
     let program = CommandSource::Program;
-    assert_eq!(c.acknowledge(program, &Key), Err(Refusal::Source { command: Command::Acknowledge, source: program }));
+    let start = Command::Start(StartupReason::Warm);
+    assert_eq!(c.start(StartupReason::Warm, program, &Key), Err(Refusal::Source { command: start, source: program }));
     assert_eq!(c.state(), &before);
+    let refused = |command| Err(Refusal::State { command, state: StateWord::Fault });
     fn zero_at_1(index: usize) -> In {
         if index == 1 { In { value: 9, divisor: 0 } } else { steady(index) }
     }
@@ -722,12 +721,11 @@ fn scripted(plan: Vec<Option<MakeError>>) -> Scripted {
     Scripted { inner: loaded(&first()), plan, makes: 0 }
 }
 
-// R10-M1: a start after a load fault makes the program afresh (a program mended on its drive runs).
+// R10-M1: a start after no program makes the program afresh (a program mended on its drive runs).
 #[test]
-fn a_start_after_a_load_fault_makes_the_program_afresh() {
+fn a_start_after_no_program_makes_the_program_afresh() {
     let mut c = Controller::power_on_from(config(), SIM, Restart::First, scripted(vec![Some(MakeError::State)])).unwrap();
-    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
-    c.acknowledge(OFICINA, &Key).unwrap();
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
     let mut clock = VirtualClock::new();
     let mut plant = Plant::new(&clock, steady);
     c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
@@ -749,7 +747,7 @@ fn a_crash_s_power_on_checks_the_program_and_keeps_its_reason_behind_the_507() {
     let mut clock = VirtualClock::new();
     let mut plant = Plant::new(&clock, steady);
     step(&mut c, &mut plant, &mut clock, 1);
-    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
 }
 
 fn zero_at_1(index: usize) -> In {
@@ -805,7 +803,7 @@ fn a_power_cycle_s_warm_start_makes_the_program_afresh() {
     let mut clock = VirtualClock::new();
     let mut plant = Plant::new(&clock, steady);
     step(&mut c, &mut plant, &mut clock, 1);
-    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
     assert_eq!(c.load_error(), Some(&MakeError::Scan));
 }
 
@@ -815,18 +813,17 @@ fn the_reason_kept_is_the_last_load_s() {
     let source = scripted(vec![Some(MakeError::State), Some(MakeError::Scan)]);
     let mut c = Controller::power_on_from(config(), SIM, Restart::First, source).unwrap();
     assert_eq!(c.load_error(), Some(&MakeError::State));
-    c.acknowledge(OFICINA, &Key).unwrap();
     c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
     let mut clock = VirtualClock::new();
     let mut plant = Plant::new(&clock, steady);
     step(&mut c, &mut plant, &mut clock, 1);
-    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
     assert_eq!(c.load_error(), Some(&MakeError::Scan));
 }
 
 // The eleventh refute round's tests: a program error in a scan that overran within twice its period, and on the
-// very first scan, the program's 502; a power cycle's load fault keeping its reason and exchanging the safe outputs;
-// and the load's reason outliving its acknowledge.
+// very first scan, the program's 502; a power cycle with no program keeping its reason and exchanging the safe
+// outputs; and the load's reason outliving an acknowledge.
 
 fn zero_at_0(index: usize) -> In {
     if index == 0 { In { value: 9, divisor: 0 } } else { steady(index) }
@@ -861,9 +858,9 @@ fn a_program_error_on_the_very_first_scan_is_the_program_s_fault() {
     assert_eq!(plant.writes, [(ms(0), SAFE.value)]);
 }
 
-// a power cycle's load fault keeps the adapter's reason and exchanges the safe outputs, from every state.
+// a power cycle with no program keeps the adapter's reason and exchanges the safe outputs, from every state.
 #[test]
-fn a_power_cycle_s_load_fault_keeps_its_reason_and_exchanges_the_safe_outputs_from_every_state() {
+fn a_power_cycle_with_no_program_keeps_its_reason_and_exchanges_the_safe_outputs_from_every_state() {
     let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
     for was in [StateWord::Run, StateWord::Startup, StateWord::Stop, StateWord::Hold, StateWord::Fault] {
         let mut c = Controller::power_on_from(config(), SIM, Restart::PowerCycle { was }, loaded(&two)).unwrap();
@@ -872,23 +869,26 @@ fn a_power_cycle_s_load_fault_keeps_its_reason_and_exchanges_the_safe_outputs_fr
         let mut plant = Plant::new(&clock, steady);
         step(&mut c, &mut plant, &mut clock, 3);
         assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)], "{was:?}");
-        assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()", "{was:?}");
+        assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()", "{was:?}");
     }
 }
 
-// the load's reason outlives its acknowledge.
+// the load's reason outlives the acknowledge of a crash's fault, and a refused acknowledge with no program.
 #[test]
-fn the_load_s_reason_outlives_its_acknowledge() {
+fn the_load_s_reason_outlives_an_acknowledge() {
     let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
-    let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).unwrap();
+    let mut c = Controller::power_on_from(config(), SIM, Restart::Crash, loaded(&two)).unwrap();
     c.acknowledge(OFICINA, &Key).unwrap();
+    assert_eq!(c.load_error(), Some(&MakeError::State));
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).unwrap();
+    assert!(c.acknowledge(OFICINA, &Key).is_err());
     assert_eq!(c.load_error(), Some(&MakeError::State));
 }
 
 // The twelfth refute round's tests: a program error whose location names no file still the program's 502, its file
-// read as `?`; an acknowledge of a power cycle's load fault leaving STOP from every state; a first power-on and a
-// crash's on a production target without real time checking the program; and a start's failed load after a run the
-// load fault, never the last run's program.
+// read as `?`; a power cycle with no program staying in STOP until a person's start, from every state; a first
+// power-on and a crash's on a production target without real time checking the program; and a start's failed load
+// after a run leaving no program, never the last run's.
 
 // a program error whose span names no file of the program (which neither the file's reader nor the
 // load refuses) is still a fault of the controller's, with the line and column, never a panic of its thread.
@@ -910,41 +910,38 @@ fn a_program_error_whose_location_names_no_file_is_the_program_s_fault_its_file_
     }
 }
 
-// from a power cycle's load fault, whatever the state it came back from, an acknowledge leaves STOP
-// acknowledged and nothing starts without a person's start.
-// from a power cycle's load fault, whatever state it came back from and whether its source can make the program
-// later or never, an acknowledge leaves STOP acknowledged, and nothing starts without a person's start.
+// with no program after a power cycle, whatever state it came back from and whether its source can make the
+// program later or never, the controller stays in STOP 104 until a person's start, which makes it afresh.
 #[test]
-fn an_acknowledge_of_a_power_cycle_s_load_fault_leaves_stop_from_every_state() {
+fn a_power_cycle_with_no_program_stays_in_stop_until_a_person_s_start_from_every_state() {
     let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
     for was in [StateWord::Run, StateWord::Startup, StateWord::Stop, StateWord::Hold, StateWord::Fault] {
         let never = || Scripted { inner: loaded(&two), plan: vec![], makes: 0 };
         let mended = || scripted(vec![Some(MakeError::State)]);
-        for (source, kind) in [(never(), "never made"), (mended(), "made once mended")] {
+        for (source, kind, then) in [(never(), "never made", "STOP no_program(id=104) sim() no_realtime()"), (mended(), "made once mended", "RUN sim() no_realtime()")] {
             let mut c = Controller::power_on_from(config(), SIM, Restart::PowerCycle { was }, source).unwrap();
             let mut clock = VirtualClock::new();
             let mut plant = Plant::new(&clock, steady);
-            step(&mut c, &mut plant, &mut clock, 1);
-            assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()", "{was:?}, {kind}");
-            c.acknowledge(OFICINA, &Key).unwrap();
-            assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()", "{was:?}, {kind}");
-            step(&mut c, &mut plant, &mut clock, 2);
-            assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()", "{was:?}, {kind}");
+            step(&mut c, &mut plant, &mut clock, 3);
+            assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()", "{was:?}, {kind}");
             assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)], "{was:?}, {kind}");
+            c.start(StartupReason::Warm, OFICINA, &Key).unwrap();
+            step(&mut c, &mut plant, &mut clock, 1);
+            assert_eq!(text(&c), then, "{was:?}, {kind}");
         }
     }
 }
 
-// a power-on's load fault, its source able to make the program on a later try, stays the load fault until a
-// person acknowledges it: the load is never tried again by itself.
+// with no program at power-on, its source able to make the program on a later try, the controller stays in
+// STOP 104 until a person starts it: the load is never tried again by itself.
 #[test]
-fn a_power_on_s_load_fault_is_never_retried_by_itself() {
+fn a_power_on_with_no_program_is_never_retried_by_itself() {
     for restart in [Restart::First, Restart::PowerCycle { was: StateWord::Run }, Restart::PowerCycle { was: StateWord::Startup }] {
         let mut c = Controller::power_on_from(config(), SIM, restart, scripted(vec![Some(MakeError::State)])).unwrap();
         let mut clock = VirtualClock::new();
         let mut plant = Plant::new(&clock, steady);
         step(&mut c, &mut plant, &mut clock, 3);
-        assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()", "{restart:?}");
+        assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()", "{restart:?}");
         assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)], "{restart:?}");
     }
 }
@@ -954,17 +951,20 @@ fn a_power_on_s_load_fault_is_never_retried_by_itself() {
 fn a_first_power_on_and_a_crash_s_on_a_production_target_without_real_time_check_the_program() {
     let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
     let production = Target { production: true, realtime: false, simulated: false };
-    let c = Controller::power_on_from(config(), production, Restart::First, loaded(&two)).unwrap();
-    assert_eq!(text(&c), "FAULT load(id=506, download=0)");
+    let mut c = Controller::power_on_from(config(), production, Restart::First, loaded(&two)).unwrap();
+    assert_eq!(text(&c), "STOP no_program(id=104)");
     assert_eq!(c.load_error(), Some(&MakeError::State));
+    // a start there is the real-time refusal, before any load
+    assert_eq!(c.start(StartupReason::Cold, OFICINA, &Key), Err(Refusal::Realtime));
+    assert_eq!(text(&c), "STOP realtime_refused(id=105)");
     let c = Controller::power_on_from(config(), production, Restart::Crash, loaded(&two)).unwrap();
     assert_eq!(text(&c), "FAULT internal(id=507)");
     assert_eq!(c.load_error(), Some(&MakeError::State));
 }
 
-// a start whose load fails after a run is the load fault, never the last run's program (Q36: no substitute).
+// a start whose load fails after a run leaves no program, never the last run's (no substitute).
 #[test]
-fn a_start_s_failed_load_after_a_run_is_the_load_fault_never_the_last_run_s_program() {
+fn a_start_s_failed_load_after_a_run_leaves_no_program_never_the_last_run_s() {
     let mut c = Controller::power_on_from(config(), SIM, Restart::First, scripted(vec![None, None, Some(MakeError::Scan)])).unwrap();
     let mut clock = VirtualClock::new();
     let mut plant = Plant::new(&clock, steady);
@@ -975,8 +975,99 @@ fn a_start_s_failed_load_after_a_run_is_the_load_fault_never_the_last_run_s_prog
     c.start(StartupReason::Warm, OFICINA, &Key).unwrap();
     plant.writes.clear();
     step(&mut c, &mut plant, &mut clock, 3);
-    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
     assert_eq!(c.load_error(), Some(&MakeError::Scan));
     assert!(c.program().is_none());
     assert_eq!(plant.writes, [(ms(30), SAFE.value), (ms(40), SAFE.value), (ms(50), SAFE.value)]);
+}
+
+// The fourteenth refute round's tests, adopted at the clause's next change (Q233): a location's file shown as the
+// program names it, its folders included; a start's failed load on a production target with real time left as a
+// power-on's is; and after an acknowledged program fault the safe outputs on the target's periods.
+
+/// The program of `code()` with its files named by paths, as a crate with modules in folders lists them.
+fn with_files(files: &[&str], file: u32) -> Code {
+    let mut program = code();
+    program.files = files.iter().map(|f| f.to_string()).collect();
+    for block in &mut program.functions[0].blocks {
+        for s in &mut block.statements {
+            s.at.file = file;
+        }
+        if let Terminator::Assert { at, .. } = &mut block.terminator {
+            at.file = file;
+        }
+    }
+    program
+}
+
+// R14-M3: the location's file is shown as the program names it, its folders included, so two `mod.rs` read apart.
+#[test]
+fn a_location_s_file_is_shown_as_the_program_names_it() {
+    let files = ["src/conveyor/mod.rs", "src/valve/mod.rs"];
+    for (file, want) in [(0, "src/conveyor/mod.rs"), (1, "src/valve/mod.rs")] {
+        let (c, _, _) = started(on(with_files(&files, file)), zero_at_1, 2);
+        assert_eq!(text(&c), format!(r#"FAULT program(id=502, at="{want}:2:5") sim() no_realtime()"#));
+    }
+}
+
+// no program at power-on on a production target with real time too, then a start's own failed load and its
+// refusals, the safe outputs on the target's periods throughout, and a start that makes it running it.
+#[test]
+fn a_start_s_failed_load_is_left_as_a_power_on_s_is() {
+    let production = Target { production: true, realtime: true, simulated: false };
+    let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
+    for restart in [Restart::First, Restart::PowerCycle { was: StateWord::Run }, Restart::PowerCycle { was: StateWord::Hold }] {
+        let c = Controller::power_on_from(config(), production, restart, loaded(&two)).unwrap();
+        assert_eq!(text(&c), "STOP no_program(id=104)", "{restart:?}");
+    }
+    let source = scripted(vec![None, Some(MakeError::Scan)]);
+    let mut c = Controller::power_on_from(config(), production, Restart::First, source).unwrap();
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    clock.advance(ms(13));
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(text(&c), "STOP no_program(id=104)");
+    let before = c.state().clone();
+    let refused = |command| Err(Refusal::State { command, state: StateWord::Stop });
+    assert_eq!(c.stop(OFICINA), refused(Command::Stop));
+    assert_eq!(c.acknowledge(CommandSource::Local, &Key), refused(Command::Acknowledge));
+    assert_eq!(c.state(), &before);
+    step(&mut c, &mut plant, &mut clock, 1);
+    c.start(StartupReason::Cold, CommandSource::Local, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(text(&c), "RUN");
+    let values: Vec<u32> = plant.writes.iter().map(|w| w.1).collect();
+    let times: Vec<Duration> = plant.writes.iter().map(|w| w.0).collect();
+    // the failed load at 13 exchanges at 20, then 30 and 40, the run from 40 on its own clock
+    assert_eq!(times, [20, 30, 40, 40, 50].map(ms));
+    assert_eq!(values, [SAFE.value, SAFE.value, SAFE.value, scanned(FIRST + 1, 3), scanned(FIRST + 2, 4)]);
+}
+
+// after an acknowledged program fault the safe outputs handed in are exchanged on the target's periods, once in each,
+// and a power cycle from RUN on a production target with real time runs the program from its first state.
+#[test]
+fn after_an_acknowledged_program_fault_the_safe_outputs_are_on_the_target_s_periods() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, zero_at_2);
+    let mut c = interpreted();
+    clock.advance(ms(7));
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 4); // scans at 7, 17, the fault at 27, the faulted task at 37
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:2:5") sim() no_realtime()"#);
+    c.acknowledge(OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 3);
+    assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()");
+    let times: Vec<Duration> = plant.writes.iter().map(|w| w.0).collect();
+    assert_eq!(times, [7, 17, 27, 37, 40, 50, 60].map(ms));
+    let values: Vec<u32> = plant.writes.iter().map(|w| w.1).collect();
+    assert_eq!(values[2..], [SAFE.value; 5]);
+    let production = Target { production: true, realtime: true, simulated: false };
+    let mut c = Controller::power_on_from(config(), production, Restart::PowerCycle { was: StateWord::Run }, loaded(&first())).unwrap();
+    assert_eq!(text(&c), "STARTUP warm(id=201) load()");
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    step(&mut c, &mut plant, &mut clock, 3);
+    assert_eq!(text(&c), "RUN");
+    assert_eq!(plant.writes, (0..3).map(|k| (ms(10) * k as u32, scanned(FIRST + 1 + k as u32, k as usize))).collect::<Vec<_>>());
 }

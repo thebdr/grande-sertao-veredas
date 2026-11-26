@@ -142,8 +142,9 @@ impl<P: Program + Default> Source for Native<P> {
 }
 
 /// An interpreted program as its host hands it: the program `orcl-interp` loads, its scan entry, its four regions'
-/// types, its first state and its safe outputs (`docs/questions.md` Q231, DECISION PENDING: the front end would
-/// give the last two). Each make loads it afresh.
+/// types, its first state and its safe outputs (`docs/questions.md` Q231, ruled: the front end computes the last two
+/// and the program file will carry them, once its format holds them; until then the host hands them in). Each make
+/// loads it afresh.
 pub struct Loaded<I: Image, O: Image> {
     pub program: orcl_interp::Program,
     pub entry: FunctionId,
@@ -187,10 +188,6 @@ impl<I: Image, O: Image> Source for Loaded<I, O> {
         }
     }
 }
-
-/// The download a load names while there are none: a program handed in by its host (`docs/questions.md` Q233,
-/// DECISION PENDING).
-const NO_DOWNLOAD: u32 = 0;
 
 /// The program clock a task runs on: the target's clock from the moment the program started.
 struct ProgramClock<'a, C: Clock> {
@@ -254,9 +251,10 @@ impl<P: Program + Default> Controller<P> {
 
 impl<P: TaskProgram, S: Source<Program = P>> Controller<P, S> {
     /// The controller as it comes up, its program made by `source`: refused when the engine refuses the task's
-    /// configuration, checked once, here. The program is made here too, as every load checks it (Q36): one that
-    /// cannot be made leaves the controller in FAULT 506 `load`, exchanging the safe outputs, unless it comes up
-    /// from its own failure, FAULT 507 `internal`.
+    /// configuration, checked once, here. The program is made here too, as every load checks it: one that cannot be
+    /// made leaves the controller in STOP 104 `no_program`, exchanging the safe outputs, unless it comes up from its
+    /// own failure, FAULT 507 `internal` (`docs/questions.md` Q233: until downloads exist; a stored download failing
+    /// its check will be the FAULT 506 `load(download)`, Q36).
     pub fn power_on_from(config: TaskConfig, target: Target, restart: Restart, mut source: S) -> Result<Self, TaskError> {
         config.check()?;
         let idle = source.safe_outputs();
@@ -281,9 +279,9 @@ impl<P: TaskProgram, S: Source<Program = P>> Controller<P, S> {
             // Q228, point 8 (the briefing's K7 reading): the runtime restarting while the machine did not is its
             // own failure, and it comes up in FAULT, which stops a crash loop.
             Restart::Crash => controller.state.state = State::Fault(Some(FaultReason::Internal)),
-            // Q36: a stored program that does not pass its check at power-on is the FAULT 506 `load`, never a
-            // substitute, whatever the state it would come back to.
-            _ if !loads => controller.state.state = State::Fault(Some(FaultReason::Load { download: NO_DOWNLOAD })),
+            // Q233: a program handed in that cannot be made leaves no program, whatever the state it would come back
+            // to, never a substitute.
+            _ if !loads => controller.state.state = State::Stop(Some(StopReason::NoProgram)),
             // Q228, point 2: a controller that never ran comes up in STOP with no reason.
             Restart::First => {}
             // RUN returns as RUN through a warm start; so does a start-up a power cut interrupted, its aim having
@@ -421,7 +419,8 @@ impl<P: TaskProgram, S: Source<Program = P>> Controller<P, S> {
     /// Load, restore, handler, devices, then RUN, the program's clock starting `now`: the load makes the program
     /// afresh from its source. With no retained variable that ORCL can mark yet, a warm start and a cold one both
     /// start the program from its initial values; with no start-up handler and no device, the phases pass at once
-    /// (Q228, points 4 and 5). A program that cannot be made fails the load: FAULT 506 `load` (Q36).
+    /// (Q228, points 4 and 5). A program that cannot be made fails the load, leaving no program: STOP 104
+    /// `no_program` (Q233), from where a person's start tries again.
     fn finish_startup(&mut self, now: Duration) {
         self.origin = now;
         self.task = None;
@@ -436,7 +435,7 @@ impl<P: TaskProgram, S: Source<Program = P>> Controller<P, S> {
             },
             Err(error) => {
                 self.load_error = Some(error);
-                State::Fault(Some(FaultReason::Load { download: NO_DOWNLOAD }))
+                State::Stop(Some(StopReason::NoProgram))
             }
         };
     }
