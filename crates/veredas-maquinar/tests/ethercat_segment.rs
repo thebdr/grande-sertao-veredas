@@ -38,7 +38,7 @@ fn maindevice(storage: &'static PduStorage<MAX_FRAMES, MAX_PDU_DATA>) -> Arc<Mai
     let (tx, rx, pdu_loop) = storage.try_split().expect("split once");
     let maindevice = Arc::new(MainDevice::new(
         pdu_loop,
-        Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), ..Default::default() },
+        Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), eeprom: Duration::from_millis(500), ..Default::default() },
         MainDeviceConfig::default(),
     ));
     std::thread::spawn(move || futures_lite::future::block_on(ethercrab::std::tx_rx_task("a0", tx, rx).expect("the raw socket")));
@@ -979,7 +979,7 @@ mod round_3 {
             let (tx, rx, pdu_loop) = PDU_STORAGE.try_split().expect("split once");
             let maindevice = Arc::new(MainDevice::new(
                 pdu_loop,
-                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), ..Default::default() },
+                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), eeprom: Duration::from_millis(500), ..Default::default() },
                 MainDeviceConfig::default(),
             ));
             std::thread::spawn(move || futures_lite::future::block_on(ethercrab::std::tx_rx_task("a0", tx, rx).expect("the raw socket")));
@@ -1252,7 +1252,7 @@ mod round_4 {
             let (tx, rx, pdu_loop) = PDU_STORAGE_BIG.try_split().expect("split once");
             let maindevice = Arc::new(MainDevice::new(
                 pdu_loop,
-                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), ..Default::default() },
+                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), eeprom: Duration::from_millis(500), ..Default::default() },
                 MainDeviceConfig::default(),
             ));
             std::thread::spawn(move || futures_lite::future::block_on(ethercrab::std::tx_rx_task("a0", tx, rx).expect("the raw socket")));
@@ -1316,7 +1316,7 @@ mod round_4 {
             let (tx, rx, pdu_loop) = PDU_STORAGE_DOWN.try_split().expect("split once");
             let maindevice = Arc::new(MainDevice::new(
                 pdu_loop,
-                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(2), pdu: Duration::from_millis(500), ..Default::default() },
+                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(2), pdu: Duration::from_millis(500), eeprom: Duration::from_millis(500), ..Default::default() },
                 MainDeviceConfig::default(),
             ));
             std::thread::spawn(move || futures_lite::future::block_on(ethercrab::std::tx_rx_task("a0", tx, rx).expect("the raw socket")));
@@ -1641,7 +1641,7 @@ mod round_6 {
             let (tx, rx, pdu_loop) = PDU_ROUND_6.try_split().expect("split once");
             let maindevice = Arc::new(MainDevice::new(
                 pdu_loop,
-                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), ..Default::default() },
+                Timeouts { wait_loop_delay: Duration::from_millis(2), state_transition: Duration::from_secs(5), pdu: Duration::from_millis(500), eeprom: Duration::from_millis(500), ..Default::default() },
                 MainDeviceConfig { dc_static_sync_iterations: 100, ..Default::default() },
             ));
             std::thread::spawn(move || futures_lite::future::block_on(ethercrab::std::tx_rx_task("a0", tx, rx).expect("the raw socket")));
@@ -1768,5 +1768,136 @@ mod round_7 {
     fn the_sii_interface_states_8_byte_reads_before_any_command() {
         let l = line(1);
         assert_eq!(l[0].get16(0x0502), 0x0040);
+    }
+}
+
+/// C-113's eighth refute round: the critic's probes (`~/.cache/veredas/critic-c113-r8/probes`),
+/// kept as pins: the SII control register's 8-byte reads after a command too; a request of the
+/// state held taken without error, SOEM's broadcast OP among them; every auto-increment command
+/// back three more; the alias addressing every configured-address command; an unknown state
+/// flagged without an error held.
+mod round_8 {
+    use veredas_maquinar::ethercat::esc::{self, Datagram, Esc, Identity, PdoEntry};
+
+    fn line(n: u16) -> Vec<Esc> {
+        (0..n)
+            .map(|i| {
+                let id = Identity { vendor_id: 0x0700 + u32::from(i), product_code: u32::from(i) + 1, revision: 1, serial: 0, name: format!("d{i}"), alias: if i == 2 { 0x0102 } else { 0 } };
+                let e8 = vec![PdoEntry { index: 0x7000, subindex: 1, bits: 8 }];
+                let mut e = Esc::new(esc::sii_image(&id, &e8, &e8), u64::from(i) * 1_000);
+                e.mem[0x10..0x12].copy_from_slice(&(0x1000 + i).to_le_bytes());
+                e.mem[0x12..0x14].copy_from_slice(&id.alias.to_le_bytes());
+                e.set_link(i + 1 < n);
+                e
+            })
+            .collect()
+    }
+
+    fn pass(line: &mut [Esc], now: u64, dgs: &[(u8, u32, Vec<u8>)]) -> Vec<(Vec<u8>, u16, u32)> {
+        let mut d: Vec<Datagram> = dgs.iter().map(|(cmd, address, data)| Datagram { cmd: *cmd, idx: 0, address: *address, circulating: false, more: false, irq: 0, data: data.clone(), wkc: 0 }).collect();
+        esc::process(line, &mut d, now);
+        d.into_iter().map(|x| (x.data, x.wkc, x.address)).collect()
+    }
+
+    fn fp(station: u16, ado: u16) -> u32 {
+        (u32::from(ado) << 16) | u32::from(station)
+    }
+
+    fn ap(position: u16, ado: u16) -> u32 {
+        (u32::from(ado) << 16) | u32::from(0u16.wrapping_sub(position))
+    }
+
+    fn u16_of(b: &[u8]) -> u16 {
+        u16::from_le_bytes([b[0], b[1]])
+    }
+
+    /// "its SII EEPROM read through the registers, 8 bytes at a time as its control register says":
+    /// after a read command (ethercrab's 6-byte request, IgH's 4-byte one with 0x80 in the low byte) the
+    /// control register still says 8-byte reads, no command pending, no error: 0x0040.
+    #[test]
+    fn the_sii_control_register_says_8_byte_reads_after_a_command_too() {
+        let mut l = line(3);
+        // ethercrab / SOEM: control (read), address word 8, high word 0.
+        pass(&mut l, 0, &[(5, fp(0x1001, 0x0502), vec![0x00, 0x01, 0x08, 0x00, 0x00, 0x00])]);
+        let r = pass(&mut l, 0, &[(4, fp(0x1001, 0x0502), vec![0; 2]), (4, fp(0x1001, 0x0508), vec![0; 8])]);
+        let after_ethercrab = u16_of(&r[0].0);
+        // IgH: 0x80 (two address octets), 0x01 (read), the word.
+        pass(&mut l, 0, &[(5, fp(0x1001, 0x0502), vec![0x80, 0x01, 0x0A, 0x00])]);
+        let r2 = pass(&mut l, 0, &[(4, fp(0x1001, 0x0502), vec![0; 10])]);
+        let after_igh = u16_of(&r2[0].0);
+        assert_eq!((after_ethercrab, after_igh), (0x0040, 0x0040));
+        assert_eq!(&r2[0].0[6..10], &[0x02, 0x00, 0x00, 0x00], "product code 2 at word 0x0A");
+    }
+
+
+    /// "a transition it refuses flagged with code 0x0011": a request of the state the device is
+    /// already in is no transition (ETG.1000.6), so it is never flagged; SOEM's `ec_writestate(0)`
+    /// broadcasts OP to every device, some already in OP, while one comes back from SAFE-OP.
+    #[test]
+    fn a_request_of_the_state_held_is_taken_without_error() {
+        let st = |l: &[Esc], i: usize| (l[i].mem[0x0130], u16::from_le_bytes([l[i].mem[0x0134], l[i].mem[0x0135]]));
+        let mut seen = Vec::new();
+        for (path, again) in [(&[0x02u8][..], 0x02u8), (&[0x02, 0x04][..], 0x04), (&[0x02, 0x04, 0x08][..], 0x08)] {
+            let mut l = line(3);
+            for c in path {
+                pass(&mut l, 0, &[(5, fp(0x1001, 0x0120), vec![*c, 0])]);
+            }
+            pass(&mut l, 0, &[(5, fp(0x1001, 0x0120), vec![again, 0])]);
+            seen.push(st(&l, 1));
+        }
+        // SOEM's broadcast: every device in OP but d1 back in SAFE-OP; BWR OP to all (one byte).
+        let mut l = line(3);
+        for c in [0x02u8, 0x04, 0x08] {
+            pass(&mut l, 0, &[(8, u32::from(0x0120u16) << 16, vec![c])]);
+        }
+        pass(&mut l, 0, &[(5, fp(0x1001, 0x0120), vec![0x04, 0])]);
+        let r = pass(&mut l, 0, &[(8, u32::from(0x0120u16) << 16, vec![0x08])]);
+        let all: Vec<(u8, u16)> = (0..3).map(|i| st(&l, i)).collect();
+        assert_eq!(seen, [(0x02, 0), (0x04, 0), (0x08, 0)]);
+        assert_eq!((all, r[0].1), (vec![(0x08, 0), (0x08, 0), (0x08, 0)], 3), "each in OP, the broadcast counted by the three");
+    }
+
+
+    /// "auto-increment by position, the address back three more than sent": every auto-increment
+    /// command, not the APRD alone.
+    #[test]
+    fn every_auto_increment_command_comes_back_three_more() {
+        let mut l = line(3);
+        let dgs = [(1u8, ap(1, 0x0F80), vec![0]), (2, ap(1, 0x0F80), vec![1]), (3, ap(2, 0x0F81), vec![2]), (13, ap(0, 0x0910), vec![0; 8])];
+        let r = pass(&mut l, 1_000_000, &dgs);
+        let back: Vec<u16> = r.iter().map(|x| x.2 as u16).collect();
+        let want: Vec<u16> = dgs.iter().map(|d| (d.1 as u16).wrapping_add(3)).collect();
+        assert_eq!(back, want);
+    }
+
+
+    /// "configured address, or the alias once DL control's bit 24 is set": every configured-address
+    /// command (FPWR, FPRW, FRMW too: the ESC datasheet, DL control bit 24), not the FPRD alone.
+    #[test]
+    fn the_alias_addresses_every_configured_command() {
+        let mut l = line(3);
+        pass(&mut l, 0, &[(5, fp(0x1002, 0x0100), vec![0, 0, 0, 1])]);
+        let r = pass(&mut l, 5_000, &[(5, fp(0x0102, 0x0F80), vec![0xAB]), (6, fp(0x0102, 0x0F80), vec![0xCD]), (14, fp(0x0102, 0x0910), vec![0; 8])]);
+        let got = (r[0].1, r[1].1, r[1].0.clone(), l[2].mem[0x0F80], r[2].1, u64::from_le_bytes(r[2].0.clone().try_into().unwrap()));
+        // FRMW by d2's alias: d2 reads (its system time at 5 us is 3000), d0 and d1 write: 3.
+        assert_eq!(got, (1, 3, vec![0xAB], 0xCD, 3, 3_000));
+    }
+
+
+    /// "an unknown state 0x0012": a request of a state that does not exist, from a device holding no
+    /// error (PRE-OP asked 0x05, OP asked 0x0F), is flagged 0x0012 as one under an acknowledge is.
+    #[test]
+    fn an_unknown_state_is_flagged_without_an_error_held() {
+        let st = |l: &[Esc]| (l[1].mem[0x0130], u16::from_le_bytes([l[1].mem[0x0134], l[1].mem[0x0135]]));
+        let mut seen = Vec::new();
+        for (path, unknown) in [(&[0x02u8][..], 0x05u8), (&[0x02, 0x04, 0x08][..], 0x0F)] {
+            let mut l = line(3);
+            for c in path {
+                pass(&mut l, 0, &[(5, fp(0x1001, 0x0120), vec![*c, 0])]);
+            }
+            pass(&mut l, 0, &[(5, fp(0x1001, 0x0120), vec![unknown, 0])]);
+            seen.push(st(&l));
+        }
+        assert_eq!(seen, [(0x12, 0x0012), (0x18, 0x0012)]);
     }
 }
