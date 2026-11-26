@@ -57,7 +57,9 @@ controller's hardware configuration has nothing of the suite's own to compare ag
   the interfaces only one scan listened on named. Its schema document lands with it
   (`docs/scan-schema.md`).
 - **The executable** (`veredas-aranha`): listen on an interface for a while and write the scan;
-  identify; diff two scan files. The commissioning tool on its own, from the command line.
+  identify; diff two scan files. The commissioning tool on its own, from the command line: plain
+  text out, the diff's exit status diff(1)'s, so a script can ask whether a plant changed since its
+  baseline.
 - **Later phases**, named, no code now:
   - **deep identity**: the PROFINET implicit read (never an application relation): I&M0 to I&M4,
     the port's neighbour data (where device-to-device links come from), the real identification

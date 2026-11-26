@@ -382,8 +382,10 @@ fn aranha_compiles_in_no_file_from_outside_its_folder() {
 fn aranha_is_one_library_and_at_most_its_one_executable() {
     let t = targets(&manifest_dir());
     assert_eq!(breaches(&t), Vec::<String>::new(), "{t:?}");
-    let built: Vec<&String> = t.iter().filter(|(_, k, _)| k != &["test"]).map(|(n, _, _)| n).collect();
-    assert_eq!(built, ["veredas_aranha"]);
+    // The library and its one executable (C-149), nothing else built but tests.
+    let mut built: Vec<&String> = t.iter().filter(|(_, k, _)| k != &["test"]).map(|(n, _, _)| n).collect();
+    built.sort();
+    assert_eq!(built, ["veredas-aranha", "veredas_aranha"]);
 }
 
 /// A throwaway package outside the workspace, with the files given.
