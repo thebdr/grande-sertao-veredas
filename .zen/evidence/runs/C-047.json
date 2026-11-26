@@ -14,15 +14,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "b699f77a09676a4a189a1f9de58620c98facbbbb84d08f72ab3a5485dfd6c365",
-  "outputTail": "test an_entry_git_reads_other_than_from_the_working_tree_is_refused ... ok\ntest its_own_dependencies_are_core_portal_and_the_servers_crates ... ok\ntest supervisao_is_one_library_and_one_executable_named_for_it ... ok\ntest the_crate_compiles_in_no_file_from_outside_itself ... ok\ntest every_latin_letter_and_every_html_name_of_one_reads_as_plain_letters ... ok\ntest every_file_the_crate_compiles_is_one_read_here ... ok\ntest the_page_compiled_in_is_built_from_the_sources_in_the_tree ... ok\ntest the_plant_s_stack_reaches_supervisao_through_portal_alone ... ok\ntest no_file_of_supervisao_names_a_vendor_a_product_or_a_customer ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.07s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s\n     Running tests/real_tree.rs (/home/thebdr/.cache/veredas/supervisao-refute/target/debug/build/leis/a569915b221409c9/out/real_tree-a569915b221409c9)\n     Running tests/component.rs (/home/thebdr/.cache/veredas/supervisao-refute/target/debug/build/veredas-supervisao/f1508a08bc216205/out/component-f1508a08bc216205)",
-  "ranAt": "2026-11-23T01:22:40.603Z",
-  "headCommit": "153c9ffd292d17819569b908a55a092a28534157",
+  "outputSha": "f4d7a6e495cec6a0c2b88d52d1e9297aa9b497e4ba390488599c5a8cdb8ba43d",
+  "outputTail": "test its_own_dependencies_are_core_portal_and_the_servers_crates ... ok\ntest supervisao_is_one_library_and_one_executable_named_for_it ... ok\ntest the_crate_compiles_in_no_file_from_outside_itself ... ok\ntest every_latin_letter_and_every_html_name_of_one_reads_as_plain_letters ... ok\ntest every_file_the_crate_compiles_is_one_read_here ... ok\ntest the_page_compiled_in_is_built_from_the_sources_in_the_tree ... ok\ntest the_plant_s_stack_reaches_supervisao_through_portal_alone ... ok\ntest no_file_of_supervisao_names_a_vendor_a_product_or_a_customer ... ok\n\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.09s\n\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.95s\n     Running tests/real_tree.rs (target/debug/build/leis/269fed904d7e8a1b/out/real_tree-269fed904d7e8a1b)\n     Running tests/component.rs (target/debug/build/veredas-supervisao/bd201bbc0924541c/out/component-bd201bbc0924541c)",
+  "ranAt": "2026-11-26T07:28:37.533Z",
+  "headCommit": "a2df77f25994029f482327595fbab14390b6a12d",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/component.rs",
       "file": "crates/veredas-supervisao/tests/component.rs",
-      "fileSha": "b8a0e79cfe0089877a090e0263dab3b56f20b777139c8cda578c27ab040f45f6"
+      "fileSha": "00be23c4fb3620a36fbb81067bc6382cebd113cf26f5b79ec401c9aef7fde687"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
