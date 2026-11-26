@@ -1234,3 +1234,44 @@ fn a_type_refused_inside_another_is_named_itself() {
         assert_eq!(Machine::load(p, &[]).map(|_| ()), Err(LoadError::Type { ty, reason }), "{reason}");
     }
 }
+
+// The sixteenth refute round's tests: a shared borrow written into a mutable reference, and a duration cast `as` a
+// number, each one side of a check no test had met.
+
+/// `_2 = &_1` written into a local of `&mut u8` (a shared borrow taken as a mutable one) refused, as the
+/// downgrade is.
+#[test]
+fn a_shared_borrow_into_a_mutable_reference_is_refused() {
+    let types = [Type::Int(Int::U8), Type::Ref { to: TypeId(0), mutable: true }];
+    let mut p = Program { types: types.to_vec(), ..Program::default() };
+    p.functions.push(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[TypeId(1), TypeId(0)]),
+        blocks: vec![block(vec![assign(place(0), Value::Ref(place(1), false), 1)], ret())],
+    });
+    assert_eq!(
+        Machine::load(p, &[]).map(|_| ()),
+        Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a reference into another type" })
+    );
+}
+
+/// a `Duration` cast `as` an integer or a float (Rust has no such cast) refused.
+#[test]
+fn a_duration_cast_as_a_number_is_refused() {
+    for (to, name) in [(Type::Int(Int::U64), "u64"), (Type::F64, "f64")] {
+        let types = [Type::Duration, to];
+        let mut p = Program { types: types.to_vec(), ..Program::default() };
+        p.functions.push(Function {
+            name: "f".into(),
+            params: 0,
+            locals: locals(&[TypeId(1), TypeId(0)]),
+            blocks: vec![block(vec![assign(place(0), Value::Cast(copy(1), TypeId(1)), 1)], ret())],
+        });
+        assert_eq!(
+            Machine::load(p, &[]).map(|_| ()),
+            Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a cast `as` does not make" }),
+            "Duration as {name}"
+        );
+    }
+}

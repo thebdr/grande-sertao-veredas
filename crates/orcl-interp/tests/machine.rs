@@ -2458,3 +2458,106 @@ fn the_last_listed_variant_s_slots_past_its_fields_must_be_unwritten() {
     assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, -3), int(Int::I64, -9), Scalar::Uninit]), Ok(()));
     assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, -3), int(Int::I64, -9), Scalar::Bool(true)]), Err(HostError::Slots), "C(-9) with B's bool left behind");
 }
+
+// The sixteenth refute round's tests (`.zen/evidence/C-153.md`): what one run leaves in a frame is never seen by the
+// next, for an entry and a callee larger than function 0 and for a callee whose last call never returned.
+
+/// `fn g(flag: bool) -> u8 { let y; if flag { y = 7 } y + 0 }`: its `y` unwritten when the flag is off; `then` is
+/// where the branch that writes `y` goes (on to the addition, or to code marked unreachable).
+fn maybe_unwritten_r16_then(b: &mut Build, name: &str, extra: &[TypeId], then: Terminator) -> FunctionId {
+    let (u8t, boolean) = (b.int(Int::U8), b.bool());
+    let mut types = vec![u8t, boolean];
+    types.extend_from_slice(extra);
+    types.push(u8t);
+    let y = types.len() as u32 - 1;
+    b.function(Function {
+        name: name.into(),
+        params: 1,
+        locals: locals(&types),
+        blocks: vec![
+            block(vec![], Terminator::SwitchInt { value: copy(1), targets: vec![(0, BlockId(2))], otherwise: BlockId(1), at: at(1) }),
+            block(vec![assign(place(y), Value::Use(konst(u8t, vec![int(Int::U8, 7)])), 2)], then),
+            block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(y), konst(u8t, vec![int(Int::U8, 0)])), 3)], ret()),
+        ],
+    })
+}
+
+fn maybe_unwritten_r16(b: &mut Build, name: &str, extra: &[TypeId]) -> FunctionId {
+    maybe_unwritten_r16_then(b, name, extra, Terminator::Goto(BlockId(2)))
+}
+
+/// `fn f(flag: bool) -> u8 { g(flag) }`
+fn caller_of(b: &mut Build, g: FunctionId) -> FunctionId {
+    let (u8t, boolean) = (b.int(Int::U8), b.bool());
+    b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[u8t, boolean]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(g), args: vec![copy(1)], dest: place(0), next: BlockId(1), at: at(4) }),
+            block(vec![], ret()),
+        ],
+    })
+}
+
+fn uninit_in(got: Result<Vec<Scalar>, CallError>, f: FunctionId) -> bool {
+    matches!(got, Err(CallError::Program(ProgramError { kind: ErrorKind::Uninit, function, .. })) if function == f)
+}
+
+/// an entry whose frame is larger than function 0's; its `y` lies past function 0's frame.
+#[test]
+fn an_entry_larger_than_function_0_has_every_local_unwritten_again_at_every_start() {
+    let mut b = Build::default();
+    let unit = b.unit();
+    b.function(Function { name: "first".into(), params: 0, locals: locals(&[unit]), blocks: vec![block(vec![], ret())] });
+    let u8t = b.int(Int::U8);
+    let g = maybe_unwritten_r16(&mut b, "g", &[u8t, u8t, u8t]);
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    assert_eq!(m.call(g, &[Arg::Value(&[Scalar::Bool(true)])]).unwrap(), &[int(Int::U8, 7)]);
+    let got = m.call(g, &[Arg::Value(&[Scalar::Bool(false)])]).map(|r| r.to_vec());
+    assert!(uninit_in(got.clone(), g), "y kept the last run's value: {got:?}");
+}
+
+/// the same, for a callee larger than function 0.
+#[test]
+fn a_callee_larger_than_function_0_has_every_local_unwritten_again_at_every_call() {
+    let mut b = Build::default();
+    let unit = b.unit();
+    b.function(Function { name: "first".into(), params: 0, locals: locals(&[unit]), blocks: vec![block(vec![], ret())] });
+    let u8t = b.int(Int::U8);
+    let g = maybe_unwritten_r16(&mut b, "g", &[u8t, u8t, u8t]);
+    let f = caller_of(&mut b, g);
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    assert_eq!(m.call(f, &[Arg::Value(&[Scalar::Bool(true)])]).unwrap(), &[int(Int::U8, 7)]);
+    let got = m.call(f, &[Arg::Value(&[Scalar::Bool(false)])]).map(|r| r.to_vec());
+    assert!(uninit_in(got.clone(), g), "y kept the last call's value: {got:?}");
+}
+
+/// a callee stopped midway, or failed, then the entry started afresh: the callee's next call finds its locals
+/// unwritten, its frame cleared at the call, never only at a return the stopped or failed call never reached.
+#[test]
+fn a_callee_s_locals_are_unwritten_at_its_call_after_a_run_stopped_or_failed_inside_it() {
+    // stopped: f(true) run until g stands at its last block, its y written, then aborted
+    let mut b = Build::default();
+    let g = maybe_unwritten_r16(&mut b, "g", &[]);
+    let f = caller_of(&mut b, g);
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    m.start(f, &[Arg::Value(&[Scalar::Bool(true)])]).unwrap();
+    while m.position() != Some((g, BlockId(2), 0)) {
+        assert_eq!(m.step(), Ok(Step::Ran));
+    }
+    m.abort();
+    let got = m.call(f, &[Arg::Value(&[Scalar::Bool(false)])]).map(|r| r.to_vec());
+    assert!(uninit_in(got.clone(), g), "after a stop, y kept the stopped call's value: {got:?}");
+    m.abort();
+    // failed: g writes y and reaches code marked unreachable; aborted; then f(false)
+    let mut b = Build::default();
+    let g = maybe_unwritten_r16_then(&mut b, "g", &[], Terminator::Unreachable { at: at(2) });
+    let f = caller_of(&mut b, g);
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    let got = m.call(f, &[Arg::Value(&[Scalar::Bool(true)])]).map(|r| r.to_vec());
+    assert!(matches!(got, Err(CallError::Program(ProgramError { kind: ErrorKind::Unreachable, .. }))), "{got:?}");
+    m.abort();
+    let got = m.call(f, &[Arg::Value(&[Scalar::Bool(false)])]).map(|r| r.to_vec());
+    assert!(uninit_in(got.clone(), g), "after a failure, y kept the failed call's value: {got:?}");
+}
