@@ -2066,3 +2066,48 @@ fn an_enum_whose_first_variant_is_the_largest_is_laid_out_at_its_size() {
     assert_eq!(m.region(RegionId(0)), Some(&want[..]));
     assert_eq!(m.region(RegionId(1)), Some(&[int(Int::U8, 9)][..]), "the region beside it untouched");
 }
+
+// The twenty-fourth refute round's tests: a switch's otherwise naming no block after its targets, and its last
+// target after a sound one, block and value, each refused.
+
+/// `fn f(x: u8) -> u8` whose block 0 switches on `x` to `targets`, else to `otherwise`; blocks 1 and 2 return `x`.
+fn switch_program(targets: Vec<(i128, BlockId)>, otherwise: BlockId) -> Program {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let back = || block(vec![assign(place(0), Value::Use(copy(1)), 2)], ret());
+    b.function(Function {
+        name: "f".into(),
+        params: 1,
+        locals: locals(&[u8t, u8t]),
+        blocks: vec![block(vec![], Terminator::SwitchInt { value: copy(1), targets, otherwise, at: at(1) }), back(), back()],
+    });
+    b.program
+}
+
+fn refused_at_the_switch(reason: &'static str) -> Result<(), LoadError> {
+    Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason })
+}
+
+#[test]
+fn a_switch_s_otherwise_naming_no_block_after_its_targets_is_refused() {
+    // rustc's `if x == 0` is `switchInt(x) -> [0: bb1, otherwise: bb2]`: the otherwise comes after a sound target
+    for targets in [vec![(0, BlockId(1))], vec![(0, BlockId(1)), (1, BlockId(2))]] {
+        let n = targets.len();
+        let got = Machine::load(switch_program(targets, BlockId(9)), &[]).map(|_| ());
+        assert_eq!(got, refused_at_the_switch("no such block"), "otherwise bb9 after {n} sound targets");
+    }
+    // and the sound one loads
+    assert!(Machine::load(switch_program(vec![(0, BlockId(1))], BlockId(2)), &[]).is_ok());
+}
+
+#[test]
+fn a_switch_s_last_target_after_a_sound_one_is_refused() {
+    let cases: [(Vec<(i128, BlockId)>, &str); 2] = [
+        (vec![(0, BlockId(1)), (1, BlockId(9))], "no such block"),
+        (vec![(0, BlockId(1)), (256, BlockId(1))], "a switch's value outside its operand's type"),
+    ];
+    for (targets, reason) in cases {
+        let got = Machine::load(switch_program(targets, BlockId(2)), &[]).map(|_| ());
+        assert_eq!(got, refused_at_the_switch(reason), "{reason}, the last target after a sound one");
+    }
+}
