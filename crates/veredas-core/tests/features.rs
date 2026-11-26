@@ -892,6 +892,8 @@ impl Reading<'_> {
                 match w.as_str() {
                     "feature" => self.refuse(t, "`feature` outside an attribute"),
                     "doc" => self.refuse(t, "`doc` outside an attribute"),
+                    // No `cfg!`, and no cfg a macro assembles from its words.
+                    "cfg" | "cfg_attr" => self.refuse(t, &format!("`{w}` outside an attribute")),
                     w if PULLS_IN.contains(&w) => self.refuse(t, &format!("`{w}`")),
                     _ => {}
                 }
@@ -925,6 +927,9 @@ impl Reading<'_> {
                         }
                         "doc" if !(top && k == 0) => {
                             self.refuse(t, "`doc` but as an attribute's name")
+                        }
+                        "cfg" | "cfg_attr" if !(top && k == 0) => {
+                            self.refuse(t, &format!("`{w}` but as an attribute's name"))
                         }
                         "hidden" | "path" => self.refuse(t, &format!("`{w}` in an attribute")),
                         w if PULLS_IN.contains(&w) => self.refuse(t, &format!("`{w}`")),
@@ -1547,7 +1552,7 @@ fn lock_crates() -> BTreeSet<String> {
 /// Rustdoc's view of one form of core, with private items or without them: every page and every
 /// key a page shows ([`page_view`]), as `page` and `page#key`, each with what it renders.
 /// `all.html` is kept as a page only: its sections mirror the pages.
-fn rustdoc_view(features: &[&str], private: bool) -> BTreeMap<String, String> {
+fn rustdoc_view(features: &[&str], private: bool, profile: &str) -> BTreeMap<String, String> {
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check");
     // Rustdoc links a dependency's type, with its full path as the link's title, only when a
     // folder of that crate's name stands in the doc folder; without one it writes the bare name,
@@ -1557,7 +1562,10 @@ fn rustdoc_view(features: &[&str], private: bool) -> BTreeMap<String, String> {
     }
     let list = features.join(",");
     let (docs, args): (PathBuf, Vec<String>) = if private {
-        // Core's own pages, private items included: rustdoc reads core's source, under `cfg(doc)`.
+        // Core's own pages, private items included: rustdoc reads core's source, under `cfg(doc)`,
+        // and with `debug_assertions` on whatever the profile, so this view is the development
+        // build's alone.
+        assert_eq!(profile, "dev", "the private view in {profile}");
         let m = manifest();
         let mut args: Vec<String> = [
             "doc",
@@ -1597,12 +1605,15 @@ fn rustdoc_view(features: &[&str], private: bool) -> BTreeMap<String, String> {
             "#[doc(inline)]\npub use veredas_core::*;\n",
         )
         .unwrap();
+        // In `profile`: core's metadata compiled as that build compiles it.
         let args: Vec<String> = [
             "doc",
             "--no-deps",
             "--lib",
             "--offline",
             "--quiet",
+            "--profile",
+            profile,
             "--manifest-path",
             root.join("Cargo.toml").to_str().unwrap(),
         ]
@@ -1762,8 +1773,32 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
     };
     let forms = forms();
     for private in [true, false] {
-        let views: Vec<BTreeMap<String, String>> =
-            forms.iter().map(|f| rustdoc_view(f, private)).collect();
+        let views: Vec<BTreeMap<String, String>> = forms
+            .iter()
+            .map(|f| rustdoc_view(f, private, "dev"))
+            .collect();
+        // The build's view made in the release build too, each form's the same key for key: what
+        // a form holds does not hang on the profile.
+        if !private {
+            for (form, dev) in forms.iter().zip(&views) {
+                let release = rustdoc_view(form, false, "release");
+                let differ: Vec<String> = dev
+                    .iter()
+                    .filter(|(k, v)| release.get(*k) != Some(v))
+                    .map(|(k, v)| format!("{k} = {v:?} -> {:?}", release.get(k)))
+                    .chain(
+                        release
+                            .keys()
+                            .filter(|k| !dev.contains_key(*k))
+                            .map(|k| format!("{k} in release alone")),
+                    )
+                    .collect();
+                assert!(
+                    differ.is_empty(),
+                    "{form:?}'s release build holds otherwise: {differ:?}"
+                );
+            }
+        }
         // Every step from one form to the same form with one feature more.
         let mut steps = 0;
         for (a, base) in forms.iter().enumerate() {
@@ -1929,20 +1964,24 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
                 ),
             )
             .unwrap();
-            let out = Command::new(env!("CARGO"))
-                .args(["check", "--offline", "--quiet", "--manifest-path"])
-                .arg(root.join("Cargo.toml"))
-                .env(
-                    "CARGO_TARGET_DIR",
-                    Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check"),
-                )
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "the consumer of {form:?} cannot name what its view shows: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
+            // Checked in both builds: the names hold in each.
+            for profile in ["dev", "release"] {
+                let out = Command::new(env!("CARGO"))
+                    .args(["check", "--offline", "--quiet", "--profile", profile])
+                    .arg("--manifest-path")
+                    .arg(root.join("Cargo.toml"))
+                    .env(
+                        "CARGO_TARGET_DIR",
+                        Path::new(env!("CARGO_TARGET_TMPDIR")).join("features-check"),
+                    )
+                    .output()
+                    .unwrap();
+                assert!(
+                    out.status.success(),
+                    "the consumer of {form:?} ({profile}) cannot name what its view shows: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
         }
     }
 }

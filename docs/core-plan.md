@@ -379,6 +379,10 @@ Recorded as the port meets them.
   A consumer built alone stands in for a member's build but is not that build: core's identity
   hash (a `TypeId` reads it) and its files' paths differ there. Code that reads them can tell
   the test from a member, and no test measures that; the clause names it as a limit (round 19).
+  rustdoc reading a crate's source has `debug_assertions` on whatever the profile:
+  `cargo doc --profile release` and `RUSTDOCFLAGS="-C debug-assertions=off"` change nothing. A
+  facade's pages, rendered from the crate's metadata compiled in that profile, do follow it, so
+  the release view of what a form holds is the facade's (round 21).
 - **A copy of the tree never builds into the worktree's target.** Cargo keys a workspace
   member's artifacts by its path relative to the workspace, and judges a path package fresh by
   file times alone. A critic's copy built with `CARGO_TARGET_DIR` set to the worktree's target
