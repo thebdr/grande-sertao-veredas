@@ -7,15 +7,15 @@
     "cargo test -p orcl-runtime --test interpreted && cargo clippy -p orcl-runtime --all-targets -- -D warnings"
   ],
   "exitCode": 0,
-  "outputSha": "5849b9f2e64a3a4d1a298d2af250237ed339e007434f5825abd4b6b920283672",
-  "outputTail": "test the_scan_region_holds_the_task_s_period_on_a_late_scan ... ok\ntest the_scan_region_holds_the_scan_s_time_its_period_and_its_cycle_every_scan ... ok\ntest inputs_wider_than_the_other_regions_allocate_nothing_scan_after_scan ... ok\ntest the_scan_s_time_its_cycle_and_the_output_image_reach_the_program_scan_by_scan ... ok\ntest the_adapter_refuses_by_name_what_does_not_fit_when_it_is_made ... ok\ntest a_scan_of_an_interpreted_program_allocates_nothing ... ok\ntest an_interpreted_program_and_its_native_twin_write_the_same_outputs_at_the_same_times ... ok\ntest the_scan_region_holds_the_task_s_period_on_skipping_scans ... ok\ntest a_scan_of_half_a_million_instructions_runs_to_its_return_with_no_budget ... ok\n\ntest result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running tests/interpreted.rs (target/debug/build/orcl-runtime/4b17c6ce58b2784b/out/interpreted-4b17c6ce58b2784b)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s",
-  "ranAt": "2026-11-26T08:26:58.113Z",
-  "headCommit": "653a17a917f872a9b5c0f15a65cb27c57f344e17",
+  "outputSha": "c9d9e965979ff17e12ea397f789516510acc7ece463a06bf08e35e7673f750cf",
+  "outputTail": "test an_image_of_more_slots_than_its_region_faults_the_task_as_the_host_s_error ... ok\ntest the_output_image_handed_to_a_scan_is_the_one_the_program_reads ... ok\ntest the_scan_s_time_its_cycle_and_the_output_image_reach_the_program_scan_by_scan ... ok\ntest inputs_wider_than_the_other_regions_allocate_nothing_scan_after_scan ... ok\ntest the_adapter_refuses_by_name_what_does_not_fit_when_it_is_made ... ok\ntest a_scan_of_an_interpreted_program_allocates_nothing ... ok\ntest an_interpreted_program_and_its_native_twin_write_the_same_outputs_at_the_same_times ... ok\ntest the_scan_region_holds_the_task_s_period_on_skipping_scans ... ok\ntest a_scan_of_half_a_million_instructions_runs_to_its_return_with_no_budget ... ok\n\ntest result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running tests/interpreted.rs (target/debug/build/orcl-runtime/4b17c6ce58b2784b/out/interpreted-4b17c6ce58b2784b)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s",
+  "ranAt": "2026-11-26T09:30:29.571Z",
+  "headCommit": "749e4b9e84c48ec663bd66322a5fc67a14541575",
   "tests": [
     {
       "name": "crates/orcl-runtime/tests/interpreted.rs",
       "file": "crates/orcl-runtime/tests/interpreted.rs",
-      "fileSha": "8e6b8136c465d7420683493285ac97f1b3d34331eb345d644e5ced36efadfc39"
+      "fileSha": "52845a109cc1091dc1286823477558097c2b51626c6eb3042b8ffb396e8229a0"
     }
   ]
 }
