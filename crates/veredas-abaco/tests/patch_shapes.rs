@@ -3217,3 +3217,55 @@ fn a_name_set_in_a_scope_spelled_in_another_case_calls_that_sheet_s_lambda() {
         assert!(part(&dst, "xl/workbook.xml").contains(r#"<definedName name="L" localSheetId="0">"#), "{scope}");
     }
 }
+
+// ---- refute round 20 --------------------------------------------------------------------------
+
+#[test]
+fn a_name_is_resolved_on_its_formula_s_sheet_never_on_one_folding_to_it() {
+    // `MASS` and `Maß`: the volatile `N` local to the one is not the name a formula on the other
+    // reads, which is the workbook's `N` (its value moved, its cache written)
+    let dir = tempfile::tempdir().unwrap();
+    for (cell_sheet, other, reads, want) in [("MASS", "Maß", "N*2", "<v>14</v>"), ("MASS", "Maß", "M*2", "<v>16</v>"), ("Maß", "MASS", "N*2", "<v>14</v>")] {
+        let src = dir.path().join("pair.xlsx");
+        let (cell_index, other_index) = if cell_sheet == "MASS" { (0, 1) } else { (1, 0) };
+        let cached = if reads == "M*2" { 4 } else { 2 };
+        let data = worksheet(&format!(r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>{reads}</f><v>{cached}</v></c></row>"#), "");
+        let blank = worksheet(r#"<row r="1"><c r="A1"><v>0</v></c></row>"#, "");
+        let names = format!(
+            "<definedName name=\"N\">{cell_sheet}!$A$1</definedName><definedName name=\"N\" localSheetId=\"{other_index}\">RAND()</definedName><definedName name=\"M\" localSheetId=\"{cell_index}\">N+1</definedName>"
+        );
+        let sheets = if cell_index == 0 { vec![(cell_sheet, data), (other, blank)] } else { vec![(other, blank), (cell_sheet, data)] };
+        plain_book(&src, &sheets, &names, &[]);
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let dst = dir.path().join("out.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            patch(&src, &dst, &[value(cell_sheet, "A1", serde_json::json!(7))], &options).unwrap();
+            let part_name = format!("xl/worksheets/sheet{}.xml", cell_index + 1);
+            let b1 = format!(r#"<c r="B1"><f>{reads}</f>{want}</c>"#);
+            assert_eq!(element(&part(&dst, &part_name), "B1"), Some(b1.as_str()), "{cell_sheet} {reads}");
+            let expected = if reads == "M*2" { 16.0 } else { 14.0 };
+            assert_eq!(read_back(&dst, cell_sheet, "B1"), Value::Number(expected), "{cell_sheet} {reads}");
+        }
+    }
+}
+
+#[test]
+fn a_name_of_the_file_format_s_characters_is_read_whole_beside_a_volatile_name_of_its_part() {
+    // `Temp°C` is one name to the engine's lexer (fork change 37), not `Temp` and `C`: a volatile
+    // `Temp` beside it leaves `Temp°C*2` a value that moves
+    let dir = tempfile::tempdir().unwrap();
+    for (name, part_name) in [("Temp°C", "Temp"), ("€Custo", "Custo"), ("Ativo?", "Ativo")] {
+        let src = dir.path().join("names.xlsx");
+        let data = format!(r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>{name}*2</f><v>2</v></c></row>"#);
+        let names = format!("<definedName name=\"{name}\">Sheet1!$A$1</definedName><definedName name=\"{part_name}\">NOW()</definedName>");
+        plain_book(&src, &[("Sheet1", worksheet(&data, ""))], &names, &[]);
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let dst = dir.path().join("out.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            patch(&src, &dst, &[value("Sheet1", "A1", serde_json::json!(7))], &options).unwrap();
+            let b1 = format!(r#"<c r="B1"><f>{name}*2</f><v>14</v></c>"#);
+            assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B1"), Some(b1.as_str()), "{name}");
+            assert_eq!(read_back(&dst, "Sheet1", "B1"), Value::Number(14.0), "{name}");
+        }
+    }
+}

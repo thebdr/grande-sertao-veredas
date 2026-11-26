@@ -386,7 +386,10 @@ struct Token<'a> {
 
 /// The identifiers of a formula in A1 spelling, outside string literals and quoted sheet names.
 fn tokens(formula: &str) -> Vec<Token<'_>> {
-    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '.' || c == '\\';
+    // an identifier's characters as the engine's lexer reads a name's (MS-XLSX's `name-character`:
+    // `?`, `\\` and any character beyond ASCII among them, fork change 37; `Temp°C` is one name, the
+    // round at c139d3e5)
+    let ident = ironcalc_base::expressions::utils::is_name_char;
     let chars: Vec<(usize, char)> = formula.char_indices().collect();
     let next_after = |i: usize| formula[i..].chars().find(|c| !c.is_whitespace());
     let mut out = Vec::new();
@@ -458,21 +461,18 @@ fn calls_volatile(formula: &str) -> bool {
 /// name's formula with no sheet of its own), as Excel resolves it: `S!N` is S's local N, or the
 /// workbook's N; `N` is the formula's sheet's local N, or the workbook's N. A sheet (`N!`) or a
 /// table (`N[`) is no name; a name called (`N(`) is one (a LAMBDA).
-fn resolve(names: &[Name], token: &Token, sheet: Option<&str>) -> Option<usize> {
+fn resolve(names: &[Name], token: &Token, sheet: Option<&str>, order: &[String]) -> Option<usize> {
     if matches!(token.next, Some('!' | '[')) {
         return None;
     }
     // a name by the engine's fold (`Kx` with the Kelvin sign is `kx`), the first of two the file
-    // holds, as the engine reads it; a sheet by its own
+    // holds, as the engine reads it; the sheet found first as the engine finds one (its own
+    // spelling, then upper case, among the workbook's sheets), then that sheet's own name, else
+    // the workbook's: never another sheet's that folds to it (the round at c139d3e5)
     let key = name_key(token.text);
-    // a sheet as the engine finds one: its own spelling, then upper case (the rounds at 340e3e2e
-    // and fd142cb0)
     let scope = token.sheet.as_deref().or(sheet);
-    let local = |same: &dyn Fn(&str, &str) -> bool| {
-        scope.and_then(|sc| names.iter().position(|n| name_key(&n.name) == key && n.scope.as_deref().is_some_and(|ns| same(ns, sc))))
-    };
-    local(&|a, b| a == b)
-        .or_else(|| local(&|a, b| a.to_uppercase() == b.to_uppercase()))
+    let own = scope.map(|sc| refs::sheet_position(sc, order).and_then(|i| order.get(i)).map_or(sc, String::as_str));
+    own.and_then(|own| names.iter().position(|n| name_key(&n.name) == key && n.scope.as_deref() == Some(own)))
         .or_else(|| names.iter().position(|n| name_key(&n.name) == key && n.scope.is_none()))
 }
 
@@ -490,7 +490,7 @@ fn delete_every_name(wb: &mut Workbook, name: &str, scope: Option<&str>) -> Resu
 
 /// Which defined names (by their place in `names`) call a volatile function, directly or through
 /// other names, each name's formula read on its own sheet.
-fn volatile_names(names: &[Name]) -> Vec<bool> {
+fn volatile_names(names: &[Name], order: &[String]) -> Vec<bool> {
     let mut volatile: Vec<bool> = names.iter().map(|n| calls_volatile(&n.formula)).collect();
     loop {
         let more: Vec<usize> = (0..names.len())
@@ -498,7 +498,7 @@ fn volatile_names(names: &[Name]) -> Vec<bool> {
             .filter(|&i| {
                 tokens(&names[i].formula)
                     .iter()
-                    .any(|t| resolve(names, t, names[i].scope.as_deref()).is_some_and(|j| volatile[j]))
+                    .any(|t| resolve(names, t, names[i].scope.as_deref(), order).is_some_and(|j| volatile[j]))
             })
             .collect();
         if more.is_empty() {
@@ -511,9 +511,9 @@ fn volatile_names(names: &[Name]) -> Vec<bool> {
 }
 
 /// Whether a formula of `sheet` (A1 spelling) calls a volatile function or reads a volatile name.
-fn formula_volatile(formula: &str, sheet: &str, names: &[Name], volatile: &[bool]) -> bool {
+fn formula_volatile(formula: &str, sheet: &str, names: &[Name], volatile: &[bool], order: &[String]) -> bool {
     calls_volatile(formula)
-        || tokens(formula).iter().any(|t| resolve(names, t, Some(sheet)).is_some_and(|j| volatile[j]))
+        || tokens(formula).iter().any(|t| resolve(names, t, Some(sheet), order).is_some_and(|j| volatile[j]))
 }
 
 /// Every formula of every sheet in A1 spelling, by sheet and by the engine's formula index (the
@@ -682,7 +682,7 @@ impl Before {
     /// Whether any formula of `wb`, a cell's or a defined name's, calls a volatile function (a
     /// text test: a false positive costs one more evaluation, nothing else).
     fn volatile(wb: &Workbook) -> bool {
-        a1_formulas(wb).iter().flatten().any(|f| calls_volatile(f)) || volatile_names(&wb.names()).contains(&true)
+        a1_formulas(wb).iter().flatten().any(|f| calls_volatile(f)) || volatile_names(&wb.names(), &wb.sheet_names()).contains(&true)
     }
 
     /// The cells whose own formula calls a volatile function, directly or through a defined name
@@ -690,7 +690,8 @@ impl Before {
     /// happen to give (a random draw can repeat).
     fn volatile_cells(wb: &Workbook) -> Vec<std::collections::HashSet<(i32, i32)>> {
         let names = wb.names();
-        let volatile_name = volatile_names(&names);
+        let order = wb.sheet_names();
+        let volatile_name = volatile_names(&names, &order);
         let formulas = a1_formulas(wb);
         wb.model()
             .workbook
@@ -700,7 +701,7 @@ impl Before {
             .map(|(ws, texts)| {
                 let sheet = ws.get_name();
                 let volatile: Vec<bool> =
-                    texts.iter().map(|f| formula_volatile(f, &sheet, &names, &volatile_name)).collect();
+                    texts.iter().map(|f| formula_volatile(f, &sheet, &names, &volatile_name, &order)).collect();
                 let mut cells: std::collections::HashSet<(i32, i32)> = ws
                     .sheet_data
                     .cells()
@@ -3260,10 +3261,11 @@ mod tests {
             name("Twice", Some("Other"), "R*2"),
             name("Plain", None, "R*2"),
         ];
-        let volatile = volatile_names(&names);
+        let order = ["Data".to_string(), "Other".to_string()];
+        let volatile = volatile_names(&names, &order);
         // the local R is volatile, the workbook's is not; Twice reads Other's R, Plain the workbook's
         assert_eq!(volatile, [false, true, true, true, false]);
-        let v = |f: &str, sheet: &str| formula_volatile(f, sheet, &names, &volatile);
+        let v = |f: &str, sheet: &str| formula_volatile(f, sheet, &names, &volatile, &order);
         assert!(!v("R*2", "Data"), "Data reads the workbook's R");
         assert!(v("R*2", "Other"), "Other reads its own R");
         assert!(v("Other!R*2", "Data"), "qualified, Other's R from anywhere");
