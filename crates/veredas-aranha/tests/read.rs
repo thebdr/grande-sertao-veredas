@@ -171,6 +171,8 @@ fn a_read_is_refused_where_it_cannot_be_heard_sent_or_answered() {
     // A wait past the bound, before anything else.
     let long = read::Options { wait: MAX_WAIT + Duration::from_millis(1) };
     assert!(matches!(read::read(&l, "eth9", &on, port, &long), Err(ReadError::Wait(w)) if w == long.wait));
+    // The bound itself is a wait taken: the next refusal is the interface's.
+    assert!(matches!(read::read(&l, "eth9", &on, port, &read::Options { wait: MAX_WAIT }), Err(ReadError::Listen(ListenError::NotListening(_)))));
     // Nothing was sent by any refusal.
     assert_eq!(l.interface("hub0").unwrap().sent, 0);
     // Where the listener heard, and hears no more.
@@ -341,6 +343,8 @@ enum Reply {
     Junk(usize),
     /// A pause, in milliseconds, before the next reply.
     Pause(u64),
+    /// An answer whose header names this slot and subslot, the index asked.
+    Header { slot: u16, subslot: u16 },
 }
 
 #[cfg(target_os = "linux")]
@@ -405,6 +409,13 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
                             // Its own answer to the byte, but on the other interface.
                             Reply::Elsewhere(r) => send(&mut b1, me, d.src, &ok(&r)),
                             Reply::Pause(ms) => std::thread::sleep(Duration::from_millis(ms)),
+                            Reply::Header { slot, subslot } => {
+                                let mut header = ReadResponse::answering(&read, 1);
+                                (header.slot, header.subslot) = (slot, subslot);
+                                let mut data = header.block().encode().unwrap();
+                                data.push(b'x');
+                                send(&mut b0, me, d.src, &RpcPdu::pnio_response(&req, 7, &ResponseArgs::new(PnioStatus::OK, args.args_maximum, data)));
+                            }
                             Reply::Junk(n) => {
                                 for i in 0..n {
                                     b0.send(&ip::udp_frame(me, Endpoint { port: 9, ..d.src }, i as u16, b"junk").unwrap()).unwrap();
@@ -455,8 +466,22 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
         assert_eq!(elsewhere.iter().map(|(_, i)| i.as_str()).collect::<Vec<_>>(), ["a1"], "the answer elsewhere was heard, on a1 alone");
         assert!(elsewhere[0].0 < r.answer, "and kept before the one read");
         // A fault or a reject is a refusal, named.
+        // The frames from the device kept from `from` on, by what they are: the frame a refusal
+        // names is the device's offending datagram, never the request.
+        let from_device = |from: u64, what: &dyn Fn(&RpcPdu) -> bool| -> Vec<u64> {
+            l.frames_from(from)
+                .into_iter()
+                .filter(|(_, k)| !k.sent)
+                .filter(|(_, k)| ip::datagram(&k.frame.bytes).is_some_and(|d| d.src.mac == PEER && RpcPdu::decode(&d.payload).is_ok_and(|p| what(&p))))
+                .map(|(i, _)| i)
+                .collect()
+        };
         for kind in [PacketType::Fault, PacketType::Reject] {
-            assert!(matches!(run(vec![Reply::Kind(kind, b"no".to_vec())], im0), Err(ReadError::Rejected { device: PEER, kind: k, .. }) if k == kind));
+            let from = l.kept().1;
+            match run(vec![Reply::Kind(kind, b"no".to_vec())], im0) {
+                Err(ReadError::Rejected { device: PEER, kind: k, frame }) if k == kind => assert_eq!(vec![frame], from_device(from, &|p| p.packet_type == kind)),
+                other => panic!("{other:?}"),
+            }
         }
         // Another record's header, or a record shorter than its header says: refused, named.
         let refusal = |r: Result<read::Record, ReadError>| match r {
@@ -464,6 +489,13 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
             other => panic!("{other:?}"),
         };
         assert_eq!(refusal(run(vec![Reply::Answer { record: b"x".to_vec(), declared: None, index: Some(0xAFF1), status: PnioStatus::OK }], im0)), "it answers slot 0 subslot 0x0001 index 0xaff1");
+        assert_eq!(refusal(run(vec![Reply::Header { slot: 0, subslot: 2 }], im0)), "it answers slot 0 subslot 0x0002 index 0xaff0");
+        assert_eq!(refusal(run(vec![Reply::Header { slot: 1, subslot: 1 }], im0)), "it answers slot 1 subslot 0x0001 index 0xaff0");
+        let from = l.kept().1;
+        match run(vec![Reply::Header { slot: 0, subslot: 2 }], im0) {
+            Err(ReadError::Answer { frame, .. }) => assert_eq!(vec![frame], from_device(from, &|p| p.packet_type == PacketType::Response)),
+            other => panic!("{other:?}"),
+        }
         assert_eq!(refusal(run(vec![Reply::Answer { record: b"xy".to_vec(), declared: Some(3), index: None, status: PnioStatus::OK }], im0)), "its header says 3 bytes of record and 2 follow");
         // A record longer than its header says is read to its header's length.
         assert_eq!(run(vec![Reply::Answer { record: b"abcdef".to_vec(), declared: Some(4), index: None, status: PnioStatus::OK }], im0).unwrap().data, b"abcd");
@@ -471,12 +503,12 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
         assert!(matches!(run(vec![], im0), Err(ReadError::NoAnswer { device: PEER, waited }) if waited == quick.wait));
 
         // A port's data of another subslot than asked is refused; a peer of an all-zero MAC has none.
-        let port_data = |subslot: u16, peer_mac: Mac| {
+        let port_data_of = |slot: u16, subslot: u16, peers: Vec<Peer>| {
             let p = PortDataReal {
-                slot: 0,
+                slot,
                 subslot,
-                own_port_id: "port-001".into(),
-                peers: vec![Peer { port_id: "port-009.sw".into(), chassis_id: "sw".into(), line_delay: 0, mac: peer_mac }],
+                own_port_id: format!("port-{:03}", subslot - 0x8000),
+                peers,
                 mau_type: 0x10,
                 domain_boundary: 0,
                 multicast_boundary: 0,
@@ -486,6 +518,8 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
             };
             p.block().unwrap().encode().unwrap()
         };
+        let peer_of = |mac: Mac| Peer { port_id: "port-009.sw".into(), chassis_id: "sw".into(), line_delay: 0, mac };
+        let port_data = |subslot: u16, peer_mac: Mac| port_data_of(0, subslot, vec![peer_of(peer_mac)]);
         let lacks = || Reply::Answer { record: Vec::new(), declared: None, index: None, status: PnioStatus { code: 0xDE, decode: 0x80, code1: 0xB2, code2: 0 } };
         set(vec![(0x8001, vec![good(&port_data(0x8005, PEER1))])]);
         match read::ports(&l, "a0", &device, &quick) {
@@ -493,10 +527,30 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
             other => panic!("{other:?}"),
         }
         set(vec![(0x8001, vec![good(&port_data(0x8001, Mac([0; 6])))]), (0x8002, vec![good(&port_data(0x8002, PEER1))]), (0x8003, vec![lacks()])]);
+        let from = l.kept().1;
         let ports = read::ports(&l, "a0", &device, &quick).unwrap();
         assert_eq!(ports.read.iter().map(|r| r.data.subslot).collect::<Vec<_>>(), [0x8001, 0x8002]);
         assert_eq!(ports.neighbours.iter().map(|n| n.peer_mac).collect::<Vec<_>>(), [None, Some(PEER1)]);
-        assert!(ports.end.is_some());
+        // The end is the device's answer saying the subslot is not there.
+        let answers = from_device(from, &|p| p.packet_type == PacketType::Response);
+        assert_eq!((answers.len(), ports.end), (3, answers.last().copied()));
+        // Port data of another slot at the subslot asked is refused; two peers are two neighbours.
+        set(vec![(0x8001, vec![good(&port_data_of(1, 0x8001, vec![peer_of(PEER1)]))])]);
+        match read::ports(&l, "a0", &device, &quick) {
+            Err((0x8001, ReadError::Answer { why, .. })) => assert_eq!(why, "its port data is of slot 1 subslot 0x8001"),
+            other => panic!("{other:?}"),
+        }
+        let other = Mac([0x02, 0x00, 0x5E, 0xAE, 0x00, 0x09]);
+        set(vec![(0x8001, vec![good(&port_data_of(0, 0x8001, vec![peer_of(PEER1), peer_of(other)]))]), (0x8002, vec![lacks()])]);
+        let two = read::ports(&l, "a0", &device, &quick).unwrap();
+        assert_eq!(two.neighbours.iter().map(|n| (n.port.as_str(), n.peer_mac)).collect::<Vec<_>>(), [("port-001", Some(PEER1)), ("port-001", Some(other))]);
+        // A device answering every subslot: read to the sixteenth, 0x8010, and no further, no end.
+        set((0x8001..=0x8011).map(|sub| (sub, vec![good(&port_data(sub, PEER1))])).collect());
+        let from = l.kept().1;
+        let all = read::ports(&l, "a0", &device, &quick).unwrap();
+        assert_eq!((all.read.len(), all.read.last().map(|r| r.data.subslot), all.end), (16, Some(0x8010), None));
+        let asked = l.frames_from(from).into_iter().filter(|(_, k)| k.sent && ip::datagram(&k.frame.bytes).is_some_and(|d| d.dst.port == 34964)).count();
+        assert_eq!(asked, 16);
 
         // Frames let go past the listener's bound after the request, before its answer was read:
         // its answer may be among them, and the read says so.
@@ -508,4 +562,303 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
         peer.join().unwrap();
         l.stop();
     });
+}
+
+/// The first refute round's cases (its critic's demonstrations, taken in): the read's turn, the
+/// port held open, the device's object, an answer in the other byte order or to another address
+/// or MAC, a checksum of zero, an IPv4 header of 24 bytes, a UDP length short of its packet, and
+/// the datagram reader's totality.
+mod round_1 {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    const SOURCE: Mac = Mac([0x02, 0x00, 0x5E, 0xB0, 0x00, 0xA0]);
+    const DEVICE: Mac = Mac([0x02, 0x00, 0x5E, 0xB0, 0x00, 0x01]);
+
+    fn device_of(iface: &str, ids: Option<(u16, u16)>, instance: Option<(u8, u8)>) -> Device {
+        let identity = DeviceIdentity {
+            name: Some("bomba-1".into()),
+            ip: Some(IpSuite { ip: a(10), mask: Ipv4Addr::new(255, 255, 255, 0), gateway: Ipv4Addr::UNSPECIFIED }),
+            vendor_id: ids.map(|i| i.0),
+            device_id: ids.map(|i| i.1),
+            instance,
+            ..Default::default()
+        };
+        let o = Observation { witness: Witness { probe: Probe::DcpHeard, iface: iface.into(), at_ns: 1, frame: 0 }, observed: Observed::Dcp { mac: DEVICE, service: dcp::Service::Hello, service_type: dcp::ServiceType::Request, identity } };
+        let mut f = Fusion::new();
+        f.apply(&o);
+        f.devices.remove(&DEVICE).unwrap()
+    }
+
+    /// A datagram whose UDP checksum computes to 0 carries 0xFFFF (0 says none), and the
+    /// dissectors read it good.
+    #[test]
+    fn a_checksum_of_zero_travels_as_ffff() {
+        let f = ip::udp_frame(Endpoint { mac: SOURCE, ip: a(1), port: 49152 }, Endpoint { mac: DEVICE, ip: a(10), port: 34964 }, 0, &[0x35, 0xE9]).unwrap();
+        assert_eq!(&f[40..42], &[0xFF, 0xFF]);
+        assert_eq!(checked(std::slice::from_ref(&f), &["udp.checksum.status"])[0], ["1"]);
+        assert_eq!(ip::datagram(&f).unwrap().payload, [0x35, 0xE9]);
+    }
+
+    /// The header's checksum of `ip` written again.
+    fn resum(ip: &mut [u8]) {
+        ip[10] = 0;
+        ip[11] = 0;
+        let mut acc: u32 = ip.chunks(2).map(|p| u32::from(u16::from_be_bytes([p[0], p[1]]))).sum();
+        while acc > 0xFFFF {
+            acc = (acc & 0xFFFF) + (acc >> 16);
+        }
+        ip[10..12].copy_from_slice(&(!(acc as u16)).to_be_bytes());
+    }
+
+    #[test]
+    fn a_header_of_24_bytes_is_read_through_and_a_datagram_to_its_own_length() {
+        let payload = b"hello, device, a longer payload";
+        let good = ip::udp_frame(Endpoint { mac: SOURCE, ip: a(1), port: 49152 }, Endpoint { mac: DEVICE, ip: a(10), port: 34964 }, 7, payload).unwrap();
+        // One option word: the header 24 bytes, its total 4 longer, its checksum written again.
+        let mut iph = good[14..34].to_vec();
+        iph[0] = 0x46;
+        let total = u16::from_be_bytes([iph[2], iph[3]]) + 4;
+        iph[2..4].copy_from_slice(&total.to_be_bytes());
+        iph.extend_from_slice(&[1, 1, 1, 0]);
+        resum(&mut iph);
+        let mut opt = good[..14].to_vec();
+        opt.extend_from_slice(&iph);
+        opt.extend_from_slice(&good[34..14 + 20 + 8 + payload.len()]);
+        let d = ip::datagram(&opt).unwrap();
+        assert_eq!((d.payload.as_slice(), d.src.port, d.dst.port), (&payload[..], 49152, 34964));
+        assert_eq!(checked(&[opt], &["ip.hdr_len", "udp.checksum.status", "udp.length"])[0], ["24", "1", &(8 + payload.len()).to_string()]);
+        // An IPv4 packet longer than its UDP datagram: the datagram read to its own length (the UDP
+        // checksum then absent, as the bytes past it are no part of it).
+        let mut long = good[..14 + 20 + 8 + payload.len()].to_vec();
+        long.extend_from_slice(b"tail");
+        let total = (20 + 8 + payload.len() + 4) as u16;
+        long[16..18].copy_from_slice(&total.to_be_bytes());
+        long[40] = 0;
+        long[41] = 0;
+        let mut iph = long[14..34].to_vec();
+        resum(&mut iph);
+        long[14..34].copy_from_slice(&iph);
+        assert_eq!(ip::datagram(&long).unwrap().payload, payload);
+    }
+
+    /// Every cut of a good frame (tagged or not, with an option word), and every byte of its first
+    /// sixty set to every value, read without a panic, each datagram read within its frame.
+    #[test]
+    fn the_datagram_reader_is_total() {
+        let good = ip::udp_frame(Endpoint { mac: SOURCE, ip: a(1), port: 49152 }, Endpoint { mac: DEVICE, ip: a(10), port: 34964 }, 7, b"hello, device, a longer payload").unwrap();
+        let mut tagged = good[..12].to_vec();
+        tagged.extend_from_slice(&[0x81, 0x00, 0x00, 0x05]);
+        tagged.extend_from_slice(&good[12..]);
+        let mut iph = good[14..34].to_vec();
+        iph[0] = 0x46;
+        let total = u16::from_be_bytes([iph[2], iph[3]]) + 4;
+        iph[2..4].copy_from_slice(&total.to_be_bytes());
+        iph.extend_from_slice(&[1, 1, 1, 0]);
+        resum(&mut iph);
+        let mut opt = good[..14].to_vec();
+        opt.extend_from_slice(&iph);
+        opt.extend_from_slice(&good[34..]);
+        for f in [good, tagged, opt] {
+            for cut in 0..=f.len() {
+                let _ = ip::datagram(&f[..cut]);
+            }
+            for at in 0..f.len().min(60) {
+                for v in 0..=255u8 {
+                    let mut g = f.clone();
+                    g[at] = v;
+                    if let Some(d) = ip::datagram(&g) {
+                        assert!(d.payload.len() + 14 + 20 + 8 <= g.len() + 4, "{at} {v}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A wire named as the private network's addressed interface: it takes `block` to send each
+    /// frame, refuses them when told to, ends (an error on its next read) once `dies` has passed,
+    /// and hears nothing. It counts what it is handed.
+    struct Slow {
+        block: Duration,
+        refuse: bool,
+        dies: Option<std::time::Instant>,
+        handed: Arc<AtomicUsize>,
+    }
+
+    impl Wire for Slow {
+        fn name(&self) -> &str {
+            "a0"
+        }
+        fn mac(&self) -> Option<Mac> {
+            Some(SOURCE)
+        }
+        fn send(&mut self, f: &[u8]) -> Result<(), WireError> {
+            self.handed.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(self.block);
+            if self.refuse { Err(WireError::TooShort(f.len())) } else { Ok(()) }
+        }
+        fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+            if self.dies.is_some_and(|d| std::time::Instant::now() >= d) {
+                return Err(WireError::Ended("a0".into()));
+            }
+            std::thread::sleep(timeout.min(Duration::from_millis(5)));
+            Ok(None)
+        }
+    }
+
+    fn slow(block: Duration, refuse: bool, dies: Option<Duration>) -> (Box<dyn Wire>, Arc<AtomicUsize>) {
+        let handed = Arc::new(AtomicUsize::new(0));
+        (Box::new(Slow { block, refuse, dies: dies.map(|d| std::time::Instant::now() + d), handed: handed.clone() }), handed)
+    }
+
+    /// Sent through the listener in its turn: a read behind a frame its wire stalls on is taken
+    /// back and never sent; one its wire stalls on itself is said stalled; one refused, refused; one
+    /// whose worker ends while it waits, ended; one behind thirty frames sent in its turn.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_read_goes_in_its_turn_or_is_taken_back_never_sent() {
+        use veredas_aranha::netns;
+        netns::isolated("round_1::a_read_goes_in_its_turn_or_is_taken_back_never_sent", &[("a0", "b0")], || {
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            let device = device_of("a0", None, None);
+            let im0 = Target { slot: 0, subslot: 1, index: 0xAFF0 };
+            let quick = read::Options { wait: Duration::from_millis(200) };
+
+            // Behind a frame the wire takes 3 s to send: withdrawn past its turn, never handed over.
+            let (wire, handed) = slow(Duration::from_secs(3), false, None);
+            let l = Listener::start(vec![wire], Options::default()).unwrap();
+            l.send("a0", vec![0u8; 60]).unwrap();
+            assert!(l.until(Duration::from_secs(2), |s| s.stats.interfaces["a0"].queued == 0));
+            let start = std::time::Instant::now();
+            assert!(matches!(read::read(&l, "a0", &device, im0, &quick), Err(ReadError::NotSent { .. })));
+            assert!(start.elapsed() < Duration::from_millis(2500), "{:?}", start.elapsed());
+            std::thread::sleep(Duration::from_millis(6500).saturating_sub(start.elapsed()));
+            let i = l.interface("a0").unwrap();
+            assert_eq!((i.sent, i.withdrawn, handed.load(Ordering::SeqCst)), (1, 1, 1), "the read never went");
+            drop(l);
+
+            // Its own frame stalled on: said stalled, past its turn and not before.
+            let (wire, _) = slow(Duration::from_millis(2500), false, None);
+            let l = Listener::start(vec![wire], Options::default()).unwrap();
+            let start = std::time::Instant::now();
+            assert!(matches!(read::read(&l, "a0", &device, im0, &quick), Err(ReadError::Stalled { .. })));
+            assert!(start.elapsed() >= Duration::from_millis(1050), "{:?}", start.elapsed());
+            drop(l);
+
+            // Refused by its wire.
+            let (wire, _) = slow(Duration::ZERO, true, None);
+            let l = Listener::start(vec![wire], Options::default()).unwrap();
+            assert!(matches!(read::read(&l, "a0", &device, im0, &quick), Err(ReadError::Refused { .. })));
+            drop(l);
+
+            // Its worker ending while it waits behind a frame: ended, never stalled.
+            let (wire, _) = slow(Duration::from_millis(600), false, Some(Duration::from_millis(300)));
+            let l = Listener::start(vec![wire], Options::default()).unwrap();
+            l.send("a0", vec![0u8; 60]).unwrap();
+            assert!(l.until(Duration::from_secs(2), |s| s.stats.interfaces["a0"].queued == 0));
+            assert!(matches!(read::read(&l, "a0", &device, im0, &quick), Err(ReadError::Ended { .. })));
+            drop(l);
+
+            // Behind thirty frames at twenty a second: its turn is theirs and a second more, so it
+            // goes (no answer: nothing hears it).
+            let (wire, handed) = slow(Duration::ZERO, false, None);
+            let l = Listener::start(vec![wire], Options::default()).unwrap();
+            for _ in 0..30 {
+                l.send("a0", vec![0u8; 60]).unwrap();
+            }
+            assert!(matches!(read::read(&l, "a0", &device, im0, &quick), Err(ReadError::NoAnswer { .. })));
+            assert_eq!((l.interface("a0").unwrap().sent, handed.load(Ordering::SeqCst)), (31, 31));
+        });
+    }
+
+    /// The answer reaches the port the read holds open, so this machine sends the device no ICMP
+    /// port unreachable; the object is the device's own, its instance as stated; an answer in the
+    /// other byte order NDR allows is read the same; one to another address or MAC of this machine's
+    /// port is passed over.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_read_holds_its_port_open_and_takes_its_answer_whole() {
+        use veredas_aranha::netns;
+        use veredas_aranha::profinet::rpc::{self, ByteOrder, PnioStatus, ReadRequest, ReadResponse, RequestArgs, ResponseArgs, RpcPdu, Uuid};
+        let pairs = [("a0", "b0")];
+        netns::isolated("round_1::a_read_holds_its_port_open_and_takes_its_answer_whole", &pairs, || {
+            bench::pin(&[("a0", SOURCE), ("b0", DEVICE)], &pairs);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            // The kernel may answer the device (an ICMP error) without asking for its MAC first.
+            netns::ip(&["neigh", "add", "192.168.0.10", "lladdr", &DEVICE.to_string(), "dev", "a0", "nud", "permanent"]);
+            #[derive(Clone, Copy, PartialEq, Debug)]
+            enum Way {
+                Good,
+                BigEndian,
+                ToOtherIp,
+                ToOtherMac,
+            }
+            let way = Arc::new(Mutex::new(Way::Good));
+            let icmp = Arc::new(AtomicUsize::new(0));
+            let objects: Arc<Mutex<Vec<Uuid>>> = Arc::new(Mutex::new(Vec::new()));
+            let stop = Arc::new(AtomicBool::new(false));
+            let peer = {
+                let (way, icmp, objects, stop) = (way.clone(), icmp.clone(), objects.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    let mut b0 = bench::link("b0");
+                    let me = Endpoint { mac: DEVICE, ip: a(10), port: 34964 };
+                    while !stop.load(Ordering::SeqCst) {
+                        let Ok(Some(f)) = b0.recv(Duration::from_millis(10)) else { continue };
+                        let b = &f.bytes;
+                        // ICMP (protocol 1) from this machine's address, destination unreachable (3).
+                        if b.len() > 35 && b[12..14] == [0x08, 0x00] && b[23] == 1 && b[26..30] == [192, 168, 0, 1] && b[14 + usize::from(b[14] & 0x0F) * 4] == 3 {
+                            icmp.fetch_add(1, Ordering::SeqCst);
+                            continue;
+                        }
+                        let Some(d) = ip::datagram(b) else { continue };
+                        if d.dst != me {
+                            continue;
+                        }
+                        let req = RpcPdu::decode(&d.payload).unwrap();
+                        objects.lock().unwrap().push(req.object);
+                        let args = RequestArgs::decode(&req.body, req.byte_order()).unwrap();
+                        let read = ReadRequest::from_block(&rpc::read_blocks(&args.data).0[0]).unwrap();
+                        let w = *way.lock().unwrap();
+                        let mut data = ReadResponse::answering(&read, 4).block().encode().unwrap();
+                        data.extend_from_slice(b"mine");
+                        let answer = ResponseArgs::new(PnioStatus::OK, args.args_maximum, data);
+                        let mut pdu = RpcPdu::pnio_response(&req, 7, &answer);
+                        if w == Way::BigEndian {
+                            pdu.drep = ByteOrder::Big.drep();
+                            pdu.body = answer.encode(ByteOrder::Big);
+                        }
+                        let to = match w {
+                            Way::ToOtherIp => Endpoint { ip: a(2), ..d.src },
+                            Way::ToOtherMac => Endpoint { mac: Mac([0x02, 0, 0, 0, 0, 0x77]), ..d.src },
+                            _ => d.src,
+                        };
+                        b0.send(&ip::udp_frame(me, to, 1, &pdu.encode().unwrap()).unwrap()).unwrap();
+                    }
+                })
+            };
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let im0 = Target { slot: 0, subslot: 1, index: 0xAFF0 };
+            let quick = read::Options { wait: Duration::from_millis(400) };
+            let set = |w: Way| *way.lock().unwrap() = w;
+            // Ids (42, 261) and instance (0x01, 0x02) stated: the object carries them.
+            let device = device_of("a0", Some((42, 261)), Some((0x01, 0x02)));
+            set(Way::Good);
+            assert_eq!(read::read(&l, "a0", &device, im0, &quick).unwrap().data, b"mine");
+            std::thread::sleep(Duration::from_millis(300));
+            assert_eq!(objects.lock().unwrap().last().copied(), Some(Uuid::pnio_object(0x0102, 261, 42)));
+            assert_eq!(icmp.load(Ordering::SeqCst), 0, "the answer reached an open port");
+            // The other byte order.
+            set(Way::BigEndian);
+            assert_eq!(read::read(&l, "a0", &device, im0, &quick).unwrap().data, b"mine");
+            // To another address or another MAC of this machine's port: passed over.
+            for w in [Way::ToOtherIp, Way::ToOtherMac] {
+                set(w);
+                assert!(matches!(read::read(&l, "a0", &device, im0, &quick), Err(ReadError::NoAnswer { .. })), "{w:?}");
+            }
+            stop.store(true, Ordering::SeqCst);
+            peer.join().unwrap();
+            l.stop();
+        });
+    }
 }
