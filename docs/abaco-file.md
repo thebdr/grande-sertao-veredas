@@ -16,7 +16,10 @@ Every plain-text file of Veredas 2 states its schema (`docs/questions.md` Q10): 
 opens with `format` and `version`, read before its body by the suite's one header reader (core's
 `veredas_core::schema`, C-045), so a part of another format, or of a version this Ábaco does not
 know, is refused by name, never guessed. A key nothing reads is refused too, at any depth of a
-part, by its path (`styles.fonts.0.szz`); a tool's own records and state are tables whose keys
+part, by its path (`styles.fonts.0.szz`), and so is one that replaced a field the part then lacks
+(a link's `url` for its `target`: `links.0.2.url`), found by giving the part the field and reading
+it again, never by its spelling; a field deleted, no key standing for it, is refused in the
+reader's words (``missing field `min` ``). A tool's own records and state are tables whose keys
 the tool chooses.
 
 ## The parts
@@ -52,6 +55,8 @@ the format's epoch (1980-01-01) with mode 0644.
 | `macros` | the macros' names, each a `macros/<name>.py` part |
 | `[[sheets]]` | in order: `name`, the sheet's name, and `part`, the part that holds it |
 
+A part, a sheet's or a macro's, is listed once: one listed twice is refused by the manifest.
+
 ## The workbook part
 The engine's own structures, as the engine names them (`ironcalc_base::types`): `[settings]`,
 `[metadata]`, `[[defined_names]]`, `[styles]`, `[theme]`, `[tables.<name>]`,
@@ -65,8 +70,9 @@ engine's, refused by its path. A sheet part's structure is written the same way.
 
 Both ends hold the workbook to what the engine takes: sheet names of 1 to 31 characters with none
 of `\ / * ? : [ ]`, told apart in any case, each sheet's id its own; a row's `s` and a column's
-`style` one of the workbook's styles; each style's font, fill and border one of the workbook's; at
-least one sheet; a defined name spelled as Excel spells
+`style` one of the workbook's styles; each style's font, fill and border one of the workbook's,
+and its number format's id none below 0, a named style's too (applying it copies them into a
+cell's style); at least one sheet; a defined name spelled as Excel spells
 one (MS-XLSX's: a letter, `_`, `\` or any character beyond ASCII first, then those, digits, `.` and
 `?`, so no `@B1`,
 `(B1)` or `B1+0`, and neither `TRUE` nor `FALSE`) that does not read as a cell (`B1`, `$B$1`,

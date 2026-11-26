@@ -1011,7 +1011,7 @@ impl Parts<'_> {
                 // a field missing inside an internally tagged object (a link, a format's rule),
                 // which serde reads from a buffer `serde_ignored` never sees: a key replacing it is
                 // named by its path (refute round 12)
-                if let Some(path) = key_replacing_a_tagged_field::<T>(&json, &e.to_string()).or_else(|| key_near_a_missing_field(&json, &e.to_string())) {
+                if let Some(path) = key_replacing_a_field::<T>(&json, &e.to_string()) {
                     return Err(self.bad(format!("{name}: `{path}` is a key nothing reads")));
                 }
                 return Err(self.bad(format!("{name}: {e}")));
@@ -1048,144 +1048,278 @@ fn twice_stated_external_cell(book: &toml::Table) -> Option<String> {
     None
 }
 
-/// The first key, in an object holding a `type` (an internally tagged enum) or in any object below
-/// one (all of it read from serde's buffer: a threshold of a format's rule), that `back`, the value
-/// read written out again, lacks, by its path.
-/// The key that replaced a field the deserialiser found missing (`missing field `x``) inside an
-/// internally tagged object of `json`: each such object lacking the field is given it, as each kind
-/// of JSON value in turn, until the whole reads; the object's keys the value written back lacks are
-/// then the ones nothing reads.
-fn key_replacing_a_tagged_field<T: DeserializeOwned + Serialize>(json: &serde_json::Value, error: &str) -> Option<String> {
+/// The key that replaced a field the deserialiser found missing, found by reading again rather
+/// than guessed (refute rounds 12 to 14): objects lacking the field are given it, as each kind of
+/// JSON value and, for a tag, each variant the deserialiser names. An object holds it once a kind
+/// is taken there, the error then moving on or, a kind refused there first, staying (the same field
+/// missing in another object); an object where every kind leaves the error as it was does not read
+/// the field and is left as it came. Each new missing field is filled in its turn, 64 rounds and
+/// 1 024 readings at most, until the whole reads; the keys the value written back then lacks, as
+/// `serde_ignored` and [`unread_in_tagged`] read them, the fields put in left out, are the ones
+/// nothing reads. Of the kinds that make the whole read, the one leaving fewest such keys is taken,
+/// and its first key is named. A field deleted,
+/// no key standing for it, names none, and the deserialiser's own words stand. The objects are tried tagged ones and what they hold first,
+/// then those holding a variant-like text, each by its key nearest to the field's name, 64 a round
+/// at most.
+fn key_replacing_a_field<T: DeserializeOwned + Serialize>(json: &serde_json::Value, error: &str) -> Option<String> {
     use serde_json::Value as J;
-    let field = error.split_once("missing field `")?.1.split_once('`')?.0.to_string();
-    // the paths of the tagged objects (a `type` text) that lack the field
-    fn lacking(v: &J, field: &str, path: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+    let missing = |e: &str| e.split_once("missing field `").and_then(|(_, r)| r.split_once('`')).map(|(f, _)| f.to_string());
+    // the deserialiser refusing the value put in (or, in a structure that takes no key it does not
+    // know, the key itself)
+    let rejected = |e: &str| ["invalid type", "unknown variant", "invalid value", "invalid length", "unknown field"].iter().any(|r| e.starts_with(r));
+    let dotted = |path: &[String], field: &str| path.iter().map(String::as_str).chain([field]).collect::<Vec<_>>().join(".");
+    let mut filled = json.clone();
+    let mut text = error.to_string();
+    // the fields this search put in, which are no key of the file's
+    let mut inserted: Vec<(Vec<String>, String)> = Vec::new();
+    // readings tried, all rounds together: a refused file of a large sheet stays a quick refusal
+    let mut budget = 1024usize;
+    for _ in 0..64 {
+        let field = missing(&text)?;
+        let mut moved = None;
+        for path in candidates_lacking(&filled, &field).into_iter().take(64) {
+            let mut kinds = vec![J::Bool(false), J::from(0), J::String(String::new()), J::Null, J::Array(Vec::new()), J::Object(Default::default())];
+            // a kind refused shows the field is read there; a kind then taken with the error
+            // unchanged fills it, the same field missing in another object too (two links)
+            let mut refused = false;
+            let mut taken_unchanged = None;
+            let mut best = None;
+            let mut k = 0;
+            while k < kinds.len() {
+                budget = budget.checked_sub(1)?;
+                let mut trial = filled.clone();
+                if !insert_at(&mut trial, &path, &field, kinds[k].clone()) {
+                    break;
+                }
+                match serde_json::from_value::<T>(trial.clone()) {
+                    Ok(value) => {
+                        let back = serde_json::to_value(&value).ok()?;
+                        let mut ours = inserted.clone();
+                        ours.push((path.clone(), field.clone()));
+                        let dotted_ours: Vec<String> = ours.iter().map(|(p, f)| dotted(p, f)).collect();
+                        // the file as it came, our fields out, against the value written back
+                        let mut file = trial.clone();
+                        for (p, f) in &ours {
+                            remove_at(&mut file, p, f);
+                        }
+                        let mut unread = Vec::new();
+                        let _: Result<T, _> = serde_ignored::deserialize(trial, |p| {
+                            unread.push(p.to_string().split('.').filter(|step| *step != "?").collect::<Vec<_>>().join("."));
+                        });
+                        unread.retain(|p| !dotted_ours.contains(p));
+                        unread_below(&file, &back, String::new(), false, &mut unread);
+                        // the reading that leaves fewest keys unread: none, a field deleted (no
+                        // key names it); one, the key that replaced it
+                        if unread.len() <= 1 {
+                            return unread.into_iter().next();
+                        }
+                        if best.as_ref().is_none_or(|b: &Vec<String>| unread.len() < b.len()) {
+                            best = Some(unread);
+                        }
+                        k += 1;
+                        continue;
+                    }
+                    Err(e) => {
+                        let error = e.to_string();
+                        if !rejected(&error) && error != text {
+                            moved = Some((trial, error, path.clone()));
+                            break;
+                        }
+                        if !rejected(&error) {
+                            taken_unchanged.get_or_insert(trial);
+                        } else {
+                            refused = true;
+                        }
+                        // a tag: each variant the deserialiser names (`expected `A` or `B``), one
+                        // the object holds as a text first (a tag renamed keeps its variant)
+                        if error.starts_with("unknown variant")
+                            && let Some((_, expected)) = error.split_once("expected")
+                        {
+                            let held = |v: &J| object_at(&filled, &path).is_some_and(|o| o.values().any(|x| x == v));
+                            let named: Vec<J> = expected.split('`').skip(1).step_by(2).map(|v| J::String(v.to_string())).filter(|v| !kinds.contains(v)).collect();
+                            let (first, rest): (Vec<J>, Vec<J>) = named.into_iter().partition(held);
+                            kinds.splice(k + 1..k + 1, first);
+                            kinds.extend(rest);
+                        }
+                    }
+                }
+                k += 1;
+            }
+            if let Some(unread) = best {
+                return unread.into_iter().next();
+            }
+            if moved.is_some() {
+                break;
+            }
+            // filled here, the round going on to the next object lacking it
+            if refused && let Some(trial) = taken_unchanged {
+                filled = trial;
+                inserted.push((path, field.clone()));
+            }
+        }
+        let (next, error, path) = moved?;
+        filled = next;
+        text = error;
+        inserted.push((path, field));
+    }
+    None
+}
+
+/// The object at `path` in `json`, if one stands there.
+fn object_at<'a>(json: &'a serde_json::Value, path: &[String]) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    use serde_json::Value as J;
+    let mut at = json;
+    for step in path {
+        at = match at {
+            J::Object(o) => o.get(step)?,
+            J::Array(a) => a.get(step.parse::<usize>().ok()?)?,
+            _ => return None,
+        };
+    }
+    at.as_object()
+}
+
+/// `field` taken out of the object at `path` in `json`, if it stands there.
+fn remove_at(json: &mut serde_json::Value, path: &[String], field: &str) {
+    use serde_json::Value as J;
+    let mut at = json;
+    for step in path {
+        at = match at {
+            J::Object(o) => match o.get_mut(step) {
+                Some(v) => v,
+                None => return,
+            },
+            J::Array(a) => match step.parse::<usize>().ok().and_then(|i| a.get_mut(i)) {
+                Some(v) => v,
+                None => return,
+            },
+            _ => return,
+        };
+    }
+    if let J::Object(o) = at {
+        o.remove(field);
+    }
+}
+
+/// The paths of the objects of `json` lacking `field`, the likeliest first: tagged ones (a `type`
+/// text) and the objects below them, then those holding a text that reads as a variant (`CellIs`,
+/// `External`), then the rest; among each, the one holding the key nearest to `field` first.
+fn candidates_lacking(json: &serde_json::Value, field: &str) -> Vec<Vec<String>> {
+    use serde_json::Value as J;
+    fn walk(v: &J, field: &str, path: &mut Vec<String>, below_tagged: bool, out: &mut Vec<(usize, usize, Vec<String>)>) {
         match v {
             J::Object(o) => {
-                if o.get("type").is_some_and(J::is_string) && !o.contains_key(field) {
-                    out.push(path.clone());
+                let tagged = o.get("type").is_some_and(J::is_string);
+                if !o.contains_key(field) {
+                    let variant_like = o.values().any(|x| x.as_str().is_some_and(|t| t.starts_with(|c: char| c.is_ascii_uppercase())));
+                    let rank = if tagged || below_tagged { 0 } else if variant_like { 1 } else { 2 };
+                    let nearest = o.keys().map(|k| edit_distance(k, field)).min().unwrap_or(usize::MAX);
+                    out.push((rank, nearest, path.clone()));
                 }
                 for (k, child) in o {
                     path.push(k.clone());
-                    lacking(child, field, path, out);
+                    walk(child, field, path, below_tagged || tagged, out);
                     path.pop();
                 }
             }
             J::Array(a) => {
                 for (i, child) in a.iter().enumerate() {
                     path.push(i.to_string());
-                    lacking(child, field, path, out);
+                    walk(child, field, path, below_tagged, out);
                     path.pop();
                 }
             }
             _ => {}
         }
     }
-    let mut places = Vec::new();
-    lacking(json, &field, &mut Vec::new(), &mut places);
-    let kinds = [J::Bool(false), J::from(0), J::String(String::new()), J::Null, J::Array(Vec::new()), J::Object(Default::default())];
-    for place in places {
-        for kind in &kinds {
-            let mut filled = json.clone();
-            let mut at = &mut filled;
-            for step in &place {
-                at = match at {
-                    J::Object(o) => o.get_mut(step)?,
-                    J::Array(a) => a.get_mut(step.parse::<usize>().ok()?)?,
-                    _ => return None,
-                };
-            }
-            if let J::Object(o) = at {
-                o.insert(field.clone(), kind.clone());
-            }
-            if let Ok(value) = serde_json::from_value::<T>(filled.clone()) {
-                let back = serde_json::to_value(&value).ok()?;
-                if let Some(path) = unread_in_tagged(&filled, &back, String::new()) {
-                    return Some(path);
-                }
-            }
-        }
-    }
-    None
+    let mut out = Vec::new();
+    walk(json, field, &mut Vec::new(), false, &mut out);
+    out.sort_by_key(|(rank, nearest, _)| (*rank, *nearest));
+    out.into_iter().map(|(_, _, path)| path).collect()
 }
 
-/// The key that stands for a field the deserialiser found missing where filling cannot tell (two
-/// fields replaced, a field no kind of JSON value fills, an object below a tagged one, the tag
-/// itself; refute round 13): of the keys of the objects lacking the field, the nearest to its name
-/// by edits (a letter added, dropped, changed or two swapped), two at most, the first of the
-/// nearest; its path.
-fn key_near_a_missing_field(json: &serde_json::Value, error: &str) -> Option<String> {
+/// `value` set as `field` of the object at `path` in `json`; false when no object stands there.
+fn insert_at(json: &mut serde_json::Value, path: &[String], field: &str, value: serde_json::Value) -> bool {
     use serde_json::Value as J;
-    let field = error.split_once("missing field `")?.1.split_once('`')?.0;
-    // the optimal string alignment distance
-    fn distance(a: &str, b: &str) -> usize {
-        let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-        let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
-        for (i, row) in d.iter_mut().enumerate() {
-            row[0] = i;
-        }
-        for (j, cell) in d[0].iter_mut().enumerate() {
-            *cell = j;
-        }
-        for i in 1..=a.len() {
-            for j in 1..=b.len() {
-                let cost = usize::from(a[i - 1] != b[j - 1]);
-                d[i][j] = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
-                if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                    d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
-                }
-            }
-        }
-        d[a.len()][b.len()]
+    let mut at = json;
+    for step in path {
+        at = match at {
+            J::Object(o) => match o.get_mut(step) {
+                Some(v) => v,
+                None => return false,
+            },
+            J::Array(a) => match step.parse::<usize>().ok().and_then(|i| a.get_mut(i)) {
+                Some(v) => v,
+                None => return false,
+            },
+            _ => return false,
+        };
     }
-    fn search(v: &J, field: &str, path: &str, best: &mut Option<(usize, String)>) {
-        let at = |k: &str| if path.is_empty() { k.to_string() } else { format!("{path}.{k}") };
-        match v {
-            J::Object(o) => {
-                if !o.contains_key(field) {
-                    for k in o.keys().filter(|k| k.as_str() != field) {
-                        let d = distance(k, field);
-                        if d <= 2 && best.as_ref().is_none_or(|(b, _)| d < *b) {
-                            *best = Some((d, at(k)));
-                        }
-                    }
-                }
-                for (k, child) in o {
-                    search(child, field, &at(k), best);
-                }
-            }
-            J::Array(a) => {
-                for (i, child) in a.iter().enumerate() {
-                    search(child, field, &at(&i.to_string()), best);
-                }
-            }
-            _ => {}
+    match at {
+        J::Object(o) => {
+            o.insert(field.to_string(), value);
+            true
         }
+        _ => false,
     }
-    let mut best = None;
-    search(json, field, "", &mut best);
-    best.map(|(_, path)| path)
 }
 
+/// The optimal string alignment distance between two names (letters added, dropped, changed or two
+/// swapped).
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in d[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            d[i][j] = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+            }
+        }
+    }
+    d[a.len()][b.len()]
+}
+
+/// The first key, in an object holding a `type` (an internally tagged enum, in the file or in the
+/// value written back) or in any object below one (all of it read from serde's buffer: a threshold
+/// of a format's rule), that `back`, the value read written out again, lacks, by its path.
 fn unread_in_tagged(read: &serde_json::Value, back: &serde_json::Value, path: String) -> Option<String> {
-    unread_below(read, back, path, false)
+    let mut unread = Vec::new();
+    unread_below(read, back, path, false, &mut unread);
+    unread.into_iter().next()
 }
 
-fn unread_below(read: &serde_json::Value, back: &serde_json::Value, path: String, inside: bool) -> Option<String> {
+/// Every key [`unread_in_tagged`] names, in the order of the file, pushed to `out`.
+fn unread_below(read: &serde_json::Value, back: &serde_json::Value, path: String, inside: bool, out: &mut Vec<String>) {
     use serde_json::Value as J;
     let at = |k: &str| if path.is_empty() { k.to_string() } else { format!("{path}.{k}") };
     match (read, back) {
         (J::Object(r), J::Object(b)) => {
-            let inside = inside || r.get("type").is_some_and(J::is_string);
-            if inside && let Some(k) = r.keys().find(|k| !b.contains_key(*k)) {
-                return Some(at(k));
+            // the tag read on either side: the search for a replacing key takes its own `type` out
+            let inside = inside || r.get("type").is_some_and(J::is_string) || b.get("type").is_some_and(J::is_string);
+            // this object's keys first, then those below them
+            if inside {
+                out.extend(r.keys().filter(|k| !b.contains_key(*k)).map(|k| at(k)));
             }
-            r.iter().find_map(|(k, v)| b.get(k).and_then(|bv| unread_below(v, bv, at(k), inside)))
+            for (k, v) in r {
+                if let Some(bv) = b.get(k) {
+                    unread_below(v, bv, at(k), inside, out);
+                }
+            }
         }
         (J::Array(r), J::Array(b)) => {
-            r.iter().zip(b).enumerate().find_map(|(i, (v, bv))| unread_below(v, bv, at(&i.to_string()), inside))
+            for (i, (v, bv)) in r.iter().zip(b).enumerate() {
+                unread_below(v, bv, at(&i.to_string()), inside, out);
+            }
         }
-        _ => None,
+        _ => {}
     }
 }
 
@@ -1246,16 +1380,26 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
         }
     }
     // a style's font, fill and border are each one the workbook holds (the engine indexes them
-    // unchecked when a formula reads the cell, or enters one in it)
-    for (i, xf) in ewb.styles.cell_xfs.iter().enumerate() {
+    // unchecked when a formula reads the cell, or enters one in it), and a named style's too, which
+    // applying it copies into a cell's style
+    let records = ewb.styles.cell_xfs.iter().map(|x| ("cell_xfs", x.num_fmt_id, x.font_id, x.fill_id, x.border_id));
+    let named = ewb.styles.cell_style_xfs.iter().map(|x| ("cell_style_xfs", x.num_fmt_id, x.font_id, x.fill_id, x.border_id));
+    let mut at = std::collections::HashMap::new();
+    for (table, num_fmt_id, font_id, fill_id, border_id) in records.chain(named) {
+        let i = *at.entry(table).and_modify(|i| *i += 1).or_insert(0usize);
         for (what, id, len) in [
-            ("font_id", xf.font_id, ewb.styles.fonts.len()),
-            ("fill_id", xf.fill_id, ewb.styles.fills.len()),
-            ("border_id", xf.border_id, ewb.styles.borders.len()),
+            ("font_id", font_id, ewb.styles.fonts.len()),
+            ("fill_id", fill_id, ewb.styles.fills.len()),
+            ("border_id", border_id, ewb.styles.borders.len()),
         ] {
             if usize::try_from(id).map_or(true, |id| id >= len) {
-                return Err(format!("{WORKBOOK}: `styles.cell_xfs.{i}.{what}` {id} is none of the workbook's {len}"));
+                return Err(format!("{WORKBOOK}: `styles.{table}.{i}.{what}` {id} is none of the workbook's {len}"));
             }
+        }
+        // and its number format an id the engine reads: below 50 it indexes Excel's built-in
+        // formats unchecked, a negative one past them (refute round 14)
+        if num_fmt_id < 0 {
+            return Err(format!("{WORKBOOK}: `styles.{table}.{i}.num_fmt_id` {num_fmt_id} is no number format's"));
         }
     }
     for (i, d) in ewb.defined_names.iter().enumerate() {
@@ -1486,6 +1630,18 @@ pub fn read(path: &Path) -> Result<AbacoFile, ModelError> {
     let mut stated: HashSet<(u32, i32, i32)> = HashSet::new();
     if manifest.sheets.is_empty() {
         return Err(parts.bad(format!("{MANIFEST}: a workbook holds a sheet at least")));
+    }
+    // the manifest lists each part once (refute round 14: a part listed again was taken from the
+    // file by the first listing and missed by the second)
+    for (i, sheet) in manifest.sheets.iter().enumerate() {
+        if let Some(j) = manifest.sheets[..i].iter().position(|s| s.part == sheet.part) {
+            return Err(parts.bad(format!("{MANIFEST}: `sheets.{i}` lists the part `{}`, which `sheets.{j}` lists", sheet.part)));
+        }
+    }
+    for (i, name) in manifest.macros.iter().enumerate() {
+        if let Some(j) = manifest.macros[..i].iter().position(|m| m == name) {
+            return Err(parts.bad(format!("{MANIFEST}: `macros.{i}` lists the macro `{name}`, which `macros.{j}` lists")));
+        }
     }
     let styles = book.styles.cell_xfs.len();
     for (i, sheet) in manifest.sheets.iter().enumerate() {

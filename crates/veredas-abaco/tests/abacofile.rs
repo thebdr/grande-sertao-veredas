@@ -1039,6 +1039,126 @@ fn a_style_whose_font_fill_or_border_the_workbook_does_not_hold_is_refused_at_bo
     std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
     let got = std::panic::catch_unwind(|| abacofile::read(&path).err().map(|e| e.to_string())).expect("no panic").unwrap_or_default();
     assert!(got.contains("workbook.toml: `styles.cell_xfs.") && got.contains(".font_id` 99 is none of the workbook's"), "{got}");
+    // a number format no id names (a negative one, which the engine indexed past its built-in
+    // formats when an array read the cell): refused at both ends, never a panic (refute round 14)
+    let mut file = make();
+    let xfs = &mut file.book.model_mut().workbook.styles.cell_xfs;
+    let last = xfs.len() - 1;
+    xfs[last].num_fmt_id = -1;
+    let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| abacofile::write(&mut file, &path))).expect("no panic");
+    let got = got.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(got.contains(&format!("workbook.toml: `styles.cell_xfs.{last}.num_fmt_id` -1 is no number format's")), "{got}");
+    // the reader: a cell's style, and a named style, which applying it copies into a cell's
+    for table in ["cell_xfs", "cell_style_xfs"] {
+        let mut file = make();
+        abacofile::write(&mut file, &path).unwrap();
+        let parts: Vec<(String, Vec<u8>)> = abacofile::parts(&file)
+            .unwrap()
+            .into_iter()
+            .map(|(n, b)| {
+                let t = String::from_utf8(b).unwrap();
+                if n != "workbook.toml" {
+                    return (n, t.into_bytes());
+                }
+                let start = [format!("[[styles.{table}]]"), format!("{table} = [")].iter().find_map(|m| t.find(m.as_str())).unwrap_or_else(|| panic!("{t}"));
+                let at = start + t[start..].find("num_fmt_id = 0").unwrap_or_else(|| panic!("{t}"));
+                (n, format!("{}num_fmt_id = -1{}", &t[..at], &t[at + "num_fmt_id = 0".len()..]).into_bytes())
+            })
+            .collect();
+        std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
+        let got = std::panic::catch_unwind(|| abacofile::read(&path).err().map(|e| e.to_string())).expect("no panic").unwrap_or_default();
+        assert!(got.contains(&format!("workbook.toml: `styles.{table}.")) && got.contains(".num_fmt_id` -1 is no number format's"), "{table}: {got}");
+    }
+    // and a named style's font the workbook does not hold, refused before applying the style
+    // copies it into a cell's
+    let mut file = make();
+    let named = &mut file.book.model_mut().workbook.styles.cell_style_xfs;
+    named[0].font_id = 99;
+    let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| abacofile::write(&mut file, &path))).expect("no panic");
+    let got = got.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(got.contains("workbook.toml: `styles.cell_style_xfs.0.font_id` 99 is none of the workbook's"), "{got}");
+}
+
+#[test]
+fn a_field_deleted_is_refused_as_missing_and_a_key_replacing_one_by_its_path() {
+    // refute round 14: a replacing key named only when the value written back lacks it, a field
+    // deleted refused in the deserialiser's own words, never as a key it reads
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fields.abaco");
+    let refusal = |parts: &[(String, Vec<u8>)], part: &str, edit: &dyn Fn(&str) -> String| -> String {
+        let edited: Vec<(String, Vec<u8>)> = parts
+            .iter()
+            .map(|(n, b)| if n == part || (part == "sheets/" && n.starts_with("sheets/")) { (n.clone(), edit(std::str::from_utf8(b).unwrap()).into_bytes()) } else { (n.clone(), b.clone()) })
+            .collect();
+        std::fs::write(&path, abacofile::zip_of(&edited).unwrap()).unwrap();
+        abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_else(|| "read, not refused".into())
+    };
+    let mut example = worked_example();
+    example.book.ensure_calculated();
+    let parts = abacofile::parts(&example).unwrap();
+    // deleted: the deserialiser's words
+    for (part, from, to, field) in [
+        ("workbook.toml", "tz = \"UTC\"\n", "", "tz"),
+        ("workbook.toml", "sz = 12\n", "", "sz"),
+        ("sheets/01-Loads.toml", "cols = []", "cols = [{ max = 1, width = 10.0, custom_width = true, hidden = false, style = 0 }]", "min"),
+        ("sheets/01-Loads.toml", "rows = []", "rows = [{ height = 15.0, custom_format = false, custom_height = false, s = 0, hidden = false }]", "r"),
+        ("sheets/01-Loads.toml", "merged_cells = []", "merged_cells = [{ column = 1, width = 2, height = 1 }]", "row"),
+    ] {
+        let got = refusal(&parts, part, &|t| t.replacen(from, to, 1));
+        assert!(got.contains(&format!("missing field `{field}`")) && !got.contains("is a key nothing reads"), "{field}: {got}");
+    }
+    let got = refusal(&parts, "workbook.toml", &|t| t.lines().filter(|l| !l.starts_with("created = ")).map(|l| format!("{l}\n")).collect());
+    assert!(got.contains("missing field `created`") && !got.contains("is a key nothing reads"), "created: {got}");
+    // a link's tag or field replaced by a far name, two links each with one: by its path
+    for (links, want) in [
+        ("[[1, 1, { kind = \"External\", target = \"https://example.org\" }]]", "`links.0.2.kind` is a key nothing reads"),
+        ("[[1, 1, { type = \"External\", url = \"https://example.org\" }]]", "`links.0.2.url` is a key nothing reads"),
+        ("[[1, 1, { type = \"External\", url = \"a\" }], [2, 1, { type = \"Internal\", locationn = \"Loads!A1\" }]]", "`links.0.2.url` is a key nothing reads"),
+    ] {
+        let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replace("links = []", &format!("links = {links}")));
+        assert!(got.contains(want), "{links}: {got}");
+    }
+    // a format's rule: two fields replaced, the tag replaced by `kind`, a threshold's field far
+    // renamed, a rule's field deleted
+    let rules = AbacoFile::new(open(&corpus_dir().join("conditional_formatting/cf_tests.xlsx")));
+    let parts = abacofile::parts(&rules).unwrap();
+    let cellis = |t: &str| t.contains("stop_if_true = false\ntype = \"CellIs\"");
+    let got = refusal(&parts, "sheets/", &|t| if cellis(t) { t.replacen("formula = ", "formulaa = ", 1).replacen("dxf_id = ", "dxf_idd = ", 1) } else { t.to_string() });
+    assert!(got.contains(".cf_rule.dxf_idd` is a key nothing reads") || got.contains(".cf_rule.formulaa` is a key nothing reads"), "{got}");
+    let got = refusal(&parts, "sheets/", &|t| t.replacen("type = \"CellIs\"", "kind = \"CellIs\"", 1));
+    assert!(got.contains(".cf_rule.kind` is a key nothing reads"), "{got}");
+    let got = refusal(&parts, "sheets/", &|t| t.replacen("cfvo = ", "value = ", 1));
+    assert!(got.contains(".value` is a key nothing reads"), "{got}");
+    let got = refusal(&parts, "sheets/", &|t| if cellis(t) { t.replacen("formula = ", "# formula = ", 1) } else { t.to_string() });
+    assert!(got.contains("missing field `formula`") && !got.contains("is a key nothing reads"), "{got}");
+}
+
+#[test]
+fn a_manifest_listing_a_part_twice_is_refused_by_the_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("twice.abaco");
+    let parts = abacofile::parts(&worked_example()).unwrap();
+    let manifest = String::from_utf8(parts.iter().find(|(n, _)| n == "manifest.toml").unwrap().1.clone()).unwrap();
+    let mut table: toml::Table = toml::from_str(&manifest).unwrap();
+    let sheets = table.get_mut("sheets").and_then(toml::Value::as_array_mut).unwrap();
+    let again = sheets[0].clone();
+    sheets.push(again);
+    let edited: Vec<(String, Vec<u8>)> =
+        parts.iter().map(|(n, b)| if n == "manifest.toml" { (n.clone(), toml::to_string(&table).unwrap().into_bytes()) } else { (n.clone(), b.clone()) }).collect();
+    std::fs::write(&path, abacofile::zip_of(&edited).unwrap()).unwrap();
+    let got = abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(got.contains("manifest.toml: `sheets.1` lists the part `sheets/01-Loads.toml`, which `sheets.0` lists"), "{got}");
+    let mut table: toml::Table = toml::from_str(&manifest).unwrap();
+    let macros = table.get("macros").and_then(toml::Value::as_array).cloned().unwrap_or_default();
+    assert!(!macros.is_empty(), "the worked example names a macro");
+    let mut twice = macros.clone();
+    twice.push(macros[0].clone());
+    table.insert("macros".into(), toml::Value::Array(twice));
+    let edited: Vec<(String, Vec<u8>)> =
+        parts.iter().map(|(n, b)| if n == "manifest.toml" { (n.clone(), toml::to_string(&table).unwrap().into_bytes()) } else { (n.clone(), b.clone()) }).collect();
+    std::fs::write(&path, abacofile::zip_of(&edited).unwrap()).unwrap();
+    let got = abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(got.contains(&format!("manifest.toml: `macros.{}` lists the macro", macros.len())), "{got}");
 }
 
 #[test]
