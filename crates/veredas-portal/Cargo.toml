@@ -4,6 +4,9 @@ name = "veredas-portal"
 version = "2.0.0-alpha.1"
 edition.workspace = true
 publish = false
+# The architect, 2026-11-25 (docs/questions.md Q35): every crate but Oficina states this expression
+# and carries the two texts beside its manifest, the copyright holder thebdr.
+license = "MIT OR Apache-2.0"
 description = "The gateway of Veredas 2: the one point where the suite reads the plant's logs, telegrams and OPC UA servers, stores their data alike and serves it, writes gated"
 
 [features]
