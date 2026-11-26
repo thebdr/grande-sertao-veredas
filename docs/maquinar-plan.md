@@ -382,6 +382,20 @@ The architect's decisions of 13 to 16 November 2026 that touch the bench
 - Open under Q31: entry 25 (the two extensions can only be modules here, since laws L1 and L2
   refuse them as crates).
 
+## The fault catalogue's plant side (Q237), noted, not built
+The architect ruled on 2026-11-26 (`docs/questions.md` Q237, controlador's): each robustness rule
+is proven by a test that shows the controller keeping it under the fault it guards against, the
+bench playing the plant on virtual time, by "(b) A fault catalogue (a named fault the bench injects
+for every rule ...), a long soak of weeks of virtual time with random faults before each release,
+and a few power cuts on real boards". The bench is the catalogue's player for the plant's and the
+wire's side: a device lost mid-exchange, a device that returns, a peer that lies about time, each
+by configuration as every part here is (the knobs the Modbus server, the adapter, the PROFINET
+device and the EtherCAT segment already have are the start: delay, silence, drop, a mute, a fault,
+a restart). The target's own faults (a power cut at an instruction, a drive failing a write,
+memory full) are controlador's harness. Nothing is built for it now: when controlador writes the
+catalogue it asks, through the orchestrator, for each plant-side fault's form, and each becomes a
+clause of this block then.
+
 ## Entry 36: proposed, not built
 A bench device on a real network can pass for a real one: a laptop plugged into a plant answers
 with a real device's station name and a controller takes it, its "guard closed" then coming from a
