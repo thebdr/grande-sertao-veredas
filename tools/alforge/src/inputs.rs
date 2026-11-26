@@ -313,15 +313,27 @@ impl Workspace<'_> {
         }
         // Each folder but its top tests, benches and examples, unless a shipped target starts there
         // (docs/questions.md Q445, ruled 2026-11-26 "Tests left out").
-        let mut left: Vec<String> = Vec::new();
         let dirs: BTreeSet<&str> = used.iter().map(|m| m.dir.as_str()).collect();
+        // Every file rustc reads as Rust from these packages: a test folder a module of one at a
+        // package's top can reach is not left out.
+        let rust = self.read_as_rust(&used)?;
+        let mut left: Vec<String> = Vec::new();
         for m in &used {
-            let out = left_out(self.tree, m, &dirs);
-            named.insert(format!("{}/", m.dir), self.folder_id(&m.dir, &out)?);
-            for f in out {
-                named.entry(f.clone()).or_insert_with(|| LEFT_OUT.to_string());
-                left.push(f);
-            }
+            left.extend(left_out(self.tree, m, &dirs, &rust));
+        }
+        // A package's folder without its test folders and without the packages a build uses
+        // inside it, each of which has a key of its own.
+        let mut skip: Vec<String> = left.clone();
+        skip.extend(dirs.iter().map(|d| format!("{}", prefix(d))));
+        for m in &used {
+            let own = prefix(&m.dir);
+            let skip: Vec<String> = skip.iter().filter(|s| **s != own).cloned().collect();
+            named.insert(format!("{}/", m.dir), self.folder_id(&m.dir, &skip)?);
+        }
+        for f in &left {
+            named.entry(f.clone()).or_insert_with(|| LEFT_OUT.to_string());
+        }
+        for m in &used {
             // A package of another workspace inherits keys from that workspace's manifest, read
             // whole.
             if !m.workspace.is_empty() {
@@ -355,7 +367,7 @@ impl Workspace<'_> {
     /// The identity of a package's folder at the commit: its entries as git stores them, but the
     /// folders `left` leaves out (its top tests, benches and examples), so a change there charges
     /// nothing.
-    fn folder_id(&self, dir: &str, left: &[String]) -> Result<String, String> {
+    fn folder_id(&self, dir: &str, skip: &[String]) -> Result<String, String> {
         use sha2::{Digest, Sha256};
         let spec = format!("{}:{dir}", self.commit);
         let listing = git::run(self.root, &["ls-tree", "-z", &spec])
@@ -365,8 +377,19 @@ impl Workspace<'_> {
         for entry in listing.split(|b| *b == 0).filter(|e| !e.is_empty()) {
             let text = String::from_utf8_lossy(entry);
             let (info, name) = text.split_once('\t').unwrap_or_default();
-            if info.split_whitespace().nth(1) == Some("tree") && left.contains(&format!("{}{name}/", prefix(dir))) {
-                continue;
+            if info.split_whitespace().nth(1) == Some("tree") {
+                let sub = format!("{}{name}/", prefix(dir));
+                // A folder left out, or a package a build uses with a key of its own: not this
+                // one's. A folder holding one deeper: identified without it, in turn.
+                if skip.contains(&sub) {
+                    continue;
+                }
+                if skip.iter().any(|s| s.starts_with(&sub)) {
+                    let inner = self.folder_id(&sub[..sub.len() - 1], skip)?;
+                    h.update(format!("{} {inner}\t{name}", info.split_whitespace().next().unwrap_or_default()).as_bytes());
+                    h.update([0]);
+                    continue;
+                }
             }
             h.update(entry);
             h.update([0]);
@@ -443,6 +466,34 @@ impl Workspace<'_> {
             }
         }
         Ok(out)
+    }
+
+    /// Every file of the tree rustc may read as Rust from the packages `used`: every `.rs` file in
+    /// their folders, every file a target starts from, and every file one of them names as Rust
+    /// (`#[path]`, `include!`), in turn, wherever it lies.
+    fn read_as_rust(&self, used: &[&Member]) -> Result<BTreeSet<String>, String> {
+        let mut files: Vec<String> = Vec::new();
+        for m in used {
+            walk(self.tree, &m.dir, &[], &mut files).map_err(|e| format!("{}'s sources do not read: {e}", m.dir))?;
+            files.extend(m.sources.iter().filter_map(|s| normal(Path::new(s))));
+        }
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut i = 0;
+        while i < files.len() {
+            let file = files[i].clone();
+            i += 1;
+            if !seen.insert(file.clone()) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(self.tree.join(&file)) else { continue };
+            let from = Path::new(&file).parent().unwrap_or(Path::new(""));
+            for (lit, rust) in named(&text) {
+                if let Some(path) = normal(&from.join(&lit)).filter(|_| rust) {
+                    files.push(path);
+                }
+            }
+        }
+        Ok(seen)
     }
 
     /// The files outside `folders`, or inside a folder `left` leaves out, that the Rust sources of
@@ -529,24 +580,21 @@ fn prefix(dir: &str) -> String {
 /// The top folders of a package (`crates/x/tests/`) holding its tests, benches and examples alone,
 /// which its folder's identity leaves out: each that the commit holds, that no target that ships (a
 /// library, an executable, a build script) starts in, that holds no package a build uses (`dirs`),
-/// and that no module rustc reads can reach, in a package without a build script: none is left out
-/// when a shipped target's crate root, or a `mod.rs`, lies at the package's top (its `mod
-/// examples;` is `examples/mod.rs`), nor one beside a file named after it (`tests.rs`, whose
-/// modules are read from `tests/`).
-fn left_out(tree: &Path, m: &Member, dirs: &BTreeSet<&str>) -> Vec<String> {
+/// in a package without a build script and with no file rustc may read as Rust (`rust`) at its
+/// top, whose modules rustc could read from those folders: a crate root, a `mod.rs`, a file a
+/// `#[path]` or an `include!` names there (`mod examples;` in it is `examples/mod.rs`).
+fn left_out(tree: &Path, m: &Member, dirs: &BTreeSet<&str>, rust: &BTreeSet<String>) -> Vec<String> {
     // A build script may read anything in its package's folder (IronCalc's xlsx lists its
     // `tests/` to write code), so none of it is what only the tests read.
     if m.build_script {
         return Vec::new();
     }
-    let top = prefix(&m.dir);
-    let at_top = m.sources.iter().any(|s| normal(Path::new(s)).is_some_and(|p| Path::new(&p).parent() == Some(Path::new(&m.dir)))) || tree.join(format!("{top}mod.rs")).is_file();
-    if at_top {
+    if rust.iter().any(|f| Path::new(f).parent() == Some(Path::new(&m.dir))) {
         return Vec::new();
     }
+    let top = prefix(&m.dir);
     TEST_FOLDERS
         .iter()
-        .filter(|t| !tree.join(format!("{top}{t}.rs")).exists())
         .map(|t| format!("{top}{t}/"))
         .filter(|f| tree.join(f).is_dir())
         .filter(|f| !m.sources.iter().any(|s| normal(Path::new(s)).is_some_and(|p| p.starts_with(f.as_str()))))

@@ -2250,7 +2250,8 @@ fn round_twenty_six_the_resolver_cargo_uses_and_test_folders_a_module_or_a_packa
     );
 
     // A crate root at the package's top: its `mod examples;` is `examples/mod.rs`, so `examples/`
-    // is the folder's like any other; a top `tests.rs` keeps `tests/`, whose files its modules are.
+    // is the folder's like any other; so is `tests/` beside a file a `#[path]` names at the top,
+    // which rustc reads as a `mod.rs` (round 27: its `mod tests;` is `tests/mod.rs`).
     let r = Repo::new();
     r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
     lib(&r, "veredas-core", "");
@@ -2258,9 +2259,9 @@ fn round_twenty_six_the_resolver_cargo_uses_and_test_folders_a_module_or_a_packa
     r.write("crates/veredas-portal/main.rs", "mod examples;\nfn main() { println!(\"{}\", examples::FIRST); }\n");
     r.write("crates/veredas-portal/examples/mod.rs", "pub const FIRST: &str = \"one\";\n");
     lib(&r, "veredas-base", "");
-    r.write("crates/veredas-base/src/lib.rs", "#[path = \"../tests.rs\"]\nmod t;\n");
-    r.write("crates/veredas-base/tests.rs", "mod helper;\n");
-    r.write("crates/veredas-base/tests/helper.rs", "pub const H: u8 = 1;\n");
+    r.write("crates/veredas-base/src/lib.rs", "#[path = \"../shared.rs\"]\nmod shared;\n");
+    r.write("crates/veredas-base/shared.rs", "pub mod tests;\n");
+    r.write("crates/veredas-base/tests/mod.rs", "pub const H: u8 = 1;\n");
     let c1 = r.commit("modules at the top");
     let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
     for (n, folder) in [("veredas-portal", "crates/veredas-portal/examples/"), ("veredas-base", "crates/veredas-base/tests/")] {
@@ -2269,7 +2270,7 @@ fn round_twenty_six_the_resolver_cargo_uses_and_test_folders_a_module_or_a_packa
     let names = ["veredas-base", "veredas-core", "veredas-portal"];
     for (file, text, charged) in [
         ("crates/veredas-portal/examples/mod.rs", "pub const FIRST: &str = \"one, changed\";\n", "veredas-portal 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (crates/veredas-portal/): a version names everything its build reads"),
-        ("crates/veredas-base/tests/helper.rs", "pub const H: u8 = 2;\n", "veredas-base 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (crates/veredas-base/): a version names everything its build reads"),
+        ("crates/veredas-base/tests/mod.rs", "pub const H: u8 = 2;\n", "veredas-base 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (crates/veredas-base/): a version names everything its build reads"),
     ] {
         r.write(file, text);
         let c = r.commit(file);
@@ -2297,7 +2298,7 @@ fn round_twenty_six_the_resolver_cargo_uses_and_test_folders_a_module_or_a_packa
     let c = r.commit("a word changed");
     assert_eq!(
         manifest::check_together(r.path(), &[pins(&["veredas-portal"], "2.0.0", &c1), pins(&["veredas-portal"], "2.0.1", &c)]).unwrap(),
-        ["veredas-portal 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (forks/garfo/, forks/garfo/examples/): a version names everything its build reads"]
+        ["veredas-portal 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (forks/garfo/examples/): a version names everything its build reads"]
     );
 
     // `[project]`, cargo's older name for `[package]`: its inherited keys are read as the package's.
@@ -2329,5 +2330,60 @@ fn round_twenty_six_the_resolver_cargo_uses_and_test_folders_a_module_or_a_packa
     assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
     for b in ["veredas-portal", "veredas-portal-shell"] {
         assert!(target.path().join("debug").join(b).is_file(), "{b} built");
+    }
+}
+
+/// Round 27's real forms: a file an `include!` names at a package's top, whose module folder is
+/// that top (its `mod benches;` is `benches/mod.rs`), keeps the test folders; a package a build uses
+/// nested inside another's folder (a fork's workspace member) is left out of the folder around it,
+/// so its own tests charge nothing there either, and its sources charge its own folder alone.
+#[test]
+fn round_twenty_seven_a_module_an_include_puts_at_the_top_and_a_nested_packages_tests() {
+    let pins = |names: &[&str], release: &str, commit: &str| -> (PathBuf, Manifest) {
+        let comps: String = names.iter().map(|n| format!("[[component]]\nname = \"{n}\"\nversion = \"2.0.0\"\n\n")).collect();
+        let text = format!(
+            "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n{comps}\
+             [tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+        );
+        (PathBuf::from(format!("{release}.toml")), manifest::load(&text).unwrap())
+    };
+    let charged = |inputs: &str| format!("veredas-portal 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs ({inputs}): a version names everything its build reads");
+    // `include!("../tables.rs")`, and `tables.rs` declaring `pub mod benches;`.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-portal\"]\n");
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\nautobenches = false\n");
+    r.write("crates/veredas-portal/src/main.rs", "include!(\"../tables.rs\");\nfn main() { println!(\"{}\", benches::LIMIT); }\n");
+    r.write("crates/veredas-portal/tables.rs", "pub mod benches;\n");
+    r.write("crates/veredas-portal/benches/mod.rs", "pub const LIMIT: u32 = 100;\n");
+    let c1 = r.commit("a module an include puts at the top");
+    let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
+    assert!(!held["veredas-portal"].inputs.as_ref().unwrap().0.contains_key("crates/veredas-portal/benches/"));
+    r.write("crates/veredas-portal/benches/mod.rs", "pub const LIMIT: u32 = 999;\n");
+    let c2 = r.commit("its limit moved");
+    assert_eq!(manifest::check_together(r.path(), &[pins(&["veredas-portal"], "2.0.0", &c1), pins(&["veredas-portal"], "2.0.1", &c2)]).unwrap(), [charged("crates/veredas-portal/")]);
+
+    // A fork whose package `garfo` uses `garfo-impl`, nested in its folder with tests of its own.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-portal\"]\nexclude = [\"forks/garfo\"]\n");
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\ngarfo = { path = \"../../forks/garfo\" }\n");
+    r.write("crates/veredas-portal/src/main.rs", "fn main() {}\n");
+    r.write("forks/garfo/Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"impl\"]\n\n[package]\nname = \"garfo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\ngarfo-impl = { path = \"impl\" }\n");
+    r.write("forks/garfo/src/lib.rs", "\n");
+    r.write("forks/garfo/impl/Cargo.toml", "[package]\nname = \"garfo-impl\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+    r.write("forks/garfo/impl/src/lib.rs", "pub fn word() -> &'static str { \"word\" }\n");
+    r.write("forks/garfo/impl/tests/word.rs", "#[test]\nfn word() {}\n");
+    r.write("Cargo.lock", "version = 4\n\n[[package]]\nname = \"garfo\"\nversion = \"0.1.0\"\ndependencies = [\n \"garfo-impl\",\n]\n\n[[package]]\nname = \"garfo-impl\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\ndependencies = [\n \"garfo\",\n]\n");
+    let c1 = r.commit("a nested package with its tests");
+    let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
+    assert_eq!(held["veredas-portal"].inputs.as_ref().unwrap().0["forks/garfo/impl/tests/"], alforge::inputs::LEFT_OUT);
+    for (file, text, want) in [
+        ("forks/garfo/impl/tests/word.rs", "#[test]\nfn word() {}\n#[test]\nfn another() {}\n", vec![]),
+        ("forks/garfo/impl/src/lib.rs", "pub fn word() -> &'static str { \"another word\" }\n", vec![charged("forks/garfo/impl/")]),
+        ("forks/garfo/src/lib.rs", "pub fn outer() {}\n", vec![charged("forks/garfo/")]),
+    ] {
+        r.write(file, text);
+        let c = r.commit(file);
+        assert_eq!(manifest::check_together(r.path(), &[pins(&["veredas-portal"], "2.0.0", &c1), pins(&["veredas-portal"], "2.0.1", &c)]).unwrap(), want, "{file}");
+        r.git(&["reset", "-q", "--hard", &c1]);
     }
 }
