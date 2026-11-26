@@ -73,11 +73,20 @@ fn sysroot_lib() -> &'static str {
 }
 
 fn driver(args: &[String]) -> Output {
+    driver_with(args, &[])
+}
+
+fn driver_with(args: &[String], env: &[(&str, &str)]) -> Output {
     let lib = match std::env::var("LD_LIBRARY_PATH") {
         Ok(p) if !p.is_empty() => format!("{}:{p}", sysroot_lib()),
         _ => sysroot_lib().to_string(),
     };
-    Command::new(env!("CARGO_BIN_EXE_orcl-front-driver")).env("LD_LIBRARY_PATH", lib).args(args).output().unwrap()
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orcl-front-driver"));
+    command.env("LD_LIBRARY_PATH", lib).args(args);
+    for (k, v) in env {
+        command.env(k, v);
+    }
+    command.output().unwrap()
 }
 
 fn strings(args: &[&str]) -> Vec<String> {
@@ -411,7 +420,8 @@ fn safe_outputs<O: Image>(code: &Code, state_ty: TypeId, state: &[Scalar]) -> O 
 }
 
 /// Runs `name` natively and lowered on the engine for `scans` scans of `inputs`, every report and write alike.
-fn conform<P, I, O>(name: &str, native: P, state_name: &str, inputs: &dyn Fn(u64) -> I, scans: u64)
+/// The native program's outputs, scan by scan, are returned for the test to say the run reached what it is to prove.
+fn conform<P, I, O>(name: &str, native: P, state_name: &str, inputs: &dyn Fn(u64) -> I, scans: u64) -> Vec<O>
 where
     P: Program<Inputs = I, Outputs = O>,
     I: Image + Debug,
@@ -459,6 +469,13 @@ where
     let record = format!("{name}: {scans} scans alike, {instructions} instructions in all, {most} at most in one scan\n");
     print!("{record}");
     fs::write(lowered.file.with_extension("instructions"), record).unwrap();
+    native_feed.writes.into_iter().map(|(_, o)| o).collect()
+}
+
+/// Asserts that a run's outputs held `what` true on some scan and false on another.
+fn both<O>(outputs: &[O], what: &str, f: impl Fn(&O) -> bool) {
+    let trues = outputs.iter().filter(|o| f(o)).count();
+    assert!(trues > 0 && trues < outputs.len(), "{what}: true on {trues} of {} scans", outputs.len());
 }
 
 #[test]
@@ -475,7 +492,12 @@ fn the_conveyor_runs_lowered_as_it_runs_natively() {
             part_at_end: mix(k / 3, 5) % 9 == 0,
         }
     };
-    conform("conveyor", conveyor::Conveyor::default(), "Conveyor", &inputs, 6_000);
+    let outputs = conform("conveyor", conveyor::Conveyor::default(), "Conveyor", &inputs, 6_000);
+    both(&outputs, "the motor", |o| o.motor_on);
+    both(&outputs, "the door's alarm", |o| o.door_alarm);
+    both(&outputs, "the running lamp", |o| o.lamp_running);
+    both(&outputs, "the fault lamp", |o| o.lamp_fault);
+    assert!(outputs.iter().map(|o| o.parts).max() >= Some(10), "parts counted");
 }
 
 #[test]
@@ -493,7 +515,20 @@ fn the_probe_of_every_block_of_orcl_std_runs_lowered_as_it_runs_natively() {
         w32: mix(k, 10) as u32,
         w64: mix(k, 11),
     };
-    conform("probe", probe::Probe::default(), "Probe", &inputs, 6_000);
+    let outputs = conform("probe", probe::Probe::default(), "Probe", &inputs, 6_000);
+    both(&outputs, "the on-delay", |o| o.ton);
+    both(&outputs, "the off-delay", |o| o.tof);
+    both(&outputs, "the pulse", |o| o.tp);
+    both(&outputs, "the on-delay's time below its preset", |o| o.ton_et > Duration::ZERO && !o.ton);
+    both(&outputs, "the off-delay's time running", |o| o.tof_et > Duration::ZERO && o.tof);
+    both(&outputs, "the pulse's time running", |o| o.tp_et > Duration::ZERO && o.tp);
+    both(&outputs, "the rising edge", |o| o.rising);
+    both(&outputs, "the falling edge", |o| o.falling);
+    both(&outputs, "the counter's output", |o| o.counted);
+    both(&outputs, "the counter reset", |o| o.cv == 0);
+    both(&outputs, "a bit of a u8", |o| o.get8);
+    both(&outputs, "a bit of a u64", |o| o.get64);
+    both(&outputs, "a bit written into a u16", |o| o.set16 != 0);
 }
 
 fn arith_inputs(k: u64) -> arith::Inputs {
@@ -515,7 +550,14 @@ fn arith_inputs(k: u64) -> arith::Inputs {
 
 #[test]
 fn arithmetic_bits_comparisons_and_casts_run_lowered_as_they_run_natively() {
-    conform("arith", arith::Arith::default(), "Arith", &arith_inputs, 4_000);
+    let outputs = conform("arith", arith::Arith::default(), "Arith", &arith_inputs, 4_000);
+    both(&outputs, "a < b", |o| o.less);
+    both(&outputs, "a shift left within the width", |o| o.shl_ok);
+    both(&outputs, "a shift right past the width", |o| o.shr_ok);
+    both(&outputs, "a saturated addition", |o| o.sat_add == u8::MAX);
+    both(&outputs, "a float saturating into a u8 at its top", |o| o.double_to_u8 == u8::MAX);
+    both(&outputs, "a float saturating into a u8 at zero", |o| o.double_to_u8 == 0);
+    both(&outputs, "a float below a half", |o| o.fless);
 }
 
 #[test]
@@ -527,7 +569,59 @@ fn enums_arrays_options_tuples_references_durations_and_constants_run_lowered_as
         flag: mix(k, 4) % 3 == 0,
         t_ms: mix(k, 5) % 2_000,
     };
-    conform("shapes", shapes::Shapes::default(), "Shapes", &inputs, 4_000);
+    let outputs = conform("shapes", shapes::Shapes::default(), "Shapes", &inputs, 4_000);
+    both(&outputs, "the mode off", |o| o.mode == shapes::Mode::Off);
+    both(&outputs, "the mode held", |o| matches!(o.mode, shapes::Mode::Hold(_)));
+    both(&outputs, "the mode running forward", |o| o.forward);
+    both(&outputs, "the mode running back", |o| matches!(o.mode, shapes::Mode::Run { forward: false, .. }));
+    both(&outputs, "a fault", |o| matches!(o.mode, shapes::Mode::Fault(_)));
+    both(&outputs, "a value held", |o| o.opt_some);
+    both(&outputs, "a time held", |o| o.held > Duration::ZERO);
+    both(&outputs, "a duration below a second", |o| o.dur_lt);
+    for niche in 1..=3 {
+        both(&outputs, &format!("the niche's variant {niche}"), |o| o.niche == niche);
+    }
+    both(&outputs, "a level", |o| o.level == 200);
+}
+
+#[test]
+fn the_driver_takes_its_options_from_the_environment_as_a_wrapper_and_lowers_no_test_build() {
+    // as `RUSTC_WRAPPER` (the compiler it wraps first, then rustc's arguments), the program named by the
+    // environment: the file is written as with the options
+    let work = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lowering").join("wrapper");
+    let _ = fs::remove_dir_all(&work);
+    fs::create_dir_all(&work).unwrap();
+    let w = work.display().to_string();
+    let std_src = here().join("../orcl-std/src/lib.rs").display().to_string();
+    let out = driver(&strings(&["/usr/bin/rustc", "--crate-name", "orcl_std", "--crate-type", "rlib", "--edition", "2024", &std_src, "--out-dir", &w]));
+    assert!(out.status.success(), "orcl-std: {}", String::from_utf8_lossy(&out.stderr));
+    let file = work.join("arith.orclb");
+    let source = program("arith").display().to_string();
+    let extern_std = format!("orcl_std={w}/liborcl_std.rlib");
+    let mut args = strings(&["/usr/bin/rustc", "--crate-name", "arith", "--crate-type", "rlib", "--edition", "2024", &source]);
+    args.extend(strings(&["--extern", &extern_std, "-L", &w, "--out-dir", &w]));
+    let path = file.display().to_string();
+    let env = [("ORCL_FRONT_PROGRAM", "arith"), ("ORCL_FRONT_OUT", path.as_str()), ("ORCL_FRONT_REVISION", "from-env")];
+    let out = driver_with(&args, &env);
+    assert!(out.status.success(), "arith: {}", String::from_utf8_lossy(&out.stderr));
+    let (header, code) = file::read(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(header.revision, "from-env");
+    let with_options = lower_in("wrapper-options", "arith", &program("arith")).result.unwrap().1;
+    assert_eq!(code, with_options, "the same program as with the options");
+
+    // the program's crate built as its own tests is compiled, and nothing is lowered or written
+    fs::remove_file(&file).unwrap();
+    let mut args = strings(&["--crate-name", "arith", "--test", "--edition", "2024", &source]);
+    args.extend(strings(&["--extern", &extern_std, "-L", &w, "--out-dir", &w]));
+    let out = driver_with(&args, &env);
+    assert!(out.status.success(), "arith's tests: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(!file.exists(), "a test build is not lowered");
+
+    // the program named, but no file to write: refused before rustc runs
+    let args = strings(&["--crate-name", "arith", "--crate-type", "rlib", &source, "--orcl-program=arith", "--orcl-revision", "x"]);
+    let out = driver(&args);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("error: orcl-front: usage: --orcl-out names no file to write"));
 }
 
 /// The 1-based line and column where `snippet` first stands in `source`.

@@ -5,8 +5,9 @@
 //! ORCL type has no drop glue, so MIR holds no cleanup block to keep out, and a crate built so links with the rest of
 //! the build as it would.
 //!
-//! The program's own crate, the one whose `--crate-name` is the program's, is lowered once the compiler has analysed
-//! it, and the program file is written once the compiler has finished it, with no error.
+//! The program's own crate, the one whose `--crate-name` is the program's (built as a library, not as its own tests),
+//! is lowered once the compiler has analysed it, and the program file is written once the compiler has finished it,
+//! with no error.
 use std::process::ExitCode;
 
 use orcl_interp::{Limits, Machine};
@@ -79,9 +80,11 @@ fn crate_name(args: &[String]) -> Option<&str> {
 impl Invocation {
     /// Reads the process's arguments (the driver's own path first) and, for an option not given, `env`.
     pub fn read(mut args: Vec<String>, env: impl Fn(&str) -> Option<String>) -> Result<Invocation, Error> {
-        // as `RUSTC_WRAPPER` the compiler it wraps comes first; the driver is the compiler
+        // as `RUSTC_WRAPPER` the compiler it wraps comes first, a `rustc` of no extension but `.exe`; the driver is
+        // the compiler
         if args.get(1).is_some_and(|a| {
-            std::path::Path::new(a).file_stem().is_some_and(|s| s == "rustc")
+            let path = std::path::Path::new(a);
+            path.file_stem().is_some_and(|s| s == "rustc") && path.extension().is_none_or(|e| e == "exe")
         }) {
             args.remove(1);
         }
@@ -96,8 +99,10 @@ impl Invocation {
             args.push("-Zalways-encode-mir".into());
             args.push("-Zmir-opt-level=0".into());
         }
+        // the program's crate built as its own tests (`--test`) is compiled, never lowered
+        let testing = args.iter().any(|a| a == "--test");
         let job = match program {
-            Some(program) if crate_name(&args) == Some(program.as_str()) => {
+            Some(program) if crate_name(&args) == Some(program.as_str()) && !testing => {
                 let out = out.ok_or_else(|| Error::Usage(format!("{} names no file to write", OUT.0)))?;
                 let revision = revision.ok_or_else(|| Error::Usage(format!("{} names no revision", REVISION.0)))?;
                 Some(Job { program, out, revision })
