@@ -1011,7 +1011,7 @@ impl Parts<'_> {
                 // a field missing inside an internally tagged object (a link, a format's rule),
                 // which serde reads from a buffer `serde_ignored` never sees: a key replacing it is
                 // named by its path (refute round 12)
-                if let Some(path) = key_replacing_a_tagged_field::<T>(&json, &e.to_string()) {
+                if let Some(path) = key_replacing_a_tagged_field::<T>(&json, &e.to_string()).or_else(|| key_near_a_missing_field(&json, &e.to_string())) {
                     return Err(self.bad(format!("{name}: `{path}` is a key nothing reads")));
                 }
                 return Err(self.bad(format!("{name}: {e}")));
@@ -1107,6 +1107,64 @@ fn key_replacing_a_tagged_field<T: DeserializeOwned + Serialize>(json: &serde_js
         }
     }
     None
+}
+
+/// The key that stands for a field the deserialiser found missing where filling cannot tell (two
+/// fields replaced, a field no kind of JSON value fills, an object below a tagged one, the tag
+/// itself; refute round 13): of the keys of the objects lacking the field, the nearest to its name
+/// by edits (a letter added, dropped, changed or two swapped), two at most, the first of the
+/// nearest; its path.
+fn key_near_a_missing_field(json: &serde_json::Value, error: &str) -> Option<String> {
+    use serde_json::Value as J;
+    let field = error.split_once("missing field `")?.1.split_once('`')?.0;
+    // the optimal string alignment distance
+    fn distance(a: &str, b: &str) -> usize {
+        let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+        let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+        for (i, row) in d.iter_mut().enumerate() {
+            row[0] = i;
+        }
+        for (j, cell) in d[0].iter_mut().enumerate() {
+            *cell = j;
+        }
+        for i in 1..=a.len() {
+            for j in 1..=b.len() {
+                let cost = usize::from(a[i - 1] != b[j - 1]);
+                d[i][j] = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
+                if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                    d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+                }
+            }
+        }
+        d[a.len()][b.len()]
+    }
+    fn search(v: &J, field: &str, path: &str, best: &mut Option<(usize, String)>) {
+        let at = |k: &str| if path.is_empty() { k.to_string() } else { format!("{path}.{k}") };
+        match v {
+            J::Object(o) => {
+                if !o.contains_key(field) {
+                    for k in o.keys().filter(|k| k.as_str() != field) {
+                        let d = distance(k, field);
+                        if d <= 2 && best.as_ref().is_none_or(|(b, _)| d < *b) {
+                            *best = Some((d, at(k)));
+                        }
+                    }
+                }
+                for (k, child) in o {
+                    search(child, field, &at(k), best);
+                }
+            }
+            J::Array(a) => {
+                for (i, child) in a.iter().enumerate() {
+                    search(child, field, &at(&i.to_string()), best);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut best = None;
+    search(json, field, "", &mut best);
+    best.map(|(_, path)| path)
 }
 
 fn unread_in_tagged(read: &serde_json::Value, back: &serde_json::Value, path: String) -> Option<String> {
@@ -1257,6 +1315,16 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
                 table.columns.len(),
                 table.reference
             ));
+        }
+    }
+    // a linked workbook states each of its sheets once, as the engine tells sheet names apart
+    // (`Data` and `DATA` are one): its map keeps one sheet's cells, the other's dropped without a
+    // word (refute round 13)
+    for (n, book) in ewb.external_books.iter().enumerate() {
+        for (m, sheet) in book.sheets.iter().enumerate() {
+            if let Some(j) = book.sheets[..m].iter().position(|s| ironcalc_base::external::same_sheet_name(&s.name, &sheet.name)) {
+                return Err(format!("{WORKBOOK}: `external_books.{n}.sheets.{m}` names the sheet `external_books.{n}.sheets.{j}` names"));
+            }
         }
     }
     Ok(())

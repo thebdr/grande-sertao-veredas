@@ -359,6 +359,9 @@ fn a_file_that_is_not_what_it_should_be_is_refused_by_its_part_and_place() {
         // a key replacing a tagged object's field, by its path (refute round 12)
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("links = []", "links = [[1, 1, { type = \"External\", targett = \"https://example.org\" }]]"))), "sheets/01-Loads.toml: `links.0.2.targett` is a key nothing reads"),
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("links = []", "links = [[1, 1, { type = \"Internal\", locationn = \"Loads!A1\" }]]"))), "sheets/01-Loads.toml: `links.0.2.locationn` is a key nothing reads"),
+        // two links each replacing their field, and a link's tag replaced (refute round 13)
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("links = []", "links = [[1, 1, { type = \"External\", targett = \"a\" }], [2, 1, { type = \"External\", targett = \"b\" }]]"))), "sheets/01-Loads.toml: `links.0.2.targett` is a key nothing reads"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("links = []", "links = [[1, 1, { typ = \"External\", target = \"https://example.org\" }]]"))), "sheets/01-Loads.toml: `links.0.2.typ` is a key nothing reads"),
         ("manifest.toml", Box::new(|t| Some(t[..t.find("[[sheets]]").unwrap()].replace("macros = [\"beam_report\"]", "macros = [\"beam_report\"]\nsheets = []"))), "manifest.toml: a workbook holds a sheet at least"),
         // a formula's last value: one number, text or boolean, finite, never beside its error
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("v = 63.375", "v = nan"))), "sheets/01-Loads.toml B3: `v` is NaN, no finite number"),
@@ -507,6 +510,25 @@ fn every_error_the_engine_holds_reads_back_and_a_format_s_rule_refuses_a_key_not
     std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
     let got = abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_default();
     assert!(got.contains("sheets/01-Sheet1.toml: `conditional_formatting.0.cf_rule.stop_if_ture` is a key nothing reads"), "{got}");
+    // and replacing the field it meant, which the rule then misses (refute round 12); a field no
+    // kind of value fills, a field below the rule, the tag itself (refute round 13)
+    for (from, to, want) in [
+        ("operator = ", "operatorr = ", ".cf_rule.operatorr` is a key nothing reads"),
+        ("cfvo = ", "cfvoo = ", ".cfvoo` is a key nothing reads"),
+        ("type = \"CellIs\"", "typ = \"CellIs\"", ".cf_rule.typ` is a key nothing reads"),
+    ] {
+        let parts: Vec<(String, Vec<u8>)> = abacofile::parts(&file)
+            .unwrap()
+            .into_iter()
+            .map(|(n, b)| {
+                let t = String::from_utf8(b).unwrap();
+                if n.starts_with("sheets/") && t.contains(from) { (n, t.replacen(from, to, 1).into_bytes()) } else { (n, t.into_bytes()) }
+            })
+            .collect();
+        std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
+        let got = abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(got.contains(want), "{to}: {got}");
+    }
     // and replacing the field it meant, which the rule then misses (refute round 12)
     let parts: Vec<(String, Vec<u8>)> = abacofile::parts(&file)
         .unwrap()
@@ -1217,6 +1239,30 @@ fn a_link_or_a_linked_cell_stated_twice_is_refused_by_its_path() {
         t.replacen("cells = []", "cells = [[1, 1, { Number = 1.0 }], [1, 1, { Number = 2.0 }]]", 1)
     });
     assert!(got.contains("workbook.toml: `external_books.0.sheets.0.cells.1` states a cell its sheet states already"), "{got}");
+    // a linked workbook's sheet stated twice, in its spelling or another case the engine takes as
+    // one: the engine's map would keep one sheet's cells (refute round 13)
+    for upper in [false, true] {
+        let got = read_with(&parts, "workbook.toml", &|t| {
+            let mut table: toml::Table = toml::from_str(t).unwrap();
+            let books = table.get_mut("external_books").and_then(toml::Value::as_array_mut).unwrap();
+            let sheets = books[0].get_mut("sheets").and_then(toml::Value::as_array_mut).unwrap();
+            let mut twin = sheets[0].clone();
+            if upper {
+                let name = twin.get("name").and_then(toml::Value::as_str).unwrap().to_uppercase();
+                twin.as_table_mut().unwrap().insert("name".into(), toml::Value::String(name));
+            }
+            sheets.push(twin);
+            toml::to_string(&table).unwrap()
+        });
+        let last = linked.book.model().workbook.external_books[0].sheets.len();
+        assert!(got.contains(&format!("workbook.toml: `external_books.0.sheets.{last}` names the sheet `external_books.0.sheets.0` names")), "{upper}: {got}");
+    }
+    // and the writer, a model holding such a book
+    let mut twice = AbacoFile::new(open(&corpus_dir().join("link_test.xlsx")));
+    let first = twice.book.model().workbook.external_books[0].sheets[0].clone();
+    twice.book.model_mut().workbook.external_books[0].sheets.push(first);
+    let got = abacofile::write(&mut twice, &path).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(got.contains("names the sheet `external_books.0.sheets.0` names"), "{got}");
 }
 
 #[test]
