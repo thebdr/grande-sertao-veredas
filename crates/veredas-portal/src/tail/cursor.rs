@@ -128,14 +128,14 @@ pub(crate) const HEAD_BYTES: usize = 64;
 /// top, perhaps with the same header) (C-096).
 #[derive(Clone, Debug)]
 pub(crate) struct Reach {
-    pub len: u64,
-    pub head: Vec<u8>,
+    pub(crate) len: u64,
+    pub(crate) head: Vec<u8>,
     /// The bytes just before `len`.
-    pub tail: Vec<u8>,
+    pub(crate) tail: Vec<u8>,
     /// The look found the file cut in place, its history gone with the copy: a hole of NULs at an
     /// end (no log's text holds 64 NUL bytes; a copy-and-truncate under a writer without
     /// `O_APPEND` leaves one), or the file shrinking while it looked. Never reached.
-    pub cut: bool,
+    pub(crate) cut: bool,
 }
 
 /// Whether `head` or `tail` is a hole: bytes there, every one NUL.
