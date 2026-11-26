@@ -1,0 +1,13 @@
+{
+  "clause": "C-148",
+  "verdict": "refuted",
+  "ranAt": "2026-11-26T11:25:54.355Z",
+  "headCommit": "c3ec4cec406fa0e99e3ae21be30cc3637d5ac1e4",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/read.rs",
+      "file": "crates/veredas-aranha/tests/read.rs",
+      "symbolSha": "6deeb17c055769b734bdc5adf4bebecd9e293eabf2a05ff7ad677a0dd019b3ad"
+    }
+  ]
+}
