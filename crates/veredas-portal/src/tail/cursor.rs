@@ -82,6 +82,28 @@ pub(crate) fn identity_at(path: &Path) -> Option<Identity> {
     }
 }
 
+/// The identity of the file at `path` and its length, from one state of it, without opening it
+/// for reading: a held file's length watched while it stands at its path (C-098).
+pub(crate) fn identity_and_len_at(path: &Path) -> Option<(Identity, u64)> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        let file = std::fs::OpenOptions::new().access_mode(0).custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(path).ok()?;
+        let len = file.metadata().ok()?.len();
+        Handle::from_file(file).ok().map(|h| (h, len))
+    }
+    #[cfg(unix)]
+    {
+        std::fs::metadata(path).ok().map(|m| (identity_of(&m), m.len()))
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 /// Whether the open file is the one an identity was read of.
 fn is_identity(handle: &Handle, id: &Identity) -> bool {
     #[cfg(windows)]
@@ -134,6 +156,7 @@ impl Reach {
     pub(crate) fn of_len(len: u64) -> Reach {
         Reach { len, head: Vec::new(), tail: Vec::new(), cut: false }
     }
+
 }
 
 /// Where a file's identity is now: in a folder (under any name), gone from it, or unknown (no
@@ -146,13 +169,33 @@ pub(crate) enum Whereabouts {
     Unknown,
 }
 
+/// Where a file of an identity is in a folder: at a path, gone from it, or unknown (a folder that
+/// cannot be listed, a folder that kept changing under the search).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Located {
+    At(PathBuf),
+    Gone,
+    Unknown,
+}
+
 /// Looks for `identity` among the files of `dir` (its subfolders too when `recursive`). Each
 /// entry's identity is taken from the listing itself where the system gives it (the inode a Unix
 /// listing carries), else by a lookup, an entry gone at its lookup meaning the folder changed under
 /// the search. A listing races a rename (an entry renamed while the folder is listed may be missed),
 /// so the file is gone only when two walks in a row say so (C-096's sixteenth refute round).
 pub(crate) fn find_identity(dir: &Path, identity: Option<&Identity>, recursive: bool) -> Whereabouts {
-    fn walk(dir: &Path, id: &Identity, recursive: bool) -> Result<bool, ()> {
+    let Some(id) = identity else { return Whereabouts::Unknown };
+    match locate_identity(dir, id, recursive) {
+        Located::At(_) => Whereabouts::Here,
+        Located::Gone => Whereabouts::Gone,
+        Located::Unknown => Whereabouts::Unknown,
+    }
+}
+
+/// `find_identity`, with the path the file was found at: a held file renamed out of its family's
+/// pattern is read where it is (C-098's third refute round).
+pub(crate) fn locate_identity(dir: &Path, id: &Identity, recursive: bool) -> Located {
+    fn walk(dir: &Path, id: &Identity, recursive: bool) -> Result<Option<PathBuf>, ()> {
         let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir).map_err(|_| ())?.collect::<Result<_, _>>().map_err(|_| ())?;
         #[cfg(test)]
         crate::tail::family::during_walk(dir);
@@ -164,8 +207,8 @@ pub(crate) fn find_identity(dir: &Path, identity: Option<&Identity>, recursive: 
         for entry in entries {
             let path = entry.path();
             if entry.file_type().map_err(|_| ())?.is_dir() {
-                if recursive && walk(&path, id, true)? {
-                    return Ok(true);
+                if recursive && let Some(found) = walk(&path, id, true)? {
+                    return Ok(Some(found));
                 }
                 continue;
             }
@@ -177,30 +220,29 @@ pub(crate) fn find_identity(dir: &Path, identity: Option<&Identity>, recursive: 
                 if dev == id.dev && entry.ino() == id.ino {
                     let meta = entry.metadata().map_err(|_| ())?;
                     if born_agree(meta.created().ok(), id.born) {
-                        return Ok(true);
+                        return Ok(Some(path));
                     }
                 }
             }
             #[cfg(not(unix))]
             match identity_at(&path) {
-                Some(other) if other == *id => return Ok(true),
+                Some(other) if other == *id => return Ok(Some(path)),
                 Some(_) => {}
                 None => return Err(()),
             }
         }
-        Ok(false)
+        Ok(None)
     }
-    let Some(id) = identity else { return Whereabouts::Unknown };
     let mut gone_once = false;
     for _ in 0..5 {
         match walk(dir, id, recursive) {
-            Ok(true) => return Whereabouts::Here,
-            Ok(false) if gone_once => return Whereabouts::Gone,
-            Ok(false) => gone_once = true,
+            Ok(Some(path)) => return Located::At(path),
+            Ok(None) if gone_once => return Located::Gone,
+            Ok(None) => gone_once = true,
             Err(()) => gone_once = false,
         }
     }
-    Whereabouts::Unknown
+    Located::Unknown
 }
 
 /// A file's whole content and its identity, read through one handle: one state of one file.
@@ -349,12 +391,32 @@ impl TailedFile {
     /// history stays history; a file replaced meanwhile is read whole, and so is one whose identity the look could not read (duplicates over loss). The identity, never the
     /// creation time: a file renamed over another inherits its creation time on one filesystem.
     pub fn open_held(path: &Path, len_at_look: u64, identity_at_look: Option<&Identity>) -> Result<Self, SourceError> {
+        Self::open_held_against(path, len_at_look, identity_at_look, 0, false).map(|(tf, _)| tf)
+    }
+
+    /// `open_held` for a held file watched while it stood at its path: seen cut in place there
+    /// (`cut`), or shorter now than the most of it seen (`seen`; a log never shrinks unless cut), it
+    /// is read from its top; else from where it stood. True when it was cut (C-098's third refute
+    /// round).
+    pub(crate) fn open_held_against(path: &Path, len_at_look: u64, identity_at_look: Option<&Identity>, seen: u64, cut: bool) -> Result<(Self, bool), SourceError> {
         let mut tf = TailedFile::open(path, FileStart::Begin)?;
         let meta = tf.handle.as_file().metadata().map_err(|e| SourceError::io(path, e))?;
         let same = identity_at_look.is_some_and(|id| is_identity(&tf.handle, id));
-        if same && meta.len() >= len_at_look {
+        if !same {
+            return Ok((tf, false));
+        }
+        let cut = cut || meta.len() < len_at_look.max(seen);
+        if !cut {
             tf.seek_to(len_at_look)?;
         }
+        Ok((tf, cut))
+    }
+
+    /// Open a file read from byte `len` as if it were its end then: a copy of a held file, its
+    /// first `len` bytes the held file's history (C-098's copy-and-truncate).
+    pub(crate) fn open_as_of(path: &Path, len: u64) -> Result<Self, SourceError> {
+        let mut tf = TailedFile::open(path, FileStart::Begin)?;
+        tf.seek_to(len)?;
         Ok(tf)
     }
 

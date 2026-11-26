@@ -34,7 +34,7 @@ use crate::family::{ActiveMode, FamilyFile, FamilySpec, OrderKey};
 use crate::source::{Emitter, LineEvent, Source, stop_flag};
 use crate::tail::FileStart;
 use crate::tail::backfill::locate_start;
-use crate::tail::cursor::{PathStatus, ReadStep, TailedFile};
+use crate::tail::cursor::{Identity, PathStatus, ReadStep, TailedFile};
 use crate::tail::single::{ATTACH_WAIT, attached, spawn_watcher, wait_tick};
 use crate::timestamp::TimestampSpec;
 
@@ -205,6 +205,17 @@ fn read_range_full(
 #[cfg(test)]
 mod history_test;
 
+/// A held active owed (C-098): its name, the offset its lines after the look start at (the look's
+/// length; 0 for an active held in turn, all of it new), its identity, the most of it seen at the
+/// active's path, and whether it was seen cut in place there (shorter than that).
+struct Held {
+    name: String,
+    from: u64,
+    identity: Option<Identity>,
+    seen: u64,
+    cut: bool,
+}
+
 /// After a held active's branch opened the fixed path, before the active's first line: whatever
 /// retired since the round's listing is older than it and read first, in order (as `fixed_adopt`
 /// sweeps, invariant 2), the held file among it (`identity`) from where it stood (`len`), the
@@ -217,6 +228,7 @@ fn sweep_after_held_open(
     len: u64,
     identity: Option<&crate::tail::cursor::Identity>,
     own: &Handle,
+    read: &[Identity],
     cfg: &FamilyTailConfig,
     stop: &AtomicBool,
     wake_rx: &Receiver<()>,
@@ -238,6 +250,11 @@ fn sweep_after_held_open(
             if Handle::from_path(&f.path).ok().is_some_and(|h| h == *own) {
                 known.insert(f.file_name.clone());
                 return Ok(true);
+            }
+            // A held file read where it was, out of the pattern, before it landed here.
+            if crate::tail::cursor::identity_at(&f.path).is_some_and(|id| read.contains(&id)) {
+                known.insert(f.file_name.clone());
+                continue;
             }
             let held = identity.is_some_and(|id| crate::tail::cursor::identity_at(&f.path).as_ref() == Some(id));
             let (from, id) = if held { (len, identity) } else { (0, None) };
@@ -261,7 +278,8 @@ fn sweep_after_held_open(
 }
 
 /// A test's hooks, each run before the backfill opens its path (the fixed sweep's open of its
-/// fixed path, a replay's open of a member) or a held active's branch opens the active: what a
+/// fixed path, a replay's open of a member) or a held active's branch opens the active or the
+/// held file where it was found: what a
 /// rotation or a stop between a listing and an open does there (C-096, C-098).
 #[cfg(test)]
 pub(crate) static BEFORE_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
@@ -445,6 +463,7 @@ fn sweep_unknown_retirees(
     known: &mut HashSet<String>,
     skip: &[&Handle],
     stop_at: Option<&Handle>,
+    read: &[Identity],
     grace: Duration,
     stop: &AtomicBool,
     emit: &mut dyn FnMut(String),
@@ -468,7 +487,9 @@ fn sweep_unknown_retirees(
             return Ok(Some(false));
         }
         let cursor_owned = identity.as_ref().is_some_and(|h| skip.iter().any(|identity| *h == **identity));
-        if !cursor_owned {
+        // A held file read where it was, out of the pattern, before it landed here (C-098).
+        let read_already = !read.is_empty() && crate::tail::cursor::identity_at(&f.path).is_some_and(|id| read.contains(&id));
+        if !cursor_owned && !read_already {
             read_full(&f.path, grace, stop, emit)?;
         }
         known.insert(f.file_name.clone());
@@ -486,6 +507,7 @@ fn fixed_adopt(
     cfg: &FamilyTailConfig,
     old: TailedFile,
     known: &mut HashSet<String>,
+    read: &[Identity],
     stop: &AtomicBool,
     wake_rx: &Receiver<()>,
     emit: &mut dyn FnMut(String),
@@ -508,6 +530,7 @@ fn fixed_adopt(
                             known,
                             &[old.identity()],
                             Some(new_cursor.identity()),
+                            read,
                             cfg.drain_grace,
                             stop,
                             emit,
@@ -824,10 +847,12 @@ fn run_family(
     // A start at the end whose active was there and not openable at the first look: its name,
     // length and identity then, so the open that succeeds reads it from where it stood (as a file
     // held at its first look is, C-035), and a newer active, born after the start, whole.
-    let mut held: Option<(String, u64, Option<crate::tail::cursor::Identity>)> = None;
-    // The names at that look, once it is taken (the history), and those read since (new).
+    let mut held: Option<Held> = None;
+    // The names at that look, once it is taken (the history), and those read since (new), with
+    // the identities of held files read where they were (out of the pattern), never read again.
     let mut at_look: Option<HashSet<String>> = None;
     let mut read_new: HashSet<String> = HashSet::new();
+    let mut read_ids: Vec<Identity> = Vec::new();
 
     // A backfill start replays history from the located point first; the cursor it returns IS
     // the seam: the same handle, the exact offset, live from here.
@@ -891,7 +916,7 @@ fn run_family(
                     ActiveMode::Fixed(fixed_name) => {
                         // Replay the birth-window retirees in order...
                         loop {
-                            match sweep_unknown_retirees(&spec, &mut known, &[], None, cfg.drain_grace, &stop, &mut emit)? {
+                            match sweep_unknown_retirees(&spec, &mut known, &[], None, &[], cfg.drain_grace, &stop, &mut emit)? {
                                 None => return Ok(()),
                                 Some(true) => continue,
                                 Some(false) => break,
@@ -909,6 +934,7 @@ fn run_family(
                                         &mut known,
                                         &[],
                                         Some(cursor.identity()),
+                                        &[],
                                         cfg.drain_grace,
                                         &stop,
                                         &mut emit,
@@ -945,69 +971,167 @@ fn run_family(
                 // the held file took after the look, then every generation born after it, then the
                 // active, each awaited while it is there and not readable.
                 if let Some(look) = at_look.clone() {
-                    // The held file retired unopened (a member of its identity, no longer the
-                    // active, whatever its name): read from where it stood at the look.
-                    // With no identity from the look, the member under the held name that is no
-                    // longer the active (a newest-by-order active keeps its name as it retires),
-                    // read whole.
-                    let retired = match held.as_ref() {
-                        Some((_, _, Some(id))) => {
-                            files.iter().find(|f| !f.is_active && crate::tail::cursor::identity_at(&f.path).as_ref() == Some(id)).cloned()
+                    let active_now = files.iter().find(|f| f.is_active);
+                    // The held file still standing at the active's path: the most of it seen there,
+                    // and a cut in place (shorter than that) remembered.
+                    let mut held_at_active = false;
+                    if let (Some(h), Some(a)) = (held.as_mut(), active_now)
+                        && let Some(id) = h.identity.as_ref()
+                        && let Some((now, len)) = crate::tail::cursor::identity_and_len_at(&a.path)
+                        && now == *id
+                    {
+                        held_at_active = true;
+                        if len < h.seen {
+                            h.cut = true;
+                        } else if !h.cut {
+                            h.seen = len;
                         }
-                        Some((name, _, None)) => files.iter().find(|f| !f.is_active && f.file_name == *name).cloned(),
+                    }
+                    // The held file retired unopened: a member of its identity, no longer the
+                    // active, whatever its name (with no identity from the look, the member under
+                    // the held name that is no longer the active, a newest-by-order active keeping
+                    // its name as it retires); in no member while another file stands at the
+                    // active's path (a rename in two steps, through a name outside the pattern), it
+                    // is looked for in the folder and read where it is.
+                    let mut found: Option<(std::path::PathBuf, Option<String>)> = match held.as_ref() {
+                        Some(Held { identity: Some(id), .. }) => files
+                            .iter()
+                            .find(|f| !f.is_active && crate::tail::cursor::identity_at(&f.path).as_ref() == Some(id))
+                            .map(|f| (f.path.clone(), Some(f.file_name.clone()))),
+                        Some(Held { name, identity: None, .. }) => {
+                            files.iter().find(|f| !f.is_active && f.file_name == *name).map(|f| (f.path.clone(), Some(f.file_name.clone())))
+                        }
                         None => None,
                     };
-                    if let (Some(f), Some((_, len, identity))) = (&retired, &held) {
-                        let Ok(mut c) = TailedFile::open_held(&f.path, *len, identity.as_ref()) else {
-                            wait_tick(&wake_rx, cfg.poll_interval);
-                            continue;
-                        };
-                        c.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
-                        c.flush_pending(&mut emit);
-                        read_new.insert(f.file_name.clone());
-                        held = None;
+                    if found.is_none()
+                        && !held_at_active
+                        && let (Some(Held { identity: Some(id), .. }), Some(a)) = (held.as_ref(), active_now)
+                        && crate::tail::cursor::identity_at(&a.path).is_some()
+                    {
+                        match crate::tail::cursor::locate_identity(spec.dir(), id, spec.recursive()) {
+                            crate::tail::cursor::Located::At(path) => found = Some((path, None)),
+                            // Gone from the folder (deleted, or moved out of it), what it took after
+                            // the look went with it; a search that cannot tell reads none of it.
+                            crate::tail::cursor::Located::Gone | crate::tail::cursor::Located::Unknown => held = None,
+                        }
                     }
-                    // Every generation born after the look and not read yet, in order, whole.
+                    if let (Some((path, name)), Some(h)) = (&found, held.as_ref()) {
+                        let from = if h.cut { 0 } else { h.from };
+                        #[cfg(test)]
+                        before_open(path);
+                        match TailedFile::open_held(path, from, h.identity.as_ref()) {
+                            Ok(mut c) if h.identity.as_ref().is_none_or(|id| c.has_identity(id)) => {
+                                c.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
+                                c.flush_pending(&mut emit);
+                                if let Some(name) = name {
+                                    read_new.insert(name.clone());
+                                }
+                                if let Some(Held { identity: Some(id), .. }) = held.take() {
+                                    read_ids.push(id);
+                                }
+                            }
+                            // Still held, or moved again since: looked for again next round.
+                            _ => {
+                                wait_tick(&wake_rx, cfg.poll_interval);
+                                continue;
+                            }
+                        }
+                    }
+                    // Every generation born after the look and not read yet, in order, whole; a
+                    // member of an identity read already (the held file, read where it was before
+                    // it landed in the pattern) taken as read.
                     let mut younger: Vec<&FamilyFile> =
                         files.iter().filter(|f| !f.is_active && !look.contains(&f.file_name) && !read_new.contains(&f.file_name)).collect();
                     younger.sort_by(|a, b| rank(a).cmp(&rank(b)));
+                    younger.retain(|g| {
+                        let read = crate::tail::cursor::identity_at(&g.path).is_some_and(|id| read_ids.contains(&id));
+                        if read {
+                            read_new.insert(g.file_name.clone());
+                        }
+                        !read
+                    });
+                    // While the held file stands at the active's path, a member born after the look
+                    // is no generation (no rotation moved it): its copy, made by a copy-and-truncate,
+                    // or a file dropped in, told apart at its open.
                     let mut awaiting = false;
-                    for g in younger {
-                        match read_range_full(&g.path, 0, None, None, cfg.drain_grace, &stop, &mut emit)? {
-                            Unread::No | Unread::Missing => {
-                                read_new.insert(g.file_name.clone());
-                            }
-                            Unread::Stopped => return Ok(()),
-                            Unread::Held => {
-                                awaiting = true;
-                                break;
+                    if !held_at_active {
+                        for g in &younger {
+                            match read_range_full(&g.path, 0, None, None, cfg.drain_grace, &stop, &mut emit)? {
+                                Unread::No | Unread::Missing => {
+                                    read_new.insert(g.file_name.clone());
+                                }
+                                Unread::Stopped => return Ok(()),
+                                Unread::Held => {
+                                    awaiting = true;
+                                    break;
+                                }
                             }
                         }
                     }
-                    let Some(active) = files.iter().find(|f| f.is_active).filter(|_| !awaiting) else {
+                    let Some(active) = active_now.filter(|_| !awaiting) else {
                         // A generation held, or no active yet: looked at again next round.
                         wait_tick(&wake_rx, cfg.poll_interval);
                         continue;
                     };
-                    // The active: the held file still there, from where it stood (another file at
-                    // its path whole); born after the look, whole; held in turn if it does not open.
+                    // The active: the held file still there, from where it stood (from its top
+                    // when cut in place; another file at its path whole); born after the look,
+                    // whole; held in turn if it does not open.
                     #[cfg(test)]
                     before_open(&active.path);
                     let before = crate::tail::cursor::identity_at(&active.path);
                     let opened = match &held {
-                        Some((_, len, identity)) => TailedFile::open_held(&active.path, *len, identity.as_ref()),
-                        None => TailedFile::open(&active.path, FileStart::Begin),
+                        Some(h) => TailedFile::open_held_against(&active.path, h.from, h.identity.as_ref(), h.seen, h.cut),
+                        None => TailedFile::open(&active.path, FileStart::Begin).map(|c| (c, false)),
                     };
                     match opened {
-                        Ok(c) => {
+                        Ok((c, cut)) => {
+                            // The members born beside the held file: cut in place, its copy (the
+                            // oldest holding the look's length) read from where it stood, the ones
+                            // after it whole (copies of later cuts), before its first line; not
+                            // cut, or before the copy, they were dropped in (a live tail does not
+                            // replay them, C-036).
+                            if held_at_active {
+                                let at_look = held.as_ref().map_or(0, |h| h.from);
+                                let mut copied = false;
+                                for g in &younger {
+                                    let from = if !cut {
+                                        None
+                                    } else if copied {
+                                        Some(0)
+                                    } else if std::fs::metadata(&g.path).is_ok_and(|m| m.len() >= at_look) {
+                                        copied = true;
+                                        Some(at_look)
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(from) = from {
+                                        loop {
+                                            if stop.load(Ordering::Relaxed) {
+                                                return Ok(());
+                                            }
+                                            match TailedFile::open_as_of(&g.path, from) {
+                                                Ok(mut r) => {
+                                                    r.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
+                                                    r.flush_pending(&mut emit);
+                                                    break;
+                                                }
+                                                Err(e) if crate::tail::single::is_not_found(&e) => break,
+                                                Err(_) => wait_tick(&wake_rx, cfg.poll_interval),
+                                            }
+                                        }
+                                    }
+                                    read_new.insert(g.file_name.clone());
+                                }
+                            }
                             known = look;
                             known.extend(read_new.iter().cloned());
                             known.insert(active.file_name.clone());
                             // An open of the fixed path: what retired between the round's listing
                             // and this open is read before the active's first line.
-                            let (len, identity) = held.as_ref().map(|(_, l, id)| (*l, id.as_ref())).unwrap_or((0, None));
+                            let (len, identity) =
+                                held.as_ref().map(|h| (if cut || h.cut { 0 } else { h.from }, h.identity.as_ref())).unwrap_or((0, None));
                             if matches!(spec.active_mode(), ActiveMode::Fixed(_))
-                                && !sweep_after_held_open(&spec, &mut known, len, identity, c.identity(), &cfg, &stop, &wake_rx, &mut emit)?
+                                && !sweep_after_held_open(&spec, &mut known, len, identity, c.identity(), &read_ids, &cfg, &stop, &wake_rx, &mut emit)?
                             {
                                 return Ok(());
                             }
@@ -1015,8 +1139,13 @@ fn run_family(
                         }
                         Err(e) => {
                             if held.is_none() && !crate::tail::single::is_not_found(&e) {
-                                let after = crate::tail::cursor::identity_at(&active.path);
-                                held = Some((active.file_name.clone(), 0, if after.is_some() && after == before { after } else { None }));
+                                let after = crate::tail::cursor::identity_and_len_at(&active.path);
+                                held = Some(match after {
+                                    Some((id, len)) if before.as_ref() == Some(&id) => {
+                                        Held { name: active.file_name.clone(), from: 0, identity: Some(id), seen: len, cut: false }
+                                    }
+                                    _ => Held { name: active.file_name.clone(), from: 0, identity: None, seen: 0, cut: false },
+                                });
                             }
                             wait_tick(&wake_rx, cfg.poll_interval);
                             continue;
@@ -1075,7 +1204,7 @@ fn run_family(
                             // the look taken.
                             let names = member_names(&files);
                             if after == before && spec.resolve().ok().is_some_and(|again| member_names(&again) == names) {
-                                held = Some((active.file_name.clone(), len, after));
+                                held = Some(Held { name: active.file_name.clone(), from: len, identity: after, seen: len, cut: false });
                                 at_look = Some(names);
                                 attached(&mut attached_slot);
                             }
@@ -1192,6 +1321,7 @@ fn run_family(
                             &mut known,
                             &[cursor.identity()],
                             None,
+                            &read_ids,
                             cfg.drain_grace,
                             &stop,
                             &mut emit,
@@ -1202,7 +1332,7 @@ fn run_family(
                         }
                     }
 
-                    match fixed_adopt(&spec, fixed_name, &cfg, cursor, &mut known, &stop, &wake_rx, &mut emit)? {
+                    match fixed_adopt(&spec, fixed_name, &cfg, cursor, &mut known, &read_ids, &stop, &wake_rx, &mut emit)? {
                         None => return Ok(()),
                         Some(c) => cursor = c,
                     }

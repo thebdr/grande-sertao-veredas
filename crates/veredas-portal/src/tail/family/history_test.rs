@@ -1090,3 +1090,200 @@ fn a_held_look_is_retaken_when_the_family_moves_and_a_reused_inode_is_another_fi
     });
     assert_eq!(lines, (50..80).collect::<Vec<u32>>(), "a new file at the held path, its inode number reused");
 }
+
+/// C-098's third refute round. A held active renamed in two steps, through a name outside the
+/// pattern while a new active is made at its path, is found in the folder by its identity and read
+/// from where it stood before the new active's first line (20 to 60), still held there or once in
+/// the pattern, then never read again: read where it was and landing in the pattern before the
+/// fixed path's open (the sweep), or while a generation after it is awaited (20 to 70), or found
+/// and moved again before its read there, another file left at that name (20 to 60). An active
+/// held in turn and renamed the same way is read whole (20 to 50). A held active copied and cut in
+/// place (copy-and-truncate) has its copy read from where the held file stood, then itself from
+/// its top (20 to 55): cut, it is shorter at its open than the most of it seen at its path (20 to
+/// 70, written again past the look's length right before its open), or was seen shorter there (20 to 100, written again
+/// past the most seen); a file dropped in beside a held active that is not cut is not replayed (20
+/// to 50, never 900). And when the search cannot tell where the held file went (moved out of a
+/// folder one of whose subfolders cannot be listed), its lines are lost and the new active is read,
+/// never waited on (50 to 60).
+#[cfg(unix)]
+#[test]
+fn a_held_active_renamed_outside_the_pattern_or_cut_in_place_is_read_once_in_order() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let fixed = |d: &std::path::Path| FamilySpec::new(d, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let held_family = |name: &str| {
+        let d = dir.path().join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d.join("done_1.log"), 0..10);
+        write(&d.join("current.log"), 10..20);
+        mode(&d.join("current.log"), 0o200);
+        d
+    };
+    let mut hooked: Vec<std::path::PathBuf> = Vec::new();
+
+    // Two steps, still held through both.
+    let d = held_family("two-steps");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 40, move || {
+        append(&p, 20..50);
+        std::fs::rename(&p, dd.join("current.log.rotating")).unwrap();
+        write(&p, 50..60);
+        std::thread::sleep(Duration::from_millis(1000));
+        std::fs::rename(dd.join("current.log.rotating"), dd.join("done_2.log")).unwrap();
+        mode(&dd.join("done_2.log"), 0o644);
+    });
+    assert_eq!(lines, (20..60).collect::<Vec<u32>>(), "two steps, held through both");
+
+    // Read where it was, landing in the pattern between that read and the fixed path's open.
+    let d = held_family("read-aside");
+    let (aside, landed) = (d.join("current.log.rotating"), d.join("done_2.log"));
+    BEFORE_OPEN.lock().unwrap().push((
+        d.join("current.log"),
+        Box::new(move || {
+            if std::fs::File::open(&aside).is_ok() {
+                std::fs::rename(&aside, &landed).unwrap();
+            }
+        }),
+    ));
+    hooked.push(d.join("current.log"));
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 40, move || {
+        append(&p, 20..50);
+        std::fs::rename(&p, dd.join("current.log.rotating")).unwrap();
+        mode(&dd.join("current.log.rotating"), 0o644);
+        write(&p, 50..60);
+    });
+    assert_eq!(lines, (20..60).collect::<Vec<u32>>(), "read aside, landed before the open");
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+
+    // Found where it was and moved again before its read there (a hook), another file left at
+    // that name: read once it is found again, the other file never.
+    let d = held_family("moved-again");
+    once(&d.join("current.log.rotating"), |p| {
+        std::fs::rename(p, p.with_file_name("done_2.log")).unwrap();
+        write(p, 900..905);
+    });
+    hooked.push(d.join("current.log.rotating"));
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 40, move || {
+        append(&p, 20..50);
+        std::fs::rename(&p, dd.join("current.log.rotating")).unwrap();
+        mode(&dd.join("current.log.rotating"), 0o644);
+        write(&p, 50..60);
+    });
+    assert_eq!(lines, (20..60).collect::<Vec<u32>>(), "moved again before its read");
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+
+    // Read where it was, landing in the pattern while a generation after it is awaited.
+    let d = held_family("read-aside-awaited");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 50, move || {
+        append(&p, 20..50);
+        std::fs::rename(&p, dd.join("current.log.rotating")).unwrap();
+        mode(&dd.join("current.log.rotating"), 0o644);
+        make_held(&dd.join("done_3.log"), 50..60);
+        write(&p, 60..70);
+        std::thread::sleep(Duration::from_millis(1000));
+        std::fs::rename(dd.join("current.log.rotating"), dd.join("done_2.log")).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        mode(&dd.join("done_3.log"), 0o644);
+    });
+    assert_eq!(lines, (20..70).collect::<Vec<u32>>(), "read aside, landed while a generation is awaited");
+
+    // An active held in turn, renamed in two steps.
+    let d = held_family("in-turn");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 30, move || {
+        append(&p, 20..30);
+        std::fs::rename(&p, dd.join("done_2.log")).unwrap();
+        mode(&dd.join("done_2.log"), 0o644);
+        std::thread::sleep(Duration::from_millis(1000));
+        make_held(&p, 30..40);
+        std::thread::sleep(Duration::from_millis(1000));
+        std::fs::rename(&p, dd.join("current.log.rotating")).unwrap();
+        write(&p, 40..50);
+        std::thread::sleep(Duration::from_millis(1000));
+        std::fs::rename(dd.join("current.log.rotating"), dd.join("done_3.log")).unwrap();
+        mode(&dd.join("done_3.log"), 0o644);
+    });
+    assert_eq!(lines, (20..50).collect::<Vec<u32>>(), "held in turn, two steps");
+
+    // Copy-and-truncate.
+    let d = held_family("copy-truncate");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 35, move || {
+        append(&p, 20..50);
+        write(&dd.join("done_2.log"), 10..50);
+        std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(0).unwrap();
+        append(&p, 50..55);
+        std::thread::sleep(Duration::from_millis(1000));
+        mode(&p, 0o644);
+    });
+    assert_eq!(lines, (20..55).collect::<Vec<u32>>(), "copy-and-truncate");
+
+    // Cut and written again past the look's length, short of the most of it seen, right before its
+    // open (a hook): no round saw it short, its open does.
+    let d = held_family("copy-truncate-regrown");
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (hp, trigger) = (d.join("current.log"), Arc::clone(&armed));
+    BEFORE_OPEN.lock().unwrap().push((
+        d.join("current.log"),
+        Box::new(move || {
+            if trigger.swap(false, Ordering::SeqCst) {
+                std::fs::OpenOptions::new().write(true).open(&hp).unwrap().set_len(0).unwrap();
+                append(&hp, 50..70);
+                mode(&hp, 0o644);
+            }
+        }),
+    ));
+    hooked.push(d.join("current.log"));
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 50, move || {
+        append(&p, 20..50);
+        write(&dd.join("done_2.log"), 10..50);
+        std::thread::sleep(Duration::from_millis(700));
+        armed.store(true, Ordering::SeqCst);
+    });
+    assert_eq!(lines, (20..70).collect::<Vec<u32>>(), "copy-and-truncate, grown back short of the most seen");
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+
+    // Cut, seen short, then written again past the most of it seen.
+    let d = held_family("copy-truncate-seen");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 80, move || {
+        append(&p, 20..50);
+        std::thread::sleep(Duration::from_millis(500));
+        write(&dd.join("done_2.log"), 10..50);
+        std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(0).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        append(&p, 50..100);
+        mode(&p, 0o644);
+    });
+    assert_eq!(lines, (20..100).collect::<Vec<u32>>(), "copy-and-truncate, seen cut, grown back past");
+
+    // A file dropped in beside a held active that is not cut.
+    let d = held_family("dropped-in");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 30, move || {
+        write(&dd.join("done_2.log"), 900..905);
+        append(&p, 20..50);
+        std::thread::sleep(Duration::from_millis(1000));
+        mode(&p, 0o644);
+    });
+    assert_eq!(lines, (20..50).collect::<Vec<u32>>(), "dropped in, not cut");
+
+    // The search cannot tell: the held file moved out of a recursive family's folder, one of whose
+    // subfolders cannot be listed.
+    let d = held_family("cannot-tell");
+    std::fs::create_dir_all(d.join("locked")).unwrap();
+    std::fs::set_permissions(d.join("locked"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    let spec = FamilySpec::new(&d, r"(?:locked/)?done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap().with_recursive(true);
+    let (p, outside) = (d.join("current.log"), dir.path().join("cannot-tell-moved-out.log"));
+    let (lines, _) = at_end(spec, 10, move || {
+        append(&p, 20..50);
+        std::fs::rename(&p, &outside).unwrap();
+        write(&p, 50..60);
+    });
+    std::fs::set_permissions(d.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(lines, (50..60).collect::<Vec<u32>>(), "the search cannot tell");
+}

@@ -364,6 +364,13 @@ Recorded as the port meets them.
   written while it was held; it keeps the first look's length and identity as the file does, and
   knows the held file by its identity, since a fixed name never changes. A held open of the fixed
   path sweeps what retired since its listing, as the adopt does.
+- **A held file is in no listing while it is renamed in two steps** (C-098, round 3): a rotation
+  through a name outside the pattern leaves it in no member while a new active stands at its path,
+  and the live loop takes it for a member dropped in once it lands. It is looked for in the folder
+  by its identity and read where it is, its identity kept so the landing reads nothing twice. A
+  held file cannot be read, so a copy-and-truncate beside it is told by its length alone: watched
+  while it stands at its path, a file shorter than the most of it seen was cut. Its bytes, which
+  would tell a copy from a file dropped in, are the one thing a held file never shows.
 - **A fixed active the sweep's open finds gone may have been renamed after the listing** (C-096,
   round 3): a rename is atomic, so a listing taken after that open shows it, and only then is
   the history read.
