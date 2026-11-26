@@ -4,6 +4,9 @@ name = "veredas-aranha"
 version = "2.0.0-alpha.1"
 edition.workspace = true
 publish = false
+# The architect, 2026-11-25 (docs/questions.md Q35): every crate but Oficina states this expression
+# and carries the two texts beside its manifest, the copyright holder thebdr.
+license = "MIT OR Apache-2.0"
 description = "The network scanner of Veredas 2: who is on an industrial Ethernet segment, how each device names itself and who is cabled to whom, with the evidence behind every value"
 
 # A library first, one executable on top later (docs/aranha-plan.md, "Rules"; tests/component.rs
