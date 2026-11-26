@@ -2791,3 +2791,208 @@ mod round_9 {
         assert!(wrong.is_empty(), "{wrong:#?}");
     }
 }
+
+
+/// C-110's tenth refute round: the critic's probes (`~/.cache/veredas/critic-c110-r10/probes`),
+/// kept as pins (on the machine's lock: each meets silence at a moment its sleeps choose): a byte
+/// read while silent in a frame's middle, with no delay and after a header read ahead, withholding
+/// it, and its control; an i32 low-first and a u32 high-first; a plant-side write past a table.
+mod round_10 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::modbus::*;
+
+    fn config(text: &str) -> ModbusConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn wait(within: Duration, mut what: impl FnMut() -> bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            if what() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        what()
+    }
+
+    fn connect(addr: SocketAddr) -> TcpStream {
+        let s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s.set_nodelay(true).unwrap();
+        s
+    }
+
+    fn frame(transaction: u16, pdu: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&transaction.to_be_bytes());
+        f.extend_from_slice(&0u16.to_be_bytes());
+        f.extend_from_slice(&(pdu.len() as u16 + 1).to_be_bytes());
+        f.push(1);
+        f.extend_from_slice(pdu);
+        f
+    }
+
+    const READ: [u8; 5] = [0x03, 0x00, 0x00, 0x00, 0x01];
+
+    fn w(addr: u8, v: u8) -> [u8; 5] {
+        [0x06, 0x00, addr, 0x00, v]
+    }
+
+    fn read_answer(s: &mut TcpStream) -> std::io::Result<(u16, Vec<u8>)> {
+        let mut h = [0u8; 7];
+        s.read_exact(&mut h)?;
+        let length = u16::from_be_bytes([h[4], h[5]]);
+        let mut pdu = vec![0u8; length as usize - 1];
+        s.read_exact(&mut pdu)?;
+        Ok((u16::from_be_bytes([h[0], h[1]]), pdu))
+    }
+
+    fn answers_within(s: &mut TcpStream, d: Duration) -> Vec<u16> {
+        s.set_read_timeout(Some(d)).unwrap();
+        let mut got = Vec::new();
+        while let Ok((t, _)) = read_answer(s) {
+            got.push(t);
+        }
+        got
+    }
+
+    fn answered(s: &ModbusStatus) -> u64 {
+        s.answered.values().sum()
+    }
+
+    fn read_by_server(server: &ModbusHandle, t: u16) {
+        assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == t)), "transaction {t} read");
+    }
+
+    /// No delay; a write's first `a` bytes read while NOT silent, its next `m` bytes read while
+    /// silent, silence lifted, the rest sent. The clause: "a request any byte of which was read while
+    /// silent" is withheld. Round 9's pins put the silent bytes first; a fill watching only its first read, or not the
+    /// PDU's, passed them.
+    fn middle_silent(a: usize, m: usize) -> Option<String> {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        assert_eq!(read_answer(&mut c).unwrap().0, 1);
+        let r2 = frame(2, &w(1, 0x33));
+        c.write_all(&r2[..a]).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        server.set_silent(true);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&r2[a..a + m]).unwrap();
+        std::thread::sleep(Duration::from_millis(60));
+        server.set_silent(false);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&r2[a + m..]).unwrap();
+        let got = answers_within(&mut c, Duration::from_millis(600));
+        let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+        let s = server.status();
+        if !got.is_empty() || reg != [0] || answered(&s) != 1 || s.unanswered != 1 {
+            Some(format!("clean {a}, silent {m}, clean {}: answered {got:?}, register {reg:?}, answered {}, unanswered {}", 12 - a - m, answered(&s), s.unanswered))
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn a_request_with_a_byte_read_while_silent_in_its_middle_is_withheld() {
+        let mut wrong = Vec::new();
+        for (a, m) in [(3usize, 3usize), (6, 1), (7, 1), (7, 2), (8, 2), (10, 1), (2, 8)] {
+            for _ in 0..3 {
+                if let Some(w) = middle_silent(a, m) {
+                    wrong.push(w);
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// The delay twin with the header from the read-ahead: request 2's MBAP header read ahead during
+    /// request 1's untouched delay; after answer 1, request 2's next 2 PDU bytes read from the socket
+    /// while silent; silence lifted; the rest sent. Withheld (a byte read while silent).
+    #[test]
+    fn a_header_read_ahead_and_a_pdu_byte_read_while_silent_is_withheld() {
+        let mut wrong = Vec::new();
+        for _ in 0..3 {
+            let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+            server.set_delay(Duration::from_millis(300));
+            let mut c = connect(server.addr);
+            c.write_all(&frame(1, &READ)).unwrap();
+            read_by_server(&server, 1);
+            let r2 = frame(2, &w(1, 0x33));
+            c.write_all(&r2[..7]).unwrap();
+            assert_eq!(read_answer(&mut c).unwrap().0, 1);
+            server.set_delay(Duration::ZERO);
+            std::thread::sleep(Duration::from_millis(30));
+            server.set_silent(true);
+            std::thread::sleep(Duration::from_millis(20));
+            c.write_all(&r2[7..9]).unwrap();
+            std::thread::sleep(Duration::from_millis(60));
+            server.set_silent(false);
+            std::thread::sleep(Duration::from_millis(20));
+            c.write_all(&r2[9..]).unwrap();
+            let got = answers_within(&mut c, Duration::from_millis(600));
+            let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+            let s = server.status();
+            if !got.is_empty() || reg != [0] {
+                wrong.push(format!("answered {got:?}, register {reg:?}, answered {}, unanswered {}", answered(&s), s.unanswered));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// Its control, a pulse with no byte read: answered and done.
+    #[test]
+    fn a_header_read_ahead_and_a_silence_with_no_byte_read_is_answered() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_delay(Duration::from_millis(300));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        read_by_server(&server, 1);
+        let r2 = frame(2, &w(1, 0x33));
+        c.write_all(&r2[..7]).unwrap();
+        assert_eq!(read_answer(&mut c).unwrap().0, 1);
+        server.set_delay(Duration::ZERO);
+        std::thread::sleep(Duration::from_millis(30));
+        server.set_silent(true);
+        std::thread::sleep(Duration::from_millis(30));
+        server.set_silent(false);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&r2[7..]).unwrap();
+        let got = answers_within(&mut c, Duration::from_millis(600));
+        let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+        assert_eq!((got, reg), (vec![2], vec![0x33]));
+    }
+
+    /// The word orders the test leaves out: an i32 low-first and a u32 high-first, as the wire
+    /// carries them and read back.
+    #[test]
+    fn an_i32_low_first_and_a_u32_high_first_lie_as_their_word_orders_say() {
+        let server = start(&config(
+            "port = 0\nholding_registers = 4\npoints = [ { name = \"n\", table = \"holding-register\", address = 0, type = \"i32\", words = \"low-first\", value = \"-100000\" }, { name = \"u\", table = \"holding-register\", address = 2, type = \"u32\", value = \"305419896\" } ]\n",
+        ))
+        .unwrap();
+        let n = -100000i32 as u32;
+        assert_eq!(server.registers(Table::HoldingRegister, 0, 4).unwrap(), [n as u16, (n >> 16) as u16, 0x1234, 0x5678]);
+        server.set_registers(Table::HoldingRegister, 0, &[0x0001, 0x8000, 0xCAFE, 0xF00D]).unwrap();
+        assert_eq!((server.get("n").unwrap(), server.get("u").unwrap()), (Value::I32(0x8000_0001u32 as i32), Value::U32(0xCAFE_F00D)));
+    }
+
+    /// "A plant-side read or write past a table refused whatever its count": the writes, nothing
+    /// written (the test pins the reads only).
+    #[test]
+    fn a_plant_side_write_past_a_table_is_refused_and_writes_nothing() {
+        let server = start(&config("port = 0\ncoils = 4\ndiscrete_inputs = 4\ninput_registers = 4\nholding_registers = 4\n")).unwrap();
+        assert!(server.set_registers(Table::HoldingRegister, 3, &[7, 7]).is_err(), "holding past the end");
+        assert!(server.set_registers(Table::InputRegister, 2, &[7, 7, 7]).is_err(), "input past the end");
+        assert!(server.set_bits(Table::Coil, 3, &[true, true]).is_err(), "coils past the end");
+        assert!(server.set_bits(Table::DiscreteInput, 4, &[true]).is_err(), "inputs past the end");
+        assert_eq!(server.registers(Table::HoldingRegister, 0, 4).unwrap(), [0; 4]);
+        assert_eq!(server.registers(Table::InputRegister, 0, 4).unwrap(), [0; 4]);
+        assert_eq!(server.bits(Table::Coil, 0, 4).unwrap(), [false; 4]);
+        assert_eq!(server.bits(Table::DiscreteInput, 0, 4).unwrap(), [false; 4]);
+    }
+}
