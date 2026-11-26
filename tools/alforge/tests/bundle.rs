@@ -446,6 +446,9 @@ fn round_five_the_orcl_plan_a_mode_change_ignored_folders_and_the_packers_enviro
 }
 
 /// The loop's objects the run together reads (the binding's eight).
+/// A component list as the cut hands one to the bundle (crate::components writes the real one).
+const SBOM: &str = "{\n  \"bomFormat\": \"CycloneDX\"\n}\n";
+
 const LOOP: [&str; 8] = ["speed", "read-rate", "infeed", "outlet-1", "outlet-2", "outlet-3", "parcel-1", "parcel-2"];
 
 /// A run of the plant as the cut reads one that is right: the page, every object of the loop live,
@@ -765,7 +768,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
 
     // The builder ran another toolchain than the suite: refused before anything is assembled.
     dep_info("", "");
-    match cut::after_build(&recipe(), c.path(), &commit, rustc, &built("rustc 1.99.0 (5a1b2c3d4 2026-10-01)"), name, &held, text, work.path()) {
+    match cut::after_build(&recipe(), c.path(), &commit, rustc, &built("rustc 1.99.0 (5a1b2c3d4 2026-10-01)"), name, &held, text, SBOM, work.path()) {
         Err(CutError::Refused(e)) => assert_eq!(e, format!("the builder ran `rustc 1.99.0 (5a1b2c3d4 2026-10-01)`, the suite was tested with `{rustc}`")),
         other => panic!("not refused: {other:?}"),
     }
@@ -774,7 +777,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
     // A compilation that read a file of the tree its version does not name, and one outside the
     // tree: each refused by name before anything is assembled.
     dep_info(" /build/src/docs/fora.rs /etc/fora.conf", " /build/src/crates/veredas-core/src/schema.rs");
-    match cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &held, text, work.path()) {
+    match cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &held, text, SBOM, work.path()) {
         Err(CutError::Refused(e)) => assert_eq!(
             e,
             "the library of veredas-aranha read crates/veredas-core/src/schema.rs, which its version does not name\n\
@@ -787,7 +790,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
     for (file, what) in [("primeiro.d", "`primeiro` of veredas-core"), ("libveredas_aranha.d", "the library of veredas-aranha")] {
         dep_info("", "");
         std::fs::remove_file(deps.join(file)).unwrap();
-        match cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &held, text, work.path()) {
+        match cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &held, text, SBOM, work.path()) {
             Err(CutError::Refused(e)) => assert!(e.starts_with(&format!("the build left no dep-info for {what} ({}: ", deps.join(file).display())), "{e}"),
             other => panic!("not refused: {other:?}"),
         }
@@ -800,7 +803,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
     let glibc = bundle::needs(&vm::run("objdump", &["-p", &bin.join("primeiro").display().to_string()], None).unwrap())["GLIBC"].clone();
     let mut old = recipe();
     old.base.glibc = "2.2".into();
-    match cut::after_build(&old, c.path(), &commit, rustc, &built(rustc), name, &held, text, work.path()) {
+    match cut::after_build(&old, c.path(), &commit, rustc, &built(rustc), name, &held, text, SBOM, work.path()) {
         Err(CutError::Vm(VmError::Failed { program, status, stderr })) => {
             assert_eq!((program.as_str(), status.as_str()), ("the executables' check", "refused"));
             assert_eq!(
@@ -815,8 +818,12 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
     assert!(!packed.exists());
 
     // Right: packed, extracted again into `check`, matching its sums, the executables as built.
-    let (p, extracted) = cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &held, text, work.path()).unwrap();
+    let (p, extracted) = cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &held, text, SBOM, work.path()).unwrap();
     assert_eq!((p, extracted.clone()), (packed.clone(), work.path().join("check").join(name)));
+    // The component list in the bundle, under its sums, and beside it.
+    assert_eq!(std::fs::read_to_string(extracted.join("sbom.cdx.json")).unwrap(), SBOM);
+    assert!(std::fs::read_to_string(extracted.join("SHA256SUMS")).unwrap().lines().any(|l| l.ends_with("  sbom.cdx.json")));
+    assert_eq!(std::fs::read_to_string(work.path().join(format!("{name}.cdx.json"))).unwrap(), SBOM);
     let epoch = String::from_utf8(Command::new("git").arg("-C").arg(c.path()).args(["show", "-s", "--format=%ct", &commit]).output().unwrap().stdout).unwrap();
     let entries = listing(&packed);
     assert!(entries.len() > 10, "{entries:?}");

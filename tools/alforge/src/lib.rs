@@ -6,6 +6,7 @@
 pub mod builder;
 pub mod bundle;
 pub mod cache;
+pub mod components;
 pub mod cut;
 pub mod git;
 pub mod inputs;

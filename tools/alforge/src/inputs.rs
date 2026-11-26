@@ -20,7 +20,7 @@ use std::path::{Component as Part, Path, PathBuf};
 use crate::git;
 
 /// The registry every crate of the suite comes from, left out of a locked package's name.
-const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
+pub(crate) const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
 
 /// A component's build inputs: each named (a folder ending in `/`, a file by its path, a locked
 /// package as `Cargo.lock: <name> <version>`, a part of the workspace's manifest as
@@ -112,14 +112,29 @@ pub struct Dep {
 
 /// A package of the lock file.
 #[derive(Clone, Debug)]
-struct Locked {
-    name: String,
-    version: String,
-    source: Option<String>,
-    checksum: Option<String>,
-    dependencies: Vec<String>,
+pub(crate) struct Locked {
+    pub(crate) name: String,
+    pub(crate) version: String,
+    pub(crate) source: Option<String>,
+    pub(crate) checksum: Option<String>,
+    pub(crate) dependencies: Vec<String>,
     /// What a `[replace]` puts in its place (`name version`, a package by path).
-    replace: Option<String>,
+    pub(crate) replace: Option<String>,
+}
+
+/// A lock file's packages, as `Cargo.lock`'s text holds them.
+pub(crate) fn parse_lock(text: &str) -> Result<Vec<Locked>, String> {
+    let table: toml::Table = toml::from_str(text).map_err(|e| format!("its Cargo.lock does not read: {}", e.message()))?;
+    let mut out = Vec::new();
+    for p in table.get("package").and_then(|p| p.as_array()).into_iter().flatten() {
+        let s = |k: &str| p.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        let (Some(name), Some(version)) = (s("name"), s("version")) else {
+            return Err("its Cargo.lock holds a package without a name or a version".to_string());
+        };
+        let dependencies = p.get("dependencies").and_then(|d| d.as_array()).into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string)).collect();
+        out.push(Locked { name, version, source: s("source"), checksum: s("checksum"), dependencies, replace: s("replace") });
+    }
+    Ok(out)
 }
 
 impl Locked {
@@ -157,17 +172,7 @@ impl Workspace<'_> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(format!("its Cargo.lock does not read: {e}")),
         };
-        let table: toml::Table = toml::from_str(&text).map_err(|e| format!("its Cargo.lock does not read: {}", e.message()))?;
-        let mut out = Vec::new();
-        for p in table.get("package").and_then(|p| p.as_array()).into_iter().flatten() {
-            let s = |k: &str| p.get(k).and_then(|v| v.as_str()).map(str::to_string);
-            let (Some(name), Some(version)) = (s("name"), s("version")) else {
-                return Err("its Cargo.lock holds a package without a name or a version".to_string());
-            };
-            let dependencies = p.get("dependencies").and_then(|d| d.as_array()).into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string)).collect();
-            out.push(Locked { name, version, source: s("source"), checksum: s("checksum"), dependencies, replace: s("replace") });
-        }
-        Ok(Some(out))
+        parse_lock(&text).map(Some)
     }
 
     /// The build inputs of the member `name`, or why they cannot be read.
@@ -475,7 +480,7 @@ impl Workspace<'_> {
 
 /// A lock file's dependency string (`name`, `name version` or `name version (source)`) resolved to
 /// the one package it names.
-fn resolve(lock: &[Locked], d: &str) -> Result<usize, String> {
+pub(crate) fn resolve(lock: &[Locked], d: &str) -> Result<usize, String> {
     let mut parts = d.splitn(3, ' ');
     let name = parts.next().unwrap_or_default();
     let version = parts.next();

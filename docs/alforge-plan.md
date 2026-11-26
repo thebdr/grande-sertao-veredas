@@ -36,7 +36,8 @@ bench, a project and a binding before seeing anything.
 - **The bundle**, built, never committed: `veredas-<release>-<target>.tar.gz`, holding `bin/` (the
   executables, built in release mode), `planta/` (the plant of the tester machine, below), `docs/`
   (the suite's README, its plan, every file reference `docs/*-schema.md`, the shipped components'
-  plans and `docs/design/`), `release.toml` (the manifest) and `SHA256SUMS` over every file.
+  plans and `docs/design/`), `release.toml` (the manifest), `sbom.cdx.json` (the component list,
+  below) and `SHA256SUMS` over every file.
 - **The tester machine**, part two: built from a bundle, never from a tree.
 
 The worked example, the first manifest's shape (`tools/alforge/tests/manifest.rs` loads this block
@@ -247,24 +248,31 @@ that lands this, before or after Oficina's switch to `default = ["shell"]` (Q370
   configuration names Qt, and Oficina's own tests built alone run with `shell` on.
 
 ### The component list (Q31 entry 38, "(b) Security file, component list")
-The cut writes, for each release, a CycloneDX 1.6 JSON document. It is `veredas-<release>.cdx.json`
-beside the manifest (in `releases/` for a real cut, committed with it), and `sbom.cdx.json` in the
-bundle. It holds:
-- the release itself: the suite, its release and the commit;
-- one entry per shipped component: name, version, licence expression, the commit as its source;
-- one per crate the components' builds compile, from the lock entries their versions name:
-  `pkg:cargo/<name>@<version>` (with the source and commit for a git crate), the lock's checksum as
-  its SHA-256, and its licence expression from its manifest;
-- with Oficina, Qt and KDDockWidgets at their versions;
-- the dependencies between them, as the lock states them.
+Each release says what it is made of in a CycloneDX 1.6 JSON document, the form vulnerability
+scanners read by package URL: `sbom.cdx.json` in the bundle, under its sums, and
+`veredas-<release>-<target>.cdx.json` beside the bundle. It is not committed: `alforge components
+<commit> --release <release>` gives it again, byte for byte, from the commit the manifest names.
+It holds:
+- the release itself: the suite, its release (or the commit alone, without `--release`), the
+  commit, dated at the commit;
+- one entry per component at the commit: name, version, licence expression, its folder, the
+  executables it ships;
+- one per package the components' normal and build dependencies reach, as cargo resolves them for
+  the release's target with every feature of every member on (`cargo metadata --all-features
+  --filter-platform`, offline, locked): a superset of what one build compiles, and a subset of the
+  lock entries their versions name (C-290). A package by path outside the components (the IronCalc
+  fork) by its folder; a crate by `pkg:cargo/<name>@<version>` (with `vcs_url` for a git one), the
+  lock's checksum as its SHA-256, and its licence as its manifest states it;
+- with Oficina's window, Qt and KDDockWidgets at their versions, as the recipe names them (Q446);
+- the dependencies between them, as cargo resolves them.
 
-`alforge components <commit>` prints the same list from a commit alone (`cargo metadata` over its
-lock, no build), so CI produces it on every push, as the ruling asks. The cut's list and CI's list
-of one commit agree, and a test holds them to it. CycloneDX is the form vulnerability scanners read
-by purl; an SPDX document would carry the same facts. The security file, `SECURITY.md` at the root, names
-GitHub's private vulnerability reporting and no address (Q447, ruled); turning it on in the
-repository's settings is the architect's act. Which intent the suite states under the Cyber Resilience Act is
-undecided (entry 38, ruled "Undecided, say so"), and is the suite plan's to say.
+`alforge components <commit>` prints the same list from a commit alone, so CI can produce it on
+every push, as the ruling asks; the cut's list and `alforge components`'s of one commit and release
+are the same bytes, and the cut's own test holds them to it. CycloneDX is the form scanners read
+by purl; an SPDX document would carry the same facts. The security file, `SECURITY.md` at the root,
+names GitHub's private vulnerability reporting and no address (Q447, ruled); turning it on in the
+repository's settings is the architect's act. Which intent the suite states under the Cyber
+Resilience Act is undecided (entry 38, ruled "Undecided, say so"), and is the suite plan's to say.
 
 ## Part two: the tester machine
 

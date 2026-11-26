@@ -179,8 +179,9 @@ pub fn differs_from(root: &Path, commit: &str) -> Result<Option<String>, git::Gi
 
 /// The cut once the builder handed its executables back (`built`): the builder's toolchain held to
 /// the one the suite ran with (`rustc`), the bundle `name` assembled from the executables (each held
-/// to the tester machine's libraries, [`bundle::assemble`]) and packed in `work`, then extracted again
-/// and checked against its sums ([`unpack_checked`]). Hands back the archive and the extracted bundle.
+/// to the tester machine's libraries, [`bundle::assemble`]) with the component list `sbom`, packed
+/// in `work` with the list beside it, then extracted again and checked against its sums
+/// ([`unpack_checked`]). Hands back the archive and the extracted bundle.
 #[allow(clippy::too_many_arguments)]
 pub fn after_build(
     recipe: &Recipe,
@@ -191,6 +192,7 @@ pub fn after_build(
     name: &str,
     held: &std::collections::BTreeMap<String, manifest::Held>,
     text: &str,
+    sbom: &str,
     work: &Path,
 ) -> Result<(PathBuf, PathBuf), CutError> {
     if built.toolchain != rustc {
@@ -221,7 +223,9 @@ pub fn after_build(
     }
     let bins: Vec<String> = held.values().flat_map(|h| h.bins.iter().cloned()).collect();
     let components: Vec<String> = held.keys().cloned().collect();
-    let packed = bundle::assemble(recipe, root, commit, name, &built.out.join("bin"), &bins, &components, text, work)?;
+    let packed = bundle::assemble(recipe, root, commit, name, &built.out.join("bin"), &bins, &components, text, sbom, work)?;
+    // The component list beside the bundle too, read without opening it.
+    std::fs::write(work.join(format!("{name}.cdx.json")), sbom)?;
     let extracted = unpack_checked(&packed, &work.join("check"), name)?;
     Ok((packed, extracted))
 }
@@ -356,6 +360,8 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     if !against.is_empty() {
         return Err(refused(format!("release {} would not check:\n{}", o.release, against.join("\n"))));
     }
+    // The component list, from the commit alone (crate::components), before anything runs.
+    let sbom = crate::components::list(root, &commit, Some(&o.release.to_string())).map_err(|e| refused(format!("the component list: {e}")))?;
     if o.run_suite {
         eprintln!("alforge: the whole suite at {commit}, behind the machine's lock");
         // Its temporary files on disk, outside any repository: /tmp is a tmpfs of the machine's
@@ -388,7 +394,7 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     eprintln!("alforge: built under {} on {}", built.toolchain, built.libc);
     let manifest = as_built(root, &o.release, &text)?;
     let name = format!("veredas-{}-{target}", o.release);
-    let (packed, extracted) = after_build(&recipe, root, &commit, &rustc, &built, &name, &held, &text, &o.work)?;
+    let (packed, extracted) = after_build(&recipe, root, &commit, &rustc, &built, &name, &held, &text, &sbom, &o.work)?;
     eprintln!("alforge: running the bundle's bench and supervisão together");
     let report = together::run(&extracted, &o.work.join("together"))?;
     let faults = together::faults(&report);

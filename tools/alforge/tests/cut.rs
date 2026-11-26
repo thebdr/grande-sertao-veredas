@@ -100,6 +100,11 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     assert!(!files.iter().any(|f| f.starts_with("tools/") || f.starts_with("crates/") || f.ends_with(".rs")), "{files:?}");
     let manifest_text = std::fs::read_to_string(&c.manifest_path).unwrap();
     assert_eq!(std::fs::read_to_string(c.extracted.join("release.toml")).unwrap(), manifest_text);
+    // The component list in the bundle and beside it: `alforge components`'s for the commit and
+    // the release, byte for byte (C-295).
+    let sbom = std::fs::read_to_string(c.extracted.join("sbom.cdx.json")).unwrap();
+    assert_eq!(sbom, alforge::components::list(&root, &head, Some(release)).unwrap());
+    assert_eq!(std::fs::read_to_string(work.join(format!("{name}.cdx.json"))).unwrap(), sbom);
     assert_eq!(bundle::verify_sums(&c.extracted).unwrap(), Vec::<String>::new());
     let plant_at_head = alforge::git::show(&root, &head, "tools/alforge/planta/loop/binding.toml").unwrap().unwrap();
     assert_eq!(std::fs::read_to_string(c.extracted.join("planta/loop/binding.toml")).unwrap(), plant_at_head);
@@ -131,7 +136,7 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     std::fs::create_dir_all(&again).unwrap();
     let names: Vec<String> = held.keys().cloned().collect();
     let plain_bins: Vec<String> = bins.iter().map(|b| b.trim_start_matches("bin/").to_string()).collect();
-    let repacked = bundle::assemble(&recipe, &root, &head, name, &c.extracted.join("bin"), &plain_bins, &names, &manifest_text, &again).unwrap();
+    let repacked = bundle::assemble(&recipe, &root, &head, name, &c.extracted.join("bin"), &plain_bins, &names, &manifest_text, &sbom, &again).unwrap();
     assert_eq!(alforge::cache::sha256(&repacked).unwrap(), alforge::cache::sha256(&c.bundle).unwrap());
 
     // What the run saw: the page, every object live, both sources live, the parcels moving along

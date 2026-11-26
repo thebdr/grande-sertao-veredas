@@ -9,6 +9,10 @@
 //! builder machine, the bundle packed under `target/alforge/<release>/` and run together, then the
 //! manifest written into `releases/` (or `--out`).
 //!
+//! `alforge components <commit> [--release <release>]`: print the component list of a commit of the
+//! repository the current folder is in, as the cut writes it into a release's bundle
+//! (docs/alforge-plan.md, "The component list"): CycloneDX 1.6 JSON, from the commit alone.
+//!
 //! `alforge maquina <release>`: build the tester machine of a release already cut, from its bundle
 //! under `target/alforge/<release>/`, into `veredas-<release>.ova` beside it
 //! (docs/alforge-plan.md, "How the image is built").
@@ -25,13 +29,14 @@ use std::path::PathBuf;
 
 use alforge::{git, manifest};
 
-const USAGE: &str = "usage: alforge check\n       alforge cut <release> [--trial] [--out <dir>]\n       alforge maquina <release>\n       alforge prova <release>";
+const USAGE: &str = "usage: alforge check\n       alforge cut <release> [--trial] [--out <dir>]\n       alforge components <commit> [--release <release>]\n       alforge maquina <release>\n       alforge prova <release>";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("check") if args.len() == 1 => std::process::exit(check()),
         Some("cut") => std::process::exit(cut(&args[1..])),
+        Some("components") if args.len() == 2 || (args.len() == 4 && args[2] == "--release") => std::process::exit(components(&args[1], args.get(3).map(String::as_str))),
         Some("maquina") if args.len() == 2 => std::process::exit(maquina(&args[1])),
         Some("prova") if args.len() == 2 => std::process::exit(prova(&args[1])),
         _ => {
@@ -57,6 +62,44 @@ fn repository() -> Result<PathBuf, String> {
         }
         Ok(None) => Err(format!("{}: not inside a git repository", here.display())),
         Err(e) => Err(e.to_string()),
+    }
+}
+
+fn components(commit: &str, release: Option<&str>) -> i32 {
+    let root = match repository() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    if let Some(r) = release
+        && semver::Version::parse(r).is_err()
+    {
+        eprintln!("`{r}` is not SemVer: a release is named by its version");
+        return 1;
+    }
+    // The commit by its full id, as a release's manifest names it.
+    let id = match git::text(&root, &["rev-parse", "--verify", "--quiet", &format!("{commit}^{{commit}}")]) {
+        Ok(Some(id)) => id.trim().to_string(),
+        Ok(None) => {
+            eprintln!("{commit} is no commit of {}", root.display());
+            return 2;
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    match alforge::components::list(&root, &id, release) {
+        Ok(text) => {
+            print!("{text}");
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
     }
 }
 

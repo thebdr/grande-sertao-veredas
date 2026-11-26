@@ -155,6 +155,7 @@ pub fn assemble(
     bins: &[String],
     components: &[String],
     manifest_text: &str,
+    sbom: &str,
     work: &Path,
 ) -> Result<PathBuf, VmError> {
     let dir = work.join(name);
@@ -182,6 +183,8 @@ pub fn assemble(
     std::fs::rename(dir.join(folder).join("planta"), dir.join("planta"))?;
     std::fs::remove_dir_all(dir.join("tools"))?;
     std::fs::write(dir.join("release.toml"), manifest_text)?;
+    // What the release is made of, as scanners read it (crate::components).
+    std::fs::write(dir.join("sbom.cdx.json"), sbom)?;
     write_sums(&dir)?;
     let epoch = git::text(root, &["show", "-s", "--format=%ct", commit])
         .map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?
