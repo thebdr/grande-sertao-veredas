@@ -324,7 +324,9 @@ fn open(iface: &str) -> Result<Box<dyn veredas_aranha::wire::Wire>, Refused> {
 
 #[cfg(not(target_os = "linux"))]
 fn open(_iface: &str) -> Result<Box<dyn veredas_aranha::wire::Wire>, Refused> {
-    Err(Refused("raw frames are read on Linux alone for now (docs/questions.md Q281)".to_string()))
+    // On Windows a wire will drive the Npcap the engineer installs (docs/questions.md Q281, ruled
+    // 2026-11-26), in the Windows phase; until then it says so.
+    Err(Refused("raw frames are read on Linux alone for now; on Windows they will come through Npcap, which you install from its publisher, npcap.com (its free edition on up to five computers)".to_string()))
 }
 
 fn identify(args: &[OsString]) -> Result<(), Refused> {

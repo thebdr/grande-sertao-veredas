@@ -70,8 +70,10 @@ controller's hardware configuration has nothing of the suite's own to compare ag
     tables);
   - **writes**: DCP Set of a station name, an IP suite, the identification signal (blink), gated
     (below, "Rules");
-  - **Windows**: raw frames there need a packet driver (Npcap in Veredas 1); its licence, read
-    2026-11-26 (below, "Npcap's licence"), leaves a choice (`docs/questions.md` Q281).
+  - **Windows**: raw frames there through Npcap, which the engineer installs from its publisher
+    (the free edition: up to five computers, a virtual machine counting as one); aranha neither
+    ships nor starts its installer, and says so where it needs it (Q281, ruled 2026-11-26; below,
+    "Npcap's licence").
 
 Not in scope, for good: opening an application relation (an IO exchange is the controller's, and
 a second controller contending for a device disturbs the first); any frame sent onto a bus that an
@@ -152,7 +154,7 @@ Read before the port: `docs/aranha-plan.md` and `docs/aranha-usage.md`, all of
 | `probes/pnrpc.rs` (the RPC header, the implicit read of I&M0) | `profinet::rpc`, the implicit read in deep identity | the RPC framing serves the controller's connect as much as the read; its own header says it was never checked against a real device |
 | (new) | `profinet::{rt, alarm}`, the connect, control, write and release blocks | the IO controller and the bench device need them; Veredas 1 had none of the cyclic exchange |
 | `wire.rs` (`Wire`, `ReplayWire`, `Hub`), `pcap.rs` | `wire` | the seam and its file and memory kinds; pcap written as well as read |
-| `npcap.rs`, `adapters.rs` (Windows, `wpcap.dll` and `GetAdaptersAddresses` bound by hand) | later, the Windows phase | the Linux raw link comes first (`AF_PACKET`, the interface's MAC from the kernel); Npcap waits for Q281 |
+| `npcap.rs`, `adapters.rs` (Windows, `wpcap.dll` and `GetAdaptersAddresses` bound by hand) | later, the Windows phase | the Linux raw link comes first (`AF_PACKET`, the interface's MAC from the kernel); on Windows a wire drives the Npcap the engineer installed (Q281) |
 | `observe.rs`, `fusion.rs`, `engine.rs` | `observe`, `fusion`, `listen` | as they were, with typed decode errors and the own-machine filter |
 | `capture.rs` (a thread per adapter, the one paced sender) | `listen` | the listener is the only sender on its interface, so asking is paced where it is heard |
 | `active.rs` (Identify-All, the ARP sweep) | `ask` | the ARP sweep with the IP-layer probes, later |
@@ -232,7 +234,7 @@ veredas_aranha
    its use left to deep identity).
 7. **The executable.**
 8. **Later**: the rest of deep identity, the IP-layer probes one at a time (each with its bench
-   responder first), writes, Windows.
+   responder first), writes, Windows (a wire over the Npcap the engineer installed, Q281).
 
 Each phase ends with its clauses recorded, refuted and verified, the laws green and every test
 the change can reach green, and is pushed.
@@ -254,10 +256,16 @@ The architect's decisions of 13 to 16 November 2026 that touch aranha (`docs/bri
   segment and through a target's embedded aranha when it is not (G2); the readers of GSDML, ESI
   and EDS files live in core (C5), so aranha's deep identity reads a device's description from
   core when it needs one.
-- Open: how a Windows laptop sends and hears raw frames, Npcap's licence read (Q281).
+- Ruled 2026-11-26 (Q281), against the recommendation of none on Windows: "The engineer installs
+  Npcap", the option reading "The engineer installs the free Npcap from its publisher; aranha
+  neither ships nor starts its installer and says so where it needs it". The laptop's own path of
+  G2 runs on Windows too, over a wire driving that Npcap; the Windows phase stays later, the ruling
+  changing what it builds, not when. Where aranha needs Npcap, the text the engineer reads names
+  its publisher and the free edition's limit (five computers, a virtual machine counting as one).
 
 ## Npcap's licence (read 2026-11-26)
-A fact for the record, not a decision, and no legal advice. Read from its publisher, Nmap Software
+A fact for the record, and no legal advice; the decision it fed is Q281's (above: the engineer
+installs it). Read from its publisher, Nmap Software
 LLC: the licence text (`github.com/nmap/npcap`, `LICENSE`, the copyright line 2013-2025, no version
 line; npcap.com/license points to it), npcap.com, and its OEM pages (`npcap.com/oem`,
 `/oem/redist`, `/oem/internal`); Npcap 1.90 of 2026-10-21 was current.
