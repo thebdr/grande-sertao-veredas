@@ -420,7 +420,10 @@ is pinned by a test when its phase lands.
   A device with no gateway answers only a source on its own network, by its own mask, so a read
   from the first address listed goes unanswered: the read goes from the interface's address on the
   device's network by the device's mask, and is refused, nothing sent, where the interface holds
-  none there (C-148's third refute round).
+  none there (C-148's third refute round). The system's list of addresses (`getifaddrs`) names an
+  IPv4 address by its label (`a0:plant`, as `ifconfig eth0:1` makes) and never by an interface's
+  alternative name: the read lists an interface's addresses from the kernel's own dump by the
+  interface's index, and never sends from the device's own address (the fourth round).
 - **`Path` reads `s.toml/.` as `s.toml`**: its file name, extension and parent drop a trailing
   `.`, while the system's calls resolve it (a folder, or no such file); a check on the scan's path
   reads its last part as given. Renaming onto a mount point fails (busy): the one way a test makes

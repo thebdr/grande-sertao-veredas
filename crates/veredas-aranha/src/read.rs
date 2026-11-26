@@ -107,6 +107,8 @@ pub enum ReadError {
     NoAddress(String),
     #[error("{iface:?} holds no IPv4 address on the network of {device} (mask {mask}): the device could not answer it")]
     OffNetwork { iface: String, device: Ipv4Addr, mask: Ipv4Addr },
+    #[error("{iface:?} holds {device}, the device's own address, and no other on its network: the device could not answer it")]
+    OwnAddress { iface: String, device: Ipv4Addr },
     #[error("{device} was not heard on {iface:?}: it is not read there")]
     NotHeard { device: Mac, iface: String },
     #[error("{0} states no IPv4 address of its own (DCP's IP suite): there is nothing to read it at")]
@@ -166,36 +168,105 @@ fn next_activity() -> Uuid {
     Uuid(b)
 }
 
-/// The IPv4 addresses an interface holds, in the order the system lists them.
+/// The IPv4 addresses an interface holds, in the order the system lists them: by the interface's
+/// index, so an address under a label (`a0:plant`, as an `eth0:1` alias is) and an interface named
+/// by an alternative name are the interface's (the system's list of addresses names an IPv4 one by
+/// its label, never by an alternative name).
 #[cfg(target_os = "linux")]
 pub fn addresses_of(iface: &str) -> Vec<Ipv4Addr> {
-    let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
-    // SAFETY: getifaddrs fills `list` with a list the system owns until freeifaddrs.
-    if unsafe { libc::getifaddrs(&raw mut list) } != 0 {
+    let Ok(name) = std::ffi::CString::new(iface) else { return Vec::new() };
+    // SAFETY: if_nametoindex reads the NUL-terminated name it is given and nothing else.
+    let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
+    if index == 0 {
         return Vec::new();
     }
-    let v4 = |sa: *const libc::sockaddr| -> Option<Ipv4Addr> {
-        // SAFETY: a non-null sockaddr of the list, its family saying its shape; an AF_INET one is
-        // a sockaddr_in.
-        (!sa.is_null() && i32::from(unsafe { (*sa).sa_family }) == libc::AF_INET).then(|| Ipv4Addr::from(u32::from_be(unsafe { (*sa.cast::<libc::sockaddr_in>()).sin_addr.s_addr })))
-    };
-    let mut found = Vec::new();
-    let mut at = list;
-    while !at.is_null() {
-        // SAFETY: `at` is an element of the list getifaddrs returned, not yet freed.
-        let a = unsafe { &*at };
-        // SAFETY: a non-null `ifa_name` is a NUL-terminated string of the list.
-        let name = (!a.ifa_name.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(a.ifa_name) });
-        if name.is_some_and(|n| n.to_bytes() == iface.as_bytes())
-            && let Some(address) = v4(a.ifa_addr)
-        {
-            found.push(address);
-        }
-        at = a.ifa_next;
+    addresses_by_index(index).unwrap_or_default()
+}
+
+/// Every IPv4 address of the interface at `index`, from the kernel's own dump of addresses
+/// (netlink's RTM_GETADDR), in its order.
+#[cfg(target_os = "linux")]
+fn addresses_by_index(index: u32) -> std::io::Result<Vec<Ipv4Addr>> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    const NLMSG_HDR: usize = 16;
+    const NLMSG_DONE: u16 = 3;
+    const NLMSG_ERROR: u16 = 2;
+    const NLM_F_REQUEST: u16 = 1;
+    const NLM_F_DUMP: u16 = 0x300;
+    // SAFETY: a socket call with constant arguments; the descriptor is owned at once.
+    let raw = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, libc::NETLINK_ROUTE) };
+    if raw < 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    // SAFETY: `list` came from getifaddrs and is freed once.
-    unsafe { libc::freeifaddrs(list) };
-    found
+    // SAFETY: `raw` is a descriptor this call just opened and nothing else owns.
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    // The request: a netlink header, then an ifaddrmsg asking IPv4 addresses.
+    let mut req = Vec::with_capacity(NLMSG_HDR + 8);
+    req.extend_from_slice(&((NLMSG_HDR + 8) as u32).to_ne_bytes());
+    req.extend_from_slice(&libc::RTM_GETADDR.to_ne_bytes());
+    req.extend_from_slice(&(NLM_F_REQUEST | NLM_F_DUMP).to_ne_bytes());
+    req.extend_from_slice(&1u32.to_ne_bytes());
+    req.extend_from_slice(&0u32.to_ne_bytes());
+    req.extend_from_slice(&[libc::AF_INET as u8, 0, 0, 0]);
+    req.extend_from_slice(&0u32.to_ne_bytes());
+    // SAFETY: `req` is valid for its length; the kernel only reads it.
+    if unsafe { libc::send(fd.as_raw_fd(), req.as_ptr().cast(), req.len(), 0) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut found = Vec::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        // SAFETY: `buf` is valid and writable for its length.
+        let n = unsafe { libc::recv(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), 0) };
+        if n < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let got = &buf[..n as usize];
+        if got.is_empty() {
+            return Ok(found);
+        }
+        let u16_at = |b: &[u8], at: usize| b.get(at..at + 2).map(|x| u16::from_ne_bytes([x[0], x[1]]));
+        let u32_at = |b: &[u8], at: usize| b.get(at..at + 4).map(|x| u32::from_ne_bytes([x[0], x[1], x[2], x[3]]));
+        let mut at = 0;
+        while let (Some(len), Some(kind)) = (u32_at(got, at), u16_at(got, at + 4)) {
+            let len = len as usize;
+            if len < NLMSG_HDR || at + len > got.len() {
+                return Ok(found);
+            }
+            match kind {
+                NLMSG_DONE => return Ok(found),
+                NLMSG_ERROR => return Err(std::io::Error::other("the kernel refused its list of addresses")),
+                k if k == libc::RTM_NEWADDR => {
+                    let msg = &got[at + NLMSG_HDR..at + len];
+                    if msg.first() == Some(&(libc::AF_INET as u8)) && u32_at(msg, 4) == Some(index) {
+                        // Its attributes: IFA_LOCAL the address itself (IFA_ADDRESS the peer's on
+                        // a point-to-point link), else IFA_ADDRESS.
+                        let (mut local, mut address) = (None, None);
+                        let mut a = 8;
+                        while let (Some(alen), Some(akind)) = (u16_at(msg, a), u16_at(msg, a + 2)) {
+                            let alen = usize::from(alen);
+                            if alen < 4 || a + alen > msg.len() {
+                                break;
+                            }
+                            let value = &msg[a + 4..a + alen];
+                            let v4 = <[u8; 4]>::try_from(value).ok().map(Ipv4Addr::from);
+                            if akind == libc::IFA_LOCAL {
+                                local = v4;
+                            } else if akind == libc::IFA_ADDRESS {
+                                address = v4;
+                            }
+                            a += (alen + 3) & !3;
+                        }
+                        if let Some(v) = local.or(address) {
+                            found.push(v);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            at += (len + 3) & !3;
+        }
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -209,11 +280,12 @@ pub fn address_of(iface: &str) -> Option<Ipv4Addr> {
 }
 
 /// The interface's address on the network of a device at `device` with `mask`, by the device's own
-/// mask (the first such the system lists): a device answers without a router only a source on its
-/// network; none when the interface holds none there.
+/// mask (the first such the system lists, the device's own address never: it could not answer
+/// itself): a device answers without a router only a source on its network; none when the
+/// interface holds none there.
 pub fn address_for(iface: &str, device: Ipv4Addr, mask: Ipv4Addr) -> Option<Ipv4Addr> {
     let m = u32::from(mask);
-    addresses_of(iface).into_iter().find(|a| u32::from(*a) & m == u32::from(device) & m)
+    addresses_of(iface).into_iter().find(|a| *a != device && u32::from(*a) & m == u32::from(device) & m)
 }
 
 /// The object a read is addressed to: the device's own (its vendor and device ids, its instance,
@@ -245,8 +317,16 @@ pub fn read(listener: &Listener, iface: &str, device: &Device, target: Target, o
     let address = suite.ip;
     let here = match address_for(iface, address, suite.mask) {
         Some(here) => here,
-        None if address_of(iface).is_some() => return Err(ReadError::OffNetwork { iface: iface.to_string(), device: address, mask: suite.mask }),
-        None => return Err(ReadError::NoAddress(iface.to_string())),
+        None => {
+            let held = addresses_of(iface);
+            return Err(if held.contains(&address) {
+                ReadError::OwnAddress { iface: iface.to_string(), device: address }
+            } else if held.is_empty() {
+                ReadError::NoAddress(iface.to_string())
+            } else {
+                ReadError::OffNetwork { iface: iface.to_string(), device: address, mask: suite.mask }
+            });
+        }
     };
     let socket = UdpSocket::bind((here, 0)).map_err(|source| ReadError::Socket { address: here, source })?;
     let port = socket.local_addr().map_err(|source| ReadError::Socket { address: here, source })?.port();
@@ -295,11 +375,13 @@ pub fn read(listener: &Listener, iface: &str, device: &Device, target: Target, o
                 continue;
             }
             let Ok(answer) = RpcPdu::decode(&d.payload) else { continue };
-            if answer.activity != activity || answer.interface != Uuid::PNIO_DEVICE {
+            if answer.activity != activity {
                 continue;
             }
             match answer.packet_type {
-                PacketType::Response => {}
+                // A response names PNIO's device interface; a fault or a reject under the request's
+                // activity is its answer whatever interface it names.
+                PacketType::Response if answer.interface == Uuid::PNIO_DEVICE => {}
                 PacketType::Fault | PacketType::Reject => return Err(ReadError::Rejected { device: device.mac, frame: i, kind: answer.packet_type }),
                 // Working, a no-call, an acknowledgement: not the answer yet.
                 _ => continue,
