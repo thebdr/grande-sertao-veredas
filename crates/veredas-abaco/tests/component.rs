@@ -2459,6 +2459,16 @@ fn change_rows(record: &str) -> Result<Vec<String>, String> {
     if at != heading_end {
         return Err("the record's `Local changes` heading is not its line `## Local changes`".into());
     }
+    // nothing before the heading holds it: it follows a blank line, which ends every paragraph and
+    // HTML block of kind 6 or 7, and no line of the record opens an HTML block, in a container or
+    // not, which may run past a blank line (`<textarea>`) or start on a lazy line (the round at
+    // 0394f0ba)
+    if heading == 0 || !lines[heading - 1].is_empty() {
+        return Err(format!("line {} of the record, before `## Local changes`, is not blank", heading));
+    }
+    if let Some(k) = lines.iter().position(|l| without_containers(l).0.trim_start_matches([' ', '\t']).starts_with('<')) {
+        return Err(format!("line {} of the record opens an HTML block, which may hold what follows it", k + 1));
+    }
     // no other line, nor two lines joined, reads `local changes`, its ASCII letters read
     let letters = |l: &str| -> Vec<String> {
         [None, Some(""), Some(" ")].iter().map(|u| heading_words_with(l, *u).chars().filter(char::is_ascii_alphabetic).collect()).collect()
@@ -2480,9 +2490,12 @@ fn change_rows(record: &str) -> Result<Vec<String>, String> {
     let mut k = heading + 1;
     while k < lines.len() && lines[k] != RECORD_HEADER {
         let l = lines[k];
-        let underline = l.trim_matches(['=', '-', ' ']).is_empty();
-        if !l.is_empty() && (column_of(l) > 0 || block_start(l).is_some() || l.contains(['|', '<']) || underline) {
-            return Err(leaves(k, "prose stands at the margin, opens no block and holds no `|` or `<`"));
+        // a line of prose holds a letter or a digit: one of `-`, `:`, `=` alone is a setext
+        // underline or a pipeless table's delimiter to GFM (`:-`, `===\t`; the round at 0394f0ba)
+        let underline = l.trim_matches(['=', '-', ' ', '\t']).is_empty();
+        let words = l.chars().any(char::is_alphanumeric);
+        if !l.is_empty() && (column_of(l) > 0 || block_start(l).is_some() || l.contains(['|', '<']) || underline || !words) {
+            return Err(leaves(k, "prose stands at the margin, opens no block, holds a letter or a digit and no `|` or `<`"));
         }
         k += 1;
     }
@@ -2617,7 +2630,9 @@ fn gfm_cells(line: &str) -> Vec<String> {
         } else {
             cells.last_mut().unwrap().push(ch);
         }
-        escaped = ch == '\\' && !escaped;
+        // a pipe after a backslash is the cell's whatever stands before the backslash, as
+        // cmark-gfm's cell scanner reads it (`\\|` splits nothing; the round at 0394f0ba)
+        escaped = ch == '\\';
     }
     cells.into_iter().map(|c| c.trim().to_string()).collect()
 }
@@ -2687,7 +2702,7 @@ fn block_start(line: &str) -> Option<Block> {
 fn html_block_start(t: &str) -> Option<u8> {
     let lower = t.to_ascii_lowercase();
     let after_name = |rest: &str| rest.is_empty() || rest.starts_with([' ', '\t', '>']) || rest.starts_with("/>");
-    for name in ["script", "pre", "style"] {
+    for name in ["script", "pre", "style", "textarea"] {
         if let Some(rest) = lower.strip_prefix('<').and_then(|r| r.strip_prefix(name)) {
             if rest.is_empty() || rest.starts_with([' ', '\t', '>']) {
                 return Some(1);
@@ -2799,7 +2814,7 @@ fn complete_tag_alone(t: &str) -> bool {
 fn html_block_ends(kind: u8, line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     match kind {
-        1 => ["</script>", "</pre>", "</style>"].iter().any(|m| lower.contains(m)),
+        1 => ["</script>", "</pre>", "</style>", "</textarea>"].iter().any(|m| lower.contains(m)),
         2 => line.contains("-->"),
         3 => line.contains("?>"),
         4 => line.contains('>'),
@@ -2904,6 +2919,21 @@ fn the_record_is_read_in_its_one_form() {
     for after_table in ["\n## After\n| 31 | another table |", "\n<!--\n| 30 | hidden |\n-->", "\nMore prose.", "\n- a\n\n  | # | Change |\n  |---|---|\n  | 33 | listed |"] {
         assert!(refused(&canon(&format!("| 1 | a | b | c |\n{after_table}\n"))), "{after_table:?}");
     }
+    // the round at 0394f0ba: an HTML block before the heading that holds it (`<textarea>`, kind 1,
+    // runs past a blank line; kind 7 after a table row or on a lazy line), a pipeless table's
+    // delimiter or an underline with a tab in the prose, a row GitHub splits otherwise
+    for before_heading in ["<textarea>\n", "para\n<textarea>", "| | |\n|---|---|\n| Rows | below |\n<x-y>", "> a\n<x-y>", "[^1]: a\n<x-y>", "- a\n<x-y>"] {
+        let record = format!("# Fork\n\n{before_heading}\n## Local changes\nProse.\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n");
+        assert!(refused(&record), "{before_heading:?}");
+        let record = format!("# Fork\n\n{before_heading}\n\n## Local changes\nProse.\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n");
+        assert!(refused(&record), "{before_heading:?} and a blank line");
+    }
+    for prose in [":-\n40 an unlisted change, base, none", "-:", ":-:", "===\t", "---\t"] {
+        let record = format!("# Fork\n\n## Local changes\nProse.\n{prose}\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n");
+        assert!(refused(&record), "{prose:?}");
+    }
+    assert!(refused(&canon("| 1 | a | b | c |\n| 4 | a \\\\| b | c |\n")));
+    assert_eq!(gfm_cells("| 4 | a \\\\| b | c |"), ["4", "a \\\\| b", "c"]);
     // the table after the heading with no blank line, a delimiter of another spelling, no table
     assert!(refused(&format!("## Local changes\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n")));
     assert!(refused(&format!("## Local changes\n\n{RECORD_HEADER}\n|:--|---|---|---|\n| 1 | a | b | c |\n")));
