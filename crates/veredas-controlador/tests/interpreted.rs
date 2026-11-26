@@ -875,3 +875,76 @@ fn the_load_s_reason_outlives_its_acknowledge() {
     c.acknowledge(OFICINA, &Key).unwrap();
     assert_eq!(c.load_error(), Some(&MakeError::State));
 }
+
+// The twelfth refute round's tests: a program error whose location names no file still the program's 502, its file
+// read as `?`; an acknowledge of a power cycle's load fault leaving STOP from every state; a first power-on and a
+// crash's on a production target without real time checking the program; and a start's failed load after a run the
+// load fault, never the last run's program.
+
+// a program error whose span names no file of the program (which neither the file's reader nor the
+// load refuses) is still a fault of the controller's, with the line and column, never a panic of its thread.
+#[test]
+fn a_program_error_whose_location_names_no_file_is_the_program_s_fault_its_file_unknown() {
+    let mut program = code();
+    for block in &mut program.functions[0].blocks {
+        for s in &mut block.statements {
+            s.at.file = 9;
+        }
+        if let Terminator::Assert { at, .. } = &mut block.terminator {
+            at.file = 9;
+        }
+    }
+    let (c, plant, _) = started(on(program), zero_at_1, 2);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="?:2:5") sim() no_realtime()"#);
+    assert_eq!(plant.writes.iter().map(|w| w.1).collect::<Vec<_>>(), [scanned(FIRST + 1, 0), SAFE.value]);
+}
+
+// from a power cycle's load fault, whatever the state it came back from, an acknowledge leaves STOP
+// acknowledged and nothing starts without a person's start.
+#[test]
+fn an_acknowledge_of_a_power_cycle_s_load_fault_leaves_stop_from_every_state() {
+    let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
+    for was in [StateWord::Run, StateWord::Startup, StateWord::Stop, StateWord::Hold, StateWord::Fault] {
+        let mut c = Controller::power_on_from(config(), SIM, Restart::PowerCycle { was }, loaded(&two)).unwrap();
+        let mut clock = VirtualClock::new();
+        let mut plant = Plant::new(&clock, steady);
+        step(&mut c, &mut plant, &mut clock, 1);
+        c.acknowledge(OFICINA, &Key).unwrap();
+        assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()", "{was:?}");
+        step(&mut c, &mut plant, &mut clock, 2);
+        assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()", "{was:?}");
+        assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)], "{was:?}");
+    }
+}
+
+// a first power-on and a crash's on a production target without real time check the program too.
+#[test]
+fn a_first_power_on_and_a_crash_s_on_a_production_target_without_real_time_check_the_program() {
+    let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
+    let production = Target { production: true, realtime: false, simulated: false };
+    let c = Controller::power_on_from(config(), production, Restart::First, loaded(&two)).unwrap();
+    assert_eq!(text(&c), "FAULT load(id=506, download=0)");
+    assert_eq!(c.load_error(), Some(&MakeError::State));
+    let c = Controller::power_on_from(config(), production, Restart::Crash, loaded(&two)).unwrap();
+    assert_eq!(text(&c), "FAULT internal(id=507)");
+    assert_eq!(c.load_error(), Some(&MakeError::State));
+}
+
+// a start whose load fails after a run is the load fault, never the last run's program (Q36: no substitute).
+#[test]
+fn a_start_s_failed_load_after_a_run_is_the_load_fault_never_the_last_run_s_program() {
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, scripted(vec![None, None, Some(MakeError::Scan)])).unwrap();
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 3);
+    assert_eq!(text(&c), "RUN sim() no_realtime()");
+    c.stop(OFICINA).unwrap();
+    c.start(StartupReason::Warm, OFICINA, &Key).unwrap();
+    plant.writes.clear();
+    step(&mut c, &mut plant, &mut clock, 3);
+    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(c.load_error(), Some(&MakeError::Scan));
+    assert!(c.program().is_none());
+    assert_eq!(plant.writes, [(ms(30), SAFE.value), (ms(40), SAFE.value), (ms(50), SAFE.value)]);
+}
