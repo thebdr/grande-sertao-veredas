@@ -5,19 +5,20 @@ use crate::{
     calc_result::CalcResult, expressions::parser::Node, expressions::token::Error, model::Model,
 };
 
-// Veredas fork change 16: a host's seed, when it set one, comes first (`crate::seed_random`).
+// Veredas fork change 16: a host's seed, when it set one, comes first (`crate::seed_random`), each
+// cell drawing its own sequence (change 40).
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-fn random() -> f64 {
-    if let Some(v) = crate::model::next_seeded_random() {
+fn random(cell: &CellReferenceIndex) -> f64 {
+    if let Some(v) = crate::model::next_seeded_random(cell) {
         return v;
     }
     rand::random()
 }
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-fn random() -> f64 {
+fn random(cell: &CellReferenceIndex) -> f64 {
     use js_sys::Math;
-    if let Some(v) = crate::model::next_seeded_random() {
+    if let Some(v) = crate::model::next_seeded_random(cell) {
         return v;
     }
     Math::random()
@@ -28,7 +29,7 @@ impl<'a> Model<'a> {
         if !args.is_empty() {
             return CalcResult::new_args_number_error(cell);
         }
-        CalcResult::Number(random())
+        CalcResult::Number(random(&cell))
     }
 
     // TODO: Add tests for RANDBETWEEN
@@ -51,7 +52,7 @@ impl<'a> Model<'a> {
                 message: format!("{x}>{y}"),
             };
         }
-        CalcResult::Number((x + random() * (y - x)).floor())
+        CalcResult::Number((x + random(&cell) * (y - x)).floor())
     }
 
     /// `=RANDARRAY([rows], [cols], [min], [max], [whole_number])`
@@ -183,9 +184,9 @@ impl<'a> Model<'a> {
                     let min_int = min.floor();
                     let max_int = max.floor();
                     let span = max_int - min_int + 1.0;
-                    min_int + (random() * span).floor()
+                    min_int + (random(&cell) * span).floor()
                 } else {
-                    min + random() * (max - min)
+                    min + random(&cell) * (max - min)
                 };
                 row.push(ArrayNode::Number(val));
             }
@@ -225,10 +226,49 @@ mod seeded_tests {
         assert_ne!(draws()[0], first[0]);
         // every draw lies in [0, 1)
         crate::seed_random(Some(7));
+        let cell = crate::expressions::types::CellReferenceIndex { sheet: 0, row: 1, column: 1 };
         for _ in 0..10_000 {
-            let x = crate::model::next_seeded_random().unwrap();
+            let x = crate::model::next_seeded_random(&cell).unwrap();
             assert!((0.0..1.0).contains(&x), "{x}");
         }
+        crate::seed_random(None);
+    }
+
+    /// The cells' values in the order given, after an evaluation seeded with 5.
+    fn values(model: &mut crate::Model, cells: &[&str]) -> Vec<String> {
+        crate::seed_random(Some(5));
+        model.evaluate();
+        cells.iter().map(|c| model._get_text(c)).collect()
+    }
+
+    #[test]
+    fn each_cell_draws_its_own_sequence_and_a_host_keys_a_moved_one() {
+        // Veredas fork change 40: a draw removed before a cell, in the evaluation's order, leaves
+        // the cell's own draws as they were
+        let mut model = new_empty_model();
+        for r in 1..=5 {
+            model._set(&format!("A{r}"), "=RAND()");
+        }
+        model._set("B1", "=RANDARRAY(1,3)");
+        let first = values(&mut model, &["A2", "A3", "A4", "A5", "B1", "C1", "D1"]);
+        assert_eq!(values(&mut model, &["A2", "A3", "A4", "A5", "B1", "C1", "D1"]), first, "seeded alike, drawn alike");
+        model._set("A1", "7");
+        assert_eq!(values(&mut model, &["A2", "A3", "A4", "A5", "B1", "C1", "D1"]), first, "A1's draw removed");
+        // two cells' draws differ, and a cell's second draw is not its first
+        model._set("E1", "=RAND()-RAND()");
+        let e1 = values(&mut model, &["E1"]);
+        assert_ne!(e1[0], "0");
+        assert_ne!(first[0], first[1]);
+        // a host keys the cells it moved: A3 drawing as A2 stood draws A2's numbers, a place the
+        // keys do not hold draws as no other cell's
+        let mut keys = std::collections::HashMap::new();
+        keys.insert((0, 3, 1), (0, 2, 1));
+        crate::key_random_draws(Some(keys));
+        let moved = values(&mut model, &["A3", "A2"]);
+        crate::key_random_draws(None);
+        assert_eq!(moved[0], first[0], "A3 draws as A2");
+        assert_ne!(moved[1], first[0], "A2, not in the keys, draws as no other cell");
+        assert_ne!(moved[1], first[1]);
         crate::seed_random(None);
     }
 }

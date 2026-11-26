@@ -74,13 +74,37 @@ thread_local! {
     static SEEDED_RANDOM: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
+thread_local! {
+    /// Veredas fork change 40: the key a host gave each cell's draws, by the cell's place
+    /// (sheet index, row, column), if it gave any ([`key_random_draws`]).
+    static DRAW_KEYS: std::cell::RefCell<Option<HashMap<(u32, i32, i32), (u32, i32, i32)>>> =
+        const { std::cell::RefCell::new(None) };
+    /// Veredas fork change 40: how many draws each key made since the generator was seeded.
+    static DRAWS_MADE: std::cell::RefCell<HashMap<(bool, u32, i32, i32), u64>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
 /// Seeds the random functions (RAND, RANDBETWEEN, RANDARRAY) on this thread: from now on they draw
 /// from a deterministic generator started at `seed`, so one workbook evaluated the same way draws
 /// the same numbers every time; `None` returns them to the system's randomness. Seeding again
 /// starts the sequence over. A host that compares evaluations (a measure against cached values)
 /// seeds it so its result does not depend on chance. Veredas fork change 16.
+///
+/// Each cell draws its own sequence (Veredas fork change 40): the n-th number a cell draws since
+/// the seed is the seed's, the cell's key's and n's alone, so a draw added, removed or moved in
+/// another cell, before it in the evaluation's order, changes none of its own.
 pub fn seed_random(seed: Option<u64>) {
     SEEDED_RANDOM.with(|s| s.set(seed));
+    DRAWS_MADE.with(|d| d.borrow_mut().clear());
+}
+
+/// Keys each cell's seeded draws by `keys`, a cell's place now (sheet index, row, column) to the
+/// place it draws as, so a host that moved cells (rows or columns inserted or deleted, a sheet
+/// added before them) has each draw the same numbers as where it stood; a place `keys` does not
+/// hold draws as one of no other cell's. `None` keys every cell by its own place. Veredas fork
+/// change 40.
+pub fn key_random_draws(keys: Option<HashMap<(u32, i32, i32), (u32, i32, i32)>>) {
+    DRAW_KEYS.with(|k| *k.borrow_mut() = keys);
 }
 
 /// Whether the random functions are seeded on this thread ([`seed_random`]).
@@ -88,17 +112,37 @@ pub fn random_is_seeded() -> bool {
     SEEDED_RANDOM.with(|s| s.get().is_some())
 }
 
-/// The next number in [0, 1) of the seeded generator (SplitMix64), `None` when not seeded.
-pub(crate) fn next_seeded_random() -> Option<f64> {
-    SEEDED_RANDOM.with(|s| {
-        let state = s.get()?.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        s.set(Some(state));
-        let mut z = state;
+/// The next number in [0, 1) the cell at `cell` draws from the seeded generator, `None` when not
+/// seeded: SplitMix64's mix of the seed, the cell's key ([`key_random_draws`]) and how many it
+/// drew before since the seed (Veredas fork changes 16 and 40).
+pub(crate) fn next_seeded_random(cell: &crate::expressions::types::CellReferenceIndex) -> Option<f64> {
+    let seed = SEEDED_RANDOM.with(|s| s.get())?;
+    let at = (cell.sheet, cell.row, cell.column);
+    let key = DRAW_KEYS.with(|k| match &*k.borrow() {
+        None => (false, at.0, at.1, at.2),
+        Some(keys) => match keys.get(&at) {
+            Some(&(sheet, row, column)) => (false, sheet, row, column),
+            None => (true, at.0, at.1, at.2),
+        },
+    });
+    let n = DRAWS_MADE.with(|d| {
+        let mut d = d.borrow_mut();
+        let made = d.entry(key).or_insert(0);
+        let n = *made;
+        *made += 1;
+        n
+    });
+    let mix = |mut z: u64| {
+        z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        Some((z >> 11) as f64 / (1u64 << 53) as f64)
-    })
+        z ^ (z >> 31)
+    };
+    let mut z = mix(seed);
+    for part in [u64::from(key.0), u64::from(key.1), key.2 as u32 as u64, key.3 as u32 as u64, n] {
+        z = mix(z ^ part);
+    }
+    Some((z >> 11) as f64 / (1u64 << 53) as f64)
 }
 
 /// Number of milliseconds since January 1, 1970

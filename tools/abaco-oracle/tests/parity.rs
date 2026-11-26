@@ -1223,9 +1223,10 @@ fn parity_under_the_linked_resolution() {
 const RANDOM_CELLS: [&str; 9] = ["A19", "B19", "C19", "A20", "B20", "C20", "A21", "B21", "C21"];
 
 /// Its nine draws seeded with 1, under either resolution, on every run (none equals Excel's
-/// cached one, so each is a mismatch its report lists with the engine's value).
+/// cached one, so each is a mismatch its report lists with the engine's value): the array's own
+/// sequence, the n-th number of its cell's draws (fork change 40).
 fn seeded_draws() -> BTreeMap<String, String> {
-    RANDOM_CELLS.iter().zip(["80", "40", "61", "45", "53", "44", "16", "65", "82"]).map(|(c, v)| (c.to_string(), v.to_string())).collect()
+    RANDOM_CELLS.iter().zip(["20", "73", "12", "31", "66", "40", "36", "93", "73"]).map(|(c, v)| (c.to_string(), v.to_string())).collect()
 }
 
 /// The nine draws a report of `DynamicArrays.xlsx` lists (its examples, at least nine kept).
