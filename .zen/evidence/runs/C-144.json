@@ -14,15 +14,15 @@
     "ask"
   ],
   "exitCode": 0,
-  "outputSha": "82c6172693a03f01662a58845eca3733e6d844585719ab30764748823ecd3ec3",
-  "outputTail": "\nrunning 8 tests\ntest an_answer_a_capture_cut_is_not_counted ... ok\ntest answers_let_go_past_the_listener_s_bound_are_counted_lost ... ok\ntest an_identify_is_answered_by_what_it_matches_and_only_its_answers_count ... ok\ntest asking_is_refused_where_it_cannot_be_heard_sent_or_bounded ... ok\ntest an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer ... ok\ntest askers_at_once_each_take_their_turn_and_their_answers ... ok\ntest frames_let_go_while_answers_flood_are_counted_at_the_moment_they_are_read ... ok\ntest the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_segment ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.00s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running tests/ask.rs (target/debug/build/veredas-aranha/79e8d25a70a9eddf/out/ask-79e8d25a70a9eddf)",
-  "ranAt": "2026-11-25T04:22:51.000Z",
-  "headCommit": "5e1841cf5fbf5a945bde88d29b9b302c27789864",
+  "outputSha": "51e84eb600272a19b11880497403af2bca30d245d98a70f01ec3db31d5af0549",
+  "outputTail": "test an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer ... ok\ntest askers_at_once_each_take_their_turn_and_their_answers ... ok\ntest frames_let_go_while_answers_flood_are_counted_at_the_moment_they_are_read ... ok\ntest asking_is_refused_where_it_cannot_be_heard_sent_or_bounded ... ok\ntest a_request_whose_worker_ends_as_its_turn_runs_out_is_never_said_still_being_taken ... ok\ntest the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_segment ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.44s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.79s\n     Running tests/ask.rs (target/debug/build/veredas-aranha/2d7732ea6724cde8/out/ask-2d7732ea6724cde8)",
+  "ranAt": "2026-11-26T07:20:06.017Z",
+  "headCommit": "fb43e2777c1fc80a7a2cbafc277a7e000900b052",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/ask.rs",
       "file": "crates/veredas-aranha/tests/ask.rs",
-      "fileSha": "c05a101d7f99e34e95a1de2ace3ea496d9825272993b70c228ed7a642e6040ee"
+      "fileSha": "4b8de905b8f62a78658dffb5cca5188131d3848b82dee650066627114b58932d"
     }
   ]
 }
