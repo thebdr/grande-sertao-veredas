@@ -47,9 +47,8 @@ users, the PLC programmer, the commissioning technician and the software enginee
   2026-11-15).
 - **Licence GPLv3.** Every crate Oficina links carries a permissive licence that GPLv3 accepts, and
   a check of dependency licences runs in CI (the architect, 2026-11-15). The suite's permissive
-  crates state `MIT OR Apache-2.0` (Q35, ruled 2026-11-25); not yet ruled: whether Oficina's GPL is
-  version 3 only or version 3 or later, and the copyright holder the licence files name. Nothing is
-  stated in Oficina's manifest until they are.
+  crates state `MIT OR Apache-2.0` and Oficina `GPL-3.0-or-later`, the GPL version 3 text beside
+  its manifest (`COPYING`), the licence files' copyright holder thebdr (Q35, ruled 2026-11-25).
 - **Every capability's test drives the real interface**: Rust tests through the Spix tool.
 - Qt Creator was dropped as a base and is kept as a reference.
 
@@ -183,7 +182,7 @@ only. The architect kept it on 2026-11-15, under three rules:
   to portal: law L5 lets a component outside the map use core alone, and the first code does. In
   `docs/design/README.md` (which holds the accent's tones since 2026-11-19) the syntax palette's
   number colour (`#D2A8FF`) moves, sitting too close to the accent: with the code editor's clause,
-  the first code that draws it. Licence files wait for Q35 (taken meanwhile: none).
+  the first code that draws it. The licence: `GPL-3.0-or-later` and `COPYING` (done, Q35).
 
 ## The crate
 `crates/veredas-oficina`, from 2026-11-25 (C-250): a library whose model builds on any machine the
@@ -477,8 +476,7 @@ kept, rust-analyzer is held to running nothing of the folder, and the embedded b
 - **Q370**, Oficina's, ruled 2026-11-25: the window is built by default. The switch waits until
   every member's build on this machine finds Qt and the C++ libraries (the orchestrator's order:
   the machine's cargo configuration first, the switch after); meanwhile it stays behind `shell`.
-- **Q35**'s remainder: Oficina's GPL version and the licence files' copyright holder. **Q36,
-  Q37** the download's integrity and the robust link.
+- **Q36, Q37** the download's integrity and the robust link.
   **Q43** the security round. **Q45** the briefing's readings, among them where "identify, name
   and address" runs, on the laptop or through a target.
 - The research behind these decisions (five PLC suites' manuals; three toolkits, Qt 6.12, Avalonia

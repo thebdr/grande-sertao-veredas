@@ -5,7 +5,9 @@ version = "2.0.0-alpha.1"
 edition.workspace = true
 publish = false
 description = "The workshop of Veredas 2 (Oficina): the one native application through which a person sets up, programs, monitors and commissions every component"
-# No licence stated yet: docs/questions.md Q35 (taken meanwhile: none in any manifest).
+# The architect, 2026-11-25 (docs/questions.md Q35): Oficina is GPLv3, version 3 or any later one;
+# the GPL version 3 text sits beside this manifest unchanged (`COPYING`).
+license = "GPL-3.0-or-later"
 
 # A library whose model builds anywhere, with no Qt: the project tree and which component reads
 # each format. The window behind the `shell` feature (Qt Quick through cxx-qt, KDDockWidgets), the

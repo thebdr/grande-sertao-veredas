@@ -61,9 +61,13 @@ fn oficina_is_a_library_and_one_executable_its_window_behind_the_shell_feature()
     let p = package();
     assert_eq!(p["name"], "veredas-oficina");
     assert_eq!(p["version"], "2.0.0-alpha.1");
-    // No licence stated while Q35 is open.
-    assert!(p["license"].is_null(), "a licence stated: {}", p["license"]);
+    // GPL version 3 or later (Q35), the licence's text beside the manifest, unchanged.
+    assert_eq!(p["license"], "GPL-3.0-or-later");
     assert!(p["license_file"].is_null(), "a licence file named: {}", p["license_file"]);
+    let copying = std::fs::read_to_string(crate_dir().join("COPYING")).expect("COPYING beside the manifest");
+    assert_eq!(copying.len(), 35_149, "the GPL version 3 text's length");
+    assert!(copying.starts_with("                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n"), "the GPL version 3's title");
+    assert!(copying.contains("                     END OF TERMS AND CONDITIONS\n"), "the terms whole");
     let mut targets: Vec<(String, String, Vec<String>)> = p["targets"]
         .as_array()
         .expect("targets")
