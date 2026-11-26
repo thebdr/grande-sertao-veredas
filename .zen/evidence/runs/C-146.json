@@ -12,15 +12,15 @@
     "scan"
   ],
   "exitCode": 0,
-  "outputSha": "466fead32a4aeee099d14a28d9bbde652ff8b8c863e293a30561d8ac234112e1",
-  "outputTail": "test two_values_of_a_field_from_one_frame_and_a_device_s_own_link_flipped_are_no_scan ... ok\ntest a_scan_is_read_back_whole_and_its_witnesses_name_its_capture_s_frames ... ok\ntest the_documented_example_is_the_sample_scan_s_file ... ok\ntest a_full_scan_reads_back_equal_and_the_schema_names_every_key_it_holds ... ok\ntest witnesses_before_a_bounded_capture_are_frames_let_go_and_none_lies_past_it ... ok\ntest a_key_nobody_reads_is_named_where_it_is ... ok\ntest links_stored_otherwise_than_lesser_end_first_and_each_pair_once_are_no_scan ... ok\ntest a_file_of_another_format_or_version_or_with_a_key_nobody_reads_is_refused ... ok\ntest a_body_not_read_as_the_file_holds_it_is_refused ... ok\n\ntest result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.41s\n     Running tests/scan.rs (target/debug/build/veredas-aranha/fdac3f56fba44505/out/scan-fdac3f56fba44505)",
-  "ranAt": "2026-11-26T14:26:35.433Z",
-  "headCommit": "83f198cad7efdf5d2d3a81463c4b7ebd683befbb",
+  "outputSha": "dee2070d4a2eb22906d79b5d4dee1acb3faa723920487f4bfbb0ffe5a01cbec3",
+  "outputTail": "test a_port_s_last_frame_on_an_interface_past_the_capture_is_no_scan ... ok\ntest the_documented_example_is_the_sample_scan_s_file ... ok\ntest a_scan_is_read_back_whole_and_its_witnesses_name_its_capture_s_frames ... ok\ntest two_values_of_a_field_from_one_frame_and_a_device_s_own_link_flipped_are_no_scan ... ok\ntest a_key_nobody_reads_is_named_where_it_is ... ok\ntest witnesses_before_a_bounded_capture_are_frames_let_go_and_none_lies_past_it ... ok\ntest a_full_scan_reads_back_equal_and_the_schema_names_every_key_it_holds ... ok\ntest a_file_of_another_format_or_version_or_with_a_key_nobody_reads_is_refused ... ok\ntest links_stored_otherwise_than_lesser_end_first_and_each_pair_once_are_no_scan ... ok\ntest a_body_not_read_as_the_file_holds_it_is_refused ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running tests/scan.rs (target/debug/build/veredas-aranha/fdac3f56fba44505/out/scan-fdac3f56fba44505)",
+  "ranAt": "2026-11-26T17:21:39.568Z",
+  "headCommit": "5460b2da81f9a2a378c35ec0eeab0796e2315c5b",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/scan.rs",
       "file": "crates/veredas-aranha/tests/scan.rs",
-      "fileSha": "c0f66e2b3771d30b514b9d069437a6699c6f9fd9d9a626b1b550a86c9104b099"
+      "fileSha": "7258f5326e30638a37be3530c59668ac379b3f9435fd72f5947e0172ce5a3f07"
     }
   ]
 }
