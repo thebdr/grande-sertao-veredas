@@ -606,14 +606,14 @@ fn a_baseline_of_the_bench_and_the_bench_changed_since_are_told_apart() {
 mod round_3 {
     use std::net::Ipv4Addr;
 
-    use veredas_aranha::diff::{self, Change, OneSided, Said};
+    use veredas_aranha::diff::{self, Change, DiffError, OneSided, Said};
     use veredas_aranha::fusion::Fusion;
     use veredas_aranha::listen::{Interface as Account, Stats};
     use veredas_aranha::observe::{Observation, Observed, Probe, Witness};
     use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpSuite};
     use veredas_aranha::profinet::lldp::{ChassisId, LldpPdu, MgmtAddr, PortId};
     use veredas_aranha::profinet::mac::Mac;
-    use veredas_aranha::scan::Scan;
+    use veredas_aranha::scan::{Scan, ScanError};
     use veredas_aranha::topology::{self, Interface, Neighbour};
 
     /// One hearing to come: its stamp and frame given when it is kept.
@@ -872,10 +872,10 @@ mod round_3 {
         assert_eq!(d.conflicts_new, [dup("bomba-1")]);
     }
 
-    /// Whatever the check lets through in the diff's own fields, one diff whatever the order of a
-    /// field's values: a tie in each field, its list reversed.
+    /// A tie in a field (two values last heard in one frame), its list in either order: the check
+    /// lets neither through, so the diff refuses both, never two diffs of one scan.
     #[test]
-    fn q09_a_tie_the_check_lets_through_gives_one_diff_in_either_order() {
+    fn q09_a_tie_in_a_field_is_refused_in_either_order() {
         let s = scan_of(
             &[hello(A, Some("bomba-1"), Some(suite(ip(10))), "eth1", 1, 1), arp(A, ip(10), "eth1", 2, 2), lldp(A, 1, "eth1", Some("sw-1"), &[ip(10)], 3, 3)],
             &["eth1"],
@@ -888,8 +888,8 @@ mod round_3 {
         t.devices[0].ip.candidates.push(c);
         let mut r = t.clone();
         r.devices[0].ip.candidates.reverse();
-        if let (Ok(x), Ok(y)) = (diff::diff(&base, &t), diff::diff(&base, &r)) {
-            assert_eq!(x, y, "one scan, two diffs by the order of its IP suite's values");
+        for tied in [&t, &r] {
+            assert!(matches!(diff::diff(&base, tied), Err(DiffError::Scan(ScanError::Invalid(_)))), "{:?}", diff::diff(&base, tied));
         }
     }
 }
@@ -931,5 +931,229 @@ fn one_sided_values_and_interfaces_alone_are_no_change() {
         // With one-sided values and interfaces beside it, still a change.
         let beside = Diff { interfaces_added: vec!["eth2".into()], ..d.clone() };
         assert!(beside.has_change(), "{beside:?}");
+    }
+}
+
+/// The fourth refute round's cases: conflicts whose devices change, listed twice or out of order;
+/// every field one-sided against an unstated value and changed against a stated one; an interface
+/// by its name, its MAC aside; an empty system name off the wire a value; hand-made values the
+/// check accepts (ARP at 0.0.0.0, no management address); devices out of order refused by name.
+mod round_4 {
+    use std::net::Ipv4Addr;
+
+    use veredas_aranha::diff::{self, Change, Diff, DiffError, OneSided, Said};
+    use veredas_aranha::fusion::{Conflict, ConflictKind, Fusion};
+    use veredas_aranha::listen::{Interface as Account, Stats};
+    use veredas_aranha::observe::{Observation, Observed, Probe, Witness};
+    use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpStatus, IpSuite};
+    use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, MgmtAddr, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::scan::{Scan, ScanError};
+    use veredas_aranha::topology::{self, Interface};
+
+    const A: Mac = Mac([0x02, 0, 0, 0, 0, 0x0A]);
+    const B: Mac = Mac([0x02, 0, 0, 0, 0, 0x0B]);
+    const C: Mac = Mac([0x02, 0, 0, 0, 0, 0x0C]);
+    const T0: u64 = 1_764_000_000_000_000_000;
+
+    fn ip(last: u8) -> Ipv4Addr {
+        Ipv4Addr::new(192, 168, 0, last)
+    }
+
+    fn suite(a: Ipv4Addr) -> IpSuite {
+        IpSuite { ip: a, mask: Ipv4Addr::new(255, 255, 255, 0), gateway: Ipv4Addr::UNSPECIFIED }
+    }
+
+    fn w(probe: Probe, iface: &str, frame: u64) -> Witness {
+        Witness { probe, iface: iface.into(), at_ns: T0 + frame, frame }
+    }
+
+    fn hello_full(dev: Mac, name: Option<&str>, address: Option<IpSuite>, conflict: Option<bool>, frame: u64) -> Observation {
+        let identity = DeviceIdentity { name: name.map(String::from), ip: address, ip_status: conflict.map(|c| IpStatus { set: 1, conflict: c }), ..Default::default() };
+        Observation { witness: w(Probe::DcpHeard, "eth1", frame), observed: Observed::Dcp { mac: dev, service: dcp::Service::Hello, service_type: dcp::ServiceType::Request, identity } }
+    }
+
+    fn hello(dev: Mac, name: Option<&str>, address: Option<IpSuite>, frame: u64) -> Observation {
+        hello_full(dev, name, address, None, frame)
+    }
+
+    fn lldp_of(dev: Mac, sys: Option<&str>, mgmt: &[Ipv4Addr], frame: u64) -> Observation {
+        let mut pdu = LldpPdu::new(ChassisId::Mac { mac: dev }, PortId::Local { id: "port-001".into() }, 20);
+        pdu.pn.chassis_mac = Some(dev);
+        pdu.sys_name = sys.map(String::from);
+        pdu.mgmt_addrs = mgmt.iter().map(|a| MgmtAddr { subtype: 1, addr: a.octets().to_vec(), if_subtype: 1, if_number: 0, oid: vec![] }).collect();
+        Observation { witness: w(Probe::LldpHeard, "eth1", frame), observed: Observed::Lldp { src: Mac([0x02, 0, 0, 0, dev.0[5], 1]), pdu } }
+    }
+
+    fn arp(dev: Mac, a: Ipv4Addr, frame: u64) -> Observation {
+        Observation { witness: w(Probe::ArpHeard, "eth1", frame), observed: Observed::Arp { mac: dev, ip: a } }
+    }
+
+    fn scan_with(obs: &[Observation], interfaces: &[(&str, Option<Mac>)]) -> Scan {
+        let mut f = Fusion::new();
+        for o in obs {
+            f.apply(o);
+        }
+        let stats = Stats { interfaces: interfaces.iter().map(|(i, m)| (i.to_string(), Account { mac: *m, ..Account::default() })).collect(), ..Stats::default() };
+        let ifaces: Vec<Interface> = interfaces.iter().map(|(i, m)| Interface { name: i.to_string(), mac: *m }).collect();
+        Scan::new(&f, &stats, &topology::build(&f, &ifaces, &[]), T0 + 1_000_000_000, None)
+    }
+
+    fn one(obs: &[Observation]) -> Scan {
+        scan_with(obs, &[("eth1", None)])
+    }
+
+    fn change(mac: Mac, what: Said, from: &str, to: &str) -> Change {
+        Change { mac, what, from: from.into(), to: to.into() }
+    }
+
+    fn mirror(d: Diff) -> Diff {
+        let back = |c: Vec<Change>| c.into_iter().map(|c| Change { mac: c.mac, what: c.what, from: c.to, to: c.from }).collect();
+        Diff {
+            appeared: d.vanished,
+            vanished: d.appeared,
+            renamed: back(d.renamed),
+            readdressed: back(d.readdressed),
+            one_sided: d.one_sided.into_iter().map(|o| OneSided { mac: o.mac, what: o.what, baseline: o.scan, scan: o.baseline }).collect(),
+            links_added: d.links_removed,
+            links_removed: d.links_added,
+            conflicts_new: d.conflicts_cleared,
+            conflicts_cleared: d.conflicts_new,
+            interfaces_added: d.interfaces_removed,
+            interfaces_removed: d.interfaces_added,
+        }
+    }
+
+    fn back(s: &Scan) -> Scan {
+        Scan::read(&s.to_toml().unwrap()).unwrap()
+    }
+
+    /// The diff of a pair, after every property the clause states of it: the mirror, each against
+    /// itself empty, each read back the same.
+    fn props(b: &Scan, s: &Scan) -> Diff {
+        let d = diff::diff(b, s).unwrap();
+        assert_eq!(diff::diff(s, b).unwrap(), mirror(d.clone()), "mirror");
+        assert!(diff::diff(b, b).unwrap().is_empty() && diff::diff(s, s).unwrap().is_empty());
+        let (rb, rs) = (back(b), back(s));
+        assert!(diff::diff(b, &rb).unwrap().is_empty() && diff::diff(s, &rs).unwrap().is_empty());
+        assert_eq!(diff::diff(&rb, &rs).unwrap(), d, "read back");
+        d
+    }
+
+    /// A conflict whose devices change, kind and value kept: cleared and new. Its devices twice,
+    /// the conflict twice, the list reversed (a hand-made file the check accepts): one diff, and
+    /// the same read back. New conflicts listed by kind, value and devices.
+    #[test]
+    fn conflicts_by_kind_value_and_devices_whatever_their_list_holds() {
+        let conflict = |kind, value: &str, macs: &[Mac]| Conflict { kind, value: value.into(), macs: macs.to_vec() };
+        let b = one(&[hello(A, Some("a"), Some(suite(ip(10))), 1), hello(B, Some("b"), Some(suite(ip(10))), 2), hello(C, Some("c"), Some(suite(ip(11))), 3)]);
+        let s = one(&[hello(A, Some("a"), Some(suite(ip(10))), 1), hello(B, Some("b"), Some(suite(ip(11))), 2), hello(C, Some("c"), Some(suite(ip(10))), 3)]);
+        let d = props(&b, &s);
+        assert_eq!(d.conflicts_cleared, [conflict(ConflictKind::DuplicateIp, "192.168.0.10", &[A, B])]);
+        assert_eq!(d.conflicts_new, [conflict(ConflictKind::DuplicateIp, "192.168.0.10", &[A, C])]);
+        let mut e = s.clone();
+        e.conflicts[0].macs.push(A);
+        e.conflicts.push(e.conflicts[0].clone());
+        e.conflicts.reverse();
+        assert_eq!(diff::diff(&b, &e).unwrap(), d);
+        assert!(diff::diff(&s, &e).unwrap().is_empty() && diff::diff(&e, &s).unwrap().is_empty());
+        assert_eq!(diff::diff(&b, &Scan::read(&e.to_toml().unwrap()).unwrap()).unwrap(), d);
+        let b = one(&[hello(A, Some("x"), Some(suite(ip(10))), 1)]);
+        let s = one(&[hello_full(A, Some("n"), Some(suite(ip(100))), Some(true), 1), hello(A, Some("m"), Some(suite(ip(20))), 2), hello(B, Some("m"), Some(suite(ip(20))), 3), hello(C, Some("m"), Some(suite(ip(100))), 4)]);
+        let d = props(&b, &s);
+        let mut sorted = d.conflicts_new.clone();
+        sorted.sort();
+        assert!(d.conflicts_new.len() >= 3);
+        assert_eq!(d.conflicts_new, sorted);
+    }
+
+    /// Every field one-sided against an unstated value (its empty name or 0.0.0.0 a value), and
+    /// renamed or readdressed against a stated one; management addresses differing in one of
+    /// several, listed in their numeric order.
+    #[test]
+    fn every_field_one_sided_against_none_and_changed_against_a_value() {
+        let none = one(&[hello(A, None, None, 1)]);
+        let cases: Vec<(Said, Scan, &str)> = vec![
+            (Said::StationName, one(&[hello(A, Some(""), None, 1)]), ""),
+            (Said::SystemName, one(&[hello(A, None, None, 1), lldp_of(A, Some(""), &[], 2)]), ""),
+            (Said::IpSuite, one(&[hello(A, None, Some(suite(Ipv4Addr::UNSPECIFIED)), 1)]), "0.0.0.0 255.255.255.0 0.0.0.0"),
+            (Said::ArpAddress, one(&[hello(A, None, None, 1), arp(A, Ipv4Addr::UNSPECIFIED, 2)]), "0.0.0.0"),
+            (Said::ManagementAddresses, one(&[hello(A, None, None, 1), lldp_of(A, None, &[Ipv4Addr::UNSPECIFIED], 2)]), "0.0.0.0"),
+        ];
+        for (what, s, v) in &cases {
+            let d = props(&none, s);
+            assert_eq!(d.one_sided, [OneSided { mac: A, what: *what, baseline: None, scan: Some(v.to_string()) }], "{what:?}");
+            assert!(d.renamed.is_empty() && d.readdressed.is_empty(), "{what:?}");
+        }
+        let valued = one(&[hello(A, Some("n"), Some(suite(ip(10))), 1), lldp_of(A, Some("s"), &[ip(10)], 2), arp(A, ip(10), 3)]);
+        for (what, s, v) in &cases {
+            let d = diff::diff(&valued, s).unwrap();
+            let list = if what.is_name() { &d.renamed } else { &d.readdressed };
+            assert!(list.iter().any(|c| c.what == *what && c.to == *v), "{what:?}: {d:?}");
+        }
+        let m = |set: &[Ipv4Addr]| one(&[lldp_of(A, None, set, 1)]);
+        assert_eq!(props(&m(&[ip(10), ip(11)]), &m(&[ip(10), ip(12)])).readdressed, [change(A, Said::ManagementAddresses, "192.168.0.10, 192.168.0.11", "192.168.0.10, 192.168.0.12")]);
+        assert_eq!(props(&m(&[ip(9)]), &m(&[ip(100), ip(9)])).readdressed, [change(A, Said::ManagementAddresses, "192.168.0.9", "192.168.0.9, 192.168.0.100")]);
+    }
+
+    /// An interface is its name: one whose MAC changed (an adapter swapped) is no change; the same
+    /// name in another case is another interface.
+    #[test]
+    fn an_interface_is_its_name_its_mac_aside() {
+        let obs = [hello(A, Some("a"), None, 1)];
+        let b = scan_with(&obs, &[("eth1", Some(Mac([2, 0, 0, 0, 0xA0, 1])))]);
+        let s = scan_with(&obs, &[("eth1", Some(Mac([2, 0, 0, 0, 0xA0, 2])))]);
+        assert!(props(&b, &s).is_empty(), "an interface whose MAC changed");
+        let d = props(&b, &scan_with(&obs, &[("ETH1", None)]));
+        assert_eq!((d.interfaces_added, d.interfaces_removed), (vec!["ETH1".to_string()], vec!["eth1".to_string()]));
+    }
+
+    /// A zero-length system name off the wire (the codec writes and reads one) is a value: renamed
+    /// both ways, never one-sided.
+    #[test]
+    fn an_empty_system_name_from_the_wire_is_a_value() {
+        let heard = |sys: &str| {
+            let mut pdu = LldpPdu::new(ChassisId::Mac { mac: A }, PortId::Local { id: "port-001".into() }, 20);
+            pdu.pn.chassis_mac = Some(A);
+            pdu.sys_name = Some(sys.into());
+            let back = lldp::decode(&lldp::encode(&pdu).unwrap()).unwrap();
+            assert_eq!(back.sys_name.as_deref(), Some(sys));
+            Observation { witness: w(Probe::LldpHeard, "eth1", 1), observed: Observed::Lldp { src: Mac([0x02, 0, 0, 0, 0x0A, 1]), pdu: back } }
+        };
+        let d = props(&one(&[heard("sw-1")]), &one(&[heard("")]));
+        assert_eq!(d.renamed, [change(A, Said::SystemName, "sw-1", "")]);
+        assert!(d.one_sided.is_empty());
+    }
+
+    /// Values no listening makes and the check accepts, written by a person: an ARP address of
+    /// 0.0.0.0 and no management address at all are values, readdressed.
+    #[test]
+    fn hand_made_values_the_check_accepts_are_values() {
+        let s = one(&[hello(A, Some("a"), None, 1), lldp_of(A, None, &[ip(10)], 2), arp(A, ip(10), 3)]);
+        let t = s.to_toml().unwrap();
+        let empty_set = t.replacen("value = [\"192.168.0.10\"]", "value = []", 1);
+        let i = t.find("[[devices.arp_ip]]").unwrap();
+        let zero_arp = format!("{}{}", &t[..i], t[i..].replacen("value = \"192.168.0.10\"", "value = \"0.0.0.0\"", 1));
+        for (text, want) in [(empty_set, change(A, Said::ManagementAddresses, "192.168.0.10", "")), (zero_arp, change(A, Said::ArpAddress, "192.168.0.10", "0.0.0.0"))] {
+            let r = Scan::read(&text).unwrap();
+            let d = diff::diff(&s, &r).unwrap();
+            assert_eq!((d.readdressed, d.one_sided), (vec![want], vec![]));
+        }
+    }
+
+    /// Devices out of their order by MAC: refused, naming which scan.
+    #[test]
+    fn devices_out_of_order_are_refused_naming_which() {
+        let s = one(&[hello(A, Some("a"), None, 1), hello(B, Some("b"), None, 2)]);
+        let mut swapped = s.clone();
+        swapped.devices.swap(0, 1);
+        match diff::diff(&swapped, &s) {
+            Err(DiffError::Baseline(ScanError::Invalid(why))) => assert!(why.ends_with("is out of the order by MAC"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        match diff::diff(&s, &swapped) {
+            Err(DiffError::Scan(ScanError::Invalid(why))) => assert!(why.ends_with("is out of the order by MAC"), "{why}"),
+            other => panic!("{other:?}"),
+        }
     }
 }

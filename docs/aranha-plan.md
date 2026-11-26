@@ -234,7 +234,10 @@ veredas_aranha
    its use left to deep identity).
 7. **The executable.**
 8. **Later**: the rest of deep identity, the IP-layer probes one at a time (each with its bench
-   responder first), writes, Windows (a wire over the Npcap the engineer installed, Q281).
+   responder first), writes, Windows (a wire over the Npcap the engineer installed, Q281); the
+   scan saying which devices' ports it read, so a diff against a scan that read none calls their
+   reported links one-sided rather than removed (C-147's fourth refute round: today a scan taken
+   without `--ports` says every reported link removed).
 
 Each phase ends with its clauses recorded, refuted and verified, the laws green and every test
 the change can reach green, and is pushed.

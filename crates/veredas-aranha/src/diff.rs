@@ -22,8 +22,9 @@
 //!
 //! Every list in a fixed order (devices by MAC, a device's changes by field, links by their ends,
 //! conflicts by kind, value and devices, interfaces by name), so the same two scans give the same
-//! diff whatever order they hold their lists in, and the diff of the two the other way round is
-//! its mirror.
+//! diff whatever order they hold their conflicts and a conflict's devices in (their devices and
+//! links come in the one order a scan holds them in, any other refused), and the diff of the two
+//! the other way round is its mirror.
 
 use std::collections::{BTreeMap, BTreeSet};
 
