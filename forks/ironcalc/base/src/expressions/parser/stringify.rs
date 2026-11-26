@@ -1299,7 +1299,9 @@ fn stringify(
                 }
             }
         },
-        ErrorKind(kind) => format!("{kind}"),
+        // an error as the lexer reads it, in the language spelled (`#N/IMPL!`, where `Display`
+        // gives `#N/IMPL`; Veredas fork change 36)
+        ErrorKind(kind) => kind.to_localized_error_string(language),
         ParseErrorKind { formula, .. } => formula.to_string(),
         EmptyArgKind => "".to_string(),
         SpillRangeOperator { child } => {

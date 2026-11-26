@@ -78,7 +78,8 @@ area, a cell with content inside another's area, an empty formula, a formula the
 read, which it would read back repaired: `SUM(A1:A3` as `SUM(A1:A3)`, a formula whose spelling the
 reader would read as another formula: a locale whose decimal is a comma spells an array's rows with
 `/`, which the engine's lexer does not read), and a reference not
-in its form, settings the engine refuses, a workspace part TOML's reader would not read back (a
+in its form, settings the engine refuses, a table whose cells are no range or whose sheet is none of the
+workbook's, a workspace part TOML's reader would not read back (a
 tool's table nested past its depth), and a part it kept that a written one would overwrite, so
 every file it writes reads back. A name local to a sheet the workbook does not hold is kept: the engine
 holds one for a chart sheet of the `.xlsx` the workbook came from, which no formula reads.
@@ -253,7 +254,8 @@ an error code that is none, an address that is none or not written as here, a st
 does not hold (a cell's, a row's, a column's), a number that is no finite number (`nan`, `inf`)
 or an integer no double holds, a value of the wrong type (a date-time among them, a formula's `v`
 that is a table), a formula's `v` beside its `e`, a manifest with no sheet, a sheet whose part
-names another sheet than the manifest, a sheet name or a defined name the engine refuses, a cell's
+names another sheet than the manifest, a sheet name or a defined name the engine refuses, a table whose
+cells are no range or whose sheet is none of the workbook's (`tables.Table3.reference`), a cell's
 link stated twice (`links.1`), a linked workbook's cached cell stated twice, a cell stated inside a
 legacy array's area (but a style-only cell it spills into), settings
 the engine refuses (a time zone, a locale: the workbook part named), a reference's hash or date

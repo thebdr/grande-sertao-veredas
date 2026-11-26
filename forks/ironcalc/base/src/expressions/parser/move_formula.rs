@@ -98,7 +98,8 @@ pub(crate) fn to_string_array_node(
         }
         ArrayNode::Number(number) => format_number_locale(*number, locale),
         ArrayNode::String(value) => format!("\"{value}\""),
-        ArrayNode::Error(kind) => format!("{kind}"),
+        // as the lexer reads it, in the language (Veredas fork change 36)
+        ArrayNode::Error(kind) => kind.to_localized_error_string(language),
         ArrayNode::Empty => "0".to_string(),
     }
 }
@@ -579,7 +580,7 @@ fn to_string_moved(
                 to_string_moved(right, move_context, locale, language)
             ),
         },
-        ErrorKind(kind) => format!("{kind}"),
+        ErrorKind(kind) => kind.to_localized_error_string(language),
         ParseErrorKind { formula, .. } => formula.to_string(),
         EmptyArgKind => "".to_string(),
         ImplicitIntersection {

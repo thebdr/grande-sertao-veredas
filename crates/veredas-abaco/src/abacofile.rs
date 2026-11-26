@@ -1144,7 +1144,29 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
             return Err(format!("{WORKBOOK}: `defined_names.{i}` `{}` is stated in its scope already, as `defined_names.{j}`", d.name));
         }
     }
+    // a table's cells a range the engine reads (its parser reads a structured reference by them,
+    // and panics on one it cannot) and its sheet one of the workbook's, by name as the parser looks
+    // it up (refute round 10)
+    for (key, table) in &ewb.tables {
+        if !reads_as_a_range(&table.reference) {
+            return Err(format!("{WORKBOOK}: `tables.{key}.reference` `{}` is no range of cells, which the engine reads a table by", table.reference));
+        }
+        if !ewb.worksheets.iter().any(|w| w.name == table.sheet_name) {
+            return Err(format!("{WORKBOOK}: `tables.{key}.sheet_name` `{}` is none of the workbook's sheets", table.sheet_name));
+        }
+    }
     Ok(())
+}
+
+/// Whether `reference` is a range of cells as the engine reads a table's (`A1:E6`, `$A$1:$E$6`):
+/// its lexer's first token a range, as `Model::set_table_reference` and the parser take it.
+fn reads_as_a_range(reference: &str) -> bool {
+    use ironcalc_base::expressions::lexer::{Lexer, LexerMode};
+    use ironcalc_base::expressions::token::TokenType;
+    let (Ok(locale), Ok(language)) = (ironcalc_base::locale::get_locale("en"), ironcalc_base::language::get_language("en")) else {
+        return false;
+    };
+    matches!(Lexer::new(reference, LexerMode::A1, locale, language).next_token(), TokenType::Range { .. })
 }
 
 /// The suite's one header reader (C-045): core's own source, compiled here by path, so the stamp

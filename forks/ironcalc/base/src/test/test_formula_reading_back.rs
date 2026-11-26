@@ -223,3 +223,23 @@ fn a_name_opens_with_a_letter_of_any_script() {
         assert!(!crate::expressions::utils::is_valid_identifier(name), "{name}");
     }
 }
+
+/// Veredas fork change 36: an error in a formula is spelled as the lexer reads it, in the
+/// language spelled: `#N/IMPL!` (its `Display` is `#N/IMPL`, which no lexer reads), and each of a
+/// language's errors in that language.
+#[test]
+fn an_error_is_spelled_as_the_lexer_reads_it() {
+    let mut model = new_empty_model();
+    for (row, typed) in [(1, "=#N/IMPL!"), (2, "=IFERROR(#N/IMPL!,1)"), (3, "=ISERROR({#N/IMPL!,1})"), (4, "=IFERROR(#REF!,#NULL!)"), (5, "=IFERROR(#DIV/0!,#N/A)")] {
+        model.set_user_input(0, row, 1, typed.to_string()).unwrap();
+    }
+    model.evaluate();
+    assert_eq!(model.get_cell_formula(0, 1, 1).unwrap().unwrap(), "=#N/IMPL!");
+    assert_eq!(model.get_cell_formula(0, 2, 1).unwrap().unwrap(), "=IFERROR(#N/IMPL!,1)");
+    assert_eq!(model.get_cell_formula(0, 3, 1).unwrap().unwrap(), "=ISERROR({#N/IMPL!,1})");
+    assert_eq!(model.get_formatted_cell_value(0, 2, 1).unwrap(), "1");
+    assert_eq!(model.formulas_reading_back_otherwise(), Vec::<(u32, i32, i32)>::new());
+    for (locale, language) in [("en", "en"), ("de", "de"), ("es", "es"), ("fr", "fr"), ("it", "it")] {
+        assert_eq!(model.formulas_reading_back_otherwise_in(locale, language).unwrap(), Vec::<(u32, i32, i32)>::new(), "{language}");
+    }
+}

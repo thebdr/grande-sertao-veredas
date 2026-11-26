@@ -1249,3 +1249,89 @@ fn a_write_that_fails_leaves_the_destination_and_nothing_beside_it() {
     left.sort();
     assert_eq!(left, ["b.abaco", "b.abaco.bak"]);
 }
+
+// ---- refute round 10 --------------------------------------------------------------------------
+
+#[test]
+fn a_table_whose_range_or_sheet_the_engine_cannot_read_is_refused_at_both_ends() {
+    // the repository's own tables workbook; Table3's range a range no longer, or its sheet none of
+    // the workbook's: the engine's parser reads a structured reference by them (and panicked on
+    // the range), so the reader refuses the file by the table's path, a formula naming the table or
+    // not, and the writer a model holding such a table
+    let src = corpus_dir().join("calc_test_no_export/tables.xlsx");
+    let mut file = AbacoFile::new(open(&src));
+    file.book.ensure_calculated();
+    let good = abacofile::parts(&file).unwrap();
+    let text = |name: &str| String::from_utf8(good.iter().find(|(n, _)| n == name).unwrap().1.clone()).unwrap();
+    let book_toml = text("workbook.toml");
+    let section = book_toml.find("[tables.Table3]").unwrap_or_else(|| panic!("no `[tables.Table3]`:\n{book_toml}"));
+    let end = book_toml[section + 1..].find("\n[").map(|e| section + 1 + e).unwrap_or(book_toml.len());
+    let in_table = |key: &str, value: &str| -> String {
+        let mut out = book_toml.clone();
+        let line = out[section..end].find(&format!("\n{key} = ")).map(|l| section + l + 1).unwrap_or_else(|| panic!("no `{key}` in Table3:\n{}", &book_toml[section..end]));
+        let line_end = out[line..].find('\n').map(|e| line + e).unwrap_or(out.len());
+        out.replace_range(line..line_end, &format!("{key} = {value}"));
+        out
+    };
+    let sheet_name = book_toml[section..end].lines().find_map(|l| l.strip_prefix("sheet_name = \"")).map(|l| l.trim_end_matches('"').to_string()).unwrap();
+    let sheet_part = good.iter().map(|(n, _)| n.clone()).find(|n| n.starts_with("sheets/") && n.ends_with(&format!("-{sheet_name}.toml"))).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tables.abaco");
+    for (key, value, want) in [
+        ("reference", "\"nonsense\"", "workbook.toml: `tables.Table3.reference` `nonsense` is no range of cells"),
+        ("reference", "\"A1\"", "workbook.toml: `tables.Table3.reference` `A1` is no range of cells"),
+        ("reference", "\"\"", "workbook.toml: `tables.Table3.reference` `` is no range of cells"),
+        ("sheet_name", "\"Nowhere\"", "workbook.toml: `tables.Table3.sheet_name` `Nowhere` is none of the workbook's sheets"),
+    ] {
+        for naming in [false, true] {
+            let parts: Vec<(String, Vec<u8>)> = good
+                .iter()
+                .map(|(n, b)| match n.as_str() {
+                    "workbook.toml" => (n.clone(), in_table(key, value).into_bytes()),
+                    _ if *n == sheet_part && naming => {
+                        let sheet = String::from_utf8(b.clone()).unwrap();
+                        (n.clone(), format!("{sheet}ZZ999 = {{ f = \"SUM(Table3[The one])\" }}\n").into_bytes())
+                    }
+                    _ => (n.clone(), b.clone()),
+                })
+                .collect();
+            std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
+            let got = abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_else(|| "read, not refused".into());
+            assert!(got.contains(want), "{key} = {value}, naming {naming}: {got}");
+        }
+    }
+    // the writer: a model whose table holds such a range or sheet, set past the engine's API
+    for (reference, sheet, want) in [("nonsense", None, "`tables.Table3.reference` `nonsense` is no range of cells"), ("A1:E6", Some("Nowhere"), "`tables.Table3.sheet_name` `Nowhere` is none of the workbook's sheets")] {
+        let mut book = open(&src);
+        let table = book.model_mut().workbook.tables.get_mut("Table3").unwrap();
+        table.reference = reference.to_string();
+        if let Some(sheet) = sheet {
+            table.sheet_name = sheet.to_string();
+        }
+        let got = abacofile::write(&mut AbacoFile::new(book), &path).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(got.contains(want), "{got}");
+    }
+}
+
+#[test]
+fn an_error_in_a_formula_reads_back_as_itself() {
+    // `#N/IMPL!`, which the engine spelled `#N/IMPL` (fork change 36): typed and stated in a file,
+    // read back with no difference and written again to the same bytes
+    let mut book = Workbook::new("Errors").unwrap();
+    for (cell, f) in [("A1", "=#N/IMPL!"), ("A2", "=IFERROR(#N/IMPL!,1)"), ("A3", "=ISERROR({#N/IMPL!,1})")] {
+        book.set_formula(0, Addr::parse(cell).unwrap(), f).unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("errors.abaco");
+    let mut file = AbacoFile::new(book);
+    abacofile::write(&mut file, &path).unwrap();
+    let first = std::fs::read(&path).unwrap();
+    let mut back = read(&path);
+    assert_eq!(differences(&file.book, &back.book), Vec::<String>::new());
+    assert_eq!(back.book.value_now(0, Addr::parse("A2").unwrap()).unwrap(), Value::Number(1.0));
+    let again = dir.path().join("again.abaco");
+    abacofile::write(&mut back, &again).unwrap();
+    assert_eq!(std::fs::read(&again).unwrap(), first);
+    let sheet = String::from_utf8(abacofile::parts(&back).unwrap().into_iter().find(|(n, _)| n.starts_with("sheets/")).unwrap().1).unwrap();
+    assert!(sheet.contains("f = \"IFERROR(#N/IMPL!,1)\""), "{sheet}");
+}
