@@ -4,6 +4,7 @@ name = "orcl-interp"
 version = "2.0.0-alpha.1"
 edition.workspace = true
 publish = false
+license = "MIT OR Apache-2.0"
 description = "ORCL's interpreter: a program in the shape of rustc's MIR, run one instruction at a time on memory laid out at load"
 
 # The interpreter depends on nothing; its tests compare it with orcl-std's native blocks (law L5: orcl-* use each

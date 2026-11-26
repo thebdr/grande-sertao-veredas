@@ -132,8 +132,8 @@ view need a second front end that reads the source (Q44, the assistant's reading
 - **Fixture first.** A program's plant in a test is a simulated process image, then maquinar's bench.
 - **One test file per capability** under the crate's `tests/`, so each contract clause links one file.
 - **The licence** is `MIT OR Apache-2.0`, for every crate of the suite but Oficina, its licence files naming the
-  repository's owner (Q35, ruled on 2026-11-25); no manifest here states it yet. Nothing is published
-  (`publish = false`).
+  repository's owner (Q35, ruled on 2026-11-25): each ORCL crate's manifest states it, and `LICENSE-MIT` and
+  `LICENSE-APACHE` stand beside it. Nothing is published (`publish = false`).
 
 ## What it absorbs from Veredas 1
 Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crates/orcl-std`, `crates/orcl-runtime`,

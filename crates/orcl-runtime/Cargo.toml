@@ -4,6 +4,7 @@ name = "orcl-runtime"
 version = "2.0.0-alpha.1"
 edition.workspace = true
 publish = false
+license = "MIT OR Apache-2.0"
 description = "The engine of an ORCL scan: a cyclic task over a process image, its watchdog, safe outputs and cycle statistics"
 
 # No operating-system code: the real-time setup of a Linux process is the host's (docs/orcl/README.md,

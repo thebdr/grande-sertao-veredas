@@ -510,8 +510,6 @@ Where each item stands on 2026-11-25:
 - **Q32** the specification of what disqualifies an edit from a live takeover, proposed in
   `docs/controlador/live-takeover.md` for the architect to rule. **Q42** the robustness round's areas not opened. **Q43** the security round.
   **Q44** the conversion's type table. **Q45** the briefing's readings.
-- Ruled and not yet stated by the crates here: **Q35** the licence, `MIT OR Apache-2.0`, its files
-  naming the repository's owner.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan gives way to the
   prior art's LET. **Q230** a program whose functions call themselves. **Q231** where an
   interpreted program's first state and safe outputs come from. **Q232** an instruction budget per
