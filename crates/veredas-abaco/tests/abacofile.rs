@@ -330,6 +330,10 @@ fn a_file_that_is_not_what_it_should_be_is_refused_by_its_part_and_place() {
         // a key the engine's structures do not read, at any depth, by its path
         ("workbook.toml", Box::new(|t| Some(t.replacen("tz = \"UTC\"", "tz = \"UTC\"\ntzz = \"UTC\"", 1))), "workbook.toml: `settings.tzz` is a key nothing reads"),
         ("workbook.toml", Box::new(|t| Some(t.replacen("sz = 12", "sz = 12\nszz = 12", 1))), "workbook.toml: `styles.fonts.0.szz` is a key nothing reads"),
+        // a misspelt key replacing the field it meant, and one under an optional field: named by
+        // the file's own path (refute round 11)
+        ("workbook.toml", Box::new(|t| Some(t.replacen("tz = \"UTC\"", "tzz = \"UTC\"", 1))), "workbook.toml: `settings.tzz` is a key nothing reads"),
+        ("workbook.toml", Box::new(|t| Some(t.replacen("dxfs = []", "dxfs = [{ font = { szz = 1 } }]", 1))), "workbook.toml: `styles.dxfs.0.font.szz` is a key nothing reads"),
         ("sheets/01-Loads.toml", Box::new(|_| None), "no part `sheets/01-Loads.toml`"),
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B1 = { n = 6.5 }", "B1 = { n = 6.5, s = \"x\" }"))), "sheets/01-Loads.toml B1: more than one of `n`, `s`, `b`, `e`, `f`, `array`, `dynamic`"),
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B4 = { b = true }", "B4 = { b = true, v = 1 }"))), "sheets/01-Loads.toml B4: `v` without `f`"),
@@ -1282,22 +1286,30 @@ fn a_table_whose_range_or_sheet_the_engine_cannot_read_is_refused_at_both_ends()
         ("reference", "\"A1\"", "workbook.toml: `tables.Table3.reference` `A1` is no range of cells"),
         ("reference", "\"\"", "workbook.toml: `tables.Table3.reference` `` is no range of cells"),
         ("sheet_name", "\"Nowhere\"", "workbook.toml: `tables.Table3.sheet_name` `Nowhere` is none of the workbook's sheets"),
+        // refute round 11: counts the parser's sums overflowed on, or that pass the table's rows,
+        // and a range whose corners are out of order
+        ("header_row_count", "2147483647", "workbook.toml: `tables.Table3.header_row_count` 2147483647 is none of Excel's (0 or 1)"),
+        ("header_row_count", "50", "workbook.toml: `tables.Table3.header_row_count` 50 is none of Excel's (0 or 1)"),
+        ("totals_row_count", "2147483648", "workbook.toml: `tables.Table3.totals_row_count` 2147483648 is none of Excel's (0 or 1)"),
+        ("totals_row_count", "50", "workbook.toml: `tables.Table3.totals_row_count` 50 is none of Excel's (0 or 1)"),
+        ("reference", "\"E6:A1\"", "workbook.toml: `tables.Table3.reference` `E6:A1` has its corners out of order"),
+        ("reference", "\"A1:E1\"", "workbook.toml: `tables.Table3` holds no data row"),
     ] {
-        for naming in [false, true] {
+        for naming in [None, Some("SUM(Table3[The one])"), Some("SUM(Table3[#Data])"), Some("SUM(Table3[#All])")] {
             let parts: Vec<(String, Vec<u8>)> = good
                 .iter()
                 .map(|(n, b)| match n.as_str() {
                     "workbook.toml" => (n.clone(), in_table(key, value).into_bytes()),
-                    _ if *n == sheet_part && naming => {
+                    _ if *n == sheet_part && naming.is_some() => {
                         let sheet = String::from_utf8(b.clone()).unwrap();
-                        (n.clone(), format!("{sheet}ZZ999 = {{ f = \"SUM(Table3[The one])\" }}\n").into_bytes())
+                        (n.clone(), format!("{sheet}ZZ999 = {{ f = \"{}\" }}\n", naming.unwrap()).into_bytes())
                     }
                     _ => (n.clone(), b.clone()),
                 })
                 .collect();
             std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
             let got = abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_else(|| "read, not refused".into());
-            assert!(got.contains(want), "{key} = {value}, naming {naming}: {got}");
+            assert!(got.contains(want), "{key} = {value}, naming {naming:?}: {got}");
         }
     }
     // the writer: a model whose table holds such a range or sheet, set past the engine's API
@@ -1310,6 +1322,37 @@ fn a_table_whose_range_or_sheet_the_engine_cannot_read_is_refused_at_both_ends()
         }
         let got = abacofile::write(&mut AbacoFile::new(book), &path).err().map(|e| e.to_string()).unwrap_or_default();
         assert!(got.contains(want), "{got}");
+    }
+    let mut book = open(&src);
+    book.model_mut().workbook.tables.get_mut("Table3").unwrap().header_row_count = 50;
+    let got = abacofile::write(&mut AbacoFile::new(book), &path).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(got.contains("`tables.Table3.header_row_count` 50 is none of Excel's (0 or 1)"), "{got}");
+}
+
+#[test]
+fn a_table_s_sheet_renamed_or_deleted_by_the_engine_writes_and_reads_back() {
+    // the engine's own rename and delete carry a sheet's tables (fork change 38), so the workbook
+    // they leave is one both ends take (refute round 11)
+    let src = corpus_dir().join("calc_test_no_export/tables.xlsx");
+    let dir = tempfile::tempdir().unwrap();
+    let table_sheet = open(&src).model().workbook.tables["Table3"].sheet_name.clone();
+    for edit in ["Escondido", "lower", "delete"] {
+        let mut book = open(&src);
+        let index = book.model().workbook.worksheets.iter().position(|w| w.name == table_sheet).unwrap() as u32;
+        match edit {
+            "delete" => book.model_mut().delete_sheet(index).unwrap(),
+            "lower" => book.model_mut().rename_sheet_by_index(index, &table_sheet.to_lowercase()).unwrap(),
+            name => book.model_mut().rename_sheet_by_index(index, name).unwrap(),
+        }
+        let mut file = AbacoFile::new(book);
+        let path = dir.path().join("renamed.abaco");
+        abacofile::write(&mut file, &path).unwrap_or_else(|e| panic!("{edit}: {e}"));
+        let first = std::fs::read(&path).unwrap();
+        let mut back = read(&path);
+        assert_eq!(differences(&file.book, &back.book), Vec::<String>::new(), "{edit}");
+        let again = dir.path().join("again.abaco");
+        abacofile::write(&mut back, &again).unwrap();
+        assert_eq!(std::fs::read(&again).unwrap(), first, "{edit}");
     }
 }
 

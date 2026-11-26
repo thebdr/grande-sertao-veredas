@@ -994,12 +994,18 @@ impl Parts<'_> {
         let json = toml_to_json(toml::Value::Table(table), "").map_err(|e| self.bad(format!("{name}: {e}")))?;
         // the engine's structures take a key they do not know without a word: a key nothing
         // reads, at any depth, is refused by its path, as every file of the suite refuses one
+        // (`serde_ignored` marks an optional field's step with `?`, which the file has not: dropped)
         let mut unread = Vec::new();
-        let value: T = serde_ignored::deserialize(json.clone(), |path| unread.push(path.to_string()))
-            .map_err(|e| self.bad(format!("{name}: {e}")))?;
+        let read: Result<T, _> = serde_ignored::deserialize(json.clone(), |path| {
+            let path = path.to_string();
+            unread.push(path.split('.').filter(|step| *step != "?").collect::<Vec<_>>().join("."));
+        });
+        // a key nothing reads is named first, a misspelt one replacing the field it meant too (the
+        // field then missing: refute round 11)
         if let Some(path) = unread.first() {
             return Err(self.bad(format!("{name}: `{path}` is a key nothing reads")));
         }
+        let value = read.map_err(|e| self.bad(format!("{name}: {e}")))?;
         // inside an internally tagged enum (an object with its `type`: a link, a format's rule)
         // serde reads from a buffer `serde_ignored` never sees; those types skip no field when
         // written, so a key the value written back lacks is one nothing read
@@ -1145,28 +1151,49 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
         }
     }
     // a table's cells a range the engine reads (its parser reads a structured reference by them,
-    // and panics on one it cannot) and its sheet one of the workbook's, by name as the parser looks
-    // it up (refute round 10)
+    // and panics on one it cannot), its corners in order, its header and totals rows Excel's (none
+    // or one each) and fewer together than its rows (the parser's sums of them overflowed, and past
+    // the rows they read another range: refute round 11), and its sheet one of the workbook's, by
+    // name as the parser looks it up, in any case (refute rounds 10 and 11)
     for (key, table) in &ewb.tables {
-        if !reads_as_a_range(&table.reference) {
+        let Some((top, left, bottom, right)) = table_range(&table.reference) else {
             return Err(format!("{WORKBOOK}: `tables.{key}.reference` `{}` is no range of cells, which the engine reads a table by", table.reference));
+        };
+        if top > bottom || left > right {
+            return Err(format!("{WORKBOOK}: `tables.{key}.reference` `{}` has its corners out of order", table.reference));
         }
-        if !ewb.worksheets.iter().any(|w| w.name == table.sheet_name) {
+        for (field, count) in [("header_row_count", table.header_row_count), ("totals_row_count", table.totals_row_count)] {
+            if count > 1 {
+                return Err(format!("{WORKBOOK}: `tables.{key}.{field}` {count} is none of Excel's (0 or 1)"));
+            }
+        }
+        let rows = i64::from(bottom) - i64::from(top) + 1;
+        if i64::from(table.header_row_count) + i64::from(table.totals_row_count) >= rows {
+            return Err(format!(
+                "{WORKBOOK}: `tables.{key}` holds no data row: {} header and {} totals rows of the {rows} of `{}`",
+                table.header_row_count, table.totals_row_count, table.reference
+            ));
+        }
+        let upper = table.sheet_name.to_uppercase();
+        if !ewb.worksheets.iter().any(|w| w.name == table.sheet_name || w.name.to_uppercase() == upper) {
             return Err(format!("{WORKBOOK}: `tables.{key}.sheet_name` `{}` is none of the workbook's sheets", table.sheet_name));
         }
     }
     Ok(())
 }
 
-/// Whether `reference` is a range of cells as the engine reads a table's (`A1:E6`, `$A$1:$E$6`):
-/// its lexer's first token a range, as `Model::set_table_reference` and the parser take it.
-fn reads_as_a_range(reference: &str) -> bool {
+/// A table's range as the engine reads one (`A1:E6`, `$A$1:$E$6`), its top row, left column,
+/// bottom row and right column: its lexer's first token a range, as `Model::set_table_reference`
+/// and the parser take it; `None` for anything else.
+fn table_range(reference: &str) -> Option<(i32, i32, i32, i32)> {
     use ironcalc_base::expressions::lexer::{Lexer, LexerMode};
     use ironcalc_base::expressions::token::TokenType;
-    let (Ok(locale), Ok(language)) = (ironcalc_base::locale::get_locale("en"), ironcalc_base::language::get_language("en")) else {
-        return false;
-    };
-    matches!(Lexer::new(reference, LexerMode::A1, locale, language).next_token(), TokenType::Range { .. })
+    let locale = ironcalc_base::locale::get_locale("en").ok()?;
+    let language = ironcalc_base::language::get_language("en").ok()?;
+    match Lexer::new(reference, LexerMode::A1, locale, language).next_token() {
+        TokenType::Range { left, right, .. } => Some((left.row, left.column, right.row, right.column)),
+        _ => None,
+    }
 }
 
 /// The suite's one header reader (C-045): core's own source, compiled here by path, so the stamp

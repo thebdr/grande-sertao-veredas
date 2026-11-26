@@ -518,6 +518,15 @@ impl<'a> Model<'a> {
         }
         self.workbook.defined_names = defined_names;
 
+        // a table of the sheet is on the sheet as it is now named, as Excel keeps it (its parser
+        // reads a structured reference by the table's sheet; Veredas fork change 38)
+        for table in self.workbook.tables.values_mut() {
+            if table.sheet_name == old_name {
+                table.sheet_name = new_name.to_string();
+            }
+        }
+        self.parser.set_tables(self.workbook.tables.clone());
+
         // Update the name of the worksheet
         self.workbook.worksheet_mut(sheet_index)?.set_name(new_name);
         self.reset_parsed_structures();
@@ -536,6 +545,10 @@ impl<'a> Model<'a> {
         if sheet_index >= sheet_count {
             return Err("Sheet index too large".to_string());
         };
+        // the sheet's tables go with it, as Excel's do (Veredas fork change 38)
+        let name = self.workbook.worksheets[sheet_index as usize].get_name();
+        self.workbook.tables.retain(|_, table| table.sheet_name != name);
+        self.parser.set_tables(self.workbook.tables.clone());
         self.workbook.worksheets.remove(sheet_index as usize);
         self.reset_parsed_structures();
         Ok(())

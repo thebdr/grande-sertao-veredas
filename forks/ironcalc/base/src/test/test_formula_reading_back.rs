@@ -301,3 +301,46 @@ fn a_name_holds_the_characters_the_file_format_takes() {
         assert!(!crate::expressions::utils::is_valid_identifier(name), "{name}");
     }
 }
+
+/// Veredas fork change 38: a sheet renamed carries its tables, so a structured reference reads the
+/// table where it is, and a sheet deleted takes its tables with it.
+#[test]
+fn a_sheet_renamed_or_deleted_carries_its_tables() {
+    use crate::types::{Table, TableColumn, TableStyleInfo};
+    let mut model = new_empty_model();
+    model.add_sheet("Data").unwrap();
+    for (row, value) in [(1, "Qty"), (2, "2"), (3, "5")] {
+        model.set_user_input(1, row, 1, value.to_string()).unwrap();
+    }
+    model.workbook.tables.insert(
+        "Table1".to_string(),
+        Table {
+            name: "Table1".to_string(),
+            display_name: "Table1".to_string(),
+            sheet_name: "Data".to_string(),
+            reference: "A1:A3".to_string(),
+            totals_row_count: 0,
+            header_row_count: 1,
+            header_row_dxf_id: None,
+            data_dxf_id: None,
+            totals_row_dxf_id: None,
+            columns: vec![TableColumn { id: 1, name: "Qty".to_string(), ..Default::default() }],
+            style_info: TableStyleInfo::default(),
+            has_filters: false,
+        },
+    );
+    model.parser.set_tables(model.workbook.tables.clone());
+    model.reset_parsed_structures();
+    model.set_user_input(0, 1, 1, "=SUM(Table1[Qty])".to_string()).unwrap();
+    model.evaluate();
+    assert_eq!(model.get_formatted_cell_value(0, 1, 1).unwrap(), "7");
+    for new_name in ["Dados", "dados"] {
+        model.rename_sheet_by_index(1, new_name).unwrap();
+        assert_eq!(model.workbook.tables["Table1"].sheet_name, new_name);
+        model.set_user_input(0, 1, 1, "=SUM(Table1[Qty])".to_string()).unwrap();
+        model.evaluate();
+        assert_eq!(model.get_formatted_cell_value(0, 1, 1).unwrap(), "7", "{new_name}");
+    }
+    model.delete_sheet(1).unwrap();
+    assert!(model.workbook.tables.is_empty());
+}
