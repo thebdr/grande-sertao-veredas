@@ -1419,3 +1419,63 @@ fn a_negation_into_a_place_of_another_type_is_refused_as_a_not_is() {
         );
     }
 }
+
+// The nineteenth refute round's tests: a structure and a variant too large named themselves inside another type, an
+// enum of no variant laid out at its discriminant's slot, and an enum given fewer slots than its type refused.
+
+/// A structure and an enum variant whose fields sum past reach, found by the walk of a structure listed
+/// before them, each named itself, as an array is (g14's test).
+#[test]
+fn a_structure_or_a_variant_too_large_inside_another_is_named_itself() {
+    let s = |inner: u32| Type::Struct { name: "S".into(), fields: vec![Field { name: "x".into(), ty: TypeId(inner) }] };
+    let two_halves = || vec![Field { name: "0".into(), ty: TypeId(2) }, Field { name: "1".into(), ty: TypeId(2) }];
+    let big_struct = Type::Struct { name: "T".into(), fields: two_halves() };
+    let big_enum = Type::Enum {
+        name: "E".into(),
+        discriminant: Int::U8,
+        variants: vec![Variant { name: "A".into(), discriminant: 0, fields: two_halves() }],
+    };
+    for (t, what) in [(big_struct, "a structure"), (big_enum, "a variant")] {
+        // types: 0 S { x: 3 }, 1 u8, 2 [u8; 2^31], 3 the type too large
+        let p = Program { types: vec![s(3), Type::Int(Int::U8), Type::Array { element: TypeId(1), len: 1 << 31 }, t], ..Program::default() };
+        assert_eq!(Machine::load(p, &[]).map(|_| ()), Err(LoadError::Type { ty: 3, reason: "too large" }), "{what}");
+    }
+}
+
+/// An enum of no variant: laid out at its discriminant's slot, and no value of it a host can set.
+#[test]
+fn an_enum_of_no_variant_has_its_discriminant_slot_and_no_value() {
+    let mut b = Build::default();
+    let never = b.ty(Type::Enum { name: "Never".into(), discriminant: Int::Isize, variants: vec![] });
+    let mut m = Machine::load(b.program, &[never]).unwrap();
+    assert_eq!(m.size_of(never), Some(1), "its discriminant's slot");
+    assert_eq!(m.set_region(RegionId(0), &[]), Err(HostError::Slots), "no value of it");
+}
+
+/// A constant, and an entry's argument, of an enum given fewer slots than its type, its variant's own fields
+/// all there: refused, as slots of another count are everywhere else.
+#[test]
+fn an_enum_given_fewer_slots_than_its_type_is_refused_as_a_constant_and_an_argument() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let opt = b.option(u8t);
+    let short = vec![int(Int::Isize, 0)];
+    b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[opt]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(konst(opt, short.clone())), 1)], ret())],
+    });
+    assert_eq!(
+        Machine::load(b.program.clone(), &[]).map(|_| ()),
+        Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" }),
+        "None of Option<u8> as one slot"
+    );
+    let mut b = Build::default();
+    let (u8t, unit) = (b.int(Int::U8), b.unit());
+    let opt = b.option(u8t);
+    let g = b.function(Function { name: "g".into(), params: 1, locals: locals(&[unit, opt]), blocks: vec![block(vec![], ret())] });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    assert_eq!(m.start(g, &[Arg::Value(&short)]), Err(HostError::Arguments), "an argument of one slot for Option<u8>");
+    assert_eq!(m.start(g, &[Arg::Value(&[int(Int::Isize, 0), Scalar::Uninit])]), Ok(()), "its two slots taken");
+}
