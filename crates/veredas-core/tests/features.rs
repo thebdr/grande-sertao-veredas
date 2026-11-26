@@ -706,6 +706,9 @@ fn every_feature_gate_is_where_it_belongs() {
             .to_string_lossy()
             .replace('\\', "/");
         let text = std::fs::read_to_string(&path).unwrap();
+        if let Some(why) = stripped(&text) {
+            stray.push(format!("{rel}:1: {why}"));
+        }
         let tokens: Vec<TokenTree> = text
             .parse::<TokenStream>()
             .unwrap_or_else(|e| panic!("{rel} does not read as Rust tokens: {e}"))
@@ -796,6 +799,24 @@ const PULLS_IN: [&str; 5] = [
     "env",
     "option_env",
 ];
+
+/// What rustc takes off a text's start before it lexes it, a source file's or a string a derive
+/// parses: a byte-order mark, a first line starting `#!` that is no inner attribute (a shebang),
+/// and a frontmatter (`---`). proc-macro2 strips none, so text behind one reads otherwise to it
+/// (`#! r#"` opening a raw string over code rustc compiles). Refused wherever a text starts so;
+/// a `#!` counts as a shebang unless `[` follows it at once, stricter than rustc, which lets
+/// whitespace and comments stand between.
+fn stripped(text: &str) -> Option<&'static str> {
+    if text.starts_with('\u{feff}') {
+        Some("a byte-order mark, which rustc strips")
+    } else if text.starts_with("#!") && !text[2..].starts_with('[') {
+        Some("a first line rustc strips as a shebang")
+    } else if text.trim_start().starts_with("---") {
+        Some("a frontmatter, which rustc strips")
+    } else {
+        None
+    }
+}
 
 /// A token's identifier, a raw one (`r#doc`) read as its name.
 fn ident(t: &TokenTree) -> Option<String> {
@@ -954,6 +975,13 @@ impl Reading<'_> {
                 // the code's rules wherever it reads as Rust tokens. One that does not cannot be
                 // code to a derive either.
                 TokenTree::Literal(l) if !doc => {
+                    if let syn::Lit::Str(s) = syn::Lit::new(l.clone())
+                        && let Some(why) = stripped(&s.value())
+                    {
+                        let line = l.span().start().line;
+                        self.stray
+                            .push(format!("{}: a string at line {line}: {why}", self.rel));
+                    }
                     if let syn::Lit::Str(s) = syn::Lit::new(l.clone())
                         && let Ok(code) = s.value().parse::<TokenStream>()
                     {
