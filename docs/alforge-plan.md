@@ -84,11 +84,13 @@ Keys (each required unless a default is given):
 - `toolchain`: what `rustc --version` printed at the cut, stated, not enforced.
 - `[[component]]`: `name` (a `veredas-*` or `orcl-*` member at the commit), `version` (SemVer, the
   one cargo reads at the commit), `bins` (default none: a library such as core ships none; every
-  `bin` target cargo names for the component whose required features its default features turn
-  on, each built with them or the cut refuses it; one needing a feature they leave off, as
-  Oficina's window needs `shell`, is not shipped, and the cut says so: Q443).
-- `[tested]`: `suite`, the command whose green run at the commit made the set tested; `together`,
-  what the cut ran from the bundle itself. Statements of what was run, written by the cut.
+  `bin` target cargo names for the component, each built with the features its executables need,
+  whatever its default features are, or the cut refuses it: Q443, ruled (c). What they need is the
+  union of its bins' `required-features`, as cargo states them, turned on in the component's one
+  build, so Oficina's window ships with `shell` on).
+- `[tested]`: `suite`, the commands whose green runs at the commit made the set tested (the whole
+  suite, then each component's own tests built alone: Q444); `together`, what the cut ran from the
+  bundle itself. Statements of what was run, written by the cut.
 
 ### How a release is cut (the recipe, `alforge cut <release>`)
 1. **HEAD of a clean tree**, cut from a fresh `origin/main`: the cut refuses a tree that differs
@@ -96,23 +98,42 @@ Keys (each required unless a default is given):
    manifest first and checks it against the repository and every release already cut, so a
    version another release pinned at other build inputs is refused before anything is built.
    **A version names everything its build reads but the toolchain** (Q441, ruled "All build
-   inputs"): the component's folder; the folder of every member it uses (its normal and build
-   dependencies by path, transitively; what its tests alone use never goes into an executable)
-   and of every package by path outside the members (a fork kept in the tree, `forks/ironcalc`,
-   with its own workspace's manifest, which cargo reads for inherited keys); every file outside
-   those folders their sources name by a literal `#[path]`, `include_str!`, `include_bytes!` or
-   `include!` (Ábaco's `#[path]` to core's `schema.rs`); the lock file's entries for its external
-   dependencies, transitively, each by its source and checksum; the workspace's manifest, whole
-   (Q442: what cargo reads of it for that component alone is recommended); and the root's cargo
-   configuration. Each is identified as git stores it at the commit, so two commits
-   compare without a build, and a refusal names each input that differs. So a change to core
-   bumps core and every component using it, a `Cargo.lock` update every component it reaches, and
-   an edit of the workspace's manifest every component. It then
+   inputs"):
+   - the component's folder, but for its top `tests/`, `benches/` and `examples/` (Q445, ruled
+     "Tests left out"): what only the tests read never goes into an executable, and a file there
+     that a shipped target starts from or a shipped source names is charged as a file of its own;
+   - the folder of every member it uses, alike (its normal and build dependencies by path,
+     transitively; what its tests alone use never goes into an executable), and of every package
+     by path outside the members (a fork kept in the tree, `forks/ironcalc`, with its own
+     workspace's manifest whole, which cargo reads for inherited keys);
+   - every file outside those folders their sources name by a literal `#[path]`, `include_str!`,
+     `include_bytes!` or `include!` (Ábaco's `#[path]` to core's `schema.rs`);
+   - the lock file's entries for its external dependencies, transitively, each by its source and
+     checksum;
+   - what cargo reads of the workspace's manifest to build it (Q442, ruled "Only what cargo reads
+     for it"): its `resolver`, its profiles, its `[patch]` and `[replace]`, and each
+     `[workspace.package]` key, `[workspace.dependencies]` entry and `[workspace.lints]` table that
+     the component or a member it uses inherits (`x.workspace = true` in its package, its normal
+     and build dependencies or its lints), each named `Cargo.toml: <key>` and identified by its
+     value, so the member list, comments, layout and what other members alone inherit charge
+     nothing;
+   - and the root's cargo configuration.
+
+   Each is identified as git stores it at the commit (a part of the manifest by its value), so two
+   commits compare without a build, and a refusal names each input that differs. So a change to
+   core bumps core and every component using it, a `Cargo.lock` update every component it reaches,
+   a profile's setting every component, and a new member or a test nothing else. It then
    runs the whole suite there (`cargo nextest run --workspace`, the gate of `CLAUDE.md`, built
    first and run behind the machine's lock, its temporary files in the cache), and refuses a red
-   one. "Tested together" means two runs: that one, which tests the components against each
-   other from source, and the cut's own run of the bundle (step 5). A **trial cut** (`--trial`)
-   skips the suite, says so in its manifest (`suite = "not run: a trial cut"`), is checked against
+   one; then **each component's own tests, built alone** (Q444, ruled "Alone, and tested alone"):
+   `cargo nextest run -p <component>` with the features its executables need (Q443), each built
+   first and run behind the machine's lock, on the development machine, where the suite runs. Built
+   alone, a component's features unify within its own inputs and its tests' dependencies, as its
+   executables are built, so what ships is tested as it is built, not only with every member's
+   features turned on together. A red one refuses the cut, naming the component. "Tested together"
+   means two runs: the whole suite, which tests the components against each other from source, and
+   the cut's own run of the bundle (step 5). A **trial cut** (`--trial`)
+   skips the suite and the runs alone, says so in its manifest (`suite = "not run: a trial cut"`), is checked against
    the repository alone and writes it beside its bundle, never into `releases/`: it proves the
    recipe and is never committed. After a real cut's suite, the tree is checked again: a commit or
    an edit made while it ran refuses the cut.
@@ -124,20 +145,32 @@ Keys (each required unless a default is given):
    build four jobs, holding the machine's lock for the database engine's compilation: the
    commit's tree as git stores it (its objects, no attribute or filter applied) and its
    dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them) handed in on a disk as a tar
-   stream, `cargo build --release --locked --offline -p <component> --bins` run inside for each
-   component alone (in one build cargo unifies features across the packages it builds, so one
-   component's manifest would reach another's executables) under the toolchain the suite was
-   tested with (the development machine's `rustc`), the executables handed back on another disk
-   with cargo's dep-info for each (`target/release/<bin>.d`: every file rustc read and every
-   file a build script declared with `rerun-if-changed`). Each file it names lies in what its
-   component's version names, or the cut refuses it by name: the sources' scan of step 1 is
-   proven against the compiler at every cut. What a build script reads without declaring it, a
-   header the C compiler it runs includes, and what a proc-macro reads while it expands are in no
-   dep-info, so the cut does not judge them (Q448 asks whether it should, by building each
-   component from a tree holding only what its version names, or by tracing its builds). Built on the development machine (Ubuntu 26.10,
+   stream, `cargo build --release --locked --offline -p <component> --bins --features <what its
+   bins require>` run inside for each component alone (in one build cargo unifies features across
+   the packages it builds, so one component's manifest would reach another's executables) under
+   the toolchain the suite was tested with (the development machine's `rustc`), the executables
+   handed back on another disk with cargo's dep-info for each (`target/release/<bin>.d`: every
+   file rustc read and every file a build script declared with `rerun-if-changed`). Each file it
+   names lies in what its component's version names, or the cut refuses it by name: the sources'
+   scan of step 1 is proven against the compiler at every cut.
+
+   **Each build runs traced** (Q448, ruled "Trace each build"): `strace -f` (one of the recipe's
+   packages) logs every file each process of the build opens, as the kernel's own path of what it
+   opened, and every program it starts. The trace comes back gzipped on the output disk, and the
+   cut judges every file a process other than cargo opened to read under the tree or the vendored
+   sources as it judges the dep-info's paths. So a build script's undeclared read, a header the C
+   compiler it runs includes and a file a proc-macro reads while it expands are judged too.
+   - Cargo's own reads are its resolution, pinned by `--locked`: every member's manifest to load
+     the workspace, the lock, the vendored sums.
+   - What lies outside the tree is the builder's, not a version's: the toolchain, the system's
+     headers, Qt.
+   - A file read without being opened is not judged: one a kernel ring reads (`io_uring`), and a
+     file whose existence alone a build looks at.
+
+   Built on the development machine (Ubuntu 26.10,
    glibc 2.44), portal and supervisão need `GLIBC_2.44` and do not start on Debian 13 (the probe
    below); built on the oldest, they run there and on every newer system. The builder's disk is
-   the base image with the recipe's packages (a C and C++ compiler) and the toolchain from
+   the base image with the recipe's packages (a C and C++ compiler, `strace`, `patchelf`) and the toolchain from
    rustup's official source, built once per toolchain and kept in the cache. Each executable's
    symbol versions are then read (`objdump -p`) and held to the guest's glibc, libstdc++ and C++
    ABI as the recipe states them, so a binary that would not start on the tester machine is
@@ -161,7 +194,7 @@ Keys (each required unless a default is given):
 
 Core ripples outward (the plan), and since Q441 any change to what a component's build reads does:
 a change to core charges core and every component using it, a lock file update every component it
-reaches, an edit of the workspace's manifest every component (Q442). The cut refuses a release that
+reaches, a part of the workspace's manifest every component that inherits it (Q442). The cut refuses a release that
 pins such a component at its earlier version, before anything runs, naming each input that moved;
 each member bumps its own version (alforge edits no component's crate), asked through the
 orchestrator before a real cut. A bump an input forces is a PATCH by SemVer's own rule when the
@@ -187,20 +220,31 @@ beside its manifest, the copyright holder thebdr; Oficina is `GPL-3.0-or-later` 
   source, namely the commit's tree and the vendored crates the builder built it from (the cut's
   builder input). Nothing is published yet (Q436, "Nowhere yet"); this binds the first place named.
 
-### Oficina's window and Qt (Q370, Q446)
-Q370 is ruled "Built by default": once Oficina's switch lands, a release builds and ships the window.
+### Oficina's window and Qt (Q370, Q443, Q446)
+Oficina's one executable, its window, requires the `shell` feature. Under Q443 (c) the cut builds it
+with that feature on, whatever Oficina's defaults say, so a release ships the window from the cut
+that lands this, before or after Oficina's switch to `default = ["shell"]` (Q370).
 - **The builder builds it** with Qt 6.12 and KDDockWidgets from the development machine, the paths
   `~/.cargo/config.toml` names (`~/.local/opt/Qt/6.12.0/gcc_64`, 2.4 GB, and
   `~/.local/opt/oficina-deps`). They are copied once per Qt version into a builder disk of their own,
   cached as the toolchain is, and the build's environment names `QMAKE` and `OFICINA_DEPS` there.
+  They lie outside the tree: like the toolchain, they are the builder's, named by the component
+  list (C-295), never by a version.
 - **Both run on Debian 13:** Qt is qt.io's build (glibc 2.34, GLIBCXX 3.4.29) and KDDockWidgets needs
   glibc 2.38 and GLIBCXX 3.4.32, within the recipe's 2.41 and 3.4.33. The cut's ABI check holds the
-  window and what it loads to them.
-- **What the bundle carries** of them is Q446. Recommended: the libraries the window loads, in the
-  bundle's `lib/`, found by the executable's `RUNPATH`, about 120 MB extracted.
+  window and every library it ships with it to them.
+- **The bundle carries them** (Q446, ruled "The bundle carries them"): `lib/` beside `bin/` holds
+  every library of Qt and KDDockWidgets the window loads, as the builder's `ldd` resolves it, each
+  under the name it is loaded by, and what Qt loads by name at run time (the `xcb` platform plugin,
+  the QML modules Oficina imports), placed by a `qt.conf` beside the window. The window's
+  `RUNPATH` becomes `$ORIGIN/../lib` (`patchelf` in the builder), so it loads the bundle's Qt and no
+  other. About 120 MB extracted; each release carries its own Qt, and an update brings a new Qt
+  with it. `licenses/` gains Qt's and KDDockWidgets' texts and where their sources are (C-294).
+- **The tester machine provides** what any Qt program takes from its system (the X client
+  libraries, OpenGL, fontconfig), from Debian's packages in the recipe; its proof holds every
+  library of the window and of `lib/` to load there, none missing.
 - **The real cut's suite run** builds the workspace on the development machine, where cargo's
-  configuration names Qt.
-- **Until the switch lands,** the window is off by default and not shipped (Q443).
+  configuration names Qt, and Oficina's own tests built alone run with `shell` on.
 
 ### The component list (Q31 entry 38, "(b) Security file, component list")
 The cut writes, for each release, a CycloneDX 1.6 JSON document. It is `veredas-<release>.cdx.json`
@@ -217,8 +261,9 @@ bundle. It holds:
 `alforge components <commit>` prints the same list from a commit alone (`cargo metadata` over its
 lock, no build), so CI produces it on every push, as the ruling asks. The cut's list and CI's list
 of one commit agree, and a test holds them to it. CycloneDX is the form vulnerability scanners read
-by purl; an SPDX document would carry the same facts. The security file's reporting channel is the
-architect's to name (Q447). Which intent the suite states under the Cyber Resilience Act is
+by purl; an SPDX document would carry the same facts. The security file, `SECURITY.md` at the root, names
+GitHub's private vulnerability reporting and no address (Q447, ruled); turning it on in the
+repository's settings is the architect's act. Which intent the suite states under the Cyber Resilience Act is
 undecided (entry 38, ruled "Undecided, say so"), and is the suite plan's to say.
 
 ## Part two: the tester machine
@@ -485,9 +530,18 @@ Measured on release 2.0.0-alpha.1 (2026-11-22):
   (`tests/atualizar.rs`), and run inside the machine C-292 builds (`tests/maquina.rs`: it rides on
   that machine rather than building a second, so a change to that file re-stales both clauses).
 - **C-294**, a release's licences: the cut's refusal of a component or crate stating none, and the
-  bundle's `licenses/` (Q35). It lands once each member states its licence.
+  bundle's `licenses/` (Q35). Every member states its licence since 2026-11-26.
 - **C-295**, the component list: the cut's CycloneDX document and `alforge components <commit>`,
   which agree on one commit (Q31 entry 38).
+
+The rulings of 2026-11-26 (Q442 to Q448) change what four verified clauses state, and each such
+clause takes a fresh record and a refute pass before it is verified again:
+- C-290: a version's folders without their tests (Q445), the workspace manifest's parts (Q442),
+  every bin shipped with the features it requires (Q443);
+- C-291: each build with those features (Q443) and traced (Q448), each component's tests run alone
+  (Q444), Oficina's window built with Qt and shipped with its `lib/` (Q446);
+- C-292: the window's libraries loading on the tester machine (Q446);
+- C-293 states nothing these change, its record held to its own files.
 
 ## What a component is asked for
 Through the orchestrator: before every real cut, a version bump of each component whose build
