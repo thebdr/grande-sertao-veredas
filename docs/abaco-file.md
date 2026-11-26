@@ -20,8 +20,10 @@ part, by its path (`styles.fonts.0.szz`), and so is one that replaced a field th
 (a link's `url` for its `target`: `links.0.2.url`), found by reading the object that lacks it
 alone (a link, a format's rule: inside one, the reader reads from a buffer that marks no key)
 with the field given, as each kind of value and each variant of a tag, the reading that leaves
-fewest keys unread deciding, never by its spelling; a field deleted, a tag too, no key standing
-for it, is refused in the reader's words (``missing field `min` ``). A tool's own records and state are tables whose keys
+fewest keys unread deciding, never by its spelling. So is a key beside an externally tagged
+variant, or in its place (a threshold's `cfvo`, `{ Percent = 33.0 }`, given a `note`, or a linked
+workbook's cached cell spelled `{ Numbr = 1.0 }`), each such object read alone. A field deleted, a
+tag too, no key standing for it, is refused in the reader's words (``missing field `min` ``). A tool's own records and state are tables whose keys
 the tool chooses.
 
 ## The parts

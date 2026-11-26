@@ -23,9 +23,9 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use ironcalc_base::Model;
-use ironcalc_base::cf_types::{CfRule, ConditionalFormatting};
+use ironcalc_base::cf_types::{CfRule, Cfvo, ConditionalFormatting};
 use ironcalc_base::expressions::token::get_error_by_english_name;
-use ironcalc_base::external::ExternalBook;
+use ironcalc_base::external::{ExternalBook, ExternalValue};
 use ironcalc_base::sheet_data::SheetData;
 use ironcalc_base::types::{
     ArrayKind, Cell, Col, Color, Comment, DefinedName, Link, MergedCell, Metadata, Row, SheetState, Styles, Table, Theme,
@@ -1011,7 +1011,9 @@ impl Parts<'_> {
                 // inside an internally tagged object (a link, a format's rule) serde reads from a
                 // buffer `serde_ignored` never sees: a key nothing reads there, one replacing a
                 // field too, is named by its path (refute rounds 12 to 15)
-                if let Some(path) = key_nothing_reads_in_tagged(&json) {
+                // and beside an externally tagged enum's variant (a threshold's `cfvo`, a linked
+                // workbook's cached cell), where serde's words name no place (refute round 16)
+                if let Some(path) = key_beside_a_variant(&json).or_else(|| key_nothing_reads_in_tagged(&json)) {
                     return Err(self.bad(format!("{name}: `{path}` is a key nothing reads")));
                 }
                 return Err(self.bad(format!("{name}: {e}")));
@@ -1080,27 +1082,108 @@ fn read_back<L: DeserializeOwned + Serialize>(v: &serde_json::Value) -> Result<s
 /// reads, by its path: in an object that reads alone, a key its value written back lacks; in one
 /// that does not, the key [`key_replacing_in`] finds.
 fn key_nothing_reads_in_tagged(json: &serde_json::Value) -> Option<String> {
-    tagged_objects(json).into_iter().find_map(|(path, obj, read)| key_replacing_in(obj, read).map(|k| format!("{path}.{k}")))
+    // the readings of a whole part, its objects together: a part of many refuses quickly
+    let mut budget = 1usize << 16;
+    tagged_objects(json).into_iter().find_map(|(path, obj, read)| key_replacing_in(obj, read, &mut budget).map(|k| format!("{path}.{k}")))
 }
 
-/// The key of a tagged object nothing reads (refute rounds 12 to 15), found by reading again rather
+/// The engine's externally tagged enums with data a part holds, each by its place and its reader
+/// (refute round 16): a format's `Cfvo` (a colour scale's and an icon set's
+/// `conditional_formatting.N.cf_rule.thresholds.M.cfvo`, an icon rating's `….thresholds.M.0`, a data
+/// bar's `….min` and `….max`) and a linked workbook's cached cell's `ExternalValue`
+/// (`external_books.N.sheets.M.cells.K.2`). Each is an object of one key, its variant (`Number =
+/// 1.0`); a variant of no data is a text. The engine holds no other in a part, which a test of the
+/// reader holds to its source.
+fn variant_objects(json: &serde_json::Value) -> Vec<(String, &serde_json::Value, TaggedReader)> {
+    use serde_json::Value as J;
+    fn list(v: Option<&J>) -> Vec<&J> {
+        v.and_then(J::as_array).map(|a| a.iter().collect()).unwrap_or_default()
+    }
+    let mut out = Vec::new();
+    for (i, format) in list(json.get("conditional_formatting")).into_iter().enumerate() {
+        let Some(rule) = format.get("cf_rule") else { continue };
+        let at = format!("conditional_formatting.{i}.cf_rule");
+        for (m, threshold) in list(rule.get("thresholds")).into_iter().enumerate() {
+            match threshold {
+                J::Object(t) => {
+                    if let Some(cfvo) = t.get("cfvo").filter(|c| c.is_object()) {
+                        out.push((format!("{at}.thresholds.{m}.cfvo"), cfvo, read_back::<Cfvo> as TaggedReader));
+                    }
+                }
+                J::Array(t) => {
+                    if let Some(cfvo) = t.first().filter(|c| c.is_object()) {
+                        out.push((format!("{at}.thresholds.{m}.0"), cfvo, read_back::<Cfvo> as TaggedReader));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for end in ["min", "max"] {
+            if let Some(cfvo) = rule.get(end).filter(|c| c.is_object()) {
+                out.push((format!("{at}.{end}"), cfvo, read_back::<Cfvo> as TaggedReader));
+            }
+        }
+    }
+    for (n, book) in list(json.get("external_books")).into_iter().enumerate() {
+        for (m, sheet) in list(book.get("sheets")).into_iter().enumerate() {
+            for (k, cell) in list(sheet.get("cells")).into_iter().enumerate() {
+                if let Some(value) = cell.get(2).filter(|v| v.is_object()) {
+                    out.push((format!("external_books.{n}.sheets.{m}.cells.{k}.2"), value, read_back::<ExternalValue> as TaggedReader));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The first key, in the order of the part, beside or in place of an externally tagged enum's
+/// variant ([`variant_objects`]), by its path: read alone, an object that names a variant none of
+/// the enum's has that key nothing reads (`Numbr`); one of two keys or more has, beside the one
+/// key that reads alone as a variant, the others (`note`). An object no key of which reads alone,
+/// or more than one, names none: the deserialiser's words stand.
+fn key_beside_a_variant(json: &serde_json::Value) -> Option<String> {
+    use serde_json::Value as J;
+    variant_objects(json).into_iter().find_map(|(path, obj, read)| {
+        let J::Object(o) = obj else { return None };
+        let error = read(obj).err()?;
+        if let Some((_, rest)) = error.split_once("unknown variant `")
+            && let Some((name, _)) = rest.split_once('`')
+        {
+            return o.contains_key(name).then(|| format!("{path}.{name}"));
+        }
+        if o.len() < 2 {
+            return None;
+        }
+        let alone = |k: &String| read(&J::Object([(k.clone(), o[k].clone())].into_iter().collect())).is_ok();
+        let variants: Vec<&String> = o.keys().filter(|k| alone(k)).collect();
+        match variants.as_slice() {
+            [variant] => o.keys().find(|k| k != variant).map(|k| format!("{path}.{k}")),
+            _ => None,
+        }
+    })
+}
+
+/// The key of a tagged object nothing reads (refute rounds 12 to 16), found by reading again rather
 /// than guessed. Read alone, an object that reads names a key its value written back lacks. One a
 /// field is missing from is given it, at each object of its own that lacks it, as each kind of JSON
-/// value and, for a tag, each variant the deserialiser names; every kind taken (the error moving
-/// on to another missing field, or, a kind refused there first, staying: the same field missing
-/// twice) is followed, each new missing field filled in its turn, so every variant is tried, not
-/// the first that moves on. Of the readings that make the object read, the ones leaving fewest
-/// keys its value written back lacks decide: none, a field deleted, names none and the
-/// deserialiser's words stand; else the first key all of them leave unread. A search past its
-/// 4 096 readings, or 16 fields deep, names none.
-fn key_replacing_in(obj: &serde_json::Value, read: TaggedReader) -> Option<String> {
+/// value and each variant the deserialiser names, until one is taken (the error moving on to
+/// another missing field, or, a kind refused there first, staying: the same field missing twice),
+/// each new missing field filled in its turn; for the object's own tag every variant taken is
+/// followed, each a structure of its own, not the first that moves on. Of the readings that make
+/// the object read, the ones leaving fewest keys its value written back lacks decide: none, a field
+/// deleted, names none and the deserialiser's words stand; else the first key all of them leave
+/// unread. A search past its 4 096 readings, or 16 fields deep, or past the part's 65 536, names
+/// none.
+fn key_replacing_in(obj: &serde_json::Value, read: TaggedReader, part_budget: &mut usize) -> Option<String> {
     let error = match read(obj) {
         Ok(back) => return unread_keys(obj, &back).into_iter().next(),
         Err(e) => e,
     };
     let mut outcomes = Vec::new();
-    let mut budget = 4096usize;
+    let mut budget = 4096usize.min(*part_budget);
+    let given = budget;
     explore_from(obj, obj, &error, 0, read, &mut budget, &mut outcomes);
+    *part_budget -= given - budget;
     if budget == 0 {
         return None;
     }
@@ -1136,6 +1219,11 @@ fn explore_from(
         return;
     }
     for path in candidates_lacking(filled, &field) {
+        // the object's own tag: every variant followed, each a structure of its own; any other
+        // field: the first kind taken, which fills it as well as another (a value filled holds no
+        // key of the file's, so which period or icon it names leaves the same keys unread; refute
+        // round 16: following each spent the readings)
+        let branch = field == "type" && path.is_empty();
         let mut kinds = vec![J::Bool(false), J::from(0), J::String(String::new()), J::Null, J::Array(Vec::new()), J::Object(Default::default())];
         let mut refused = false;
         let mut taken_unchanged = None;
@@ -1150,8 +1238,18 @@ fn explore_from(
                 break;
             }
             match read(&trial) {
-                Ok(back) => outcomes.push(unread_keys(file, &back)),
-                Err(e) if missing(&e).is_some() && e != error => explore_from(file, &trial, &e, depth + 1, read, budget, outcomes),
+                Ok(back) => {
+                    outcomes.push(unread_keys(file, &back));
+                    if !branch {
+                        return;
+                    }
+                }
+                Err(e) if missing(&e).is_some() && e != error => {
+                    explore_from(file, &trial, &e, depth + 1, read, budget, outcomes);
+                    if !branch {
+                        return;
+                    }
+                }
                 Err(e) if e == error => {
                     taken_unchanged.get_or_insert(trial);
                 }
@@ -1179,6 +1277,9 @@ fn explore_from(
         }
         if refused && let Some(trial) = taken_unchanged {
             explore_from(file, &trial, error, depth + 1, read, budget, outcomes);
+            if !branch {
+                return;
+            }
         }
     }
 }

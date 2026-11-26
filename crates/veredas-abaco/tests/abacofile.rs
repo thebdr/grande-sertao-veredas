@@ -1171,6 +1171,39 @@ fn a_field_deleted_is_refused_as_missing_and_a_key_replacing_one_by_its_path() {
         let got = refusal(&parts, "sheets/", &|t| t.replacen(&tag, "", 1));
         assert!(got.contains("missing field `type`") && !got.contains("is a key nothing reads"), "{kind}: {got}");
     }
+    // refute round 16: every rule's tag replaced, one at a time, by `kind` and by `Type`, by its path
+    // (an icon set's and a colour scale's spent the readings following every value of every field)
+    let mut tags = 0;
+    for (part, text) in parts.iter().filter(|(n, _)| n.starts_with("sheets/")).map(|(n, b)| (n.clone(), String::from_utf8(b.clone()).unwrap())) {
+        for (at, _) in text.match_indices("\ntype = \"") {
+            for key in ["kind", "Type"] {
+                let got = refusal(&parts, &part, &|t| format!("{}{key}{}", &t[..at + 1], &t[at + 1 + "type".len()..]));
+                assert!(got.contains(&format!(".cf_rule.{key}` is a key nothing reads")), "{part} at {at}, {key}: {got}");
+            }
+            tags += 1;
+        }
+    }
+    assert!(tags >= 50, "{tags} rules");
+    // a key beside a threshold's variant, and a variant misspelt, by their paths
+    let iconsets = parts.iter().find(|(n, b)| n.starts_with("sheets/") && std::str::from_utf8(b).unwrap().contains("\nPercent = ")).map(|(n, _)| n.clone()).unwrap();
+    let got = refusal(&parts, &iconsets, &|t| t.replacen("\nPercent = ", "\nnote = 1\nPercent = ", 1));
+    assert!(got.contains(".cfvo.note` is a key nothing reads") && got.contains(".cf_rule.thresholds."), "{got}");
+    let got = refusal(&parts, &iconsets, &|t| t.replacen("\nPercent = ", "\nPercnt = ", 1));
+    assert!(got.contains(".cfvo.Percnt` is a key nothing reads"), "{got}");
+    // and beside a linked workbook's cached cell's variant
+    let linked = AbacoFile::new(open(&corpus_dir().join("link_test.xlsx")));
+    let parts = abacofile::parts(&linked).unwrap();
+    let book = String::from_utf8(parts.iter().find(|(n, _)| n == "workbook.toml").unwrap().1.clone()).unwrap();
+    assert!(book.contains("cells = []"), "{book}");
+    let cells = |value: &'static str| move |t: &str| t.replacen("cells = []", &format!("cells = [[1, 1, {{ {value} }}]]"), 1);
+    assert!(!refusal(&parts, "workbook.toml", &cells("Number = 1.0")).contains("is a key nothing reads"));
+    let got = refusal(&parts, "workbook.toml", &cells("Number = 1.0, note = 2"));
+    assert!(got.contains("workbook.toml: `external_books.0.sheets.0.cells.0.2.note` is a key nothing reads"), "{got}");
+    let got = refusal(&parts, "workbook.toml", &cells("Numbr = 1.0"));
+    assert!(got.contains("`external_books.0.sheets.0.cells.0.2.Numbr` is a key nothing reads"), "{got}");
+    // two keys of which none reads alone: the deserialiser's words
+    let got = refusal(&parts, "workbook.toml", &cells("note = 2, Numbr = 1.0"));
+    assert!(!got.contains("is a key nothing reads") && got.contains("workbook.toml"), "{got}");
 }
 
 #[test]
@@ -1621,7 +1654,7 @@ fn an_error_in_a_formula_reads_back_as_itself() {
 
 #[test]
 fn the_reader_knows_every_tagged_type_of_the_engine() {
-    // refute round 15: the reader reads each internally tagged object of a part alone, at its
+    // refute rounds 15 and 16: the reader reads each internally tagged object of a part alone, at its
     // place (`links.N.2`, a `Link`; `conditional_formatting.N.cf_rule`, a `CfRule`), since inside
     // one serde reads from a buffer `serde_ignored` never sees; the engine's source holds no other
     // (`CfRuleInput` is its API's input, no part's), and its one untagged type, `Color`, holds no key
@@ -1660,6 +1693,44 @@ fn the_reader_knows_every_tagged_type_of_the_engine() {
     tagged.sort();
     assert_eq!(tagged, ["CfRule", "CfRuleInput", "Link"], "the engine's internally tagged types");
     assert_eq!(untagged, ["Color"], "the engine's untagged types");
+    // and (refute round 16) its externally tagged enums with a variant of data, each read alone at
+    // its place by the reader when a part holds it: `Cfvo` (a format's thresholds, a data bar's
+    // ends) and `ExternalValue` (a linked workbook's cached cells); the others are the engine's own
+    // views and tokens (`MergeStructure`, `CellArrayStructure`, `TableReference`, `TokenType`), no
+    // part's
+    let mut external = Vec::new();
+    for f in &files {
+        let text = std::fs::read_to_string(f).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, l) in lines.iter().enumerate() {
+            let Some(rest) = l.trim().strip_prefix("pub enum ") else { continue };
+            let name = rest.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or_default().to_string();
+            // the attributes above it, past its doc comments
+            let attrs: Vec<&str> = lines[..i].iter().rev().map(|l| l.trim()).take_while(|l| l.starts_with("#[") || l.starts_with("//")).filter(|l| l.starts_with("#[")).collect();
+            let derives = attrs.iter().any(|a| a.contains("Deserialize"));
+            let represented = attrs.iter().any(|a| a.contains("serde(") && (a.contains("tag") || a.contains("untagged")));
+            if !derives || represented {
+                continue;
+            }
+            // a variant of data: a line of the body, at the enum's indentation and four more, a name
+            // followed by `(` or `{`
+            let indent = l.len() - l.trim_start().len() + 4;
+            let data = lines[i + 1..]
+                .iter()
+                .take_while(|v| !v.starts_with(&format!("{}}}", " ".repeat(indent - 4))))
+                .filter(|v| v.len() - v.trim_start().len() == indent)
+                .any(|v| {
+                    let t = v.trim();
+                    let head = t.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or_default();
+                    !head.is_empty() && (t[head.len()..].trim_start().starts_with('(') || t[head.len()..].trim_start().starts_with('{'))
+                });
+            if data {
+                external.push(name);
+            }
+        }
+    }
+    external.sort();
+    assert_eq!(external, ["CellArrayStructure", "Cfvo", "ExternalValue", "MergeStructure", "TableReference", "TokenType"], "the engine's externally tagged enums of data");
     // `Color`'s variants are a text, a tuple and none: no key of its own
     let types = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../forks/ironcalc/base/src/types.rs")).unwrap();
     let body = &types[types.find("pub enum Color {").unwrap()..];
