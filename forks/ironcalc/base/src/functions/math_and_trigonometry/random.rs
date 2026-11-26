@@ -271,4 +271,31 @@ mod seeded_tests {
         assert_ne!(moved[1], first[1]);
         crate::seed_random(None);
     }
+
+    #[test]
+    fn a_run_the_evaluator_abandons_and_runs_again_draws_the_same_numbers() {
+        // Veredas fork change 40, refined: too deep a recursion (64 formulas, or a stack whose
+        // depth depends on the build) abandons the outer cells' runs and replays them; each run
+        // draws from its first number, so the limits never change a draw
+        let chain = |model: &mut crate::Model| {
+            model._set("A1", "=RAND()+B1*0");
+            model._set("C1", "=RAND()");
+            for r in 1..100 {
+                model._set(&format!("B{r}"), &format!("=B{}", r + 1));
+            }
+            model._set("B100", "1");
+        };
+        let mut deep = new_empty_model();
+        chain(&mut deep);
+        let default = values(&mut deep, &["A1", "C1"]);
+        deep.set_max_evaluation_depth(1);
+        assert_eq!(values(&mut deep, &["A1", "C1"]), default, "replayed at every step");
+        deep.set_max_evaluation_depth(4);
+        assert_eq!(values(&mut deep, &["A1", "C1"]), default, "replayed every fourth step");
+        // and a cell reading nothing draws its first number, as A1 does at the end of the chain
+        let mut shallow = new_empty_model();
+        shallow._set("A1", "=RAND()");
+        assert_eq!(values(&mut shallow, &["A1"])[0], default[0]);
+        crate::seed_random(None);
+    }
 }

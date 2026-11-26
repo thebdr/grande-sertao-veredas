@@ -944,6 +944,10 @@ impl<'a> Model<'a> {
         if !self.links.is_empty() {
             self.links.remove(&key);
         }
+        // So does a seeded draw: this run draws its numbers from the first (Veredas fork change 40,
+        // refined: a run abandoned to an unwind, whose depth depends on the build's stack, had
+        // drawn some already).
+        crate::model::begin_cell_draws(&cell_reference);
         self.evaluation.depth += 1;
         let result = if self.evaluation.circular.contains(&key) {
             circular_reference(cell_reference)

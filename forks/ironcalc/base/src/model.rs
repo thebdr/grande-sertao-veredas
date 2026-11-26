@@ -79,7 +79,8 @@ thread_local! {
     /// (sheet index, row, column), if it gave any ([`key_random_draws`]).
     static DRAW_KEYS: std::cell::RefCell<Option<HashMap<(u32, i32, i32), (u32, i32, i32)>>> =
         const { std::cell::RefCell::new(None) };
-    /// Veredas fork change 40: how many draws each key made since the generator was seeded.
+    /// Veredas fork change 40: how many draws each key made in the run of its cell under way (a
+    /// run abandoned to an unwind or a restarted pass and run again draws them anew).
     static DRAWS_MADE: std::cell::RefCell<HashMap<(bool, u32, i32, i32), u64>> =
         std::cell::RefCell::new(HashMap::new());
 }
@@ -90,9 +91,11 @@ thread_local! {
 /// starts the sequence over. A host that compares evaluations (a measure against cached values)
 /// seeds it so its result does not depend on chance. Veredas fork change 16.
 ///
-/// Each cell draws its own sequence (Veredas fork change 40): the n-th number a cell draws since
-/// the seed is the seed's, the cell's key's and n's alone, so a draw added, removed or moved in
-/// another cell, before it in the evaluation's order, changes none of its own.
+/// Each cell draws its own sequence (Veredas fork change 40): the n-th number a cell's formula
+/// draws in a run is the seed's, the cell's key's and n's alone, so a draw added, removed or moved
+/// in another cell, before it in the evaluation's order, changes none of its own, and a run the
+/// evaluator abandons (too deep a recursion, which depends on the build's stack, or a restarted
+/// pass) and runs again draws the same numbers.
 pub fn seed_random(seed: Option<u64>) {
     SEEDED_RANDOM.with(|s| s.set(seed));
     DRAWS_MADE.with(|d| d.borrow_mut().clear());
@@ -112,19 +115,35 @@ pub fn random_is_seeded() -> bool {
     SEEDED_RANDOM.with(|s| s.get().is_some())
 }
 
-/// The next number in [0, 1) the cell at `cell` draws from the seeded generator, `None` when not
-/// seeded: SplitMix64's mix of the seed, the cell's key ([`key_random_draws`]) and how many it
-/// drew before since the seed (Veredas fork changes 16 and 40).
-pub(crate) fn next_seeded_random(cell: &crate::expressions::types::CellReferenceIndex) -> Option<f64> {
-    let seed = SEEDED_RANDOM.with(|s| s.get())?;
+/// The key of a cell's seeded draws: its place, or the one a host gave it ([`key_random_draws`]),
+/// a place the host's keys do not hold apart from every place.
+fn draw_key(cell: &crate::expressions::types::CellReferenceIndex) -> (bool, u32, i32, i32) {
     let at = (cell.sheet, cell.row, cell.column);
-    let key = DRAW_KEYS.with(|k| match &*k.borrow() {
+    DRAW_KEYS.with(|k| match &*k.borrow() {
         None => (false, at.0, at.1, at.2),
         Some(keys) => match keys.get(&at) {
             Some(&(sheet, row, column)) => (false, sheet, row, column),
             None => (true, at.0, at.1, at.2),
         },
-    });
+    })
+}
+
+/// A run of the cell's formula begins (its first, or one again after an unwind or a restarted
+/// pass): its draws are counted from the first again (Veredas fork change 40, refined).
+pub(crate) fn begin_cell_draws(cell: &crate::expressions::types::CellReferenceIndex) {
+    if SEEDED_RANDOM.with(|s| s.get()).is_none() {
+        return;
+    }
+    let key = draw_key(cell);
+    DRAWS_MADE.with(|d| d.borrow_mut().remove(&key));
+}
+
+/// The next number in [0, 1) the cell at `cell` draws from the seeded generator, `None` when not
+/// seeded: SplitMix64's mix of the seed, the cell's key ([`key_random_draws`]) and how many it
+/// drew before in this run of its formula (Veredas fork changes 16 and 40).
+pub(crate) fn next_seeded_random(cell: &crate::expressions::types::CellReferenceIndex) -> Option<f64> {
+    let seed = SEEDED_RANDOM.with(|s| s.get())?;
+    let key = draw_key(cell);
     let n = DRAWS_MADE.with(|d| {
         let mut d = d.borrow_mut();
         let made = d.entry(key).or_insert(0);

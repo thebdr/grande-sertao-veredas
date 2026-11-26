@@ -1224,9 +1224,9 @@ const RANDOM_CELLS: [&str; 9] = ["A19", "B19", "C19", "A20", "B20", "C20", "A21"
 
 /// Its nine draws seeded with 1, under either resolution, on every run (none equals Excel's
 /// cached one, so each is a mismatch its report lists with the engine's value): the array's own
-/// sequence, the n-th number of its cell's draws (fork change 40).
+/// sequence, the first nine numbers of a run of its cell (fork change 40 and 40b).
 fn seeded_draws() -> BTreeMap<String, String> {
-    RANDOM_CELLS.iter().zip(["20", "73", "12", "31", "66", "40", "36", "93", "73"]).map(|(c, v)| (c.to_string(), v.to_string())).collect()
+    RANDOM_CELLS.iter().zip(["71", "90", "9", "8", "0", "4", "10", "88", "37"]).map(|(c, v)| (c.to_string(), v.to_string())).collect()
 }
 
 /// The nine draws a report of `DynamicArrays.xlsx` lists (its examples, at least nine kept).
@@ -1438,5 +1438,47 @@ fn a_row_without_its_number_or_stated_twice_places_its_cells_as_the_engine_does(
         assert!(raw.formula_cells.iter().find(|c| c.reference == "B2").unwrap().not_held.as_deref().is_some_and(|w| w.contains("states again later")), "{spelled}");
         let (wrong, cells_now, matched_now) = mismatches(&path, &mut probe);
         assert_eq!((cells_now, matched_now), (cells + 1, matched), "{spelled}: {wrong:?}");
+    }
+}
+
+#[test]
+fn a_seeded_draw_is_the_same_however_deep_its_cell_reads() {
+    // the round at 75bc4ccb: a run the evaluator abandons to too deep a recursion (64 formulas, or
+    // a stack whose depth depends on the build) spent its draws, so a `RAND()` reading a long chain
+    // kept another number in a debug build than in a release one, matching Excel's cache in one
+    // and not the other; a cell's draws are counted within each run of it (fork change 40b)
+    let dir = tempfile::tempdir().unwrap();
+    let source = corpus_dir(&baseline()).join("calc_tests/MATH_AND_TRIGONOMETRY/ABS.xlsx");
+    let part = sheet_part(&source, "Sheet1");
+    let sheet_data = regex::Regex::new(r"(?s)<sheetData>.*?</sheetData>|<sheetData/>").unwrap();
+    let with_rows = |rows: &str| {
+        let rows = rows.to_string();
+        let sheet_data = sheet_data.clone();
+        move |text: &str| sheet_data.replace(text, regex::NoExpand(&format!("<sheetData>{rows}</sheetData>"))).to_string()
+    };
+    // the draw of a cell reading nothing, which never unwinds, measured against a cache it is not
+    let shallow = dir.path().join("shallow.xlsx");
+    rewrite_part(&source, &shallow, &part, with_rows(r#"<row r="1"><c r="A1"><f ca="1">RAND()</f><v>2</v></c></row>"#));
+    let mut probe = Probe::default();
+    let mut opts = options(LinksMode::Cached);
+    opts.max_examples = 1_000;
+    let report = run_file(&shallow, &opts, &mut probe);
+    let draw = report.examples.values().flatten().find(|e| e.reference == "A1").map(|e| e.actual.clone()).unwrap();
+    // the same cell reading a chain of 99 formulas, past the evaluator's 64 in every build, its
+    // cache that draw: every cell matches, under either resolution
+    let mut rows = format!(r#"<row r="1"><c r="A1"><f ca="1">RAND()+B1*0</f><v>{draw}</v></c><c r="B1"><f>B2</f><v>1</v></c></row>"#);
+    for r in 2..100 {
+        rows.push_str(&format!(r#"<row r="{r}"><c r="B{r}"><f>B{}</f><v>1</v></c></row>"#, r + 1));
+    }
+    rows.push_str(r#"<row r="100"><c r="B100"><v>1</v></c></row>"#);
+    let deep = dir.path().join("deep.xlsx");
+    rewrite_part(&source, &deep, &part, with_rows(&rows));
+    for links in [LinksMode::Cached, LinksMode::Linked] {
+        let mut o = options(links);
+        o.max_examples = 1_000;
+        let report = run_file(&deep, &o, &mut probe);
+        let m = report.measure().unwrap();
+        let missed: Vec<String> = report.examples.values().flatten().map(|e| format!("{} {} {}", e.reference, e.expected, e.actual)).collect();
+        assert_eq!((m.formula_cells, m.matched), (100, 100), "{links:?}: {missed:?}");
     }
 }
