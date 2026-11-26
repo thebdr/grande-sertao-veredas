@@ -747,6 +747,12 @@ fn a_value_the_interpreter_does_not_have_is_refused_where_it_stands() {
 }
 
 #[test]
+fn an_array_repeated_past_what_the_front_end_builds_is_refused_where_it_stands() {
+    let words = "a value the interpreter does not have";
+    refused("repeat", &at("repeat", "[self.x; 70_000]", words, "an array of one value repeated past 65536"));
+}
+
+#[test]
 fn a_terminator_the_interpreter_does_not_have_is_refused_where_it_stands() {
     refused("terminator", &at("terminator", "core::arch::asm!", "a terminator the interpreter does not have", "InlineAsm"));
 }

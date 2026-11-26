@@ -21,6 +21,10 @@ use crate::defs::Defs;
 use crate::error::{Refusal, Refused};
 use crate::lower::Lowerer;
 
+/// The most copies `[x; N]` is lowered to: the interpreter has no repeat, so the front end builds the array from N
+/// operands.
+const REPEAT: usize = 1 << 16;
+
 /// A body being lowered: its locals, MIR's and the ones the lowering adds, and its blocks' new numbers.
 struct Frame<'b> {
     body: &'b mir::Body,
@@ -277,12 +281,14 @@ impl Lowerer<'_> {
             Rvalue::Use(op, _) => Ok(Value::Use(self.operand(frame, op, at, before)?)),
             Rvalue::CopyForDeref(p) => Ok(Value::Use(Operand::Copy(self.place(frame, p, at)?))),
             Rvalue::Repeat(op, count) => {
-                // `[x; N]` is the array of N copies of x, built as the interpreter builds an array
+                // `[x; N]` is the array of N copies of x, built as the interpreter builds an array: one operand each,
+                // so N is bounded, past which the instruction would outweigh the program
                 let ty = rvalue.ty(frame.body.locals()).map_err(|_| self.refuse(Refused::Value, "an array of no type", at))?;
                 let ty = self.ty(ty, at)?;
                 let n = count.eval_target_usize().map_err(|_| self.refuse(Refused::Value, "an array of no length", at))?;
+                let n = usize::try_from(n).ok().filter(|n| *n <= REPEAT);
+                let n = n.ok_or_else(|| self.refuse(Refused::Value, format!("an array of one value repeated past {REPEAT}"), at))?;
                 let op = self.operand(frame, op, at, before)?;
-                let n = usize::try_from(n).map_err(|_| self.refuse(Refused::Value, "an array too long", at))?;
                 Ok(Value::Aggregate(ty, None, vec![op; n]))
             }
             Rvalue::Ref(_, kind, p) => match kind {
