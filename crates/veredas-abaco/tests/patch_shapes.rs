@@ -1803,6 +1803,51 @@ fn a_function_the_engine_does_not_compute_is_refused_in_a_formula_and_a_name() {
         assert_eq!(read_back(&dst, "S", "D3"), Value::Number(2.0), "{h:?}");
         assert_eq!(read_back(&dst, "S", "D4"), Value::Number(4.0), "{h:?}");
     }
+    // the round at eb2a9460: a call the engine makes nothing of but `#NAME?`, refused: a name over
+    // a cell, over a formula, a LET returning a LAMBDA, a local name over a global LAMBDA, `_xlfn.`
+    // before a LAMBDA name or a LET's own, and a name an edit sets calling one
+    let local = |n: &str, f: &str| Edit::SetName { name: n.into(), formula: f.into(), scope: Some("S".into()) };
+    let named = |n: &str, f: &str| Edit::SetName { name: n.into(), formula: f.into(), scope: None };
+    let d1 = |f: &str| Edit::Formula { sheet: "S".into(), cell: "D1".into(), formula: f.into(), expect: None };
+    for (edits, called) in [
+        (vec![named("Celula", "=S!$A$2"), d1("=Celula(A1)")], "CELULA"),
+        (vec![named("Taxa", "=S!$A$2*2"), d1("=Taxa(A1)")], "TAXA"),
+        (vec![named("Dobra", "=LET(z,1,LAMBDA(x,x*2))"), d1("=Dobra(A1)")], "DOBRA"),
+        (vec![named("Loc", "=LAMBDA(x,x*3)"), local("Loc", "=S!$A$2"), d1("=Loc(A1)")], "LOC"),
+        (vec![named("Dobro", "=LAMBDA(x,x*2)"), d1("=_xlfn.Dobro(A1)")], "DOBRO"),
+        (vec![d1("=LET(f,LAMBDA(x,x*2),_xlfn.f(A1))")], "F"),
+        (vec![named("Celula", "=S!$A$2"), named("Nm", "=Celula(S!$A$1)")], "CELULA"),
+    ] {
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let _ = std::fs::remove_file(&dst);
+            match patch(&src, &dst, &edits, &options) {
+                Err(PatchError::Unsupported(m)) => assert!(m.contains(&format!("{called} is a function the engine does not compute")), "{m}"),
+                other => panic!("{edits:?}: {other:?}"),
+            }
+            assert!(!dst.exists());
+        }
+    }
+    // and what the engine does compute, applied in the file's spelling: a LAMBDA name called, a
+    // LAMBDA spelled `_xlfn.lambda`, `_xlfn.Lambda` or `_xlfn._xlws.LAMBDA` (fork change 43), a
+    // binding whose `_xlpm.` is in another case
+    for (edits, cell, want, written) in [
+        (vec![named("Dobro", "=LAMBDA(x,x*2)"), d1("=Dobro(A1)")], "D1", 2.0, None),
+        (vec![d1("=LET(h,_xlfn.lambda(g,g(A1)),h(LAMBDA(y,y*2)))")], "D1", 2.0, Some("_xlfn.LET(_xlpm.h,_xlfn.LAMBDA(_xlpm.g,_xlpm.g(A1)),_xlpm.h(_xlfn.LAMBDA(_xlpm.y,_xlpm.y*2)))")),
+        (vec![d1("=LET(h,_xlfn._xlws.LAMBDA(g,g(A1)),h(LAMBDA(y,y*2)))")], "D1", 2.0, Some("_xlfn.LET(_xlpm.h,_xlfn.LAMBDA(_xlpm.g,_xlpm.g(A1)),_xlpm.h(_xlfn.LAMBDA(_xlpm.y,_xlpm.y*2)))")),
+        (vec![d1("=LET(h,_xlfn.Lambda(x,x*2),h(A1))")], "D1", 2.0, Some("_xlfn.LET(_xlpm.h,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.h(A1))")),
+        (vec![d1("=LAMBDA(_Xlpm.g,_Xlpm.g(A1))(LAMBDA(y,y*2))")], "D1", 2.0, None),
+        (vec![d1("=LET(_XLPM.f,LAMBDA(y,y*2),_XLPM.f(A1))")], "D1", 2.0, None),
+    ] {
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let _ = std::fs::remove_file(&dst);
+            let report = patch(&src, &dst, &edits, &options).unwrap_or_else(|e| panic!("{edits:?}: {e}"));
+            assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{edits:?}: {:?}", report.outcomes);
+            assert_eq!(read_back(&dst, "S", cell), Value::Number(want), "{edits:?}");
+            if let Some(written) = written {
+                assert_eq!(stored(&dst, "S", cell).0.as_deref(), Some(written), "{edits:?}");
+            }
+        }
+    }
 }
 
 #[test]

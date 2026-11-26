@@ -450,7 +450,10 @@ fn node_volatile(node: &Node, sheet: u32, names: &ParsedNames, volatile: &[bool]
 /// A LET's or a LAMBDA's own name as the parser holds it, its `_xlpm.` passed over, by the
 /// engine's fold.
 fn bound_key(name: &str) -> String {
-    name_key(name.trim_start_matches("_xlpm."))
+    // as the engine binds a call to a LET's or a LAMBDA's name (`assign_variable_ids`): both as
+    // parsed, by the one fold, no prefix passed over (`_Xlpm.g` binds `_xlpm.g(`, `_xlfn.f(` no `f`;
+    // the round at eb2a9460)
+    name_key(name)
 }
 
 fn node_volatile_bound(node: &Node, sheet: u32, names: &ParsedNames, volatile: &[bool], bound: &mut Vec<String>) -> bool {
@@ -962,29 +965,38 @@ fn spelled_as_in_the_source(
     }
 }
 
-/// The first function a formula calls that the engine does not compute: not one of its own, nor a
-/// name of the workbook (a LAMBDA) nor a parameter a LET or a LAMBDA around it binds. Such a call
-/// would be cached as `#NAME?` and spelled as the engine prints an unknown name, so an edit
-/// writing one is refused.
-fn unknown_call(node: &Node, bound: &mut Vec<String>, names: &[String]) -> Option<String> {
-    fn any<'n>(nodes: impl IntoIterator<Item = &'n Node>, bound: &mut Vec<String>, names: &[String]) -> Option<String> {
-        nodes.into_iter().find_map(|n| unknown_call(n, bound, names))
+/// The first function a formula calls that the engine does not compute, as the engine calls one
+/// (the round at eb2a9460): a built-in of its own; a LET's or a LAMBDA's own name, the call and the
+/// binding by the engine's fold as parsed; else the defined name of its key the cell's sheet holds,
+/// else the workbook's, and only where the engine parsed it as a LAMBDA definition (a name over a
+/// cell, a formula or a LET returning a LAMBDA is none it calls, nor a local name over a global
+/// LAMBDA, nor `_xlfn.f(` for a name `f`). Such a call would be cached as `#NAME?` and spelled as
+/// the engine prints an unknown name, so an edit writing one is refused.
+fn unknown_call(node: &Node, bound: &mut Vec<String>, names: &ParsedNames, sheet: Option<u32>) -> Option<String> {
+    fn any<'n>(nodes: impl IntoIterator<Item = &'n Node>, bound: &mut Vec<String>, names: &ParsedNames, sheet: Option<u32>) -> Option<String> {
+        nodes.into_iter().find_map(|n| unknown_call(n, bound, names, sheet))
     }
     match node {
         Node::NamedFunctionKind { name, args, .. } => {
-            let bare = name.trim_start_matches("_xlfn.").trim_start_matches("_xlpm.");
-            // the engine's fold, for a bound name as for a defined one (`ÁREA` is `área`)
-            let key = name_key(bare);
-            let known = bound.iter().any(|b| bound_key(b) == key) || names.iter().any(|n| name_key(n) == key);
-            if !known {
+            let key = name_key(name);
+            let own = bound.iter().any(|b| bound_key(b) == key);
+            // the engine's lookup: the sheet's own name, else the workbook's, never both
+            let lambda = || {
+                sheet
+                    .and_then(|s| names.find(Some(s), &key))
+                    .or_else(|| names.find(None, &key))
+                    .is_some_and(|i| matches!(names.0[i].2, Node::LambdaDefKind { .. }))
+            };
+            if !own && !lambda() {
+                let bare = name.trim_start_matches("_xlfn._xlws.").trim_start_matches("_xlfn.").trim_start_matches("_xlpm.");
                 return Some(bare.to_uppercase());
             }
-            any(args, bound, names)
+            any(args, bound, names, sheet)
         }
         Node::LambdaDefKind { parameters, body } => {
             let depth = bound.len();
             bound.extend(parameters.iter().map(|p| p.name().to_string()));
-            let found = unknown_call(body, bound, names);
+            let found = unknown_call(body, bound, names, sheet);
             bound.truncate(depth);
             found
         }
@@ -997,42 +1009,34 @@ fn unknown_call(node: &Node, bound: &mut Vec<String>, names: &[String]) -> Optio
                 if let Node::NamedVariableKind { name, .. } = &args[2 * i] {
                     bound.push(name.clone());
                 }
-                found = found.or_else(|| unknown_call(&args[2 * i + 1], bound, names));
+                found = found.or_else(|| unknown_call(&args[2 * i + 1], bound, names, sheet));
             }
-            let found = found.or_else(|| unknown_call(&args[2 * pairs], bound, names));
+            let found = found.or_else(|| unknown_call(&args[2 * pairs], bound, names, sheet));
             bound.truncate(depth);
             found
         }
-        Node::FunctionKind { args, .. } => any(args, bound, names),
-        Node::LambdaCallKind { lambda, args } => any(std::iter::once(lambda.as_ref()).chain(args.iter()), bound, names),
+        Node::FunctionKind { args, .. } => any(args, bound, names, sheet),
+        Node::LambdaCallKind { lambda, args } => any(std::iter::once(lambda.as_ref()).chain(args.iter()), bound, names, sheet),
         Node::OpRangeKind { left, right }
         | Node::OpConcatenateKind { left, right }
         | Node::OpSumKind { left, right, .. }
         | Node::OpProductKind { left, right, .. }
         | Node::OpPowerKind { left, right }
-        | Node::CompareKind { left, right, .. } => any([left.as_ref(), right.as_ref()], bound, names),
-        Node::UnaryKind { right, .. } => unknown_call(right, bound, names),
-        Node::ImplicitIntersection { child, .. } | Node::SpillRangeOperator { child } => unknown_call(child, bound, names),
+        | Node::CompareKind { left, right, .. } => any([left.as_ref(), right.as_ref()], bound, names, sheet),
+        Node::UnaryKind { right, .. } => unknown_call(right, bound, names, sheet),
+        Node::ImplicitIntersection { child, .. } | Node::SpillRangeOperator { child } => unknown_call(child, bound, names, sheet),
         _ => None,
     }
 }
 
-/// [`unknown_call`] of a formula an edit writes, parsed at `a` of `sheet`, where the names it sees
-/// are the workbook's global ones and those local to `scope` (the cell's sheet, a name's own scope):
-/// a LAMBDA name local to another sheet is none it can call.
+/// [`unknown_call`] of a formula an edit writes, parsed at `a` of `sheet`, evaluated from `scope`
+/// (the cell's sheet, a name's own scope; a workbook name's formula from no sheet, so only the
+/// workbook's LAMBDA names count for it): a LAMBDA name local to another sheet is none it can call.
 fn calls_unknown(wb: &Workbook, sheet: u32, a: Addr, formula: &str, scope: Option<&str>) -> Option<String> {
     let node = parsed_at(wb, sheet, a, formula)?;
-    let names: Vec<String> = wb
-        .names()
-        .into_iter()
-        .filter(|n| match (&n.scope, scope) {
-            (None, _) => true,
-            (Some(local), Some(here)) => local == here,
-            (Some(_), None) => false,
-        })
-        .map(|n| n.name)
-        .collect();
-    unknown_call(&node, &mut Vec::new(), &names)
+    let names = ParsedNames::of(wb);
+    let scope = scope.and_then(|s| wb.model().workbook.get_worksheet_names().iter().position(|n| n == s)).map(|i| i as u32);
+    unknown_call(&node, &mut Vec::new(), &names, scope)
 }
 
 /// The first error a formula states that no file's formula may hold: MS-XLSX's `error-constant`
@@ -3293,6 +3297,7 @@ mod tests {
         assert!(!v("f(1)", other, other), "Other has no f");
         assert!(!v("LET(f,LAMBDA(x,x*2),f(1))", other, data), "the LET's f");
         assert!(!v("LAMBDA(f,f(1))(LAMBDA(y,y*2))", other, data), "the LAMBDA's parameter f");
+        assert!(!v("_xlfn.lambda(f,f(1))(LAMBDA(y,y*2))", other, data), "a LAMBDA spelled otherwise (fork change 43)");
         assert!(v("LET(g,LAMBDA(x,x*2),f(1))", other, data), "a LET binding another name");
         // and a parameter whose name a debug print escapes, read whole (fork change 41; the round
         // at 444cead9)
