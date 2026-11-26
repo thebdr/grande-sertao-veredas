@@ -1864,3 +1864,205 @@ fn a_middle_argument_part_and_field_of_another_type_are_refused() {
     let mut m = Machine::load(b.program.clone(), &[triple]).unwrap();
     assert_eq!(m.set_region(RegionId(0), &bad), Err(HostError::Slots), "a middle field, as a region");
 }
+
+// The twenty-third refute round's tests: the lists rounds 21 and 22 left in one order, the element that decides now
+// after a sound one (a structure's, an enum's and a variant's deep part, a discriminant outside its type, a switch's
+// last arm, a value's last field, an aggregate's parts, an enum's largest variant first).
+
+fn nested_too_deep(p: Program) -> bool {
+    matches!(Machine::load(p, &[]).map(|_| ()), Err(LoadError::Type { reason: "nested too deep", .. }))
+}
+
+fn loads(p: Program) -> bool {
+    Machine::load(p, &[]).is_ok()
+}
+
+/// `u8`, then `S_k = (u8, S_{k-1})`, innermost first: each structure's deep field after a shallow one.
+fn structures_deep_last(depth: u32) -> Program {
+    let mut p = Program::default();
+    p.types.push(Type::Int(Int::U8));
+    for k in 1..=depth {
+        let fields = vec![Field { name: "0".into(), ty: TypeId(0) }, Field { name: "1".into(), ty: TypeId(k - 1) }];
+        p.types.push(Type::Struct { name: format!("S{k}"), fields });
+    }
+    p
+}
+
+/// `u8`, then `E_k { None, Some(E_{k-1}) }`, innermost first: `Option`'s shape, the deep variant after a shallow one.
+fn enums_deep_last(depth: u32) -> Program {
+    let mut p = Program::default();
+    p.types.push(Type::Int(Int::U8));
+    for k in 1..=depth {
+        let variants = vec![
+            Variant { name: "None".into(), discriminant: 0, fields: vec![] },
+            Variant { name: "Some".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: TypeId(k - 1) }] },
+        ];
+        p.types.push(Type::Enum { name: "Option".into(), discriminant: Int::Isize, variants });
+    }
+    p
+}
+
+/// `u8`, then `E_k { A(u8, E_{k-1}) }`, innermost first: a variant's deep field after a shallow one of its own.
+fn variants_deep_last(depth: u32) -> Program {
+    let mut p = Program::default();
+    p.types.push(Type::Int(Int::U8));
+    for k in 1..=depth {
+        let fields = vec![Field { name: "0".into(), ty: TypeId(0) }, Field { name: "1".into(), ty: TypeId(k - 1) }];
+        let variants = vec![Variant { name: "A".into(), discriminant: 0, fields }];
+        p.types.push(Type::Enum { name: format!("E{k}"), discriminant: Int::U8, variants });
+    }
+    p
+}
+
+#[test]
+fn a_structure_whose_deep_field_comes_after_a_shallow_one_counts_the_deep_one() {
+    assert!(nested_too_deep(structures_deep_last(300)), "300 structures, each (u8, the one before)");
+    assert!(loads(structures_deep_last(200)), "200 load");
+}
+
+#[test]
+fn an_enum_whose_deep_variant_comes_after_a_shallow_one_counts_the_deep_one() {
+    assert!(nested_too_deep(enums_deep_last(300)), "Option<Option<...>> 300 deep");
+    assert!(loads(enums_deep_last(200)), "200 load");
+}
+
+#[test]
+fn a_variant_whose_deep_field_comes_after_a_shallow_one_counts_the_deep_one() {
+    assert!(nested_too_deep(variants_deep_last(300)), "300 enums, each A(u8, the one before)");
+    assert!(loads(variants_deep_last(200)), "200 load");
+}
+
+#[test]
+fn a_discriminant_outside_its_type_after_a_sound_one_is_refused() {
+    for ds in [[0, -1], [1, 256]] {
+        let variants = ds.iter().map(|d| Variant { name: format!("V{d}"), discriminant: *d, fields: vec![] }).collect();
+        let p = Program { types: vec![Type::Enum { name: "E".into(), discriminant: Int::U8, variants }], ..Program::default() };
+        assert_eq!(
+            Machine::load(p, &[]).map(|_| ()),
+            Err(LoadError::Type { ty: 0, reason: "a discriminant outside its type" }),
+            "enum E: u8 {{ {} , {} }}",
+            ds[0],
+            ds[1]
+        );
+    }
+}
+
+#[test]
+fn a_switch_takes_every_arm_whatever_order_its_values_are_listed_in() {
+    // fn f(x: i8) -> u8 { match x { 5 => 1, -3 => 2, 0 => 3, 9 => 4, 2 => 5, _ => 6 } }, the arms in source order
+    let mut b = Build::default();
+    let (i8t, u8t) = (b.int(Int::I8), b.int(Int::U8));
+    let arms: [(i128, i128); 5] = [(5, 1), (-3, 2), (0, 3), (9, 4), (2, 5)];
+    let mut blocks = vec![block(
+        vec![],
+        Terminator::SwitchInt {
+            value: copy(1),
+            targets: arms.iter().enumerate().map(|(i, (v, _))| (*v, BlockId(i as u32 + 1))).collect(),
+            otherwise: BlockId(6),
+            at: at(1),
+        },
+    )];
+    for (_, r) in arms.iter().chain([(0, 6)].iter()) {
+        blocks.push(block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, *r)])), 2)], ret()));
+    }
+    let f = b.function(Function { name: "f".into(), params: 1, locals: locals(&[u8t, i8t]), blocks });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    for (x, want) in arms.iter().copied().chain([(7, 6), (-128, 6)]) {
+        let got = m.call(f, &[Arg::Value(&[int(Int::I8, x)])]).map(|r| r.to_vec());
+        assert_eq!(got, Ok(vec![int(Int::U8, want)]), "match {x}");
+    }
+}
+
+#[test]
+fn a_value_whose_last_field_is_of_another_type_is_no_value() {
+    let mut b = Build::default();
+    let (u8t, u16t, unit) = (b.int(Int::U8), b.int(Int::U16), b.unit());
+    let pair = b.tuple(&[u8t, u16t]);
+    let e = b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::Isize,
+        variants: vec![
+            Variant { name: "A".into(), discriminant: 0, fields: vec![] },
+            Variant { name: "B".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: u8t }, Field { name: "1".into(), ty: u16t }] },
+        ],
+    });
+    let take_pair = b.function(Function { name: "take_pair".into(), params: 1, locals: locals(&[unit, pair]), blocks: vec![block(vec![], ret())] });
+    let take_e = b.function(Function { name: "take_e".into(), params: 1, locals: locals(&[unit, e]), blocks: vec![block(vec![], ret())] });
+    let bad_pair = vec![int(Int::U8, 1), int(Int::U8, 2)];
+    let bad_e = vec![int(Int::Isize, 1), int(Int::U8, 1), int(Int::U8, 2)];
+    let mut m = Machine::load(b.program.clone(), &[pair, e]).unwrap();
+    assert_eq!(m.set_region(RegionId(0), &[int(Int::U8, 1), int(Int::U16, 2)]), Ok(()), "(1, 2)");
+    assert_eq!(m.set_region(RegionId(1), &[int(Int::Isize, 1), int(Int::U8, 1), int(Int::U16, 2)]), Ok(()), "B(1, 2)");
+    for (region, f, bad, what) in [(0, take_pair, &bad_pair, "(u8, u8) as (u8, u16)"), (1, take_e, &bad_e, "B(u8, u8) as B(u8, u16)")] {
+        assert_eq!(m.set_region(RegionId(region), bad), Err(HostError::Slots), "{what}, as a region");
+        assert_eq!(m.start(f, &[Arg::Value(bad)]), Err(HostError::Arguments), "{what}, as an argument");
+        let ty = if region == 0 { pair } else { e };
+        let mut p = Build { program: b.program.clone() };
+        p.function(Function { name: "f".into(), params: 0, locals: locals(&[ty]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(ty, bad.clone())), 1)], ret())] });
+        assert_eq!(
+            Machine::load(p.program, &[]).map(|_| ()),
+            Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" }),
+            "{what}, as a constant"
+        );
+    }
+}
+
+#[test]
+fn an_aggregate_with_too_few_parts_is_refused() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let pair = b.tuple(&[u8t, u8t]);
+    let arr = b.ty(Type::Array { element: u8t, len: 2 });
+    let e = b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::Isize,
+        variants: vec![Variant { name: "B".into(), discriminant: 0, fields: vec![Field { name: "0".into(), ty: u8t }, Field { name: "1".into(), ty: u8t }] }],
+    });
+    for (ty, variant, what) in [(pair, None, "(u8, u8)"), (arr, None, "[u8; 2]"), (e, Some(0), "E::B(u8, u8)")] {
+        for parts in [vec![], vec![copy(1)]] {
+            let mut p = Build { program: b.program.clone() };
+            let n = parts.len();
+            p.function(Function {
+                name: "f".into(),
+                params: 1,
+                locals: locals(&[ty, u8t]),
+                blocks: vec![block(vec![assign(place(0), Value::Aggregate(ty, variant, parts), 1)], ret())],
+            });
+            assert_eq!(
+                Machine::load(p.program, &[]).map(|_| ()),
+                Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "an aggregate with too many or too few parts" }),
+                "{what} from {n} parts"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_enum_whose_first_variant_is_the_largest_is_laid_out_at_its_size() {
+    // enum State { Running(Duration, u8), Idle }; fn set(s: &mut State, x: u8) { *s = State::Running(1.5 s, x) }
+    let mut b = Build::default();
+    let (u8t, d, unit) = (b.int(Int::U8), b.ty(Type::Duration), b.unit());
+    let state = b.ty(Type::Enum {
+        name: "State".into(),
+        discriminant: Int::Isize,
+        variants: vec![
+            Variant { name: "Running".into(), discriminant: 0, fields: vec![Field { name: "0".into(), ty: d }, Field { name: "1".into(), ty: u8t }] },
+            Variant { name: "Idle".into(), discriminant: 1, fields: vec![] },
+        ],
+    });
+    let rs = b.reference(state, true);
+    let secs = konst(d, vec![int(Int::U64, 1), int(Int::U32, 500_000_000)]);
+    let set = b.function(Function {
+        name: "set".into(),
+        params: 2,
+        locals: locals(&[unit, rs, u8t]),
+        blocks: vec![block(vec![assign(proj(1, vec![Projection::Deref]), Value::Aggregate(state, Some(0), vec![secs, copy(2)]), 1)], ret())],
+    });
+    let mut m = Machine::load(b.program, &[state, u8t]).unwrap();
+    m.set_region(RegionId(1), &[int(Int::U8, 9)]).unwrap();
+    assert_eq!(m.size_of(state), Some(4));
+    m.call(set, &[Arg::Ref(RegionId(0)), Arg::Value(&[int(Int::U8, 7)])]).unwrap();
+    let want = [int(Int::Isize, 0), int(Int::U64, 1), int(Int::U32, 500_000_000), int(Int::U8, 7)];
+    assert_eq!(m.region(RegionId(0)), Some(&want[..]));
+    assert_eq!(m.region(RegionId(1)), Some(&[int(Int::U8, 9)][..]), "the region beside it untouched");
+}
