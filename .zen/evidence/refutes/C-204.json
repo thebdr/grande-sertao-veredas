@@ -1,13 +1,13 @@
 {
   "clause": "C-204",
   "verdict": "refuted",
-  "ranAt": "2026-11-24T23:26:33.093Z",
-  "headCommit": "07ca6595500f4a431556a9e08cbaff46e2f4ba55",
+  "ranAt": "2026-11-26T08:23:23.442Z",
+  "headCommit": "ace946e0768c6c20e153fa243b7c5432588c1584",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/record.rs",
       "file": "crates/veredas-comissionador/tests/record.rs",
-      "symbolSha": "c8ec8a6090c86a4d2451e314a3d2c79ad8dcd9c599524e83e46df57c8d30aa19"
+      "symbolSha": "eb6e78bc3584a38511908f32c78d8542ea1713e3c3ee3f0b023ef944b4176545"
     }
   ]
 }
