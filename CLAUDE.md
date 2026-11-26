@@ -77,7 +77,8 @@ A Rust workspace; each component is a crate with a version of its own. Read this
   claim one number: supervisão C-055/Q190, core C-070/Q100, portal C-090/Q130, maquinar
   C-110/Q160, aranha C-130/Q280, controlador (with ORCL) C-150/Q220, comissionador C-200/Q310,
   ábaco C-220/Q340, oficina C-250/Q370, releases C-290/Q430; a block ends where the next begins.
-  Suite-wide ones run on from C-300 and Q46.
+  Suite-wide ones run on from C-300 and Q46. A member whose clause block is used up asks the
+  orchestrator for a second, twenty numbers from C-400 on: aranha C-400.
 - Before a push a member runs the laws and every test its change can reach, except supervisão's
   browser tests, which supervisão alone runs before its own pushes:
   `cargo nextest run --workspace --profile no-browser -E 'rdeps(veredas-<nome>) | package(leis)'`.
