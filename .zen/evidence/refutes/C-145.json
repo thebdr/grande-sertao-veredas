@@ -1,13 +1,13 @@
 {
   "clause": "C-145",
   "verdict": "refuted",
-  "ranAt": "2026-11-26T08:49:37.390Z",
-  "headCommit": "fc603a4ddc8ca2afb144cdde4fe47473d5d56fc4",
+  "ranAt": "2026-11-26T09:53:59.700Z",
+  "headCommit": "e4f5fad84942e923910465b1f4b171cdcf530cf6",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/topology.rs",
       "file": "crates/veredas-aranha/tests/topology.rs",
-      "symbolSha": "89d43d1acc687372d9b33fd751dc5a7042ced301ac268e2b8d3e4abc44ad7a65"
+      "symbolSha": "82b976481bce1508df22795710b5303ecc8f6a85359ce5ae6e2ebce034671c0d"
     }
   ]
 }
