@@ -52,7 +52,10 @@ controller's hardware configuration has nothing of the suite's own to compare ag
 - **Scan files and the diff** (`scan`): a scan written as a versioned TOML file (`veredas-scan`,
   law L7) beside the capture of its frames, read back whole; a **baseline** is a saved scan; the
   diff of a scan against a baseline (appeared, vanished, renamed, readdressed, rewired, conflicts
-  new and cleared). Its schema document lands with it (`docs/scan-schema.md`).
+  new and cleared), each device by its MAC, a value compared only where both scans state it (one
+  stated by one scan alone is said so, neither a change nor silence), a link by its two ends, and
+  the interfaces only one scan listened on named. Its schema document lands with it
+  (`docs/scan-schema.md`).
 - **The executable** (`veredas-aranha`): listen on an interface for a while and write the scan;
   identify; diff two scan files. The commissioning tool on its own, from the command line.
 - **Later phases**, named, no code now:
@@ -193,7 +196,8 @@ veredas_aranha
   listen        the listener: a worker per interface, the kept frames, the paced sender, status
   ask           DCP Identify, paced, through a listener
   topology      nodes, links with confidence, rings, components, notes
-  scan          the scan file (`veredas-scan`), the baseline, the diff
+  scan          the scan file (`veredas-scan`); a baseline is a saved one
+  diff          a scan against a baseline: by MAC, by value stated, by link ends
   main.rs       veredas-aranha listen | identify | diff
 ```
 
