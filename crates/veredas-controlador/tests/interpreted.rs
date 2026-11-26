@@ -814,3 +814,64 @@ fn the_reason_kept_is_the_last_load_s() {
     assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
     assert_eq!(c.load_error(), Some(&MakeError::Scan));
 }
+
+// The eleventh refute round's tests: a program error in a scan that overran within twice its period, and on the
+// very first scan, the program's 502; a power cycle's load fault keeping its reason and exchanging the safe outputs;
+// and the load's reason outliving its acknowledge.
+
+fn zero_at_0(index: usize) -> In {
+    if index == 0 { In { value: 9, divisor: 0 } } else { steady(index) }
+}
+
+fn zero_at_2(index: usize) -> In {
+    if index == 2 { In { value: 9, divisor: 0 } } else { steady(index) }
+}
+
+// a program error in a scan that overran its period, within twice it, is the program's 502,
+// its overrun counted; never RUN with the task faulted, never the watchdog's.
+#[test]
+fn a_program_error_in_a_scan_that_overran_within_twice_its_period_is_the_program_s_fault_with_its_overrun() {
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, zero_at_2);
+    plant.stall = |index| if index == 2 { ms(15) } else { Duration::ZERO };
+    let mut c = interpreted();
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 3);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:2:5") sim() no_realtime() overruns(count=1)"#, "at the scan that failed");
+    step(&mut c, &mut plant, &mut clock, 1);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:2:5") sim() no_realtime() overruns(count=1)"#);
+    let values: Vec<u32> = plant.writes.iter().map(|w| w.1).collect();
+    assert_eq!(values, [scanned(FIRST + 1, 0), scanned(FIRST + 2, 1), SAFE.value, SAFE.value]);
+}
+
+// a program error on the program's very first scan (an input still zero at start-up) is the program's 502.
+#[test]
+fn a_program_error_on_the_very_first_scan_is_the_program_s_fault() {
+    let (c, plant, _) = started(interpreted(), zero_at_0, 1);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:2:5") sim() no_realtime()"#);
+    assert_eq!(plant.writes, [(ms(0), SAFE.value)]);
+}
+
+// a power cycle's load fault keeps the adapter's reason and exchanges the safe outputs, from every state.
+#[test]
+fn a_power_cycle_s_load_fault_keeps_its_reason_and_exchanges_the_safe_outputs_from_every_state() {
+    let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
+    for was in [StateWord::Run, StateWord::Startup, StateWord::Stop, StateWord::Hold, StateWord::Fault] {
+        let mut c = Controller::power_on_from(config(), SIM, Restart::PowerCycle { was }, loaded(&two)).unwrap();
+        assert_eq!(c.load_error(), Some(&MakeError::State), "{was:?}");
+        let mut clock = VirtualClock::new();
+        let mut plant = Plant::new(&clock, steady);
+        step(&mut c, &mut plant, &mut clock, 3);
+        assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)], "{was:?}");
+        assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()", "{was:?}");
+    }
+}
+
+// the load's reason outlives its acknowledge.
+#[test]
+fn the_load_s_reason_outlives_its_acknowledge() {
+    let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two)).unwrap();
+    c.acknowledge(OFICINA, &Key).unwrap();
+    assert_eq!(c.load_error(), Some(&MakeError::State));
+}
