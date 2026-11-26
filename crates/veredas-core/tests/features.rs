@@ -718,8 +718,9 @@ fn every_feature_gate_is_where_it_belongs() {
             rel: &rel,
             gates: Vec::new(),
             stray: Vec::new(),
+            in_string: false,
         };
-        reading.code(&tokens);
+        reading.code(&tokens, false);
         gates.extend(reading.gates);
         stray.extend(reading.stray);
     }
@@ -881,16 +882,50 @@ struct Reading<'a> {
     rel: &'a str,
     gates: Vec<String>,
     stray: Vec<String>,
+    /// Reading a string an attribute holds, as the code a derive may make of it.
+    in_string: bool,
 }
 
 impl Reading<'_> {
+    /// A string in an attribute, which a derive may make code of (serde's `deserialize_with =
+    /// "path"`, `bound = "T: Trait"`): its value, unescaped as syn unescapes it for a derive, held
+    /// to the code's rules wherever it reads as Rust tokens. One that does not cannot be code to a
+    /// derive either. A string outside an attribute reaches none: no macro can move one into an
+    /// attribute, a `#` standing only where it starts one and none inside a macro's arguments.
+    fn string(&mut self, l: &proc_macro2::Literal) {
+        let syn::Lit::Str(s) = syn::Lit::new(l.clone()) else {
+            return;
+        };
+        let value = s.value();
+        let line = l.span().start().line;
+        if let Some(why) = stripped(&value) {
+            self.stray
+                .push(format!("{}: a string at line {line}: {why}", self.rel));
+        }
+        if let Ok(code) = value.parse::<TokenStream>() {
+            let inner: Vec<TokenTree> = code.into_iter().collect();
+            let at = format!("{} (a string at line {line}, read as code)", self.rel);
+            let mut string = Reading {
+                rel: &at,
+                gates: Vec::new(),
+                stray: Vec::new(),
+                in_string: true,
+            };
+            string.code(&inner, false);
+            self.gates.extend(string.gates);
+            self.stray.extend(string.stray);
+        }
+    }
+
     fn refuse(&mut self, t: &TokenTree, what: &str) {
         let line = t.span().start().line;
         self.stray.push(format!("{}:{line}: {what}", self.rel));
     }
 
-    /// Tokens outside any attribute, a function's body and a macro's among them.
-    fn code(&mut self, tokens: &[TokenTree]) {
+    /// Tokens outside any attribute, a function's body and a macro's among them; `args` inside a
+    /// macro's arguments (`name!(..)`), where no attribute stands, a doc comment included, so no
+    /// macro takes a `#` apart from its brackets and sets another group behind it.
+    fn code(&mut self, tokens: &[TokenTree], args: bool) {
         let mut k = 0;
         while k < tokens.len() {
             if let Some(end) = attribute_end(tokens, k) {
@@ -936,14 +971,31 @@ impl Reading<'_> {
                 } else if path.iter().any(|w| w == "cfg" || w == "cfg_attr") {
                     self.refuse(&tokens[k], &format!("`{}`", path.join("::")));
                 }
+                if args {
+                    self.refuse(&tokens[k], "an attribute inside a macro's arguments");
+                }
                 self.attribute(&body, true, cfg, doc);
                 k = end + 1;
                 continue;
             }
             let t = &tokens[k];
+            let after_colon =
+                k > 0 && matches!(&tokens[k - 1], TokenTree::Punct(p) if p.as_char() == ':');
             if let TokenTree::Group(g) = t {
                 let inner: Vec<TokenTree> = g.stream().into_iter().collect();
-                self.code(&inner);
+                // A group right after `!` is a macro's arguments (`#![..]` is an attribute,
+                // read above, and `macro_rules! name { .. }` has the name between).
+                let invoked =
+                    k > 0 && matches!(&tokens[k - 1], TokenTree::Punct(p) if p.as_char() == '!');
+                self.code(&inner, args || invoked);
+            } else if matches!(t, TokenTree::Punct(p) if p.as_char() == '#')
+                && !(self.in_string && after_colon)
+            {
+                // A `#` that starts no attribute: a macro may set a bracket group behind it. In a
+                // string, one right after `:` is a format's flag (`{status:#06x}`).
+                self.refuse(t, "a `#` that starts no attribute");
+            } else if self.in_string && matches!(t, TokenTree::Punct(p) if p.as_char() == '$') {
+                self.refuse(t, "a macro's `$` in a string read as code");
             } else if let Some(w) = ident(t) {
                 match w.as_str() {
                     "feature" => self.refuse(t, "`feature` outside an attribute"),
@@ -951,6 +1003,9 @@ impl Reading<'_> {
                     // No `cfg!`, and no cfg a macro assembles from its words.
                     "cfg" | "cfg_attr" => self.refuse(t, &format!("`{w}` outside an attribute")),
                     w if PULLS_IN.contains(&w) => self.refuse(t, &format!("`{w}`")),
+                    "macro_rules" if self.in_string => {
+                        self.refuse(t, "a macro defined in a string read as code")
+                    }
                     _ => {}
                 }
             }
@@ -970,37 +1025,7 @@ impl Reading<'_> {
                 TokenTree::Punct(p) if p.as_char() == '$' => {
                     self.refuse(t, "a macro's `$` in an attribute")
                 }
-                // A string a derive may read as code (serde's `deserialize_with = "path"`, `bound
-                // = "T: Trait"`): its value, unescaped as syn unescapes it for the derive, held to
-                // the code's rules wherever it reads as Rust tokens. One that does not cannot be
-                // code to a derive either.
-                TokenTree::Literal(l) if !doc => {
-                    if let syn::Lit::Str(s) = syn::Lit::new(l.clone())
-                        && let Some(why) = stripped(&s.value())
-                    {
-                        let line = l.span().start().line;
-                        self.stray
-                            .push(format!("{}: a string at line {line}: {why}", self.rel));
-                    }
-                    if let syn::Lit::Str(s) = syn::Lit::new(l.clone())
-                        && let Ok(code) = s.value().parse::<TokenStream>()
-                    {
-                        let inner: Vec<TokenTree> = code.into_iter().collect();
-                        let at = format!(
-                            "{} (a string at line {}, read as code)",
-                            self.rel,
-                            l.span().start().line
-                        );
-                        let mut string = Reading {
-                            rel: &at,
-                            gates: Vec::new(),
-                            stray: Vec::new(),
-                        };
-                        string.code(&inner);
-                        self.gates.extend(string.gates);
-                        self.stray.extend(string.stray);
-                    }
-                }
+                TokenTree::Literal(l) if !doc => self.string(l),
                 _ => {
                     let Some(w) = ident(t) else { continue };
                     match w.as_str() {
