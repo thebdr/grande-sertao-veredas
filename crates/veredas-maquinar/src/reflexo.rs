@@ -260,8 +260,10 @@ pub fn validate(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point: &dyn 
 }
 
 /// [`validate`], beside the points other parts' models already write (each with the place that
-/// writes it, named in full): a point is written by one model of the whole bench at most. Returns
-/// the points this part's models write, each with its place in the part.
+/// writes it, named in full): a point is written by one model of the whole bench at most, and a
+/// scene's belt or mover moved by one at most (round 6: two loaded, the last in the order won, and
+/// the first said what did not happen). Returns what this part's models write and move, each with
+/// its place in the part.
 pub fn validate_beside(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point: &dyn Fn(&str, &str) -> Result<PointKind, String>, others: &[(String, String)]) -> Result<Vec<(String, String)>, String> {
     let mut names: Vec<(String, &'static str)> = Vec::new();
     let mut written: Vec<(String, String)> = Vec::new();
@@ -289,13 +291,20 @@ pub fn validate_beside(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point
         }
         Ok(())
     };
-    let mut write = |place: &str, key: &str, reference: &str| -> Result<(), String> {
-        if let Some((_, by)) = written.iter().chain(others).find(|(r, _)| r == reference) {
-            return Err(format!("{place}.{key}: `{reference}` is written by {by} already"));
+    // A point written, or a scene's belt or mover moved (`moved`: its kind and name, by a key that
+    // is no `<part>.<point>`, a part's name having no dot): by one model of the whole bench at most.
+    let mut claim = |place: &str, key: &str, id: &str, moved: Option<(&str, &str)>| -> Result<(), String> {
+        if let Some((_, by)) = written.iter().chain(others).find(|(r, _)| r == id) {
+            return Err(match moved {
+                Some((kind, name)) => format!("{place}.{key}: the {kind} `{name}` is moved by {by} already"),
+                None => format!("{place}.{key}: `{id}` is written by {by} already"),
+            });
         }
-        written.push((reference.to_string(), place.to_string()));
+        written.push((id.to_string(), place.to_string()));
         Ok(())
     };
+    let scene_name = cfg.scene.clone().unwrap_or_default();
+    let moved = |kind: &str, name: &str| format!("{kind} `{name}` of the scene `{scene_name}`");
     let needs_scene = |place: &str, what: &str| -> Result<&fisica::Scene, String> {
         scene.ok_or_else(|| format!("{place}: {what}; this part names no `scene`"))
     };
@@ -309,6 +318,7 @@ pub fn validate_beside(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point
         if !s.belts.iter().any(|b| b.name == c.belt) {
             return Err(format!("{place}.belt: the scene has no belt `{}`", c.belt));
         }
+        claim(&place, "belt", &moved("belt", &c.belt), Some(("belt", &c.belt)))?;
         if !c.metres_per_unit.is_finite() || c.metres_per_unit == 0.0 {
             return Err(format!("{place}.metres_per_unit: {}, not a finite number other than 0", c.metres_per_unit));
         }
@@ -331,7 +341,7 @@ pub fn validate_beside(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point
         for (key, reference, want) in [("speed", &d.speed, PointKind::Number), ("running", &d.running, PointKind::Bool), ("at_speed", &d.at_speed, PointKind::Bool)] {
             if let Some(r) = reference {
                 resolve(place, key, r, want)?;
-                write(place, key, r)?;
+                claim(place, key, r, None)?;
             }
         }
     }
@@ -341,6 +351,7 @@ pub fn validate_beside(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point
         if !s.movers.iter().any(|m| m.name == a.mover) {
             return Err(format!("{place}.mover: the scene has no mover `{}`", a.mover));
         }
+        claim(&place, "mover", &moved("mover", &a.mover), Some(("mover", &a.mover)))?;
         resolve(&place, "extend", &a.extend, PointKind::Bool)?;
         for (key, p) in [("retracted", a.retracted), ("extended", a.extended)] {
             fisica::scene::check_pose(&format!("{place}.{key}"), p.at, [p.yaw, p.pitch, p.roll]).map_err(|e| e.to_string())?;
@@ -351,7 +362,7 @@ pub fn validate_beside(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point
         for (key, reference) in [("retracted_switch", &a.retracted_switch), ("extended_switch", &a.extended_switch)] {
             if let Some(r) = reference {
                 resolve(&place, key, r, PointKind::Bool)?;
-                write(&place, key, r)?;
+                claim(&place, key, r, None)?;
             }
         }
     }
@@ -362,7 +373,7 @@ pub fn validate_beside(cfg: &ReflexoConfig, scene: Option<&fisica::Scene>, point
             return Err(format!("{place}.sensor: the scene has no sensor `{}`", m.sensor));
         }
         resolve(&place, "point", &m.point, PointKind::Bool)?;
-        write(&place, "point", &m.point)?;
+        claim(&place, "point", &m.point, None)?;
         for (key, v) in [("on_delay_ms", m.on_delay_ms), ("off_delay_ms", m.off_delay_ms)] {
             if v > MAX_MS {
                 return Err(format!("{place}.{key}: {v}, over {MAX_MS}"));

@@ -1506,3 +1506,195 @@ mod round_5 {
         assert_eq!((s.errors, s.last_error.as_deref(), m.get("in"), m.get("out")), (30, Some("actuator `a`: no mover is named `z`"), 0.0, 0.0));
     }
 }
+
+/// C-115's sixth refute round: the critic's probes (`~/.cache/veredas/critic-c115-r6/probes`), kept
+/// as pins: two models moving one belt or one mover refused through the bench; a normally closed
+/// sensor model's delays; a refused place leaving both switches as they were; an end its pose to
+/// the bit; yaws past f64's difference turning evenly; a ramp landing at its step at 10 ms; a long
+/// reversal's exact zero step on 0; a sensor model at a 100 ms step.
+mod round_6 {
+    use super::*;
+
+    /// A scene without gravity at `step_ms`: a sensor at the origin, two movers far off.
+    fn scene(step_ms: u32) -> World {
+        let s = format!("format = \"veredas-cena\"\nversion = 1\nstep_ms = {step_ms}\ngravity = 0\n[[sensor]]\nname = \"S\"\nradius = 0.1\nat = [0.0, 0.0, 0.0]\n[[mover]]\nname = \"m\"\nsize = [0.05, 0.05, 0.05]\nat = [5.0, 0.0, 0.0]\n[[mover]]\nname = \"n\"\nsize = [0.05, 0.05, 0.05]\nat = [5.0, 5.0, 0.0]\n");
+        World::new(&fisica::load(&s).unwrap()).unwrap()
+    }
+
+    fn models_at(text: &str, m: &Arc<Mem>, step: Duration) -> Models {
+        let cfg: ReflexoConfig = toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+        let points: Arc<dyn Points> = m.clone();
+        Models::new(&cfg, step, &|p: &str| (p == "m").then(|| points.clone())).unwrap()
+    }
+
+    const BENCH: &str = "format = \"veredas-bench\"\nversion = 1\n[[modbus]]\nname = \"m\"\nport = 0\npoints = [ { name = \"run\", table = \"coil\", address = 0 }, { name = \"sp\", table = \"holding-register\", address = 0 }, { name = \"sp2\", table = \"holding-register\", address = 1 } ]\n[[fisica]]\nname = \"sc\"\nscene = \"line.cena.toml\"\n";
+
+    /// Each model set the whole belt's speed or the whole mover's pose, the last in the order
+    /// winning, so the first said what did not happen (a conveyor at speed on a belt at another's,
+    /// an extended switch on a mover at another's pose): one belt or mover, one model.
+    #[test]
+    fn two_models_moving_one_belt_or_one_mover_are_refused() {
+        let conveyor = |name: &str, sp: &str| format!("{{ name = \"{name}\", belt = \"infeed\", metres_per_unit = 0.01, run = \"m.run\", setpoint = \"m.{sp}\", accel = 100, decel = 100 }}");
+        let actuator = |name: &str| format!("{{ name = \"{name}\", mover = \"pusher\", extend = \"m.run\", retracted = {{ at = [3.5, -0.4, 0.95] }}, extended = {{ at = [3.5, 0.25, 0.95] }}, stroke_ms = 500 }}");
+        let dir = scratch("round6-moved");
+        let mut wrong = Vec::new();
+        for (extra, want) in [
+            (format!("[[reflexo]]\nname = \"r\"\nscene = \"sc\"\nconveyor = [ {}, {} ]\n", conveyor("c1", "sp"), conveyor("c2", "sp2")), "reflexo[0] (`r`).conveyor[1] (`c2`).belt: the belt `infeed` is moved by conveyor[0] (`c1`) already"),
+            (format!("[[reflexo]]\nname = \"r\"\nscene = \"sc\"\nconveyor = [ {} ]\n[[reflexo]]\nname = \"r2\"\nscene = \"sc\"\nconveyor = [ {} ]\n", conveyor("c1", "sp"), conveyor("c2", "sp2")), "reflexo[1] (`r2`).conveyor[0] (`c2`).belt: the belt `infeed` is moved by reflexo[0] (`r`).conveyor[0] (`c1`) already"),
+            (format!("[[reflexo]]\nname = \"r\"\nscene = \"sc\"\nactuator = [ {}, {} ]\n", actuator("a"), actuator("b")), "reflexo[0] (`r`).actuator[1] (`b`).mover: the mover `pusher` is moved by actuator[0] (`a`) already"),
+            (format!("[[reflexo]]\nname = \"r2\"\nscene = \"sc\"\nactuator = [ {} ]\n[[reflexo]]\nname = \"r3\"\nscene = \"sc\"\nactuator = [ {} ]\n", actuator("a"), actuator("b")), "reflexo[1] (`r3`).actuator[0] (`b`).mover: the mover `pusher` is moved by reflexo[0] (`r2`).actuator[0] (`a`) already"),
+        ] {
+            match bench::load(&format!("{BENCH}{extra}"), &dir) {
+                Err(e) if e.to_string() == want => {}
+                Err(e) => wrong.push(format!("{want}\n  got {e}")),
+                Ok(_) => wrong.push(format!("{want}\n  loaded")),
+            }
+        }
+        // One conveyor and one actuator each on its own belt and mover: taken.
+        let one = format!("[[reflexo]]\nname = \"r\"\nscene = \"sc\"\nconveyor = [ {} ]\nactuator = [ {} ]\n", conveyor("c1", "sp"), actuator("a"));
+        if let Err(e) = bench::load(&format!("{BENCH}{one}"), &dir) {
+            wrong.push(format!("one each refused: {e}"));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// Normally closed, an on delay of 10 ms and an off delay of 20: 1 empty, 0 at the third 4 ms
+    /// step that sees the body, 1 again at the fifth after it leaves (no normally closed model with
+    /// a delay was pinned: one without delays, or inverting before them, passed).
+    #[test]
+    fn a_normally_closed_sensor_model_keeps_its_delays() {
+        let m = mem(&[("nc", Bool, 9.0)]);
+        let mut s = models_at("sensor = [ { name = \"b\", sensor = \"S\", point = \"m.nc\", normally_closed = true, on_delay_ms = 10, off_delay_ms = 20 } ]", &m, Duration::from_millis(4));
+        let mut w = scene(4);
+        let step = |s: &mut Models, w: &mut World| {
+            s.step(Some(w));
+            w.step();
+        };
+        step(&mut s, &mut w);
+        assert_eq!(m.get("nc"), 1.0, "empty: closed, 1");
+        w.place("n", fisica::Placement::at([0.0, 0.0, 0.0])).unwrap();
+        while !w.sensor("S").unwrap().occupied() {
+            step(&mut s, &mut w);
+        }
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            step(&mut s, &mut w);
+            seen.push(m.get("nc"));
+        }
+        assert_eq!(seen, [1.0, 1.0, 0.0, 0.0], "a 10 ms on delay, normally closed");
+        w.place("n", fisica::Placement::at([5.0, 5.0, 0.0])).unwrap();
+        while w.sensor("S").unwrap().occupied() {
+            step(&mut s, &mut w);
+        }
+        let mut seen = Vec::new();
+        for _ in 0..6 {
+            step(&mut s, &mut w);
+            seen.push(m.get("nc"));
+        }
+        assert_eq!(seen, [0.0, 0.0, 0.0, 0.0, 1.0, 1.0], "a 20 ms off delay, normally closed");
+    }
+
+    /// Switches holding 7 keep 7 through 30 refused places (round 5's pin preset them to 0, so a
+    /// model writing 0 to both on a refused place passed).
+    #[test]
+    fn a_refused_place_leaves_both_switches_as_they_were() {
+        let mut w = scene(4);
+        let m = mem(&[("ext", Bool, 1.0), ("in", Bool, 7.0), ("out", Bool, 7.0)]);
+        let mut a = models_at("actuator = [ { name = \"a\", mover = \"z\", extend = \"m.ext\", retracted = { at = [5.0, 0.0, 0.0] }, extended = { at = [5.0, 1.0, 0.0] }, stroke_ms = 100, retracted_switch = \"m.in\", extended_switch = \"m.out\" } ]", &m, w.step_length());
+        for _ in 0..30 {
+            a.step(Some(&mut w));
+            w.step();
+        }
+        assert_eq!((a.status().errors, m.get("in"), m.get("out")), (30, 7.0, 7.0));
+    }
+
+    /// From y = -0.4 to 0.3, where -0.4 + (0.3 - -0.4) is 0.29999999999999993: the mover at its
+    /// extended end is at 0.3 to the bit.
+    #[test]
+    fn an_actuator_s_end_is_its_pose_to_the_bit() {
+        let mut w = scene(4);
+        let m = mem(&[("ext", Bool, 1.0), ("out", Bool, 0.0)]);
+        let mut a = models_at("actuator = [ { name = \"a\", mover = \"m\", extend = \"m.ext\", retracted = { at = [5.0, -0.4, 0.0] }, extended = { at = [5.0, 0.3, 0.0] }, stroke_ms = 100, extended_switch = \"m.out\" } ]", &m, w.step_length());
+        for _ in 0..25 {
+            a.step(Some(&mut w));
+            w.step();
+        }
+        let y = w.body("m").unwrap().at[1];
+        assert_eq!((m.get("out"), a.status().errors, y.to_bits()), (1.0, 0, 0.3f64.to_bits()), "y = {y:?}");
+    }
+
+    /// Between yaws of -1e308 and 1e308, over 25 steps: the mover's rotation at each of steps 1 to
+    /// 24 is not the end's (without the halves the yaw was held to 1e308 from the first step).
+    #[test]
+    fn yaws_past_f64_s_difference_turn_evenly_not_at_once() {
+        let mut w = scene(4);
+        let m = mem(&[("ext", Bool, 1.0), ("out", Bool, 0.0)]);
+        let mut a = models_at("actuator = [ { name = \"a\", mover = \"m\", extend = \"m.ext\", retracted = { at = [5.0, 0.0, 0.0], yaw = -1e308 }, extended = { at = [5.0, 1.0, 0.0], yaw = 1e308 }, stroke_ms = 100, extended_switch = \"m.out\" } ]", &m, w.step_length());
+        let mut rotations = Vec::new();
+        for _ in 0..25 {
+            a.step(Some(&mut w));
+            w.step();
+            rotations.push(w.body("m").unwrap().rotation);
+        }
+        let early: Vec<usize> = (0..24).filter(|k| rotations[*k] == rotations[24]).map(|k| k + 1).collect();
+        assert_eq!((a.status().errors, early), (0, vec![]), "steps at the end's rotation before the end");
+    }
+
+    /// At a 10 ms step, 50 at 30 a second is 0.3 a step: on the line to the 166th step, on 50 at
+    /// the 167th and after, never past it (a count of the landing in 4 ms steps passed).
+    #[test]
+    fn a_ramp_at_a_10_ms_step_lands_at_its_step() {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 50.0)]);
+        let mut d = models_at("drive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", accel = 30, decel = 30 } ]", &m, Duration::from_millis(10));
+        let mut off = Vec::new();
+        for k in 1..=200u32 {
+            d.step(None);
+            let s = d.speed("d").unwrap();
+            if s > 50.0 || (k < 167 && (s - 0.3 * f64::from(k)).abs() > 1e-9) || (k >= 167 && s != 50.0) {
+                off.push((k, s));
+            }
+        }
+        assert!(off.is_empty(), "(step, speed) off: {:?}", &off[..off.len().min(8)]);
+    }
+
+    /// -4381 back to +4381 at a deceleration of 0.13: the zero exactly the 8 425 000th step, which
+    /// the division puts at 8424999.999999998: on 0 there and not running (a slack of 1e-9 alone,
+    /// without its part relative to the count, read a speck of speed with the drive running).
+    #[test]
+    fn a_long_reversal_s_exact_zero_step_is_on_0() {
+        let m = mem(&[("run", Bool, 1.0), ("sp", Number, 4381.0), ("rev", Bool, 1.0), ("running", Bool, 9.0)]);
+        let mut d = models_at("drive = [ { name = \"d\", run = \"m.run\", setpoint = \"m.sp\", reverse = \"m.rev\", accel = 1000000, decel = 0.13, running = \"m.running\" } ]", &m, Duration::from_millis(4));
+        while d.speed("d") != Some(-4381.0) {
+            d.step(None);
+        }
+        m.set("rev", 0.0);
+        for _ in 0..8_425_000u64 {
+            d.step(None);
+        }
+        let s = d.speed("d").unwrap();
+        assert_eq!((s.to_bits(), m.get("running")), (0f64.to_bits(), 0.0), "the 8 425 000th step: speed {s:e}");
+    }
+
+    /// At a 100 ms scene step, a 250 ms on delay: on at the third step that sees the body.
+    #[test]
+    fn a_sensor_model_at_a_100_ms_step_counts_its_delay() {
+        let mut w = scene(100);
+        let m = mem(&[("no", Bool, 9.0)]);
+        let mut s = models_at("sensor = [ { name = \"b\", sensor = \"S\", point = \"m.no\", on_delay_ms = 250 } ]", &m, w.step_length());
+        s.step(Some(&mut w));
+        w.step();
+        w.place("n", fisica::Placement::at([0.0, 0.0, 0.0])).unwrap();
+        while !w.sensor("S").unwrap().occupied() {
+            s.step(Some(&mut w));
+            w.step();
+        }
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            s.step(Some(&mut w));
+            w.step();
+            seen.push(m.get("no"));
+        }
+        assert_eq!(seen, [0.0, 0.0, 1.0, 1.0]);
+    }
+}
