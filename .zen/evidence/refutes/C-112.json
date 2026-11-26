@@ -1,13 +1,13 @@
 {
   "clause": "C-112",
   "verdict": "refuted",
-  "ranAt": "2026-11-25T06:31:49.796Z",
-  "headCommit": "d709a56ca1ea2c68bfb6c547f9e93ab008315c13",
+  "ranAt": "2026-11-26T11:28:02.560Z",
+  "headCommit": "54e3cc953558fbd2570c7588a749df9ad0ee1e92",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/profinet_device.rs",
       "file": "crates/veredas-maquinar/tests/profinet_device.rs",
-      "symbolSha": "e45a79dec4963b9e5afebe7764d5fdd6a9f3a860012be8ac0cd4e3f0d9c96c87"
+      "symbolSha": "f8419611b56c834b3d1e99838fb18d21d3d88f16f370864c232c5c124f974e28"
     }
   ]
 }
