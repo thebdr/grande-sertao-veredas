@@ -566,3 +566,59 @@ fn a_cut_inside_the_look_and_a_hole_at_the_look_are_lost() {
     assert_eq!(run_cut(Box::new(source), &history, 110).1, lost, "a fixed family's active with a hole at the locate");
     DURING_LOOK.lock().unwrap().retain(|(at, _)| !looked.contains(at));
 }
+
+/// C-096's fourteenth refute round. A file's look comes before its start returns: a file read
+/// from its start, cut and written again with ten new lines right after the start returned, is
+/// lost, its reach the one the look took before. A held file's look brackets its length with the
+/// identity at the path before the open: a rotation landing inside the held look (the held file
+/// renamed away, another made at its path) leaves no identity kept, and when the new file opens the
+/// held one's history is lost, never said read at the new file's ten lines.
+#[cfg(unix)]
+#[test]
+fn a_cut_after_the_start_and_a_rotation_inside_the_held_look_are_lost() {
+    use super::{AFTER_START, DURING_LOOK};
+    use crate::tail::{FileStart, FileTailSource, TailConfig};
+    use std::os::unix::fs::PermissionsExt;
+    let lost = crate::tail::HISTORY_LOST;
+    let dir = tempfile::tempdir().unwrap();
+    let file_source = |path: &std::path::Path, history: &Arc<AtomicU64>| {
+        FileTailSource::new("one", "one", path, TailConfig { start: FileStart::Begin, ..TailConfig::default() }).with_history_read(Arc::clone(history))
+    };
+
+    // Cut right after the start returned.
+    let file = dir.path().join("after.log");
+    write(&file, 0..50_000);
+    let (at, mut done) = (file.clone(), false);
+    AFTER_START.lock().unwrap().push((
+        file.clone(),
+        Box::new(move || {
+            if !done {
+                done = true;
+                write(&at, 90_000..90_010);
+            }
+        }),
+    ));
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    assert_eq!(run_cut(Box::new(file_source(&file, &history)), &history, 10), (10, lost), "cut right after the start");
+    AFTER_START.lock().unwrap().retain(|(p, _)| *p != file);
+
+    // A rotation inside the held look.
+    let held = dir.path().join("held.log");
+    write(&held, 0..5_000);
+    std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (at, away, mut done) = (held.clone(), dir.path().join("held.log.1"), false);
+    DURING_LOOK.lock().unwrap().push((
+        held.clone(),
+        Box::new(move || {
+            if !done {
+                done = true;
+                std::fs::rename(&at, &away).unwrap();
+                write(&at, 90_000..90_010);
+            }
+        }),
+    ));
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    assert_eq!(run_cut(Box::new(file_source(&held, &history)), &history, 10), (10, lost), "a rotation inside the held look");
+    DURING_LOOK.lock().unwrap().retain(|(p, _)| *p != held);
+    std::fs::set_permissions(dir.path().join("held.log.1"), std::fs::Permissions::from_mode(0o644)).unwrap();
+}

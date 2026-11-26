@@ -312,6 +312,22 @@ pub(crate) fn during_look(path: &Path) {
     }
 }
 
+/// A test's hooks, each run right after a file's start has returned, keyed by path: what a cut
+/// landing just after the start does (C-096's fourteenth refute round).
+#[cfg(test)]
+pub(crate) static AFTER_START: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn after_start(path: &Path) {
+    if let Ok(mut hooks) = AFTER_START.lock() {
+        for (at, hook) in hooks.iter_mut() {
+            if at == path {
+                hook();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn before_open(path: &Path) {
     if let Ok(mut hooks) = BEFORE_OPEN.lock() {

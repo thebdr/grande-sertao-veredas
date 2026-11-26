@@ -161,6 +161,8 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     // succeeds can tell the same file (read from where it stood) from a replacement (read whole).
     // An identity that is not read matches nothing; a length that is not read is zero.
     let mut held: Option<(u64, Option<crate::tail::cursor::Identity>)> = None;
+    // The identity at the path before the open: the held look below brackets its length with it.
+    let before = crate::tail::cursor::identity_at(&path);
     match TailedFile::open(&path, cfg.start) {
         Ok(tf) => {
             active = Some(tf);
@@ -168,24 +170,22 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
         }
         Err(e) if is_not_found(&e) => first_open = false,
         Err(_) => {
+            #[cfg(test)]
+            crate::tail::family::during_look(&path);
             // A look that reads nothing at all (the folder denying its listing, a share's passing
-            // error) records a length of zero and no identity: whatever opens is read whole.
+            // error) records a length of zero and no identity: whatever opens is read whole. The
+            // length and the identity are path lookups after the failed open: a rotation between
+            // the open and them would make another file pass for the held one, so the identity
+            // is kept only when it is the one at the path before the open too.
             let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            held = Some((len, crate::tail::cursor::identity_at(&path)));
+            let after = crate::tail::cursor::identity_at(&path);
+            held = Some((len, if after.is_some() && after == before { after } else { None }));
         }
     }
-    attached(&mut Some(attached_tx));
-    // A start at the end skips the history, and a file not there at the first look has none:
-    // read in at once (a file held at the first look and started at its end is read from where
-    // it stood once it opens, new content). Read from its start, present, its history is read
-    // with its first read; held, with the first read of the open that succeeds.
-    if cfg.start == FileStart::End || (active.is_none() && held.is_none()) {
-        crate::tail::mark_history_read(&history, 0);
-    }
-    // Read from its start, the file's history ends at its length when the start looked at it:
-    // the read-in must reach it, or the file was cut in place (a copy-and-truncate rotation) and
-    // the history is lost.
-    // A held file's bytes cannot be read at the look: its length alone is kept.
+    // Read from its start, the file's history ends at its reach when the start looked at it,
+    // taken here, before the start returns, so a cut after the start is seen: the read-in must
+    // reach it, or the file was cut in place (a copy-and-truncate rotation) and the history is
+    // lost. A held file's bytes cannot be read at the look: its length alone is kept.
     let mut history_to: Option<crate::tail::cursor::Reach> = None;
     if cfg.start == FileStart::Begin {
         if let Some(tf) = active.as_mut() {
@@ -193,6 +193,16 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
         } else if let Some((len, _)) = &held {
             history_to = Some(crate::tail::cursor::Reach::of_len(*len));
         }
+    }
+    attached(&mut Some(attached_tx));
+    #[cfg(test)]
+    crate::tail::family::after_start(&path);
+    // A start at the end skips the history, and a file not there at the first look has none:
+    // read in at once (a file held at the first look and started at its end is read from where
+    // it stood once it opens, new content). Read from its start, present, its history is read
+    // with its first read; held, with the first read of the open that succeeds.
+    if cfg.start == FileStart::End || (active.is_none() && held.is_none()) {
+        crate::tail::mark_history_read(&history, 0);
     }
     let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };
 
