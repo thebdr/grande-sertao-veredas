@@ -11,7 +11,8 @@ file holds what the architect decided in the briefing of 13 to 16 November 2026,
 15 November on its adversarial review, in the robustness round begun on 16 November
 (`docs/robustness.md`), and in the rulings of 25 November on the questions its first build raised
 (Q220 to Q229, and Q33 with Q223), on the robustness round (Q35 to Q42) and on the review's entries and
-the briefing's readings (Q31 up to entry 41, Q32 in part, Q44, Q45). The list that was reviewed and the review itself are kept as they were
+the briefing's readings (Q31 up to entry 41, Q32 in part, Q44, Q45), and in the rulings of 26 November
+(Q31's remaining entries, Q32's specification, Q43 in part, Q230 to Q237). The list that was reviewed and the review itself are kept as they were
 delivered (`docs/briefing/deliverables.md`, `docs/briefing/review.md`); where they differ from this
 file, this file is the later word. What is not decided is a question in `docs/questions.md`, named
 under "Open" below; nothing open is written here as settled.
@@ -58,6 +59,14 @@ time."
   closed list of the interpreter's operations, a call outside it refused by name and place when the
   program is lowered (Q227). `docs/orcl/README.md`, "The front end".
 - **The interpreter is proven against Rust by a fixed conformance suite.**
+- **What an interpreted program runs on** (2026-11-26): a stack of the size the target's settings give,
+  laid out at load, on which every program Rust compiles runs, one whose functions call themselves
+  among them, a call past it being the fault 502 `program(at)` (Q230); its first state and its safe
+  outputs computed when the front end builds it and written into its file, a program whose
+  `safe_outputs` reads its state refused (Q231); no instruction budget, the entry running to its
+  return and a scan that never returns waiting for the host's watchdog, as a native one does (Q232).
+  Until the target's settings (`veredas-alvo`) and the program file's format past 1 are built, the
+  controller's host hands in all three, as it hands in the program (C-152, C-155).
 - **No check of a program's structure before it runs**, for now: "rust as a base gives us an
   optimal linter and compiler. no further checks necessary (for now)" (the architect, 2026-11-16).
   The compiler and the linter on the sender's machine stand for the source, and the download's
@@ -140,6 +149,11 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   STOP, the reason saying what it was. "Always as before" (the architect, 2026-11-15): no start-up
   parameter, no STOP forced by a commissioning condition, no rule that ends a shadow test; the
   program handles the rest.
+- **A program that cannot be made, until downloads exist** (2026-11-26, Q233): a controller whose
+  program, handed in by its host, cannot be made comes up in STOP 104 `no_program`, at power-on
+  whatever state it would come back to and at a start's load alike; a person's start tries it again,
+  nothing by itself. A stored program failing its check is the FAULT 506 `load(download)` once
+  downloads exist (Q36, "Everything that alters the controller is robust" below).
 - **A dry run survives a power cycle** (2026-11-15): RUN with the dry run on comes back the same,
   outputs safe until a person ends the dry run.
 - **Nobody switches states in normal work**: "we do not switch states in normal working
@@ -158,7 +172,11 @@ think Siemens did a great job in the PLC implementation") and kept every family 
 - **Live values** of any variable; watch tables.
 - **Forcing** covers inputs, outputs and variables. A variable is forced in one of three ways,
   chosen at the time: once now, before each scan, or always (held at every write, marked `[!]`,
-  behind a confirmation).
+  behind a confirmation). Tables always show the mode in words, never the mark alone (the review's
+  minor 49, Q31). "Force once now" on a variable is the online change of a value, TIA's Modify: the
+  documents say so, since a one-value fix is otherwise a whole deployment (the review's minor 48).
+- **A structure expands member by member** in watch tables, forcing and the IO mapping (2026-11-26,
+  the review's entry 44, Q31).
 - **A force belongs to the controller** until someone removes it (2026-11-15): it shows in the
   state text, a restart clears it, and a lost connection changes nothing. A force suspended while
   the program is halted applies again by itself when the program continues (2026-11-25, Q45's K3).
@@ -201,20 +219,25 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   again, and a person starts the test again (2026-11-25, Q45).
 - **Entry check:** a controller enters a shadow test only after a check that the doubled scan fits
   the task's period. In the first release only an application with one cyclic task may enter one
-  (2026-11-15).
+  (2026-11-15). When the doubled scan does not fit, the way is a stop and a download, and the popup
+  says so (the review's minor 48, Q31).
 - **Breakpoints only in the driving version**; a hit halts everything and the watcher pauses in
   step. Trouble in the watching version (an error, or an overrun from the doubled scan) ends the
   test and the machine keeps running.
 - **Fallback for a faulted edit.** A controller-wide flag, offered in the download popup, with a
   time limit, reset on shutdown. When the time limit runs out the edit is accepted and the old
-  version stops watching. The review showed that taking over "from its own watcher data" is
-  unsafe as first written, and the architect ruled (2026-11-15): "live fallback shall be enabled
+  version stops watching; the limit is the engineer's, a setting of each download, ten minutes by
+  default (2026-11-26, Q32), and an edit so accepted is recorded as "accepted by timeout" in the
+  download history, and as an event (the review's minor 47, Q31). The review showed that taking
+  over "from its own watcher data" is unsafe as first written, and the architect ruled (2026-11-15): "live fallback shall be enabled
   only when feasible. we need to build the specification for what disqualifies the edits for auto
   takeover. takeover after restart remains possible for all cases". So the previous version can
   always be put back for the next start; a live takeover happens only for an edit that nothing
-  disqualifies; and what disqualifies an edit is a specification controlador writes whole, as a
-  proposal the architect rules as a document (2026-11-25, Q32): `docs/controlador/live-takeover.md`,
-  written the same day and not ruled. After a fallback the state carries
+  disqualifies; and what disqualifies an edit is a specification controlador wrote whole, as a
+  proposal the architect ruled as a document (Q32): `docs/controlador/live-takeover.md`, written on
+  2026-11-25 and ruled on 2026-11-26 ("Yes, this is the specification"), what peers see left out of
+  its disqualifiers (its S3, "No, S3 out") and any force ending the old version's right to take over
+  (its D3). After a fallback the state carries
   the maintenance request `fault_on_update`; an edit that failed (the old version took over, or the
   edit was put back) leaves a fault record named "the edit failed", not a controller fault; and
   while the old version watches and may still take over, the state text carries a term with the
@@ -229,8 +252,8 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   fieldbus keeps exchanging.
 - **Leaving FAULT takes two actions:** acknowledge to STOP, then start.
 - **Reasons:** the watchdog; a program error without a handler; a fault raised by the program with
-  a code; a fault inside a handler; resources exhausted (call depth, memory); an application that
-  cannot be loaded; the runtime's own failure (after an unexpected restart it comes up in FAULT,
+  a code; a fault inside a handler; resources exhausted (memory; a call past an interpreted program's
+  stack is the program's own error, 502, Q230); an application that cannot be loaded; the runtime's own failure (after an unexpected restart it comes up in FAULT,
   which stops a crash loop).
 - **Overruns follow Siemens' OB80:** the time-error handler runs once on the first overrun, and
   the controller faults only when one scan exceeds twice its period.
@@ -304,7 +327,9 @@ in a fixed order, with counts and identifiers and never lists.
   (as the program states). `urgent=false` is PROFINET's maintenance required, `urgent=true` its
   maintenance demanded.
 - **A maintenance request is cleared only from Oficina or by a restart**, and is raised again if
-  its cause persists.
+  its cause persists. A request carries a "seen" mark, so clearing one whose cause persists does not
+  look like a dead button, and the detail view decodes the `shadow` term in words (2026-11-26, the
+  review's minor 50, Q31; the text itself stays English, its details translated).
 - **Examples:** `RUN`; `RUN breakpoint(set=2) force(in=1, out=2, var=3) shadow(drives=13,
   watches=12) sim()`; `HOLD breakpoint(id=401, at="conveyor.rs:42") force(in=1, out=1, var=3)`;
   `STOP command(id=101, source="oficina")`; `FAULT watchdog(id=501, task="main")`; `STARTUP
@@ -322,7 +347,7 @@ in a fixed order, with counts and identifiers and never lists.
   (Q32); maintenance reasons for the clock chip that lost its time and for NTP silent or not set
   (two, an NTP silent only after a waiting time, the urgency following the present situation while
   the request stays until cleared, Q39), a certificate a year from its end (its own and its peers',
-  Q39), the warning cycle time (Q39), a drive's wear past its threshold and a data area that cannot
+  Q39) and a known peer's certificate past its end, urgent until it is renewed (Q43), the warning cycle time (Q39), a drive's wear past its threshold and a data area that cannot
   be written (Q41), and a retained save that fails (Q40).
 
 ### Networks and devices
@@ -346,7 +371,9 @@ in a fixed order, with counts and identifiers and never lists.
 - **The hardware configuration** stands on an embedded aranha, whose scan feeds the compare and
   merge of the configuration and the topology view. Identifying, naming and addressing a device runs
   from the laptop when it is on the segment, and through a target's embedded aranha when it is not
-  (2026-11-25, Q45's G2).
+  (2026-11-25, Q45's G2); a Windows laptop sends and hears raw frames through Npcap, which the
+  engineer installs from its publisher, aranha neither shipping nor starting its installer
+  (2026-11-26, aranha's Q281).
 - **IO check** runs through a controlador target; with none set, through the laptop session
   (`docs/oficina-plan.md`, "The IO check from a laptop"), on a Linux laptop only (Q45). It refuses
   to drive outputs on a Modbus module with no timeout of its own or too long a one; the hardware
@@ -387,6 +414,17 @@ in a fixed order, with counts and identifiers and never lists.
 - **Oficina's portal talks to it over portal's own HTTP interface**, on the controller's loopback
   behind SSH, commands on the same link (2026-11-16; `docs/oficina-plan.md`, "How it reaches a
   target"). Controlador handles the commands behind its portal and checks the switch there.
+- **Pairing is one step** (2026-11-26, the review's entry 42, Q31): Oficina creates the SSH key and
+  installs it on the target. Not chosen: opening the project from the target's kept source archive
+  as one of controlador's surfaces, and one connection view.
+- **A controller's first credential** (2026-11-26, Q43): "credential-less usage permitted,
+  discouraged", discouraged by Oficina's warning at each connection to a controller without one; the
+  controller itself raises nothing.
+- **Certificates of known peers** (2026-11-26, Q43): a secured link to a known peer whose
+  certificate has passed its end goes on, an urgent maintenance request standing until it is
+  renewed; while the controller's date is unconfirmed a peer whose certificate it already trusts is
+  accepted without judging dates, the link marked so, and an unknown certificate is refused as
+  always. The end date of certificates issued after 2038 waits for the security study.
 - **Loopback is no boundary** (2026-11-25, the review's entry 33): controlador's engineering channel
   is a Unix socket (a named pipe on Windows) with the system's permissions, and portal's HTTP
   interface takes a random token per session, handed over SSH and required on every request, with
@@ -404,7 +442,7 @@ in a fixed order, with counts and identifiers and never lists.
     answering with the identity it computed. The stored program is verified again before every
     load (a swap, a restart, a power-on); a check that fails where the two copies cannot mend each
     other is the FAULT 506 `load`, never a substitute. Swap, start and rollback name the identity
-    they act on. A signature over the manifest waits for the security round (Q43);
+    they act on. A signature over the manifest waits for the security study (Q43, 2026-11-26);
   - **every request that alters the controller** (Q37), a variable write, a breakpoint, a state
     change and a download alike, carries a SHA-256 of its content (as HTTP's Content-Digest, RFC
     9530), checked before anything is done; a session and a strictly increasing number, a repeat
@@ -415,7 +453,9 @@ in a fixed order, with counts and identifiers and never lists.
     controller, a write's telling applied and saved apart; a lost answer is shown in Oficina as
     unknown and asked for by the request's number. A command passes portal's master write switch
     and then the commissioning switch. This binds the Oficina link, not peers' writes. A keyed
-    check, the refusal of an unexpected `Host` and the random session value wait for Q43.
+    check (HTTP Message Signatures, RFC 9421) waits for the security study (Q43, 2026-11-26); the
+    refusal of an unexpected `Host` and the random session value are the engineering link's (entry
+    33, above).
 - **State changes and faults are stored like any other data**, and the history view reads them.
 - **By default the embedded portal keeps its recorded values in memory, as a fixed window**, and
   writes nothing to the drive (2026-11-19; `docs/robustness.md`, "Wear and filling"). Two
@@ -437,8 +477,16 @@ in a fixed order, with counts and identifiers and never lists.
   source fed with every state and fault record (C-092), and the fault folder named (C-093).
 
 ### Language and project data
-- **ORCL text first; ladder later**, as a view of the same source; the release in which ladder
-  becomes editable is to be named (the review's entry 40, Q31, put next).
+- **ORCL text first; ladder later**, as a read-only view of the same source in release 1, editable in
+  release 2 (2026-11-26, the review's entry 40, Q31).
+- **What a Rust engineer gets** (2026-11-26, the review's entry 46): an ORCL project is a cargo crate
+  whose logic `cargo test` runs; the checker works outside Oficina and in CI; the allowed subset of
+  Rust is published as one page.
+- **A library is a pinned crate** (2026-11-26, the review's entry 44): reused blocks come from a
+  crate named by path or by Git revision, pinned in the project file, with no build scripts.
+- **What is handed over** (2026-11-26, the review's entry 45): the IO list, the alarm list and the
+  cross-reference export to CSV and PDF, among controlador's surfaces; one example project per
+  network; context help in the editor.
 - **Project data:** multilingual text lists, alarm and event definitions, recipes, units and
   limits on variables.
 - **A simulator** with the bench as plant, virtual time and snapshots.
@@ -497,15 +545,44 @@ Ruled on 2026-11-25:
   area of its own. Where the drive reports its wear the controller reads it and raises a request,
   not urgent, at a threshold the engineer sets. When the data area fails, RUN goes on, recording
   stops and a request is raised.
-- **Not opened yet** (Q42), each proposed on 2026-11-26 for the architect: running unattended beyond
-  what is ruled, memory errors and slow leaks (Q234); an old controller and a new Oficina (Q235);
-  replacing the hardware (Q236); and how each rule is proven by injecting faults on the bench (Q237).
+
+Ruled on 2026-11-26, the four areas Q42 left unopened, proposed by controlador:
+- **Running unattended** (Q234): a corrected memory error is counted, and a rate past a threshold
+  raises a maintenance request; an uncorrected one the kernel reports in the controller's memory is
+  the runtime's failure, FAULT 507, the program's data no longer trusted. The controller reads its
+  own resident memory, open files and threads against limits set when it starts: a trend rising over
+  days raises a maintenance request, a limit reached is FAULT 505 `resource`. Nothing restarts on a
+  schedule.
+- **An old controller and a new Oficina** (Q235): Oficina speaks every older controller's versions
+  for everything short of a download (connecting, reading the state and records, watching,
+  forcing), reading the controller's versions when it connects and writing only what that controller
+  reads; it refuses to download a program to a controller older than its own release and offers the
+  controller's update first, with its own rollback. No interface is frozen from release 1 as a
+  rescue path.
+- **Replacing the hardware** (Q236): a backup is one file, a manifest listing its parts with their
+  SHA-256 as a download's does: the program and its source, the hardware configuration, the IO
+  mapping, the target's own settings, the retained data at that moment, and a rebuild sheet in plain
+  text for someone with no knowledge of Veredas (the board and drive it needs, the system image's
+  version and where to get it, the network names and addresses, what to install and in what order).
+  Oficina makes it from the controller and restores it to any target that meets the requirements,
+  checked by its manifest, a person choosing whether the retained data is restored or the program
+  starts cold. Its format is a `veredas-*` format with a version (law L7).
+- **Proving the rules** (Q237): a fault catalogue, a named fault the bench injects for every rule (a
+  power cut at a chosen instruction, a drive that fails a write or reports wear, a clock that jumps
+  or an NTP that lies, a device lost mid-exchange, memory full), each linking the test of the clause
+  that builds the rule; a long soak before each release, weeks of virtual time with faults drawn at
+  random from the catalogue and the controller's invariants checked throughout (no output but a
+  computed or a safe one, a state that reads back, nothing that grows); and a few power cuts on real
+  boards before a release. The catalogue and the soak are the bench's to carry too
+  (`docs/maquinar-plan.md`).
 
 ### Out of scope
 Technology objects entirely (axes, PID, cams, counters): "technology objects later", and release 1
 says which machines it serves, discrete IO, no closed loops, no axes (the architect, 2026-11-25, the
 review's entry 41; no PID block in the standard library now, no import from PLCopen XML). Security
-features, until the security round (Q43); under the Cyber Resilience Act the suite's intent is not
+features beyond what the security round ruled on 2026-11-26 (Q43; "The engineering link" above), until
+the security study the architect postponed: the end date of certificates after 2038, a signature over
+a download's manifest and a keyed check on altering requests wait for it; under the Cyber Resilience Act the suite's intent is not
 decided yet, and before the first public release come a security file with a reporting channel and
 a component list, the security study's first output being the gap list against its Annex I (the
 review's entry 38). Certified functional safety. Know-how protection for now: a way to protect a
@@ -540,7 +617,7 @@ Where each item stands on 2026-11-25:
 - **A study of the interpreter's front end** and of the list of core-library operations ORCL allows:
   `docs/orcl/front-end.md`, its choices ruled (Q221, Q222, Q227). The front end's plan is a section
   of `docs/orcl/README.md`, which law L6 reads for every `orcl-*` crate; the interpreter's design is
-  `docs/orcl/interpreter.md` (Q230, Q231 and Q232 open).
+  `docs/orcl/interpreter.md` (Q230, Q231 and Q232 ruled on 2026-11-26).
 - **The study of Linux for real time and of its recovery methods** (`docs/robustness.md`, "The Linux
   study"): `docs/controlador/linux-study.md`, its choices ruled ("On the target" above).
 - **PROFINET International membership**: the architect's.
@@ -554,16 +631,11 @@ Where each item stands on 2026-11-25:
   `orcl-*` crates; `orcl-*` use each other). The interpreter in maquinar is P-020's change.
 
 ## Open
-- **Q31**, the review's majors and minors, ruled entry by entry on 2026-11-25 up to entry 41, each
-  written above where it binds controlador. Still open for controlador: the release in which ladder
-  becomes editable (entry 40 (b), put next), 44 (libraries; structures), 46 (what a Rust engineer
-  gets), and the minors 47 to 50, 53 and 55.
-- **Q32** the specification of what disqualifies an edit from a live takeover, proposed in
-  `docs/controlador/live-takeover.md` for the architect to rule. **Q42** the robustness round's
-  areas not opened, proposed as **Q234** to **Q237**. **Q43** the security round. **Q45**, ruled point by point on 2026-11-25, all
-  but one fact still to check: whether Npcap's licence allows what raw frames on Windows need.
+- **Q31**, the review's majors and minors: every entry is ruled, each written above where it binds
+  controlador, but minor 53 (items that wait on undecided work, marked so in the plans) and minor
+  55 (ruled with Q228's point 8).
+- **Q43** the security round: its list as it stood is gone through (2026-11-26); the end date of
+  certificates after 2038, a signature over a download's manifest and a keyed check on altering
+  requests wait for the security study.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan gives way to the
-  prior art's LET. **Q230** a program whose functions call themselves. **Q231** where an
-  interpreted program's first state and safe outputs come from. **Q232** an instruction budget per
-  scan for an interpreted program. **Q233** the download a FAULT 506 `load` names before there are
-  downloads.
+  prior art's LET.

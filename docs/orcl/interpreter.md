@@ -30,8 +30,9 @@ lean on a crate's encoding):
 - **The functions**: each a body as MIR has it at opt-level 0 (`front-end.md`): its parameters, its locals (with the
   source's name where the source gave one), basic blocks of statements, and one terminator a block.
 - **The entries**: the functions a host may call, each by its source path (`Conveyor::scan`), with the program's
-  inputs, outputs and state types, and their first state and safe outputs, as values or as functions that build
-  them (`docs/questions.md` Q231, open; each needs a format of its own past 1). Format 1 holds no
+  inputs, outputs and state types, and their first state and safe outputs as values, which the front end computes
+  when it lowers the program, refusing a program whose `safe_outputs` reads its state (`docs/questions.md` Q231,
+  ruled on 2026-11-26; they need a format past 1). Format 1 holds no
   table of them: a host finds an entry by its function's name, its parameters' types being the function's own; a
   table, if the front end needs one, comes with a new format version (C-154).
 - **The source map**: for every instruction its source location, so a fault 502 `program(at)` and a breakpoint
@@ -64,9 +65,14 @@ Everything a program needs is sized when it is loaded, so nothing is allocated d
   structure is its fields' slots in order, an enum its discriminant and its largest variant, an array its element's
   slots times its length;
 - each function has a frame of its locals' slots;
-- the call graph from the entries is walked at load; its deepest path sets the stack's size, the state's types the
-  state's. A function that reaches itself has no deepest path: Q230 asks what happens to it; taken meanwhile, the
-  file is refused at load, naming the cycle.
+- the stack is the size the target's settings give, counted in slots, laid out at load after the regions (Q230,
+  ruled on 2026-11-26): every program Rust compiles loads and runs, one whose functions call themselves among them.
+  A call whose callee's frame would end past the stack, or that would hold more frames than the stack has slots (a
+  frame of no slot still counting one), is the program's fault 502 `program(at)` at that call, the machine left
+  standing at it, nothing of the callee written; an entry whose own frame the stack cannot hold is refused when
+  the host starts it. The size is in slots, not bytes, so a program reaches the same depth on every target
+  whatever a slot's size there. Until the target's settings (`veredas-alvo`) are built, the host hands the size in
+  when it loads the program, as it hands in the program;
 - a reference is the index of a slot in that memory; it never outlives its call (O3), so it never dangles.
 
 A slot takes 32 bytes as built, and a program's memory is allocated whole at load; a limit on it belongs to the
@@ -77,10 +83,10 @@ target's settings (`veredas-alvo`), not built yet.
   one instruction at a time; a host asks for one step, for steps until the entry returns, or for steps until a
   budget of instructions or a flag stops it. Its whole state is data, so a scan halted at an instruction resumes
   where it stopped.
-- **A program error** (a failed assertion, an index out of bounds, unreachable code, a core operation's precondition
-  broken) ends the entry's run with a typed error that names the instruction's source location; the machine is
+- **A program error** (a failed assertion, an index out of bounds, a call past the stack, unreachable code, a core
+  operation's precondition broken) ends the entry's run with a typed error that names the instruction's source location; the machine is
   left as it was at that instruction, for the fault record. Never a panic (O11). To the controller (C-152) a failed
-  check and an index past the end are the program's fault 502; unreachable code, a value read before anything
+  check, an index past the end and a call past the stack are the program's fault 502; unreachable code, a value read before anything
   wrote it and an inconsistency the load should have refused are the runtime's 507.
 - **The engine of a scan** runs an interpreted program as it runs a native one. A native `Program::scan` cannot
   fail, so `orcl-runtime` runs a `TaskProgram`, whose scan may end in an error of its own, which the task turns
@@ -96,8 +102,9 @@ target's settings (`veredas-alvo`), not built yet.
   Each scan writes the scan, the inputs and the output image the task holds into their regions, calls the entry
   to its return, and reads the outputs back; nothing is allocated. A program error faults the task, and the
   machine is left at the instruction that failed, for the fault record. Its first state and its safe outputs are
-  handed in when it is made (Q231). A scan that never returns is the host's watchdog's to catch, as a native
-  one's is; an instruction budget per scan would let the engine stop it itself (Q232).
+  handed in when it is made, as the program file will carry them (Q231), and so is the stack's size (Q230). There
+  is no instruction budget: a scan that never returns is the host's watchdog's to catch, as a native one's is
+  (Q232, ruled on 2026-11-26).
 - **Determinism**: no host time or randomness inside the machine; integer and float operations as Rust's on every
   target (IEEE 754 for the basic float operations; no transcendental function is on the list); the same program,
   inputs and scan times give the same outputs and the same instruction count.
@@ -120,11 +127,13 @@ with Veredas 1's conveyor and a probe that reaches every block of `orcl-std` and
 1. **`orcl-interp`'s program and machine**, its tests on stable with programs built by hand in Rust, as the bench's
    fixtures are (fixture first): every instruction, every place, the faults, memory laid out at load, a scan halted
    at an instruction and resumed. Built on 2026-11-25 (C-153), with `orcl-std`'s on-delay and rising edge lowered by
-   hand and run beside the native blocks.
+   hand and run beside the native blocks. Changed on 2026-11-26 (Q230): the stack is the host's size, a call past
+   it the program's error, where the load had sized it by the deepest path and refused a function reaching itself.
 2. **The engine of a scan running an interpreted program**, with the program kind whose scan may fail
    ("Running"): C-151 changed, C-155 new, on 2026-11-25, a hand-lowered program and its native twin on one task;
    then the controller running one (C-152 changed), made afresh from what its host hands in at every start, its own
-   error the controller's 502 `program(at)`.
+   error the controller's 502 `program(at)`, and one that cannot be made, until downloads exist, its STOP 104
+   `no_program` (Q233, 2026-11-26).
 3. **The program file**: written and read back, its header checked, a file refused by name. Built on 2026-11-25
    (C-154): every file it accepts writes back to the very same bytes, and one small program's bytes are pinned.
 4. **`crates/orcl-front`**: the shell on stable, the driver on the nightly lowering the conveyor and the probe. A
@@ -132,9 +141,4 @@ with Veredas 1's conveyor and a probe that reaches every block of `orcl-std` and
 5. **The conformance suite and the closed list** as it grows.
 
 ## Open
-- **Q230** a program whose functions call themselves: refused at load (taken meanwhile), or run on a stack of a size
-  the target sets, a fault when it is exceeded.
-- **Q231** where an interpreted program's first state and safe outputs come from: handed in by the host at load
-  (taken meanwhile; the front end would compute them), or entries the machine calls.
-- **Q232** an instruction budget per scan, so the engine stops a scan that never returns rather than the host's
-  watchdog: none, taken meanwhile.
+Nothing of the interpreter's own: Q230, Q231 and Q232 were ruled on 2026-11-26 and are written above.

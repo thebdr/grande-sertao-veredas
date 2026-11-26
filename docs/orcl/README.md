@@ -101,7 +101,7 @@ study `front-end.md`. Ruled on 2026-11-25: a call from a program's crates into c
 list, each implemented natively and proven against the native call by the conformance suite, and a call outside the
 list is refused by name and place when the program is lowered; core's own intermediate form is never interpreted
 (Q227). How the program file, the instructions, memory and running meet these requirements is `interpreter.md`;
-what it leaves open is Q230.
+its questions (Q230 to Q232) were ruled on 2026-11-26.
 
 ### The front end
 `crates/orcl-front` (Q221, 2026-11-25): a workspace member that builds on stable as an empty shell, so
@@ -178,9 +178,5 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
 - **The interpreter's design** (`interpreter.md`), before `crates/orcl-interp`.
 
 ## Open
-- **Q230** a program whose functions call themselves: refused when the interpreter loads it, taken meanwhile.
-- **Q231** where an interpreted program's first state and safe outputs come from: handed in by its host, taken
-  meanwhile.
-- **Q232** an instruction budget per scan for an interpreted program: none, taken meanwhile.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan should give way to the prior art's
   LET, at the end of its logical period (`language/README.md`, "Not settled yet").

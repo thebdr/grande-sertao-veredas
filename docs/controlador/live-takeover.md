@@ -1,10 +1,11 @@
 # Live takeover: what disqualifies an edit
 
-**A proposal, 2026-11-25, for the architect to rule as a document** (`docs/questions.md` Q32: "controlador writes
-the whole specification as a proposal, and the architect rules on it as a document"), brought up on 2026-11-26 to
-the rulings of 2026-11-25 that bear on it (below, "Ruled since it was first written"). Nothing here is settled until
-then, and no live takeover is built before it is ruled. `docs/controlador-plan.md` ("Online change") wins on intent;
-this file is the specification it owes.
+**The specification, ruled by the architect on 2026-11-26** (`docs/questions.md` Q32: "Yes, this is the
+specification"), with three of its points decided the same day: S3 out of the list, D3 as written (any force), and
+the time limit the engineer's, ten minutes by default (D7). Controlador wrote it as a proposal on 2026-11-25 and
+brought it up on 2026-11-26 to the rulings that bear on it (below, "Ruled since it was first written"). No live
+takeover is built yet. `docs/controlador-plan.md` ("Online change") wins on intent; this file is the specification
+it owes.
 
 ## What a live takeover is
 An edit reaches the plant through a shadow test: the new version is deployed, both versions run on the same inputs,
@@ -15,7 +16,7 @@ outputs back to the old version without a stop: a **live takeover**. Without it,
 always does, its outputs safe, and the previous version is put back for the next start: "takeover after restart
 remains possible for all cases" (the architect, 2026-11-15).
 
-What was ruled with Q32 stands around this proposal: an edit that failed leaves a fault record named "the edit
+What was ruled with Q32 stands around this specification: an edit that failed leaves a fault record named "the edit
 failed", not a controller fault; and while the old version watches and may still take over, the state text
 carries a term with the time it has left.
 
@@ -28,9 +29,13 @@ carries a term with the time it has left.
   entry 15). A rollback is therefore never a live takeover.
 - **An unaccepted shadow test at a power cycle is dropped** (Q45): the version that was driving drives again and a
   person starts the test again. T1 is written so.
-- **The controller's faults** (C-152 as built): 502 `program(at)` is the program's own error where Rust would panic;
-  what safe Rust cannot reach, and a failure of the runtime or its host, is 507 `internal`; a program that cannot be
-  made is 506 `load`. T1 is written so.
+- **The controller's faults** (C-152): 502 `program(at)` is the program's own error where Rust would panic, and a
+  call past the stack the target's settings give is one too (Q230); what safe Rust cannot reach, and a failure of
+  the runtime or its host, is 507 `internal`; a stored program that fails its check is 506 `load` (Q36), and until
+  downloads exist a program handed in that cannot be made leaves the controller in STOP 104 `no_program` (Q233).
+  T1 is written so.
+- **An edit accepted when its time limit runs out is recorded as such** (the review's minor 47, Q31): "accepted by
+  timeout" in the download history, and an event. D7 is written so.
 
 ## The principle
 The old version may take over only when its picture of the plant is the plant's own: when everything the plant
@@ -52,9 +57,9 @@ fallback armed when one does (Oficina's check is a convenience; the controller's
   change on two channels in one scan that no comparison before it showed the plant.
 - **S2. What may never differ in a swap differs**: the hardware configuration or the task timing (the plan, "What
   may differ"), refused for any swap already and named here for completeness.
-- **S3. What peers see differs**: the published variables, the Modbus addresses, the OPC UA nodes or which variables
-  are writable from outside. A takeover would change under a peer what it reads or writes, which the comparison of
-  outputs does not cover. (The assistant's reading; the architect may rule it out of the list.)
+- **S3, ruled out** (2026-11-26): what peers see (the published variables, the Modbus addresses, the OPC UA nodes,
+  which variables are writable from outside) may differ and the fallback still be armed. The label stays unused, so
+  S4 keeps the name the ruling read.
 - **S4. The test cannot compare**: an application the shadow test cannot run whole, or a comparison the controller
   cannot keep up with in the doubled scan. The entry check already refuses the first; the second disqualifies the
   fallback, never the test.
@@ -72,8 +77,8 @@ drops the armed term, the state history records which one and when, and Oficina 
   may not show until later; it disqualifies at once.
 - **D3. A force.** A force belongs to the controller and applies to both versions alike, but a forced plant is not a
   plant the watcher computed for, and a force on what the old version lacks cannot apply to it. Any force set while
-  the fallback is armed disqualifies. (A narrower rule, only forces the old version cannot take, is possible; the
-  assistant proposes the strict one, by the language's own principle that loosening breaks nothing.)
+  the fallback is armed disqualifies (ruled 2026-11-26, "Any force"; the narrower rule, only forces the old version
+  cannot take, was not taken).
 - **D4. A halt.** A breakpoint hit, a pause or a single cycle. Breakpoints sit in the driving version only and the
   watcher pauses in step (the plan), but outputs at a halt follow the halt settings and the plant then moves on its
   own; debugging is not the production a live takeover protects.
@@ -83,7 +88,9 @@ drops the armed term, the state history records which one and when, and Oficina 
   versions' handlers; if one has a handler and the other none, or their outputs then differ, D1 or this rule ends
   the right. (Kept separate so the state history says why.)
 - **D7. The time limit ran out.** The edit is then accepted and the old version stops watching (the plan); there is
-  nothing left to take over.
+  nothing left to take over. The limit is the engineer's, a setting of each download, ten minutes by default
+  (2026-11-26); its acceptance is recorded as "accepted by timeout" in the download history, and as an event (the
+  review's minor 47).
 
 ## The takeover itself
 When the new version fails and none of the above has happened since the swap:
@@ -110,11 +117,13 @@ On the bench (maquinar), each case a test of the clause that builds it, on virtu
   failing scan, the plant's outputs continuous, no safe value written, the fault record and the request present;
 - the same edit with one output different once, long before the fault: the right ends at that scan, the state says
   so, and the fault is a controller FAULT with safe outputs;
-- each of S1 to S4 refusing the armed swap, and each of D2 to D7 ending the right, by name;
+- each of S1, S2 and S4 refusing the armed swap, an edit that changes only what peers see arming it, and each of D2
+  to D7 ending the right, by name;
 - a failure in each class of T1, handed over or not as listed.
 
-## What the architect is asked
-- Is this the specification: the principle, S1 to S4, D1 to D7 and T1 to T4?
-- Two of its points are the assistant's own readings, each marked above: S3 (what peers see) and D3's strictness.
-- The fallback's time limit: a default, and whether it is the engineer's to set (the plan says it has one, not
-  what it is).
+## How it was ruled
+The architect's four answers of 2026-11-26 (`docs/questions.md` Q32, the word-for-word record):
+- the document: "Yes, this is the specification" (the principle, S1 to S4, D1 to D7 and T1 to T4);
+- S3: "No, S3 out", an edit may change what peers see and still arm the fallback;
+- D3: "Any force (the proposal)";
+- the time limit: "Engineer's, default ten minutes", a setting of each download.
