@@ -177,8 +177,12 @@ impl World {
         w.integration_parameters.dt = f64::from(scene.step_ms) / 1000.0;
         // Contacts worked out anew at every step: recycled ones let a body falling from beyond the
         // prediction distance cross a fixed part whole at a long step (7 of 840 drops at 10 to
-        // 100 ms; C-114's fourth refute round). Continuous collision detection changes nothing.
+        // 100 ms; C-114's fourth refute round), which continuous collision detection did not change.
         w.integration_parameters.contact_recycling = false;
+        // A solver substep of a millisecond at most, as the default step's four iterations give at
+        // 4 ms: at longer steps fewer let a column of cartons sink into itself and through the floor
+        // (round 6: five equal cartons at 75 ms, ten at 50).
+        w.integration_parameters.num_solver_iterations = (scene.step_ms as usize).max(4);
         let ground = w.insert_body(RigidBodyBuilder::fixed());
         let (ctx, collisions) = channel();
         let (ftx, forces) = channel();
@@ -258,7 +262,9 @@ impl World {
 
     fn insert_body(&mut self, b: &Body) {
         let (x, y, z) = half(b.size);
-        let body = self.w.insert_body(RigidBodyBuilder::dynamic().pose(pose(b.at, b.yaw, b.pitch, b.roll)));
+        // Swept against every collider, not the fixed ones alone: a body dropped onto a mover's table
+        // at a long step passed through it (round 6: 117 of 360 drops at 20 to 100 ms).
+        let body = self.w.insert_body(RigidBodyBuilder::dynamic().ccd_enabled(true).pose(pose(b.at, b.yaw, b.pitch, b.roll)));
         let collider = self.w.insert_collider(ColliderBuilder::cuboid(x, y, z).mass(b.mass).friction(b.friction), Some(body));
         self.owners.insert(collider, b.name.clone());
         self.moving.insert(b.name.clone(), (body, Kind::Body));

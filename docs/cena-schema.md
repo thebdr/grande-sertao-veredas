@@ -74,8 +74,11 @@ Every part has a `name` (required), unique across the whole scene, not empty and
 surrounding whitespace; `at` (required, in metres, each coordinate within 10000 of the origin);
 `yaw`, `pitch` and `roll` (`0`, degrees, any finite value). Boxes have a `size` (required, each
 side from 0.001 to 10000 m: the engine rests a smaller part sunk into what it lies on). A contact's
-friction is the mean of its two parts' frictions; nothing bounces. The world computes in double
-precision, so a part far from the origin moves as one near it.
+friction is the mean of its two parts' frictions; nothing bounces at a plant's speeds (a body
+meeting a part faster than about 24 m/s, a fall of 30 m, rebounds a little, and no body moves
+faster than 400 m/s, the engine's cap). The world computes in double precision, so a part far
+from the origin moves as one near it, and alike at every step: its solver works a millisecond at a
+time at most, and a body is swept against every part, so stacks stand and drops land at 100 ms.
 
 **A fixed shape** (`[[fixed]]`): a box that never moves, a floor, a guide, a chute's side.
 - `friction` (`0.6`): 0 to 10.

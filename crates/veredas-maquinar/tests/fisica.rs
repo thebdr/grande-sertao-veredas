@@ -1735,3 +1735,258 @@ mod round_5 {
         }
     }
 }
+
+/// C-114's sixth refute round: the critic's probes (`~/.cache/veredas/critic-c114-r6/probes`), kept
+/// as pins: columns of cartons and two-box stacks standing at every step (the solver's iterations
+/// now grow with the step), drops onto a mover or a body resting on it (bodies swept against every
+/// collider), a body alone within 0.12 mm at every step, the header's refusals by their text; on
+/// the machine's lock, a 2 s stall caught up and never skipped, and a hook's stall counting the
+/// step after it, not its own.
+mod round_6 {
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::fisica::{self, Body, World};
+
+    fn world(body: &str) -> World {
+        World::new(&fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")).unwrap()).unwrap()
+    }
+
+    fn steps(w: &mut World, n: u64) {
+        for _ in 0..n {
+            w.step();
+        }
+    }
+
+    const FLOOR: &str = "[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n";
+
+    /// Ten equal 2.5 kg cartons of 0.3 m, stacked: at a 50 ms step they collapsed into one another
+    /// and through the floor. At every step now, the lowest 0.5 to 1 mm into the floor, each up to
+    /// 6 mm into the one under it, the top within 30 mm of 3 m.
+    #[test]
+    fn a_column_of_ten_cartons_stands_at_every_step() {
+        let mut wrong = Vec::new();
+        for step_ms in [4u32, 20, 50, 100] {
+            let mut text = format!("step_ms = {step_ms}\n{FLOOR}");
+            for i in 0..10 {
+                text += &format!("[[body]]\nname = \"c{i}\"\nsize = [0.3, 0.3, 0.3]\nat = [0.0, 0.0, {}]\nmass = 2.5\n", 0.15 + 0.3005 * f64::from(i));
+            }
+            let mut w = world(&text);
+            steps(&mut w, u64::from(6000 / step_ms));
+            let z: Vec<f64> = (0..10).map(|i| w.body(&format!("c{i}")).unwrap().at[2]).collect();
+            let floor = 0.15 - z[0];
+            let into: Vec<f64> = (1..10).map(|i| 0.3 - (z[i] - z[i - 1])).collect();
+            if !(0.0005..=0.001).contains(&floor) || into.iter().any(|d| !(0.0..=0.006).contains(d)) || z[9] + 0.15 < 2.97 {
+                wrong.push(format!("{step_ms} ms: floor {floor:.5} m, each {into:.4?}, top {:.4}", z[9] + 0.15));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// Eight cartons added one a second, each 1 cm above the top: at 50 to 100 ms they had sunk
+    /// through each other to tens of metres under the floor. Now the lowest within 2 mm of 0.15 m,
+    /// each 0.29 to 0.3 m above the one under it.
+    #[test]
+    fn a_column_built_one_carton_at_a_time_stands_at_long_steps() {
+        let mut wrong = Vec::new();
+        for step_ms in [20u32, 50, 100] {
+            let mut w = world(&format!("step_ms = {step_ms}\n{FLOOR}"));
+            let per_s = u64::from(1000 / step_ms);
+            let mut top = 0.0f64;
+            for i in 0..8 {
+                w.add_body(&Body { mass: 2.5, ..Body::new(&format!("c{i}"), [0.3, 0.3, 0.3], [0.0, 0.0, top + 0.16]) }).unwrap();
+                steps(&mut w, per_s);
+                top = (0..=i).map(|k| w.body(&format!("c{k}")).unwrap().at[2] + 0.15).fold(f64::MIN, f64::max);
+            }
+            steps(&mut w, 3 * per_s);
+            let z: Vec<f64> = (0..8).map(|i| w.body(&format!("c{i}")).unwrap().at[2]).collect();
+            if (z[0] - 0.15).abs() > 0.002 || (1..8).any(|i| !(0.29..=0.3).contains(&(z[i] - z[i - 1]))) {
+                wrong.push(format!("{step_ms} ms: centres {z:.4?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// Two 0.2 m boxes, the lower 1 kg, the upper `ratio` kg: (the lower into the floor, the upper
+    /// into the lower, the upper's bottom above the floor), in metres.
+    fn stack(step_ms: u32, ratio: f64) -> (f64, f64, f64) {
+        let mut w = world(&format!(
+            "step_ms = {step_ms}\n{FLOOR}[[body]]\nname = \"light\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.1]\nmass = 1\n\
+             [[body]]\nname = \"heavy\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.3005]\nmass = {ratio}\n"
+        ));
+        steps(&mut w, u64::from(4000 / step_ms));
+        let (l, h) = (w.body("light").unwrap().at[2], w.body("heavy").unwrap().at[2]);
+        (0.1 - l, 0.2 - (h - l), h - 0.1)
+    }
+
+    /// At every step the depths 4 ms gives: ten times the mass on top, the lower 0.6 to 0.9 mm into
+    /// the floor and the upper 2 to 3.5 mm into it (at 100 ms it had sunk through at ten times);
+    /// a thousand times, the upper's bottom on the floor, the lower pressed 35 to 50 mm into it.
+    #[test]
+    fn two_boxes_stack_alike_at_every_step() {
+        let mut wrong = Vec::new();
+        for step_ms in [1u32, 4, 20, 50, 100] {
+            let (floor, upper, _) = stack(step_ms, 10.0);
+            if !(0.0006..=0.0009).contains(&floor) || !(0.002..=0.0035).contains(&upper) {
+                wrong.push(format!("{step_ms} ms, ten times: floor {floor:.5}, upper {upper:.5}"));
+            }
+            let (floor, _, bottom) = stack(step_ms, 1000.0);
+            if bottom.abs() > 0.001 || !(0.035..=0.05).contains(&floor) {
+                wrong.push(format!("{step_ms} ms, a thousand times: floor {floor:.5}, bottom {bottom:.5}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// Boxes of 0.1 and 0.3 m dropped 5 cm to 3 m onto a mover's table 2 or 10 cm thick and onto
+    /// a 20 kg body lying on a shelf, at 20, 50 and 100 ms: each rests on what it fell on, within 5 mm
+    /// (78 of 180 had crossed a mover at those steps).
+    #[test]
+    fn drops_onto_a_mover_or_a_body_rest_on_it() {
+        let mut through = Vec::new();
+        for step_ms in [20u32, 50, 100] {
+            for (size, thick) in [(0.1f64, 0.02f64), (0.3, 0.1), (0.1, 0.1)] {
+                for n in (1..=60u32).step_by(3) {
+                    let drop = 0.05 * f64::from(n);
+                    for target in ["mover", "body"] {
+                        let part = match target {
+                            "mover" => format!("[[mover]]\nname = \"t\"\nsize = [2.0, 2.0, {thick}]\nat = [0.0, 0.0, {}]\n", 1.0 - thick / 2.0),
+                            _ => format!("[[fixed]]\nname = \"shelf\"\nsize = [3.0, 3.0, 0.1]\nat = [0.0, 0.0, {}]\n[[body]]\nname = \"t\"\nsize = [2.0, 2.0, {thick}]\nat = [0.0, 0.0, {}]\nmass = 20\n", 1.0 - thick - 0.05, 1.0 - thick / 2.0),
+                        };
+                        let mut w = world(&format!(
+                            "step_ms = {step_ms}\n[[fixed]]\nname = \"ground\"\nsize = [20.0, 20.0, 0.2]\nat = [0.0, 0.0, -5.1]\n{part}\
+                             [[body]]\nname = \"b\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\nmass = 2.5\n",
+                            1.0 + size / 2.0 + drop
+                        ));
+                        steps(&mut w, u64::from(3000 / step_ms));
+                        let b = w.body("b").unwrap();
+                        let top = if target == "body" { w.body("t").unwrap().at[2] + thick / 2.0 } else { 1.0 };
+                        if (b.at[2] - size / 2.0 - top).abs() > 0.005 {
+                            through.push(format!("{target} at {step_ms} ms, a {size} m box from {drop:.2} m onto {thick} m: z {:.3}", b.at[2]));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(through.is_empty(), "{} of 360: {through:#?}", through.len());
+    }
+
+    /// Fourteen shapes from a 1 cm cube to a 10 m slab, alone on a fixed floor, at steps of 1 to
+    /// 100 ms, and three at a milligram and at 100 t: each 0 to 0.12 mm deep (flat ones had rested
+    /// 0.14 mm at 100 ms).
+    #[test]
+    fn a_body_alone_rests_within_0_12_mm_at_every_step() {
+        let shapes: [[f64; 3]; 14] = [
+            [0.2, 0.2, 0.2],
+            [0.2, 0.2, 0.05],
+            [0.2, 0.2, 0.02],
+            [0.4, 0.4, 0.01],
+            [1.0, 1.0, 0.005],
+            [1.2, 0.8, 0.15],
+            [2.0, 0.3, 0.02],
+            [4.0, 4.0, 0.1],
+            [0.05, 0.05, 0.002],
+            [2.0, 0.05, 0.05],
+            [0.6, 0.4, 0.4],
+            [0.3, 0.4, 0.2],
+            [10.0, 10.0, 0.5],
+            [0.01, 0.01, 0.001],
+        ];
+        let depth = |step_ms: u32, size: [f64; 3], mass: f64| {
+            let half = size[2] / 2.0;
+            let mut w = world(&format!(
+                "step_ms = {step_ms}\n[[fixed]]\nname = \"floor\"\nsize = [60.0, 60.0, 0.2]\nat = [0.0, 0.0, -0.1]\n[[body]]\nname = \"box\"\nsize = [{}, {}, {}]\nat = [0.0, 0.0, {}]\nmass = {mass}\n",
+                size[0], size[1], size[2], half + 0.002
+            ));
+            steps(&mut w, u64::from(4000 / step_ms));
+            half - w.body("box").unwrap().at[2]
+        };
+        let mut over = Vec::new();
+        for step_ms in [1u32, 4, 10, 20, 50, 100] {
+            for size in shapes {
+                let d = depth(step_ms, size, 1.0);
+                if !(-0.00001..=0.00012).contains(&d) {
+                    over.push(format!("{size:?} at {step_ms} ms: {:.4} mm", d * 1000.0));
+                }
+            }
+        }
+        for step_ms in [4u32, 20, 100] {
+            for size in [[0.2, 0.2, 0.02], [1.0, 1.0, 0.005], [0.2, 0.2, 0.2]] {
+                for mass in [0.000_001, 100_000.0] {
+                    let d = depth(step_ms, size, mass);
+                    if !(-0.00001..=0.00012).contains(&d) {
+                        over.push(format!("{size:?} of {mass} kg at {step_ms} ms: {:.4} mm", d * 1000.0));
+                    }
+                }
+            }
+        }
+        assert!(over.is_empty(), "{over:#?}");
+    }
+
+    /// The header's refusals, by the text core's reader gives (the test had pinned a missing
+    /// version by a word and not-TOML by its kind).
+    #[test]
+    fn the_header_s_refusals_read_by_their_text() {
+        for (text, want) in [
+            ("version = 1\n", "no `format`: a scene file states `format` and `version`"),
+            ("format = \"veredas-cena\"\n", "no `version`: a scene file states `format` and `version`"),
+            ("format = 3\nversion = 1\n", "not a scene file: `format` is not a string"),
+            ("format = \"veredas-cena\"\nversion = \"1\"\n", "not a scene file: `version` is not a whole number from 0 to 4294967295"),
+            ("this is [ not toml", "not a scene file: TOML parse error at line 1, column 6"),
+            ("format = \"veredas-cena\"\nversion = 0\n", "version 0 of `veredas-cena` is not known here (this reader knows 1)"),
+        ] {
+            let got = fisica::load(text).unwrap_err().to_string();
+            assert_eq!(got.lines().next(), Some(want), "{text:?}");
+        }
+    }
+
+    /// On the machine's lock: a 2 s stall, ten times the earlier pins' 200 ms (a runner that gives
+    /// up on steps more than 60 behind passed those): caught up within 3 steps of the clock, 490
+    /// or more counted late.
+    #[test]
+    fn a_2_s_stall_is_caught_up_and_never_skipped() {
+        let s = fisica::load("format = \"veredas-cena\"\nversion = 1\n[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 1000.0]\n").unwrap();
+        let h = fisica::start(&s).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let (first, begun, late0) = (h.steps(), Instant::now(), h.status().late);
+        let mut once = false;
+        h.add_hook(Box::new(move |_w| {
+            if !once {
+                once = true;
+                std::thread::sleep(Duration::from_millis(2000));
+            }
+        }));
+        std::thread::sleep(Duration::from_millis(3000));
+        let (n, elapsed) = (h.steps() - first, begun.elapsed());
+        let due = (elapsed.as_millis() / 4) as u64;
+        let late = h.status().late - late0;
+        assert!(n + 3 >= due && n <= due + 2, "{n} steps against {due} due");
+        assert!(late >= 490, "{late} counted late");
+    }
+
+    /// On the machine's lock: a hook stalling 9 ms every 25th step; the step whose hook stalled
+    /// began on time and counts nothing, the one after it began late. The count lies within 3 of
+    /// the steps that began late and never past those within a tenth of a step of late (a runner
+    /// judging lateness after the hooks counted both, 80 against 40).
+    #[test]
+    fn a_hook_s_stall_counts_the_step_after_it_not_its_own() {
+        use std::sync::{Arc, Mutex};
+        let s = fisica::load("format = \"veredas-cena\"\nversion = 1\n[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 1000.0]\n").unwrap();
+        let h = fisica::start(&s).unwrap();
+        let starts: Arc<Mutex<Vec<(u64, Instant)>>> = Arc::new(Mutex::new(Vec::with_capacity(4000)));
+        let st = Arc::clone(&starts);
+        // The recording hook first, then the one that stalls.
+        h.add_hook(Box::new(move |w: &mut World| st.lock().unwrap().push((w.steps(), Instant::now()))));
+        std::thread::sleep(Duration::from_millis(100));
+        let (late0, from) = (h.status().late, h.steps());
+        h.add_hook(Box::new(move |w: &mut World| {
+            if w.steps().is_multiple_of(25) {
+                std::thread::sleep(Duration::from_millis(9));
+            }
+        }));
+        std::thread::sleep(Duration::from_millis(4000));
+        let late = h.status().late - late0;
+        drop(h);
+        let (surely, perhaps) = super::begun_late(&starts.lock().unwrap(), Duration::from_millis(4), from);
+        assert!(late as usize + 3 >= surely && late as usize <= perhaps, "{late} counted late, {surely} to {perhaps} began late");
+    }
+}

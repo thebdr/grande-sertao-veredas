@@ -514,7 +514,8 @@ Recorded as the port meets them.
   | test(round_6::a_sigterm_after_the_writer_is_far_behind_ends_the_run)
   | test(round_6::a_bench_whose_start_s_lines_pass_the_pipe_still_stops)
   | test(round_6::a_status_line_the_writer_is_far_behind_on_is_dropped)
-  | (binary(modbus_server) & test(round_9::)) | (binary(ethernetip_adapter) & test(round_7::))`
+  | (binary(modbus_server) & test(round_9::)) | (binary(ethernetip_adapter) & test(round_7::))
+  | (binary(fisica) & test(round_6::) & test(stall))`
   (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23; the adapter's
   multiplier at 3 and its restart within a second, and its timeouts, keep-alives and counts of round 7; the PROFINET neighbour aged out by its TTL, and
   kept to its last frame's when heard again, a shorter one and another's included; the Modbus server's read-ahead filled during a delay
@@ -522,7 +523,7 @@ Recorded as the port meets them.
   300 ms, and its silence met in the middle of a frame (round 9); the
   executable's status lines a second apart, and its stop with a stdout nobody reads (by `stop` and by SIGTERM once its writer is far behind, its start's lines past the pipe, and the status lines it dropped); the Modbus server's delays side by side and a close
   behind many requests seen at once; the PROFINET device's strict mute, whose bursts meet the mute
-  as the load lets them, and an Identify read before a mute not taken after it, and LLDP going on while muted; `fisica`'s late count against the steps' own starts, and its runner at a 10 and a 20 ms step).
+  as the load lets them, and an Identify read before a mute not taken after it, and LLDP going on while muted; `fisica`'s late count against the steps' own starts, and its runner at a 10 and a 20 ms step, a 2 s stall and a hook's stall).
   Free, by that rule: the bench file, the channels, the controller's rules, the component, the
   EtherCAT segment (ethercrab's own timeouts are deadlines), `fisica` but its runner, and every
   other test of the files above. A new test that measures time joins this list in its commit, and
