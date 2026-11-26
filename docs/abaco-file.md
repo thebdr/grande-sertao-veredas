@@ -3,8 +3,10 @@
 A workbook born in Ábaco, and at the same time the session that works on other files
 (`docs/abaco-plan.md`, "The `.abaco` file"): one zip of plain-text parts, readable with `unzip`
 and an editor. `veredas_abaco::abacofile` writes it (`write`, through a file beside the
-destination renamed into place, the file it replaces kept as `<name>.bak`; a write that fails
-leaves the destination as it was and nothing beside it; the temporary file is one of its own, made
+destination renamed into place, the file it replaces kept as `<name>.bak` (a second name of
+the old file made first, so one rename replaces the destination: a write killed partway leaves it
+whole, the old or the new); a write that fails leaves the destination as it was and nothing beside
+it; the temporary file is one of its own, made
 new under a name of its own (`.veredas-<process>-<n>.tmp`, so a long destination name is written up
 to the file system's limit less the `.bak` four bytes), and the names are the system's whatever
 their encoding; two writes of one destination at once are not serialised, a limit) and reads it
@@ -27,8 +29,11 @@ tag too, no key standing for it, is refused in the reader's words (``missing fie
 A variant is read as the part reads it (`{ Min = {} }` as `Min`), a rule's operator, period and
 icons among the variants read so. A structure is written as a table, a variant of no data as a
 text: a list where a table stands (serde reads a structure from its fields' values in order) or a
-table where a text does is refused by its path; in a part that does not read otherwise, in the
-reader's words. A tool's own records and state are tables whose keys
+table where a text does is refused by its path, in every part; in a part that does not read
+otherwise, in the reader's words, and so is a variant of no data written as a table with a key
+beside it at a place not named above (a sheet's `state`, a font's `scheme`). A tag replaced is
+found through the variant the object holds as a text (`kind = "CellIs"`); a tag deleted names no
+key. A search for a replacing key stops past 4 096 readings, the reader's words then standing. A tool's own records and state are tables whose keys
 the tool chooses.
 
 ## The parts

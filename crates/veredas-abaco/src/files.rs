@@ -34,17 +34,24 @@ pub fn atomic_write(path: &Path, write: impl FnOnce(std::fs::File) -> Result<(),
         }
     };
     let placed = write(file).and_then(|()| {
-        let existed = path.exists();
+        // the replaced file kept as `.bak` by a second name (a hard link, a copy where the file
+        // system has none) before the new one takes the destination's name in one rename, which
+        // replaces it: the destination is never missing, a write killed partway leaving it whole,
+        // the old or the new (refute round 18: renamed to `.bak` first, a kill between the two
+        // renames left no destination)
+        let existed = path.symlink_metadata().is_ok();
         if existed {
-            if bak.exists() {
+            if bak.symlink_metadata().is_ok() {
                 std::fs::remove_file(&bak).map_err(|e| format!("{}: {e}", bak.display()))?;
             }
-            std::fs::rename(path, &bak).map_err(|e| format!("{}: {e}", path.display()))?;
+            if std::fs::hard_link(path, &bak).is_err() {
+                std::fs::copy(path, &bak).map_err(|e| format!("{}: {e}", bak.display()))?;
+            }
         }
         std::fs::rename(&tmp, path).map_err(|e| {
-            // the destination back where it was
+            // the destination as it was, and nothing beside it
             if existed {
-                let _ = std::fs::rename(&bak, path);
+                let _ = std::fs::remove_file(&bak);
             }
             format!("{}: {e}", path.display())
         })

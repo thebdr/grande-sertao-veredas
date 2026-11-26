@@ -1813,3 +1813,111 @@ fn a_structure_in_another_form_and_a_variant_read_as_the_part_reads_it_are_named
     let got = refusal(&parts, &sheet, &|_| planted.clone());
     assert!(got.contains("`conditional_formatting.1000.cf_rule.kind` is a key nothing reads"), "{}", &got[..got.len().min(300)]);
 }
+
+#[test]
+fn a_write_keeps_its_destination_whole_and_the_eighteenth_round_s_shapes_are_named() {
+    // refute round 18
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("r18.abaco");
+    let refusal = |parts: &[(String, Vec<u8>)], part: &str, edit: &dyn Fn(&str) -> String| -> String {
+        let edited: Vec<(String, Vec<u8>)> = parts
+            .iter()
+            .map(|(n, b)| if n == part || (part == "sheets/" && n.starts_with("sheets/")) { (n.clone(), edit(std::str::from_utf8(b).unwrap()).into_bytes()) } else { (n.clone(), b.clone()) })
+            .collect();
+        std::fs::write(&path, abacofile::zip_of(&edited).unwrap()).unwrap();
+        abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_else(|| "read, not refused".into())
+    };
+    // a write over a file links the replaced one as `.bak` before the new takes its name in one
+    // rename, so the destination is never missing (a write killed between two renames left none)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let books = tempfile::tempdir().unwrap();
+        let dest = books.path().join("book.abaco");
+        let mut file = worked_example();
+        abacofile::write(&mut file, &dest).unwrap();
+        let first = std::fs::metadata(&dest).unwrap().ino();
+        abacofile::write(&mut file, &dest).unwrap();
+        assert_eq!(std::fs::metadata(books.path().join("book.abaco.bak")).unwrap().ino(), first, "the replaced file is the .bak, linked");
+        assert_ne!(std::fs::metadata(&dest).unwrap().ino(), first);
+        let mut left: Vec<String> = std::fs::read_dir(books.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        assert_eq!(left, ["book.abaco", "book.abaco.bak"]);
+    }
+    let mut example = worked_example();
+    example.book.ensure_calculated();
+    let parts = abacofile::parts(&example).unwrap();
+    // the manifest's sheet and a reference written as lists, an element beyond the fields dropped
+    let got = refusal(&parts, "manifest.toml", &|t| t.replace("[[sheets]]\nname = \"Loads\"\npart = \"sheets/01-Loads.toml\"", "sheets = [[\"Loads\", \"sheets/01-Loads.toml\", \"extra\"]]"));
+    assert!(got.contains("manifest.toml: `sheets.0` is a list where the file holds a table"), "{got}");
+    let references = String::from_utf8(parts.iter().find(|(n, _)| n == "workspace/references.toml").unwrap().1.clone()).unwrap();
+    let table: toml::Table = toml::from_str(&references).unwrap();
+    let r = table["reference"].as_array().unwrap()[0].as_table().unwrap().clone();
+    let listed = format!(
+        "format = {}\nversion = 1\nreference = [[{}, {}, {}, {}, {}, \"extra\"]]\n",
+        table["format"], r["role"], r["path"], r["size"], r["modified"], r["sha256"]
+    );
+    let got = refusal(&parts, "workspace/references.toml", &|_| listed.clone());
+    assert!(got.contains("workspace/references.toml: `reference.0` is a list where the file holds a table"), "{got}");
+    // a key spelled `?`, a step of its own
+    for (from, to, want) in [("[settings]\n", "[settings]\n\"?\" = 1\n", "`settings.?` is a key nothing reads"), ("[[styles.fonts]]\n", "[[styles.fonts]]\n\"?\" = 1\n", "`styles.fonts.0.?` is a key nothing reads")] {
+        let got = refusal(&parts, "workbook.toml", &|t| t.replacen(from, to, 1));
+        assert!(got.contains(want), "{to}: {got}");
+    }
+    // a threshold's `colour` after 690 thresholds holding `color`: the threshold lacking it, among
+    // siblings holding it, tried first
+    let threshold = r##"{ cfvo = { Number = 1.0 }, color = "#FF0000" }"##;
+    let thresholds = format!("{}, {}", vec![threshold; 690].join(", "), r##"{ cfvo = { Number = 1.0 }, colour = "#FF0000" }"##);
+    let formats = format!(r#"conditional_formatting = [{{ range = "B1:B2", priority = 1, cf_rule = {{ type = "ColorScale", thresholds = [{thresholds}] }} }}]"#);
+    let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replace("conditional_formatting = []", &formats));
+    assert!(got.contains("`conditional_formatting.0.cf_rule.thresholds.690.colour` is a key nothing reads"), "{}", &got[..got.len().min(300)]);
+    // a variant of no data written as a table at a place the reader does not list: alone, a table
+    // where the file holds a text; a key beside it, the deserialiser's words (a limit)
+    let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replacen("state = \"Visible\"", "state = { Visible = nan }", 1));
+    assert!(got.contains("`state` is a table where the file holds a text"), "{got}");
+    let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replacen("state = \"Visible\"", "state = { Visible = nan, note = 1 }", 1));
+    assert!(got.contains("sheets/01-Loads.toml") && got != "read, not refused", "{got}");
+    // every rule kind with its tag deleted beside a mistyped value: no key it reads named
+    let rules = AbacoFile::new(open(&corpus_dir().join("conditional_formatting/cf_tests.xlsx")));
+    let rule_parts = abacofile::parts(&rules).unwrap();
+    let mut mistyped = 0;
+    for (sheet, bytes) in rule_parts.iter().filter(|(n, _)| n.starts_with("sheets/")) {
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        let blocks: Vec<&str> = text.split("\n[[conditional_formatting]]\n").collect();
+        for (i, block) in blocks.iter().enumerate().skip(1) {
+            let Some(tag) = block.lines().find(|l| l.starts_with("type = ")) else { continue };
+            let Some(stop) = block.lines().find(|l| l.starts_with("stop_if_true = ")) else { continue };
+            let edited_block = block.replacen(&format!("{tag}\n"), "", 1).replacen(stop, "stop_if_true = \"x\"", 1);
+            let mut edited: Vec<String> = blocks.iter().map(|b| b.to_string()).collect();
+            edited[i] = edited_block;
+            let planted = edited.join("\n[[conditional_formatting]]\n");
+            let got = refusal(&rule_parts, sheet, &|_| planted.clone());
+            assert!(!got.contains("is a key nothing reads") && got != "read, not refused", "{sheet} {tag}: {got}");
+            mistyped += 1;
+        }
+    }
+    assert!(mistyped >= 15, "{mistyped} rules");
+    // a Text rule's tag replaced beside a table-form operator: the tag's key named, the operator
+    // judged by no enum the rule has not named
+    let text_rule = rule_parts.iter().find(|(n, b)| n.starts_with("sheets/") && std::str::from_utf8(b).unwrap().contains("type = \"Text\"")).map(|(n, _)| n.clone()).unwrap();
+    let got = refusal(&rule_parts, &text_rule, &|t| t.replacen("type = \"Text\"", "kind = \"Text\"", 1).replacen("operator = \"Contains\"", "operator = { Contains = {} }", 1));
+    assert!(got.contains(".cf_rule.kind` is a key nothing reads"), "{got}");
+    // variants named with `expected` in them, or a backtick, read past their own name
+    let holding = |s: &str| rule_parts.iter().find(|(n, b)| n.starts_with("sheets/") && std::str::from_utf8(b).unwrap().contains(s)).map(|(n, _)| n.clone()).unwrap();
+    for (from, to, want) in [
+        ("cfvo = \"Min\"", "cfvo = { Unexpected = 1.0 }", ".cfvo.Unexpected` is a key nothing reads"),
+        ("cfvo = \"Min\"", "cfvo = { \"Perc`ent\" = 1.0 }", ".cfvo.Perc`ent` is a key nothing reads"),
+        ("icon = \"Circle\"", "icon = { Unexpected = {} }", ".icon.Unexpected` is a key nothing reads"),
+    ] {
+        let got = refusal(&rule_parts, &holding(from), &|t| t.replacen(from, to, 1));
+        assert!(got.contains(want), "{to}: {got}");
+    }
+    // a linked workbook's cached cells out of the written order, paired by row and column; and a
+    // variant named `Unexpected` there
+    let linked = AbacoFile::new(open(&corpus_dir().join("link_test.xlsx")));
+    let linked_parts = abacofile::parts(&linked).unwrap();
+    let got = refusal(&linked_parts, "workbook.toml", &|t| t.replacen("cells = []", "cells = [[2, 1, { Number = 1.0 }], [1, 1, { Error = { REF = nan } }]]", 1));
+    assert!(got.contains("`external_books.0.sheets.0.cells.1.2.Error` is a table where the file holds a text"), "{got}");
+    let got = refusal(&linked_parts, "workbook.toml", &|t| t.replacen("cells = []", "cells = [[1, 1, { Unexpected = 1.0 }]]", 1));
+    assert!(got.contains("`external_books.0.sheets.0.cells.0.2.Unexpected` is a key nothing reads"), "{got}");
+}

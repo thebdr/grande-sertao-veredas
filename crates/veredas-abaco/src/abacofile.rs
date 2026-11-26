@@ -976,10 +976,19 @@ impl Parts<'_> {
     }
 
     /// A TOML part: its stamp checked before its body is read.
-    fn toml<T: DeserializeOwned>(&mut self, name: &str, format: &str) -> Result<T, ModelError> {
+    fn toml<T: DeserializeOwned + Serialize>(&mut self, name: &str, format: &str) -> Result<T, ModelError> {
         let text = self.text(name)?;
         stamp(&text, name, format).map_err(|e| self.bad(format!("{name}: {e}")))?;
-        toml::from_str(&text).map_err(|e| self.bad(format!("{name}: {e}")))
+        let read: toml::Value = toml::from_str::<toml::Table>(&text).map(toml::Value::Table).map_err(|e| self.bad(format!("{name}: {e}")))?;
+        let value: T = toml::from_str(&text).map_err(|e| self.bad(format!("{name}: {e}")))?;
+        // a structure in another form than the file's, which serde reads too, an element beyond
+        // its fields dropped without a word (refute round 18: the manifest's and the references'
+        // lists)
+        let back = toml::Value::try_from(&value).map_err(|e| self.bad(format!("{name}: {e}")))?;
+        if let Some((path, what)) = toml_form_unlike(&read, &back, String::new()) {
+            return Err(self.bad(format!("{name}: `{path}` is {what}")));
+        }
+        Ok(value)
     }
 
     /// A TOML part's table, its stamp checked first.
@@ -994,11 +1003,13 @@ impl Parts<'_> {
         let json = toml_to_json(toml::Value::Table(table), "").map_err(|e| self.bad(format!("{name}: {e}")))?;
         // the engine's structures take a key they do not know without a word: a key nothing
         // reads, at any depth, is refused by its path, as every file of the suite refuses one
-        // (`serde_ignored` marks an optional field's step with `?`, which the file has not: dropped)
+        // (its steps read from `serde_ignored`'s path, an optional field's and a newtype's none of
+        // the file's: a key spelled `?` is a step of its own, refute round 18)
         let mut unread = Vec::new();
         let read: Result<T, _> = serde_ignored::deserialize(json.clone(), |path| {
-            let path = path.to_string();
-            unread.push(path.split('.').filter(|step| *step != "?").collect::<Vec<_>>().join("."));
+            let mut steps = Vec::new();
+            ignored_steps(&path, &mut steps);
+            unread.push(steps.join("."));
         });
         // a key nothing reads is named first, a misspelt one replacing the field it meant too (the
         // field then missing: refute round 11)
@@ -1034,6 +1045,24 @@ impl Parts<'_> {
             return Err(self.bad(format!("{name}: `{path}` is {what}")));
         }
         Ok(value)
+    }
+}
+
+/// The steps of a path `serde_ignored` reports, the file's keys and indices alone (an optional
+/// field's and a newtype's steps are none of the file's).
+fn ignored_steps(path: &serde_ignored::Path, out: &mut Vec<String>) {
+    use serde_ignored::Path as P;
+    match path {
+        P::Root => {}
+        P::Seq { parent, index } => {
+            ignored_steps(parent, out);
+            out.push(index.to_string());
+        }
+        P::Map { parent, key } => {
+            ignored_steps(parent, out);
+            out.push(key.clone());
+        }
+        P::Some { parent } | P::NewtypeStruct { parent } | P::NewtypeVariant { parent } => ignored_steps(parent, out),
     }
 }
 
@@ -1133,12 +1162,15 @@ fn variant_objects(json: &serde_json::Value) -> Vec<(String, &serde_json::Value,
         // and its enums of no data, a text in the file, a table to serde's buffer too (refute
         // round 17): a rule's operator (a Text rule's of texts, any other's of values), period and
         // icon, an icon set's thresholds' icons
-        let operator = if rule.get("type").and_then(J::as_str) == Some("Text") {
-            read_back::<TextOperator> as TaggedReader
-        } else {
-            read_back::<ValueOperator> as TaggedReader
+        // the operator's enum by the rule's tag, a CellIs rule's of values, a Text rule's of texts;
+        // a rule of no such tag (none, renamed) judged by the tag's search, not here (refute round 18)
+        let operator = match rule.get("type").and_then(J::as_str) {
+            Some("Text") => Some(read_back::<TextOperator> as TaggedReader),
+            Some("CellIs") => Some(read_back::<ValueOperator> as TaggedReader),
+            _ => None,
         };
-        for (key, read) in [("operator", operator), ("time_period", read_back::<PeriodType> as TaggedReader), ("icon", read_back::<Icon> as TaggedReader)] {
+        let places = [("operator", operator), ("time_period", Some(read_back::<PeriodType> as TaggedReader)), ("icon", Some(read_back::<Icon> as TaggedReader))];
+        for (key, read) in places.into_iter().filter_map(|(k, r)| r.map(|r| (k, r))) {
             if let Some(value) = rule.get(key).filter(|v| v.is_object()) {
                 out.push((format!("{at}.{key}"), value, read));
             }
@@ -1171,8 +1203,11 @@ fn variant_objects(json: &serde_json::Value) -> Vec<(String, &serde_json::Value,
 /// one, names none: the deserialiser's words stand.
 fn key_beside_a_variant(json: &serde_json::Value) -> Option<String> {
     use serde_json::Value as J;
-    let names = |error: &str| -> Vec<String> {
-        error.split_once("expected").map(|(_, e)| e.split('`').skip(1).step_by(2).map(str::to_string).collect()).unwrap_or_default()
+    // the variants an "unknown variant `name`, expected …" lists, read past the name the object
+    // gave (one holding `expected` or a backtick read whole: refute round 18)
+    let names = |error: &str, name: &str| -> Option<Vec<String>> {
+        let rest = error.strip_prefix(&format!("unknown variant `{name}`, "))?;
+        Some(rest.split('`').skip(1).step_by(2).map(str::to_string).collect())
     };
     variant_objects(json).into_iter().find_map(|(path, obj, read)| {
         let J::Object(o) = obj else { return None };
@@ -1182,12 +1217,11 @@ fn key_beside_a_variant(json: &serde_json::Value) -> Option<String> {
             read(&J::Object([(k.clone(), o[k].clone())].into_iter().collect())).is_ok()
                 || (o[k].as_object().is_some_and(serde_json::Map::is_empty) && read(&J::String(k.clone())).is_ok())
         };
-        if let Some((_, rest)) = error.split_once("unknown variant `")
-            && let Some((name, _)) = rest.split_once('`')
-        {
-            // the enum's own variants, as a name none of them is shows them
-            let own = read(&J::Object([("\u{1}".to_string(), J::Null)].into_iter().collect())).err().map(|e| names(&e)).unwrap_or_default();
-            return (o.contains_key(name) && !own.is_empty() && names(&error) == own).then(|| format!("{path}.{name}"));
+        if error.starts_with("unknown variant `") {
+            // the key the error names, one of the object's, and the enum's own variants, as a name
+            // none of them is shows them
+            let own = read(&J::Object([("\u{1}".to_string(), J::Null)].into_iter().collect())).err().and_then(|e| names(&e, "\u{1}")).unwrap_or_default();
+            return o.keys().find(|k| names(&error, k).is_some_and(|listed| !own.is_empty() && listed == own)).map(|k| format!("{path}.{k}"));
         }
         if let [(k, J::Object(inner))] = o.iter().collect::<Vec<_>>().as_slice()
             && !inner.is_empty()
@@ -1271,7 +1305,15 @@ fn explore_from(
         // key of the file's, so which period or icon it names leaves the same keys unread; refute
         // round 16: following each spent the readings)
         let branch = field == "type" && path.is_empty();
-        let mut kinds = vec![J::Bool(false), J::from(0), J::String(String::new()), J::Null, J::Array(Vec::new()), J::Object(Default::default())];
+        // the tag searched only over the variants the object holds as a text (`kind = "CellIs"`):
+        // a tag deleted, no key standing for it, names none, and a wrong variant's reading never
+        // decides (refute round 18: a deleted tag beside a mistyped value named a key read)
+        let mut kinds = if branch {
+            vec![J::String(String::new())]
+        } else {
+            vec![J::Bool(false), J::from(0), J::String(String::new()), J::Null, J::Array(Vec::new()), J::Object(Default::default())]
+        };
+        let held = |v: &J| file.as_object().is_some_and(|o| o.values().any(|x| x == v));
         let mut refused = false;
         let mut taken_unchanged = None;
         let mut k = 0;
@@ -1305,11 +1347,11 @@ fn explore_from(
                     // enum's no variant): a tag's variants, each tried
                     refused = true;
                     if e.starts_with("unknown variant")
-                        && let Some((_, expected)) = e.split_once("expected")
+                        && let Some((_, expected)) = e.split_once("`, expected")
                     {
                         for v in expected.split('`').skip(1).step_by(2) {
                             let v = J::String(v.to_string());
-                            if !kinds.contains(&v) {
+                            if !kinds.contains(&v) && (!branch || held(&v)) {
                                 kinds.push(v);
                             }
                         }
@@ -1331,8 +1373,31 @@ fn explore_from(
     }
 }
 
-/// The paths of the objects of `json` lacking `field`, in the order of the part.
+/// The paths of the objects of `json` lacking `field`, in the order of the part, those first whose
+/// siblings in their list hold it (a threshold missing its `color` among thresholds holding one:
+/// refute round 18, the search spending its readings on every `cfvo` before it).
 fn candidates_lacking(json: &serde_json::Value, field: &str) -> Vec<Vec<String>> {
+    use serde_json::Value as J;
+    let all = candidates_in_order(json, field);
+    let parent_of = |path: &[String]| -> Option<&J> {
+        let (_, up) = path.split_last()?;
+        let mut at = json;
+        for step in up {
+            at = match at {
+                J::Object(o) => o.get(step)?,
+                J::Array(a) => a.get(step.parse::<usize>().ok()?)?,
+                _ => return None,
+            };
+        }
+        Some(at)
+    };
+    let sibling_holds = |path: &Vec<String>| parent_of(path).and_then(J::as_array).is_some_and(|a| a.iter().any(|x| x.get(field).is_some()));
+    let (first, rest): (Vec<Vec<String>>, Vec<Vec<String>>) = all.into_iter().partition(sibling_holds);
+    first.into_iter().chain(rest).collect()
+}
+
+/// The paths of the objects of `json` lacking `field`, in the order of the part.
+fn candidates_in_order(json: &serde_json::Value, field: &str) -> Vec<Vec<String>> {
     use serde_json::Value as J;
     fn walk(v: &J, field: &str, path: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
         match v {
@@ -1387,6 +1452,19 @@ fn insert_at(json: &mut serde_json::Value, path: &[String], field: &str, value: 
     }
 }
 
+/// [`form_unlike`] of a TOML part read as itself (the manifest, the workspace's parts).
+fn toml_form_unlike(read: &toml::Value, back: &toml::Value, path: String) -> Option<(String, &'static str)> {
+    use toml::Value as T;
+    let at = |k: &str| if path.is_empty() { k.to_string() } else { format!("{path}.{k}") };
+    match (read, back) {
+        (T::Array(_), T::Table(_)) => Some((path, "a list where the file holds a table")),
+        (T::Table(_), T::String(_)) => Some((path, "a table where the file holds a text")),
+        (T::Table(r), T::Table(b)) => r.iter().find_map(|(k, v)| b.get(k).and_then(|bv| toml_form_unlike(v, bv, at(k)))),
+        (T::Array(r), T::Array(b)) => r.iter().zip(b).enumerate().find_map(|(i, (v, bv))| toml_form_unlike(v, bv, at(&i.to_string()))),
+        _ => None,
+    }
+}
+
 /// The first place, in the order of the part, where the file holds another form than the value
 /// read written back: a list where it holds a table, or a table where it holds a text. The writer
 /// writes every value in the form it writes it back, so nothing it writes is refused.
@@ -1397,7 +1475,19 @@ fn form_unlike(read: &serde_json::Value, back: &serde_json::Value, path: String)
         (J::Array(_), J::Object(_)) => Some((path, "a list where the file holds a table")),
         (J::Object(_), J::String(_)) => Some((path, "a table where the file holds a text")),
         (J::Object(r), J::Object(b)) => r.iter().find_map(|(k, v)| b.get(k).and_then(|bv| form_unlike(v, bv, at(k)))),
-        (J::Array(r), J::Array(b)) => r.iter().zip(b).enumerate().find_map(|(i, (v, bv))| form_unlike(v, bv, at(&i.to_string()))),
+        (J::Array(r), J::Array(b)) => {
+            // a list of `[row, column, value]`, which the engine writes back by its cells' order
+            // (a linked workbook's cached cells): paired by their row and column, not their place
+            // (refute round 18)
+            let cell = |v: &J| v.as_array().filter(|c| c.len() == 3 && c[0].is_number() && c[1].is_number()).map(|c| (c[0].to_string(), c[1].to_string()));
+            if !r.is_empty() && r.iter().all(|v| cell(v).is_some()) && b.iter().all(|v| cell(v).is_some()) {
+                return r.iter().enumerate().find_map(|(i, v)| {
+                    let bv = b.iter().find(|w| cell(w) == cell(v))?;
+                    form_unlike(v, bv, at(&i.to_string()))
+                });
+            }
+            r.iter().zip(b).enumerate().find_map(|(i, (v, bv))| form_unlike(v, bv, at(&i.to_string())))
+        }
         _ => None,
     }
 }
