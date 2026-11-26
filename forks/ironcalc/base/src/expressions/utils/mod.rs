@@ -232,7 +232,7 @@ pub fn is_valid_a1_identifier(name: &str) -> bool {
 
     // The first character of a name must be a letter, an underscore character (_), or a backslash (\).
     // A letter of any script, as Excel takes one (`Área`, `Índice`, `销售`; Veredas fork change 35),
-    // and any character beyond ASCII (`€Custo`; change 38): `is_name_start_char`.
+    // and any character beyond ASCII (`€Custo`; change 37): `is_name_start_char`.
     if !is_name_start_char(first) {
         return false;
     }
@@ -257,13 +257,13 @@ pub fn is_valid_a1_identifier(name: &str) -> bool {
 /// A character a defined name may open with, as MS-XLSX's grammar (2.2.2) takes one
 /// (`name-start-character`): `_`, `\`, an ASCII letter or any character beyond ASCII
 /// (`name-base-character`), white space aside, which the lexer reads as a token's end (Veredas fork
-/// change 38).
+/// change 37).
 pub fn is_name_start_char(c: char) -> bool {
     c == '_' || c == '\\' || c.is_ascii_alphabetic() || (!c.is_ascii() && !c.is_whitespace())
 }
 
 /// A character a defined name may hold after its first (`name-character`): one it may open with,
-/// a digit, `.` or `?` (`Ativo?`, `Temp°C`; Veredas fork change 38).
+/// a digit, `.` or `?` (`Ativo?`, `Temp°C`; Veredas fork change 37).
 pub fn is_name_char(c: char) -> bool {
     is_name_start_char(c) || c.is_ascii_digit() || c == '.' || c == '?'
 }

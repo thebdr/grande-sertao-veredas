@@ -96,7 +96,7 @@ fn is_valid_r1c1_identifier(name: &str, next_char: Option<char>) -> bool {
 
 /// A character that can be part of an identifier (see `consume_identifier`, which also keeps `\`
 /// out where it separates an array constant's columns, a locale whose decimal is a comma): a
-/// defined name's, as MS-XLSX's grammar takes them (`utils::is_name_char`; Veredas fork change 38)
+/// defined name's, as MS-XLSX's grammar takes them (`utils::is_name_char`; Veredas fork change 37)
 fn is_identifier_char(c: char) -> bool {
     utils::is_name_char(c)
 }
@@ -234,7 +234,7 @@ impl<'a> Lexer<'a> {
                     ';' => TokenType::Semicolon,
                     '@' => TokenType::At,
                     // a name opening with `\` (`\Loads`) where `\` separates nothing: a locale
-                    // whose decimal is `.` (Veredas fork change 38)
+                    // whose decimal is `.` (Veredas fork change 37)
                     '\\' if !(self.locale.numbers.symbols.decimal == "." && self.peek_char().is_some_and(is_identifier_char)) => {
                         TokenType::Backslash
                     }

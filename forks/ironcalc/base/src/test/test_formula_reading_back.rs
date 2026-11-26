@@ -219,7 +219,7 @@ fn a_name_opens_with_a_letter_of_any_script() {
     assert_eq!(model.get_cell_formula(0, 2, 1).unwrap().unwrap(), "=Área");
     assert_eq!(model.formulas_reading_back_otherwise(), Vec::<(u32, i32, i32)>::new());
     // a digit, a dot or a sign first is still no name
-    // (a character beyond ASCII but a letter, `·x`, opens one since change 38)
+    // (a character beyond ASCII but a letter, `·x`, opens one since change 37)
     for name in ["1x", ".x", "-x"] {
         assert!(!crate::expressions::utils::is_valid_identifier(name), "{name}");
     }
@@ -276,7 +276,7 @@ fn a_sheet_named_in_another_case_is_that_sheet_spelled_as_it_is() {
     assert_eq!(model.formulas_reading_back_otherwise(), Vec::<(u32, i32, i32)>::new());
 }
 
-/// Veredas fork change 38: a defined name holds the characters MS-XLSX's grammar takes (`?` and `\`
+/// Veredas fork change 37: a defined name holds the characters MS-XLSX's grammar takes (`?` and `\`
 /// after its first, any character beyond ASCII anywhere), defined, read in a formula and spelled
 /// back.
 #[test]
