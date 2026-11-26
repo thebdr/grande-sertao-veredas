@@ -380,7 +380,9 @@ Recorded as the port meets them.
   the newest: followed from its end, never read; a new file at the held file's own name is new.
   An active held in turn is a look of its own, bracketed like the first (round 5): one failed
   open with no second listing let a rotation inside it hide a generation. Every listing the held
-  path takes as "born beside" is checked after it is taken (round 6), as the live loop's are.
+  path takes as "born beside" is checked after it is taken (round 6), as the live loop's are, and so
+  is the held file's cut (round 7): judged at the open alone, a copy-and-truncate just after it was
+  missed. A generation the held branch never opened is the one it cannot follow (a stated limit).
 - **A fixed active the sweep's open finds gone may have been renamed after the listing** (C-096,
   round 3): a rename is atomic, so a listing taken after that open shows it, and only then is
   the history read.

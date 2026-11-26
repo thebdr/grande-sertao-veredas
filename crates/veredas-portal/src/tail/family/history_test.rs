@@ -1608,3 +1608,44 @@ fn a_burst_between_the_held_open_and_the_listing_again_loses_no_generation() {
     assert_eq!(lines, (20..65).collect::<Vec<u32>>(), "a burst between the held open and the listing again");
     AFTER_HELD_OPEN.lock().unwrap().retain(|(at, _)| *at != d.join("current.log"));
 }
+
+/// C-098's seventh refute round. A copy-and-truncate between the held open and the listing again
+/// (a hook): the cut is judged again from the open file's length once the family is listed, the
+/// copy read from where the held file stood and the held file from its top (20 to 55, each line
+/// once), reopened there even when it was written again past the look's length (20 to 70).
+#[cfg(unix)]
+#[test]
+fn a_copy_and_truncate_between_the_held_open_and_the_listing_again_is_read_from_where_it_stood() {
+    use super::AFTER_HELD_OPEN;
+    let dir = tempfile::tempdir().unwrap();
+    // Cut and written again short of the look's length (20 to 55), and past it, short of the most
+    // of it seen (20 to 70): the held file reopened from its top, never read on from the look.
+    for (name, again_to) in [("cut-after-open", 55u32), ("cut-after-open-past-the-look", 70)] {
+        let d = dir.path().join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d.join("done_1.log"), 0..10);
+        write(&d.join("current.log"), 10..20);
+        mode(&d.join("current.log"), 0o200);
+        let spec = FamilySpec::new(&d, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+        let (current, mut done) = (d.join("current.log"), false);
+        AFTER_HELD_OPEN.lock().unwrap().push((
+            d.join("current.log"),
+            Box::new(move || {
+                if !done {
+                    done = true;
+                    write(&current.with_file_name("done_2.log"), 10..50);
+                    std::fs::OpenOptions::new().write(true).open(&current).unwrap().set_len(0).unwrap();
+                    append(&current, 50..again_to);
+                }
+            }),
+        ));
+        let p = d.join("current.log");
+        let (lines, _) = at_end(spec, (again_to - 20) as usize, move || {
+            append(&p, 20..50);
+            std::thread::sleep(Duration::from_millis(500));
+            mode(&p, 0o644);
+        });
+        assert_eq!(lines, (20..again_to).collect::<Vec<u32>>(), "{name}");
+        AFTER_HELD_OPEN.lock().unwrap().retain(|(at, _)| *at != d.join("current.log"));
+    }
+}

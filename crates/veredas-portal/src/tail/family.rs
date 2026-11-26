@@ -1216,7 +1216,7 @@ fn run_family(
                         Ok((c, _)) if held_at_active && held.as_ref().and_then(|h| h.identity.as_ref()).is_some_and(|id| !c.has_identity(id)) => {
                             continue;
                         }
-                        Ok((c, cut)) => {
+                        Ok((mut c, mut cut)) => {
                             // The held file opened where it stood: the members born beside it,
                             // those listed since the round's listing too (made between it and this
                             // open), read before its first line.
@@ -1239,6 +1239,17 @@ fn run_family(
                                         && !crate::tail::cursor::identity_at(&f.path).is_some_and(|i| h.identity.as_ref() == Some(&i) || read_ids.contains(&i))
                                     {
                                         beside.insert(f.file_name.clone());
+                                    }
+                                }
+                                // Cut after the open (a copy-and-truncate between it and the
+                                // listing): judged again from the open file's length, then read
+                                // from its top, its copy first.
+                                if still && !cut && c.disk_len()? < h.from.max(h.seen) {
+                                    cut = true;
+                                    if let Ok(top) = TailedFile::open(&active.path, FileStart::Begin)
+                                        && h.identity.as_ref().is_some_and(|id| top.has_identity(id))
+                                    {
+                                        c = top;
                                     }
                                 }
                                 if !read_beside(&beside_members(&again, &beside), cut, h.from, &mut read_new, &cfg, &stop, &wake_rx, &mut emit)? {
