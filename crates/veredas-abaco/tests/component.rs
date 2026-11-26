@@ -172,8 +172,7 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
     }
     let named = regex_free_change_ids(&later);
     let record = std::fs::read_to_string(root().join("forks/ironcalc/VEREDAS-FORK.md")).unwrap();
-    local_changes_heading(&record).unwrap();
-    let rows = change_rows(&record);
+    let rows = change_rows(&record).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(named.len(), later.lines().count(), "a commit changed the engine without naming its change:\n{later}");
     let mut sorted_named = named.clone();
     sorted_named.sort();
@@ -1095,8 +1094,10 @@ fn string_value_at(code: &str, i: usize) -> Option<String> {
                 }
                 out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
             }
+            // the white space rustc and syn skip after a line continuation: spaces, tabs and line
+            // breaks alone (`\u{b}` stays; the round at 27f6099e)
             Some('\n' | '\r') => {
-                while chars.next_if(|c| c.is_whitespace()).is_some() {}
+                while chars.next_if(|c| matches!(c, ' ' | '\t' | '\n' | '\r')).is_some() {}
             }
             Some(other) => {
                 out.push('\\');
@@ -1922,6 +1923,8 @@ fn every_route_the_critics_found_is_a_socket_route() {
         ("a getter in a Unicode escape", "#[serde(getter = \"js_\\u{73}ys::eval\")] struct R;"),
         ("a getter across a line break", "#[serde(getter = \"js_\\\n    sys::eval\")] struct R;"),
         ("a with in hex", "#[serde(with = \"\\x6cibc\")] struct R;"),
+        // the round at 27f6099e: a vertical tab after a continuation stays, so `as` and `libc` part
+        ("a vertical tab after a continuation", "#[serde(with = \"<u8 as\\\n\u{b}libc::X>::f\")] struct R;"),
         // the round at 36bd57e3: a dependency's macro writing the block, a system crate's path
         ("windows_link's link!", "windows_link::link!(\"c\" \"C\" fn rexec(ahost: *mut *mut c_char, inport: i32) -> i32);"),
         ("a spaced link! call", "link ! (\"c\" \"C\" fn rcmd() -> i32);"),
@@ -2427,151 +2430,86 @@ fn is_format_char(c: char) -> bool {
         | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
 }
 
-/// The rows of every table of the record's `## Local changes` section (to the next heading of level 1
-/// or 2), each by its first cell, as GitHub's Markdown (GFM 0.29) reads a table: a header row and a
-/// delimiter row of as many cells (each `:?-+:?`) open it, the header a line a paragraph holds but
-/// for one that lazily continues a list item's or a quote's paragraph; every line after them is a
-/// row, its leading `|` or not, until a blank line or one that opens another block
-/// ([`block_start`]). Cells split at each `|` no backslash escapes, one leading and one trailing
-/// pipe passed over. Fenced code and HTML blocks are none of it.
-fn change_rows(record: &str) -> Vec<String> {
-    let at = local_changes_heading(record).unwrap_or_else(|e| panic!("{e}"));
-    let section = &record[at..];
-    let lines: Vec<&str> = section.lines().collect();
-    // the lines a list item holds (at its content column or beyond): a table there is the item's
-    let items = list_items(&lines);
-    let delimiter = |l: &str| {
-        column_of(l) <= 3 && {
-            let cells = gfm_cells(l);
-            !cells.is_empty()
-                && cells.iter().all(|c| {
-                    let c = c.strip_prefix(':').unwrap_or(c);
-                    let c = c.strip_suffix(':').unwrap_or(c);
-                    !c.is_empty() && c.chars().all(|ch| ch == '-')
-                })
-        }
-    };
-    // a setext heading's underline (`===`, `---` under a paragraph's line)
-    let underline = |l: &str| {
-        let t = l.trim();
-        column_of(l) <= 3 && !t.is_empty() && (t.chars().all(|c| c == '=') || t.chars().all(|c| c == '-'))
-    };
-    let mut out = Vec::new();
-    // the lines a table read or a fence or an HTML block holds
-    let mut read = vec![false; lines.len()];
-    let mut i = 0;
-    // whether a paragraph is going on, and whether it is a list item's or a quote's: a header line in
-    // the latter is its lazy continuation and opens no table; an HTML block of kind 7 interrupts none
-    let mut in_paragraph = false;
-    let mut in_container_paragraph = false;
-    let mut end = lines.len();
-    while i < lines.len() {
-        let l = lines[i];
-        let start = match block_start(l) {
-            Some(Block::Html(7)) if in_paragraph || in_container_paragraph => None,
-            other => other,
-        };
-        match start {
-            // a fence or an HTML block: passed over to its end, a table in it is none
-            Some(Block::Fence(ch, n)) => {
-                read[i] = true;
-                i += 1;
-                while i < lines.len() && !closes_fence(lines[i], ch, n) {
-                    read[i] = true;
-                    i += 1;
-                }
-                if i < lines.len() {
-                    read[i] = true;
-                }
-                (in_paragraph, in_container_paragraph) = (false, false);
-            }
-            Some(Block::Html(kind)) => {
-                let ends = |line: &str| html_block_ends(kind, line);
-                read[i] = true;
-                if !ends(l) {
-                    i += 1;
-                    while i < lines.len() && !ends(lines[i]) {
-                        read[i] = true;
-                        i += 1;
-                    }
-                }
-                (in_paragraph, in_container_paragraph) = (false, false);
-            }
-            // the section ends at the next heading of its level or above, ATX or setext
-            Some(Block::Heading) if l.trim_start().chars().take_while(|c| *c == '#').count() <= 2 => {
-                end = i;
-                break;
-            }
-            None if !in_container_paragraph && i + 1 < lines.len() && underline(lines[i + 1]) && !lines[i + 1].contains('|') => {
-                end = i;
-                break;
-            }
-            Some(Block::ListItem | Block::Quote) => {
-                // a marker with text after it opens a paragraph inside the item or the quote
-                let t = l.trim_start();
-                let after = t.trim_start_matches(|c: char| c.is_ascii_digit()).trim_start_matches(['-', '+', '*', '.', ')', '>']);
-                in_container_paragraph = !after.trim().is_empty();
-                in_paragraph = false;
-            }
-            None if !in_container_paragraph
-                && items[i].is_none()
-                && i + 1 < lines.len()
-                && delimiter(lines[i + 1])
-                && gfm_cells(l).len() == gfm_cells(lines[i + 1]).len() =>
-            {
-                read[i] = true;
-                read[i + 1] = true;
-                i += 2;
-                while i < lines.len() && block_start(lines[i]).is_none() {
-                    out.push(gfm_cells(lines[i]).into_iter().next().unwrap_or_default());
-                    read[i] = true;
-                    i += 1;
-                }
-                (in_paragraph, in_container_paragraph) = (false, false);
-                // the line that ended the table is read for what it opens
-                continue;
-            }
-            None => in_paragraph = !in_container_paragraph,
-            _ => (in_paragraph, in_container_paragraph) = (false, false),
-        }
-        i += 1;
+/// The header and the delimiter of the record's one table, as written.
+const RECORD_HEADER: &str = "| # | Change | Where | Upstream |";
+const RECORD_DELIMITER: &str = "|---|---|---|---|";
+
+/// The record's rows, each by its first cell, read from the one form the record is held to, which
+/// GitHub's Markdown reads one way only (the round at 27f6099e: the rounds before read the section
+/// as GFM 0.29 reads any Markdown, and each found a corner the reading took otherwise):
+///
+/// - the line `## Local changes`, the one heading that reads so ([`local_changes_heading`]);
+/// - after it, lines of prose at the margin, opening no block and holding no `|` or `<`, and blank
+///   lines;
+/// - after a blank line, the one table: its header and its delimiter as written above, and every
+///   row a line of four cells opening and closing with a pipe;
+/// - the table running to the end of the record, but for blank lines.
+///
+/// The record holds no carriage return, and no other line, nor two lines joined, reads `local
+/// changes` in any spelling (its ASCII letters, [`heading_words_with`]'s readings). Anything else
+/// fails the reading, naming its line.
+fn change_rows(record: &str) -> Result<Vec<String>, String> {
+    if record.contains('\r') {
+        return Err("the record holds a carriage return, which ends a line to GitHub".into());
     }
-    // a table GitHub shows that this reading does not read (in a quote, in a list item): its rows
-    // are the record's too, so the reading fails, naming it
-    let bare = |l: &str| -> String {
-        let mut t = l.trim_start();
-        loop {
-            if let Some(r) = t.strip_prefix('>') {
-                t = r.trim_start();
-            } else if let Some(r) = t.strip_prefix(['-', '+', '*']).filter(|r| r.starts_with([' ', '\t'])) {
-                t = r.trim_start();
-            } else {
-                let digits = t.chars().take_while(char::is_ascii_digit).count();
-                match t[digits..].strip_prefix(['.', ')']).filter(|r| digits > 0 && r.starts_with([' ', '\t'])) {
-                    Some(r) => t = r.trim_start(),
-                    None => break,
-                }
-            }
-        }
-        t.to_string()
+    let lines: Vec<&str> = record.split('\n').collect();
+    let heading = lines.iter().position(|l| *l == "## Local changes").ok_or("the record has no line `## Local changes`")?;
+    let at = local_changes_heading(record)?;
+    let heading_end: usize = lines[..=heading].iter().map(|l| l.len() + 1).sum::<usize>() - 1;
+    if at != heading_end {
+        return Err("the record's `Local changes` heading is not its line `## Local changes`".into());
+    }
+    // no other line, nor two lines joined, reads `local changes`, its ASCII letters read
+    let letters = |l: &str| -> Vec<String> {
+        [None, Some(""), Some(" ")].iter().map(|u| heading_words_with(l, *u).chars().filter(char::is_ascii_alphabetic).collect()).collect()
     };
-    for k in 1..end {
-        let (head, delim) = (bare(lines[k - 1]), bare(lines[k]));
-        // (one at the margin outside a quote is a paragraph's lazy line, or no table: GFM shows none;
-        // one indented is a list item's, whatever its marker's width, `10. ` and `-   ` holding their
-        // content four columns in, so no indent is taken for code; a delimiter of `-` alone could be
-        // a setext heading's underline, so a pipe or a colon marks one)
-        let nested = lines[k].trim_start().starts_with('>') || column_of(lines[k]) >= 1 || items[k].is_some();
-        if !read[k]
-            && nested
-            && delim.contains(['|', ':'])
-            && delimiter(&delim)
-            && gfm_cells(&head).len() == gfm_cells(&delim).len()
-        {
-            out.push(format!("(a table this reading does not read, at line {} of the section)", k));
+    for k in (0..lines.len()).filter(|k| *k != heading) {
+        let here = letters(lines[k]);
+        if here.iter().any(|w| w.contains("localchanges")) {
+            return Err(format!("line {} of the record reads `local changes`", k + 1));
+        }
+        if k + 1 < lines.len() && k + 1 != heading {
+            let next = letters(lines[k + 1]);
+            if here.iter().any(|a| next.iter().any(|b| format!("{a}{b}").contains("localchanges"))) {
+                return Err(format!("lines {} and {} of the record read `local changes` joined", k + 1, k + 2));
+            }
         }
     }
-    out
+    let leaves = |k: usize, why: &str| format!("line {} of the record leaves its one form: {why}", k + 1);
+    // the section's prose and blank lines, to the table
+    let mut k = heading + 1;
+    while k < lines.len() && lines[k] != RECORD_HEADER {
+        let l = lines[k];
+        let underline = l.trim_matches(['=', '-', ' ']).is_empty();
+        if !l.is_empty() && (column_of(l) > 0 || block_start(l).is_some() || l.contains(['|', '<']) || underline) {
+            return Err(leaves(k, "prose stands at the margin, opens no block and holds no `|` or `<`"));
+        }
+        k += 1;
+    }
+    if k == lines.len() {
+        return Err(format!("the record has no table `{RECORD_HEADER}`"));
+    }
+    if !lines[k - 1].is_empty() {
+        return Err(leaves(k, "the table follows a blank line"));
+    }
+    if lines.get(k + 1) != Some(&RECORD_DELIMITER) {
+        return Err(leaves(k + 1, &format!("the table's delimiter is `{RECORD_DELIMITER}`")));
+    }
+    let mut rows = Vec::new();
+    k += 2;
+    while k < lines.len() && !lines[k].is_empty() {
+        let l = lines[k];
+        let cells = gfm_cells(l);
+        if !(l.starts_with("| ") && l.ends_with(" |") && cells.len() == 4) {
+            return Err(leaves(k, "a row is a line of four cells opening and closing with a pipe"));
+        }
+        rows.push(cells[0].clone());
+        k += 1;
+    }
+    if let Some(j) = (k..lines.len()).find(|j| !lines[*j].is_empty()) {
+        return Err(leaves(j, "the table runs to the end of the record"));
+    }
+    Ok(rows)
 }
 
 /// For each line, the content column of the innermost list item holding it as GFM nests them,
@@ -2877,109 +2815,99 @@ fn closes_fence(line: &str, ch: char, n: usize) -> bool {
 }
 
 #[test]
-fn the_record_s_rows_are_read_as_markdown_reads_a_table() {
-    // the round at 36bd57e3: the heading read as GFM reads it, one and only one
+fn the_record_is_read_in_its_one_form() {
+    // the one form: the heading line, prose, a blank line, the table to the end
+    let canon = |rows: &str| format!("# Fork\n\nAbout it.\n\n## Local changes\nProse of the section,\non two lines.\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n{rows}");
+    assert_eq!(change_rows(&canon("| 1 | a | base | none |\n| 1b | b \\| c | `xlsx` | none |\n\n")), Ok(vec!["1".to_string(), "1b".to_string()]));
+    let refused = |record: &str| change_rows(record).is_err();
+    // the heading read as GFM reads one, one and only one (the rounds at 36bd57e3, c0de423e and
+    // 8736f277); the reading takes the plain line alone
     let decoy = "# Fork\n##  Local changes\n| # | Change |\n|---|---|\n| 35 | no commit names it |\n## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n";
     assert!(local_changes_heading(decoy).unwrap_err().contains("2 `Local changes` headings"));
     for one in ["##  Local changes\n", "## Local changes  \n", "##\tLocal changes\n", "   ## Local changes ##\n"] {
-        let record = format!("{one}| # | Change |\n|---|---|\n| 7 | a |\n");
-        assert_eq!(change_rows(&record), ["7"], "{one:?}");
+        assert!(local_changes_heading(one).is_ok(), "{one:?}");
+        assert!(refused(&format!("{one}\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 7 | a | b | c |\n")), "{one:?}");
     }
     assert!(local_changes_heading("## Local changes\nLocal changes\n---\n").is_err());
-    // the round at c0de423e: headings GFM reads as `Local changes` through markup or inside a
-    // container, each beside the plain one, refused; lines GFM reads as none of a heading, passed over
     let plain = "\n\n## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n";
     for decoy in ["## Local&Tab;changes", "## Local&NewLine;changes", "## Local&NonBreakingSpace;changes", "## Local&emsp13;changes", "## Local changes&lrm;", "## Local changes\u{200E}", "## \u{200F}Local changes", "## Local changes\u{2061}", "## Local\u{180E} changes", "## [Local changes][x]\n\n[x]: #a", "## [Local changes](a(b))", "## Local&UnknownSpace;changes", "10. A note:\n\n    ## Local changes", "- a\n  - b\n\n    ## Local changes", "- a\n\n  ## Local changes", "## Local&#32;changes", "## Local&#x20;changes", "## Local&nbsp;changes", "## Local changes<!-- -->", "## *Local changes*", "## `Local` changes", "## [Local changes](#x)", "Local\nchanges\n---", "> ## Local changes", "- ## Local changes", "1. ## Local changes", "## Local\u{a0}changes", "# Local changes"] {
         let record = format!("{decoy}\n| # | Change |\n|---|---|\n| 36 | no commit names it |{plain}");
         assert!(local_changes_heading(&record).is_err(), "{decoy:?}");
+        // and before the one form's heading, the reading fails on it too
+        assert!(refused(&format!("{decoy}\n\n{}", canon("| 1 | a | b | c |\n"))), "{decoy:?}");
     }
     for hidden in ["<!--\n## Local changes\n-->", "<div>\n## Local changes\n</div>", "\u{a0}## Local changes", "\u{3000}## Local changes", "```\n## Local changes\n```", "    ## Local changes"] {
-        let record = format!("{hidden}{plain}");
-        assert_eq!(change_rows(&record), ["1"], "{hidden:?}");
+        assert!(local_changes_heading(&format!("{hidden}{plain}")).is_ok(), "{hidden:?}");
     }
-    // the critic's tree: the real heading led by a no-break space, an entity one above it
     let record = "## Local&#32;changes\n| # | Change |\n|---|---|\n| 36 | a |\n\n\u{a0}## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n";
     assert!(local_changes_heading(record).is_err());
     assert!(local_changes_heading("Local changes\n---\n| 1 | a |\n").is_err());
     assert!(local_changes_heading("### Local changes\n").is_err());
     assert!(local_changes_heading("## Local changesx\n").is_err());
-    let record = "# Fork\n## Local changes\n| # | Change | Where | Upstream |\n|---|---|---|---|\n| 1 | a | x | none |\n|28| **no space** | x | none |\n   | 29 | indented | x | none |\n    | 30 | code, not a row |\n| :-- | --- |\n## After\n| 31 | another table |\n";
-    assert_eq!(change_rows(record), ["1", "28", "29"]);
-    // a row with no leading pipe is one; a row in an HTML comment after the table is none
-    let record = "## Local changes\n<!--\n| 0 | commented |\n-->\n| # | Change |\n|---|---|\n| 29 | a |\n32 | no leading pipe | base | none\n\n<!--\n| 30 | hidden |\n-->\n";
-    assert_eq!(change_rows(record), ["29", "32"]);
-    // what opens a block ends the rows: a list item, a thematic break, a footnote, an HTML block of
-    // a block tag or a lone complete tag; a line that only starts with `#` or `<` is a row
-    for (line, row) in [
-        ("- 5 | a list item |", false),
-        ("1. 5 | an ordered item |", false),
-        ("***", false),
-        ("[^5]: a footnote", false),
-        ("<div>", false),
-        ("<span class=\"x\">", false),
-        ("``` | a fence |", false),
-        ("#5 | not a heading |", true),
-        ("<b>5</b> | inline html |", true),
-        ("-5 | no space after the dash |", true),
+    // the round at 27f6099e: headings GitHub reads as `Local changes` the decoder took otherwise,
+    // and look-alike letters, fail the reading
+    for decoy in ["## [Local changes](a\\)b)", "## [Local changes](x \"a)b\")", "## [Local changes](x 'a)b')", "## Local changes\u{034F}", "## Local\u{3164}changes", "## Local changes\u{FE0F}", "Intro\r## Local changes"] {
+        assert!(refused(&format!("{decoy}\n\n{}", canon("| 1 | a | b | c |\n"))), "{decoy:?}");
+    }
+    // every construct beyond the one form fails the reading, each where a round found GitHub's
+    // reading and a reading's apart: among the rows, between the prose and the table, after the
+    // table
+    for between_rows in [
+        "",
+        "- 5 | a list item |",
+        "1. 5 | an ordered item |",
+        "***",
+        "[^5]: a footnote",
+        "<div>",
+        "<span class=\"x\">",
+        "``` | a fence |",
+        "#5 | not a heading |",
+        "<b>5</b> | inline html |",
+        "-5 | no space after the dash |",
+        "    | 30 | code, not a row |",
+        "   | 29 | indented | x | none |",
+        "|28| **no space** | x | none |",
+        "32 | no leading pipe | base | none",
+        "> | 31 | quoted | x | none |",
+        "| 39 | three | cells |",
+        "| 39 | five | cells | x | y |",
+        "| 39 | a | b | c |\r| 40 | after a lone CR | x | none |",
     ] {
-        let record = format!("## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n{line}\n| 2 | b |\n");
-        let expected = if row { vec!["1".to_string(), gfm_cells(line)[0].clone(), "2".to_string()] } else { vec!["1".to_string()] };
-        assert_eq!(change_rows(&record), expected, "{line}");
+        assert!(refused(&canon(&format!("| 1 | a | b | c |\n{between_rows}\n| 2 | b | c | d |\n"))), "{between_rows:?}");
     }
-    // a header and a delimiter of unequal cells, or a delimiter cell no GFM delimiter is, open no
-    // table; a table in a fence before the record's is none
-    for opening in ["| # | Change |\n|---|", "| # | Change |\n|:-:-:|---|", "| # | Change |\n|---|- -|"] {
-        assert_eq!(change_rows(&format!("## Local changes\n{opening}\n| 1 | a |\n")), Vec::<String>::new(), "{opening}");
-    }
-    let record = "## Local changes\n```\n| # | Change |\n|---|---|\n| 0 | fenced |\n```\n| # | Change |\n|---|---|\n| 1 | a |\n";
-    assert_eq!(change_rows(record), ["1"]);
-    // the round at 6e528bd8: a second table of the section is read too, a later section's is not;
-    // `<!x` opens no HTML block (GFM 0.29: an uppercase letter, `<!DOCTYPE`), so the rows go on; a
-    // header that lazily continues a list item's paragraph opens no table
-    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n| # | More |\n|---|---|\n| 29 | hidden below |\n# Other\n| # | x |\n|---|---|\n| 30 | no |\n";
-    assert_eq!(change_rows(record), ["1", "29"]);
-    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n<!x upstream notes | n |\n| 29 | b |\n<!DOCTYPE x>\n| 30 | c |\n";
-    assert_eq!(change_rows(record), ["1", "<!x upstream notes", "29"]);
-    let record = "## Local changes\n- The rows, one per change:\n| # | Change |\n|---|---|\n| 1 | a |\n";
-    assert_eq!(change_rows(record), Vec::<String>::new());
-    let record = "## Local changes\n> quoted:\n| # | Change |\n|---|---|\n| 1 | a |\n\n| # | Change |\n|---|---|\n| 2 | b |\n";
-    assert_eq!(change_rows(record), ["2"]);
-    // the round at c434b0fb: a setext heading ends the section (its underline is no delimiter); a
-    // table in a quote or a list item, which GitHub shows, fails the reading; an HTML line of kind 7
-    // in a paragraph is the paragraph's, and the table after it is read
-    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\nNotes\n---\n30 | a probe | x | none\n";
-    assert_eq!(change_rows(record), ["1"]);
-    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\nOther\n=====\n| # | x |\n|---|---|\n| 31 | no |\n";
-    assert_eq!(change_rows(record), ["1"]);
-    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n> | # | Change |\n> |---|---|\n> | 31 | quoted |\n";
-    assert!(change_rows(record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{:?}", change_rows(record));
-    // (a list item's table after a blank line is the item's, at its content column: GitHub shows it
-    // in the item, and the reading fails, the round at 8736f277; rounds before read its row)
-    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n- More:\n\n  | # | Change |\n  |---|---|\n  | 33 | listed |\n";
-    assert!(change_rows(record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{:?}", change_rows(record));
-    // a table after a tab marker, `-\t` and `1)\t`, the item's too
-    for marker in ["-\t", "1)\t"] {
-        let record = format!("## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n{marker}| # | Change | Where | Upstream |\n\t|---|---|---|---|\n\t| 38 | no commit names it | base | none |\n");
-        assert!(change_rows(&record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{marker:?}: {:?}", change_rows(&record));
-    }
-    // the item's table at its content column, a line at the margin after it a paragraph: no row
-    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n- a\n\n  | # | Change |\n  |---|---|\n  | 1 | a |\n| 34 | x |\n";
-    assert!(!change_rows(record).contains(&"34".to_string()), "{:?}", change_rows(record));
-    let record = "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n- More:\n  | # | Change |\n  |---|---|\n  | 34 | in the item |\n";
-    assert!(change_rows(record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{:?}", change_rows(record));
-    let record = "## Local changes\nSome text\n<span class=\"x\">\n| # | Change |\n|---|---|\n| 32 | after a span |\n";
-    assert_eq!(change_rows(record), ["32"]);
-    // the round at 3df0bd89: a list item whose marker is wide holds its table four columns in
-    // (`10. `, `-   `), loose or tight, and a quote's one-column table with no pipe: each fails the
-    // reading, which does not read it
-    for record in [
-        "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n10. Later:\n\n    | # | Change |\n    |---|---|\n    | 33 | in the item |\n",
-        "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n10. | # | Change |\n    |---|---|\n    | 33 | tight |\n",
-        "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n-   Later:\n\n    | # | Change |\n    |---|---|\n    | 33 | wide bullet |\n",
-        "## Local changes\n| # | Change |\n|---|---|\n| 1 | a |\n\n> Change\n> :--\n> 33\n",
+    for before_table in [
+        "- More:",
+        "> quoted:",
+        "10. Later:",
+        "<!--",
+        "<span class=\"x\">",
+        "    indented code",
+        "```",
+        "Notes\n---",
+        "Notes\n===",
+        "Some paragraph text\n2. | # | Change |\n|---|---|---|\n| 39 | x | y |",
+        "text\n+ \n|---|\n| 39 |",
+        "- a\n  2. | # | Change |\n  |---|---|---|\n  | 39 | x | y |",
+        "- ```",
+        "> ### Notes",
+        "- ### Notes",
+        "text\n    x\n<span>",
+        "- a\n    b\n| # | Change |\n|---|---|\n| 39 | x |",
+        "> a\n    b\n| # | Change |\n|---|---|\n| 39 | x |",
+        "> ## Notes\n\n| # | x |\n|---|---|\n| 39 | not a change |",
+        "| # | Change | Where | Upstream |\n|---|---|---|---|\n| 39 | a second table | x | none |",
+        "-\t| # | Change | Where | Upstream |\n\t|---|---|---|---|\n\t| 38 | after a tab marker | base | none |",
     ] {
-        assert!(change_rows(record).last().is_some_and(|r| r.starts_with("(a table this reading does not read")), "{record:?}: {:?}", change_rows(record));
+        let record = format!("# Fork\n\n## Local changes\nProse.\n{before_table}\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n");
+        assert!(refused(&record), "{before_table:?}");
     }
+    for after_table in ["\n## After\n| 31 | another table |", "\n<!--\n| 30 | hidden |\n-->", "\nMore prose.", "\n- a\n\n  | # | Change |\n  |---|---|\n  | 33 | listed |"] {
+        assert!(refused(&canon(&format!("| 1 | a | b | c |\n{after_table}\n"))), "{after_table:?}");
+    }
+    // the table after the heading with no blank line, a delimiter of another spelling, no table
+    assert!(refused(&format!("## Local changes\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n")));
+    assert!(refused(&format!("## Local changes\n\n{RECORD_HEADER}\n|:--|---|---|---|\n| 1 | a | b | c |\n")));
+    assert!(refused("## Local changes\nProse alone.\n"));
     // cells split at unescaped pipes alone, one leading pipe passed over
     assert_eq!(gfm_cells("||28| a \\| b |"), ["", "28", "a \\| b"]);
 }
