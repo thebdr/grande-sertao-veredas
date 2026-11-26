@@ -650,6 +650,15 @@ fn in_a_load_fault_and_a_program_fault_a_start_and_a_stop_are_refused_by_the_sta
     let refused = |command| Err(Refusal::State { command, state: StateWord::Fault });
     assert_eq!(c.start(StartupReason::Cold, OFICINA, &Key), refused(Command::Start(StartupReason::Cold)));
     assert_eq!(c.stop(OFICINA), refused(Command::Stop));
+    struct Off;
+    impl Switch for Off {
+        fn armed(&self) -> bool {
+            false
+        }
+    }
+    assert_eq!(c.acknowledge(OFICINA, &Off), Err(Refusal::Switch { command: Command::Acknowledge }));
+    let program = CommandSource::Program;
+    assert_eq!(c.acknowledge(program, &Key), Err(Refusal::Source { command: Command::Acknowledge, source: program }));
     assert_eq!(c.state(), &before);
     fn zero_at_1(index: usize) -> In {
         if index == 1 { In { value: 9, divisor: 0 } } else { steady(index) }
@@ -885,35 +894,58 @@ fn the_load_s_reason_outlives_its_acknowledge() {
 // load refuses) is still a fault of the controller's, with the line and column, never a panic of its thread.
 #[test]
 fn a_program_error_whose_location_names_no_file_is_the_program_s_fault_its_file_unknown() {
+    for file in [2, 9] {
     let mut program = code();
     for block in &mut program.functions[0].blocks {
         for s in &mut block.statements {
-            s.at.file = 9;
+            s.at.file = file;
         }
         if let Terminator::Assert { at, .. } = &mut block.terminator {
-            at.file = 9;
+            at.file = file;
         }
     }
     let (c, plant, _) = started(on(program), zero_at_1, 2);
     assert_eq!(text(&c), r#"FAULT program(id=502, at="?:2:5") sim() no_realtime()"#);
     assert_eq!(plant.writes.iter().map(|w| w.1).collect::<Vec<_>>(), [scanned(FIRST + 1, 0), SAFE.value]);
+    }
 }
 
 // from a power cycle's load fault, whatever the state it came back from, an acknowledge leaves STOP
 // acknowledged and nothing starts without a person's start.
+// from a power cycle's load fault, whatever state it came back from and whether its source can make the program
+// later or never, an acknowledge leaves STOP acknowledged, and nothing starts without a person's start.
 #[test]
 fn an_acknowledge_of_a_power_cycle_s_load_fault_leaves_stop_from_every_state() {
     let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
     for was in [StateWord::Run, StateWord::Startup, StateWord::Stop, StateWord::Hold, StateWord::Fault] {
-        let mut c = Controller::power_on_from(config(), SIM, Restart::PowerCycle { was }, loaded(&two)).unwrap();
+        let never = || Scripted { inner: loaded(&two), plan: vec![], makes: 0 };
+        let mended = || scripted(vec![Some(MakeError::State)]);
+        for (source, kind) in [(never(), "never made"), (mended(), "made once mended")] {
+            let mut c = Controller::power_on_from(config(), SIM, Restart::PowerCycle { was }, source).unwrap();
+            let mut clock = VirtualClock::new();
+            let mut plant = Plant::new(&clock, steady);
+            step(&mut c, &mut plant, &mut clock, 1);
+            assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()", "{was:?}, {kind}");
+            c.acknowledge(OFICINA, &Key).unwrap();
+            assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()", "{was:?}, {kind}");
+            step(&mut c, &mut plant, &mut clock, 2);
+            assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()", "{was:?}, {kind}");
+            assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)], "{was:?}, {kind}");
+        }
+    }
+}
+
+// a power-on's load fault, its source able to make the program on a later try, stays the load fault until a
+// person acknowledges it: the load is never tried again by itself.
+#[test]
+fn a_power_on_s_load_fault_is_never_retried_by_itself() {
+    for restart in [Restart::First, Restart::PowerCycle { was: StateWord::Run }, Restart::PowerCycle { was: StateWord::Startup }] {
+        let mut c = Controller::power_on_from(config(), SIM, restart, scripted(vec![Some(MakeError::State)])).unwrap();
         let mut clock = VirtualClock::new();
         let mut plant = Plant::new(&clock, steady);
-        step(&mut c, &mut plant, &mut clock, 1);
-        c.acknowledge(OFICINA, &Key).unwrap();
-        assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()", "{was:?}");
-        step(&mut c, &mut plant, &mut clock, 2);
-        assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()", "{was:?}");
-        assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)], "{was:?}");
+        step(&mut c, &mut plant, &mut clock, 3);
+        assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()", "{restart:?}");
+        assert_eq!(plant.writes, [(ms(0), SAFE.value), (ms(10), SAFE.value), (ms(20), SAFE.value)], "{restart:?}");
     }
 }
 
