@@ -24,7 +24,7 @@ use crate::fusion::Device;
 use crate::ip::{self, Endpoint, IpError};
 use crate::listen::{ListenError, Listener, Outcome};
 use crate::profinet::mac::Mac;
-use crate::profinet::record::{INDEX_PORT_DATA_REAL, PortDataReal, RecordError};
+use crate::profinet::record::{INDEX_PORT_DATA_REAL, PortDataReal};
 use crate::profinet::rpc::{self, ByteOrder, PNIO_PORT, PacketType, PnioStatus, ReadRequest, ReadResponse, ResponseArgs, RpcError, RpcPdu, Uuid};
 use crate::topology::Neighbour;
 
@@ -323,12 +323,21 @@ pub fn is_no_subslot(status: PnioStatus) -> bool {
     (status.code, status.decode, status.code1) == (0xDE, 0x80, 0xB2)
 }
 
+/// A walk of a device's ports ended by a read refused or unanswered: the subslot, why, and the
+/// ports read before it, kept.
+#[derive(Debug)]
+pub struct Cut {
+    pub subslot: u16,
+    pub error: ReadError,
+    pub read: Ports,
+}
+
 /// Read the port data of `device`'s ports, one read at a time: subslot 0x8001 of slot 0 and on,
 /// until the device answers that a subslot is not there (every port, not only those whose LLDP was
 /// heard: a port facing another device is never heard here), at most `MAX_PORTS`; each port named
 /// as its record names it, and the neighbours they report. Any other refusal, or no answer, ends
-/// it, naming the subslot.
-pub fn ports(listener: &Listener, iface: &str, device: &Device, options: &Options) -> Result<Ports, (u16, ReadError)> {
+/// it, naming the subslot, with what was read before it.
+pub fn ports(listener: &Listener, iface: &str, device: &Device, options: &Options) -> Result<Ports, Box<Cut>> {
     let mut out = Ports::default();
     for subslot in (SUBSLOT_PORTS + 1)..=(SUBSLOT_PORTS + MAX_PORTS) {
         let target = Target { slot: 0, subslot, index: INDEX_PORT_DATA_REAL };
@@ -338,15 +347,22 @@ pub fn ports(listener: &Listener, iface: &str, device: &Device, options: &Option
                 out.end = Some(frame);
                 return Ok(out);
             }
-            Err(e) => return Err((subslot, e)),
+            Err(error) => return Err(Box::new(Cut { subslot, error, read: out })),
         };
-        let blocks = rpc::read_blocks(&record.data).0;
-        let bad = |why: String| (subslot, ReadError::Answer { device: device.mac, frame: record.answer, why });
-        let block = blocks.first().ok_or_else(|| bad("it holds no block".into()))?;
-        let data = PortDataReal::from_block(block).map_err(|e: RecordError| bad(e.to_string()))?;
-        if (data.slot, data.subslot) != (0, subslot) {
-            return Err(bad(format!("its port data is of slot {} subslot {:#06x}", data.slot, data.subslot)));
-        }
+        let frame = record.answer;
+        let bad = |why: String| ReadError::Answer { device: device.mac, frame, why };
+        let data = match rpc::read_blocks(&record.data).0.first() {
+            None => Err(bad("it holds no block".into())),
+            Some(block) => match PortDataReal::from_block(block) {
+                Err(e) => Err(bad(e.to_string())),
+                Ok(d) if (d.slot, d.subslot) != (0, subslot) => Err(bad(format!("its port data is of slot {} subslot {:#06x}", d.slot, d.subslot))),
+                Ok(d) => Ok(d),
+            },
+        };
+        let data = match data {
+            Ok(d) => d,
+            Err(error) => return Err(Box::new(Cut { subslot, error, read: out })),
+        };
         let own = crate::topology::short(&data.own_port_id);
         for peer in &data.peers {
             out.neighbours.push(Neighbour {

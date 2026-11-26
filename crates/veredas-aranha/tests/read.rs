@@ -524,10 +524,11 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
         let port_data = |subslot: u16, peer_mac: Mac| port_data_of(0, subslot, vec![peer_of(peer_mac)]);
         let lacks = || Reply::Answer { record: Vec::new(), declared: None, index: None, status: PnioStatus { code: 0xDE, decode: 0x80, code1: 0xB2, code2: 0 } };
         set(vec![(0x8001, vec![good(&port_data(0x8005, PEER1))])]);
-        match read::ports(&l, "a0", &device, &quick) {
-            Err((0x8001, ReadError::Answer { why, .. })) => assert_eq!(why, "its port data is of slot 0 subslot 0x8005"),
+        let cut_why = |r: Result<read::Ports, Box<read::Cut>>| match r.map_err(|c| *c) {
+            Err(read::Cut { subslot: 0x8001, error: ReadError::Answer { why, .. }, read }) if read.read.is_empty() => why,
             other => panic!("{other:?}"),
-        }
+        };
+        assert_eq!(cut_why(read::ports(&l, "a0", &device, &quick)), "its port data is of slot 0 subslot 0x8005");
         set(vec![(0x8001, vec![good(&port_data(0x8001, Mac([0; 6])))]), (0x8002, vec![good(&port_data(0x8002, PEER1))]), (0x8003, vec![lacks()])]);
         let from = l.kept().1;
         let ports = read::ports(&l, "a0", &device, &quick).unwrap();
@@ -538,8 +539,14 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
         assert_eq!((answers.len(), ports.end), (3, answers.last().copied()));
         // Port data of another slot at the subslot asked is refused; two peers are two neighbours.
         set(vec![(0x8001, vec![good(&port_data_of(1, 0x8001, vec![peer_of(PEER1)]))])]);
-        match read::ports(&l, "a0", &device, &quick) {
-            Err((0x8001, ReadError::Answer { why, .. })) => assert_eq!(why, "its port data is of slot 1 subslot 0x8001"),
+        assert_eq!(cut_why(read::ports(&l, "a0", &device, &quick)), "its port data is of slot 1 subslot 0x8001");
+        // A walk cut by a read unanswered keeps what was read before it: the subslot, why, and the
+        // first port with its neighbour.
+        set(vec![(0x8001, vec![good(&port_data(0x8001, PEER1))])]);
+        match read::ports(&l, "a0", &device, &quick).map_err(|c| *c) {
+            Err(read::Cut { subslot: 0x8002, error: ReadError::NoAnswer { device: PEER, .. }, read }) => {
+                assert_eq!((read.read.len(), read.neighbours.iter().map(|n| n.peer_mac).collect::<Vec<_>>(), read.end), (1, vec![Some(PEER1)], None));
+            }
             other => panic!("{other:?}"),
         }
         let other = Mac([0x02, 0x00, 0x5E, 0xAE, 0x00, 0x09]);
@@ -572,12 +579,15 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
 /// the datagram reader's totality.
 mod round_1 {
     use super::*;
+    #[cfg(target_os = "linux")]
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    #[cfg(target_os = "linux")]
     use std::sync::{Arc, Mutex};
 
     const SOURCE: Mac = Mac([0x02, 0x00, 0x5E, 0xB0, 0x00, 0xA0]);
     const DEVICE: Mac = Mac([0x02, 0x00, 0x5E, 0xB0, 0x00, 0x01]);
 
+    #[cfg(target_os = "linux")]
     fn device_of(iface: &str, ids: Option<(u16, u16)>, instance: Option<(u8, u8)>) -> Device {
         let identity = DeviceIdentity {
             name: Some("bomba-1".into()),
@@ -681,6 +691,7 @@ mod round_1 {
     /// A wire named as the private network's addressed interface: it takes `block` to send each
     /// frame, refuses them when told to, ends (an error on its next read) once `dies` has passed,
     /// and hears nothing. It counts what it is handed.
+    #[cfg(target_os = "linux")]
     struct Slow {
         block: Duration,
         refuse: bool,
@@ -688,6 +699,7 @@ mod round_1 {
         handed: Arc<AtomicUsize>,
     }
 
+    #[cfg(target_os = "linux")]
     impl Wire for Slow {
         fn name(&self) -> &str {
             "a0"
@@ -709,6 +721,7 @@ mod round_1 {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn slow(block: Duration, refuse: bool, dies: Option<Duration>) -> (Box<dyn Wire>, Arc<AtomicUsize>) {
         let handed = Arc::new(AtomicUsize::new(0));
         (Box::new(Slow { block, refuse, dies: dies.map(|d| std::time::Instant::now() + d), handed: handed.clone() }), handed)

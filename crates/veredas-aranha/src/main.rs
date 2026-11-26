@@ -141,7 +141,9 @@ fn lines(d: &Diff) -> Vec<String> {
     for o in &d.one_sided {
         out.push(format!("one-sided {} {}: baseline {}, scan {}", o.mac, said(o.what), or_none(&o.baseline), or_none(&o.scan)));
     }
-    let end = |e: &veredas_aranha::topology::End| if e.port.is_empty() { e.node.clone() } else { format!("{} {}", e.node, e.port) };
+    // A node and its port quoted: a port or a chassis is a device's own text, which may hold
+    // anything, a line break among it.
+    let end = |e: &veredas_aranha::topology::End| if e.port.is_empty() { format!("{:?}", e.node) } else { format!("{:?} {:?}", e.node, e.port) };
     for l in &d.links_added {
         out.push(format!("link added {} = {} ({})", end(&l.a), end(&l.b), spelled(l.confidence)));
     }
@@ -165,6 +167,28 @@ fn lines(d: &Diff) -> Vec<String> {
         out.push("no change".to_string());
     }
     out
+}
+
+/// The scan and its capture written under names of their own beside them, then put in place, the
+/// capture first: a failure before that leaves what was there as it was.
+fn put_in_place(out: &Path, capture: &Path, scan: &Scan, frames: &[veredas_aranha::wire::Frame]) -> Result<(), Refused> {
+    let partial = |p: &Path| {
+        let mut name = OsString::from(".");
+        name.push(p.file_name().unwrap_or_default());
+        name.push(".partial");
+        p.with_file_name(name)
+    };
+    let (scan_tmp, capture_tmp) = (partial(out), partial(capture));
+    let written = (|| -> Result<(), Refused> {
+        let text = scan.to_toml()?;
+        std::fs::write(&scan_tmp, text).map_err(|e| Refused(format!("{}: {e}", out.display())))?;
+        veredas_aranha::wire::pcap::write_file(&capture_tmp, frames).map_err(|e| Refused(format!("{}: {e}", capture.display())))?;
+        std::fs::rename(&capture_tmp, capture).map_err(|e| Refused(format!("{}: {e}", capture.display())))?;
+        std::fs::rename(&scan_tmp, out).map_err(|e| Refused(format!("{}: {e}", out.display())))
+    })();
+    let _ = std::fs::remove_file(&scan_tmp);
+    let _ = std::fs::remove_file(&capture_tmp);
+    written
 }
 
 /// A kind as the scan file spells it (`duplicate-name`, `heard`).
@@ -221,7 +245,7 @@ fn identify(args: &[OsString]) -> Result<(), Refused> {
         let d = s.fusion.devices.get(&a.mac);
         let ip = a.identity.ip.as_ref().map_or("none".to_string(), |s| s.ip.to_string());
         let ids = a.identity.vendor_id.zip(a.identity.device_id).map_or("none".to_string(), |(v, d)| format!("{v:#06x}/{d:#06x}"));
-        say(&format!("{} {:?} {} ids {} frame {}{}", a.mac, a.identity.name.clone().unwrap_or_default(), ip, ids, a.frame, d.map_or(String::new(), |d| format!(" ({})", d.label()))));
+        say(&format!("{} {:?} {} ids {}{}", a.mac, a.identity.name.clone().unwrap_or_default(), ip, ids, d.map_or(String::new(), |d| format!(" ({:?})", d.label()))));
     }
     say(&format!("{} answer(s) on {iface}, {} other(s), {} lost", asked.answers.len(), asked.others, asked.lost));
     Ok(())
@@ -266,21 +290,41 @@ fn listen(args: &[OsString]) -> Result<(), Refused> {
     if out.extension().is_none_or(|e| e != "toml") {
         return Err(Refused(format!("{}: a scan file is .toml", out.display())));
     }
+    // The scan names its capture, so its file name is text the scan can hold; both are checked
+    // before anything is opened, and an existing one is replaced only once both are written.
+    if out.file_name().and_then(|n| n.to_str()).is_none() {
+        return Err(Refused(format!("{}: a scan file's name is UTF-8, as the scan names its capture by it", out.display())));
+    }
+    let capture_path = out.with_extension("pcap");
+    for p in [&out, &capture_path] {
+        if p.exists() {
+            if !p.is_file() {
+                return Err(Refused(format!("{}: there is something there that is no file", p.display())));
+            }
+            std::fs::OpenOptions::new().write(true).open(p).map_err(|e| Refused(format!("{}: {e}", p.display())))?;
+        }
+    }
     let wires = ifaces.iter().map(|n| open(n)).collect::<Result<Vec<_>, _>>()?;
     let l = Listener::start(wires, Options::default())?;
-    // Listening first; an Identify on each interface a second in, so the wire's own traffic is
-    // heard before anything is asked.
+    // Listening first; an Identify on every interface at once a second in, so the wire's own
+    // traffic is heard before anything is asked. Its wait may carry the listening past the time
+    // given.
     let started = std::time::Instant::now();
     let total = Duration::from_secs(seconds);
     if asks {
         std::thread::sleep(Duration::from_secs(1).min(total));
-        for iface in &ifaces {
-            let asked = ask::identify(&l, iface, &ask::Identify::default())?;
-            complain(&format!("{iface}: {} device(s) answered the Identify", asked.answers.len()));
+        let asked: Vec<_> = std::thread::scope(|scope| {
+            let each: Vec<_> = ifaces.iter().map(|iface| scope.spawn(|| ask::identify(&l, iface, &ask::Identify::default()))).collect();
+            each.into_iter().map(|h| h.join()).collect()
+        });
+        for (iface, a) in ifaces.iter().zip(asked) {
+            let a = a.map_err(|_| Refused(format!("{iface}: the Identify's thread panicked")))??;
+            complain(&format!("{iface}: {} device(s) answered the Identify", a.answers.len()));
         }
     }
     std::thread::sleep(total.saturating_sub(started.elapsed()));
-    // Each device's ports read on the interface it was heard on, one device at a time.
+    // Each device's ports read on the interface it was heard on, one device at a time; what was
+    // read of a device before a read failed is kept.
     let mut neighbours = Vec::new();
     if ports {
         let s = l.snapshot();
@@ -291,7 +335,10 @@ fn listen(args: &[OsString]) -> Result<(), Refused> {
             }
             match read::ports(&l, iface, d, &read::Options::default()) {
                 Ok(p) => neighbours.extend(p.neighbours),
-                Err((subslot, e)) => complain(&format!("{} {}: subslot {subslot:#06x} not read: {e}", d.mac, d.label())),
+                Err(cut) => {
+                    neighbours.extend(cut.read.neighbours);
+                    complain(&format!("{} {:?}: subslot {:#06x} not read: {}", d.mac, d.label(), cut.subslot, cut.error));
+                }
             }
         }
     }
@@ -300,16 +347,14 @@ fn listen(args: &[OsString]) -> Result<(), Refused> {
     l.stop();
     let interfaces: Vec<Interface> = s.stats.interfaces.iter().map(|(name, i)| Interface { name: name.clone(), mac: i.mac }).collect();
     let t = topology::build(&s.fusion, &interfaces, &neighbours);
-    let capture_path = out.with_extension("pcap");
     let capture = Capture {
-        file: capture_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        file: capture_path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string(),
         first_frame: frames.first().map_or(s.kept.1, |(i, _)| *i),
         frames: frames.len() as u64,
     };
     let kept: Vec<veredas_aranha::wire::Frame> = frames.into_iter().map(|(_, k)| k.frame).collect();
-    veredas_aranha::wire::pcap::write_file(&capture_path, &kept).map_err(|e| Refused(format!("{}: {e}", capture_path.display())))?;
     let scan = Scan::new(&s.fusion, &s.stats, &t, veredas_aranha::wire::stamp(std::time::SystemTime::now()), Some(capture));
-    scan.write_file(&out)?;
+    put_in_place(&out, &capture_path, &scan, &kept)?;
     for d in &scan.devices {
         let ip = d.ip.current().map_or("none".to_string(), |s| s.ip.to_string());
         let on: Vec<&str> = d.heard_on.iter().map(String::as_str).collect();
