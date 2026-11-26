@@ -1,8 +1,8 @@
 {
   "clause": "C-152",
   "verdict": "holds",
-  "ranAt": "2026-11-22T22:20:17.942Z",
-  "headCommit": "c2e2040ebbe4849a9709f352488be87ecc767e02",
+  "ranAt": "2026-11-26T10:32:42.655Z",
+  "headCommit": "16f757a4f05a7672666298d11b4e15c025339faf",
   "tests": [
     {
       "name": "crates/veredas-controlador/tests/model.rs",
@@ -13,6 +13,11 @@
       "name": "crates/veredas-controlador/tests/states.rs",
       "file": "crates/veredas-controlador/tests/states.rs",
       "symbolSha": "b37a80128f4be628a491b4070a86d404f76b474759ac16fb1d46d344c747d1b2"
+    },
+    {
+      "name": "crates/veredas-controlador/tests/interpreted.rs",
+      "file": "crates/veredas-controlador/tests/interpreted.rs",
+      "symbolSha": "c594ff6fd7bd045bf9508b73443fd8fe00c287e9296e7c9efbfcebe3b205c165"
     }
   ]
 }
