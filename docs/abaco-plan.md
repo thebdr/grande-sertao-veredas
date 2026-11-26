@@ -323,6 +323,13 @@ own to close in a fork change of its own:
   `LET(rate,2,Rate*3)` evaluate `#VALUE!`, and a LET-bound function beside a defined one of its fold
   (`LET(twice,LAMBDA(v,v*3),TWICE(2))` with a name `Twice`) too: the parser reads the use as the
   defined name before the binding. Excel's reading is not measured here.
+- **A function over an array constant, element by element:** `COUNT({1,2})` evaluates 0 (Excel's
+  documentation: 2), `ISNUMBER({1})`, `ISNA({#N/A})` and `ISERROR({#NULL!})` FALSE (TRUE),
+  `SUMPRODUCT(--ISERROR({1,#N/A}))` 0 (1), `SUM(IF(ISERROR({1,#N/A,3}),0,{1,#N/A,3}))` `#N/A` (4), and
+  `SUMPRODUCT(--ISERROR(A9:A10))` over two error cells 1 (2), the range's argument seemingly
+  intersected. Found by C-222's nineteenth round beside the corpus; Excel's values are its
+  documentation's, not measured here.
+- **Excel's newer error literals** (`#GETTING_DATA`, `#BLOCKED!` and their kin) do not lex.
 - **A capital `ẞ` read two ways:** `MAẞ(1)` is held as `maß` and calls the name `Maß`, where a
   bare `MAẞ` is `#NAME?`: a called name is held in lower case first (change 33), and `name_key`
   folds `maß` to `mass`, `Maß`'s key, but `MAẞ` to `maß`. Both read back the same.
