@@ -1397,3 +1397,25 @@ fn a_comparison_of_durations_and_is_none_through_a_mutable_reference_are_refused
         }
     }
 }
+
+// The eighteenth refute round's test: the place's type checked for a negation as for a `!`.
+
+/// A negation into a place of another type refused, as `!` is.
+#[test]
+fn a_negation_into_a_place_of_another_type_is_refused_as_a_not_is() {
+    for op in [UnOp::Neg, UnOp::Not] {
+        let mut b = Build::default();
+        let (i8t, i16t) = (b.int(Int::I8), b.int(Int::I16));
+        b.function(Function {
+            name: "f".into(),
+            params: 1,
+            locals: locals(&[i16t, i8t]),
+            blocks: vec![block(vec![assign(place(0), Value::Unary(op, copy(1)), 1)], ret())],
+        });
+        assert_eq!(
+            Machine::load(b.program, &[]).map(|_| ()),
+            Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a unary operation on what it does not take" }),
+            "{op:?} i8 into i16"
+        );
+    }
+}

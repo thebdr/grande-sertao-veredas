@@ -2561,3 +2561,68 @@ fn a_callee_s_locals_are_unwritten_at_its_call_after_a_run_stopped_or_failed_ins
     let got = m.call(f, &[Arg::Value(&[Scalar::Bool(false)])]).map(|r| r.to_vec());
     assert!(uninit_in(got.clone(), g), "after a failure, y kept the failed call's value: {got:?}");
 }
+
+// The eighteenth refute round's tests: a duration read through another variant at the guard's edge (a whole second
+// of nanoseconds, where core's `Duration::new` panics or carries a second) and with slots of other integer types.
+
+/// `enum E { A(Duration), B(<secs>, <nanos>) }`; `let e = E::B(s, n); (e as A).0.min((e as A).0)`: a duration read
+/// through another variant, run to its error.
+fn read_through_another_variant(secs: (Int, i128), nanos: (Int, i128)) -> Result<Vec<Scalar>, CallError> {
+    let mut b = Build::default();
+    let (st, nt, d) = (b.int(secs.0), b.int(nanos.0), b.ty(Type::Duration));
+    let e = b.ty(Type::Enum {
+        name: "E".into(),
+        discriminant: Int::Isize,
+        variants: vec![
+            Variant { name: "A".into(), discriminant: 0, fields: vec![Field { name: "0".into(), ty: d }] },
+            Variant { name: "B".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: st }, Field { name: "1".into(), ty: nt }] },
+        ],
+    });
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[d, e, d]),
+        blocks: vec![
+            block(
+                vec![
+                    assign(place(1), Value::Aggregate(e, Some(1), vec![konst(st, vec![int(secs.0, secs.1)]), konst(nt, vec![int(nanos.0, nanos.1)])]), 1),
+                    assign(place(2), Value::Use(copy_at(proj(1, vec![Projection::Downcast(0), Projection::Field(0)]))), 2),
+                ],
+                Terminator::Call { callee: Callee::Core(CoreOp::DurationMin), args: vec![copy(2), copy(2)], dest: place(0), next: BlockId(1), at: at(3) },
+            ),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    m.call(f, &[]).map(|r| r.to_vec())
+}
+
+fn internal(f: FunctionId) -> Result<Vec<Scalar>, CallError> {
+    Err(CallError::Program(ProgramError {
+        function: f,
+        block: BlockId(0),
+        statement: None,
+        at: at(3),
+        kind: ErrorKind::Internal("a duration's slots are not a duration"),
+    }))
+}
+
+/// The guard before `Duration::new` at its edge: a whole second of nanoseconds, with the greatest seconds
+/// (where `Duration::new` panics) and with small ones (where it would carry a second), each the internal error.
+#[test]
+fn a_duration_of_a_whole_second_of_nanoseconds_read_through_another_variant_is_an_internal_error_never_a_panic() {
+    for secs in [u64::MAX as i128, 5] {
+        let got = std::panic::catch_unwind(|| read_through_another_variant((Int::U64, secs), (Int::U32, 1_000_000_000)));
+        assert_eq!(got.ok(), Some(internal(FunctionId(0))), "seconds {secs}: never a panic, never a duration");
+    }
+    // and one below the edge is a duration
+    assert_eq!(read_through_another_variant((Int::U64, 5), (Int::U32, 999_999_999)), Ok(vec![int(Int::U64, 5), int(Int::U32, 999_999_999)]));
+}
+
+/// A duration's slots of another integer type read through another
+/// variant are no duration.
+#[test]
+fn a_duration_s_slots_of_another_integer_type_read_through_another_variant_are_an_internal_error() {
+    assert_eq!(read_through_another_variant((Int::I64, 5), (Int::U32, 7)), internal(FunctionId(0)), "seconds of an i64");
+    assert_eq!(read_through_another_variant((Int::U64, 5), (Int::U16, 7)), internal(FunctionId(0)), "nanoseconds of a u16");
+}
