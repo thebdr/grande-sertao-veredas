@@ -1,13 +1,13 @@
 {
   "clause": "C-220",
   "verdict": "holds",
-  "ranAt": "2026-11-22T21:38:22.569Z",
-  "headCommit": "f9dd804fc0d03a6294a0fd460d316531aeecec21",
+  "ranAt": "2026-11-26T21:40:05.103Z",
+  "headCommit": "eb2a9460fc39a5e4b6902d5e519dbea083bec881",
   "tests": [
     {
       "name": "crates/veredas-abaco/tests/component.rs",
       "file": "crates/veredas-abaco/tests/component.rs",
-      "symbolSha": "175531f2de9175c8f81fb8175212614120a8bdbaff7bb86a57ae0b151f2915a6"
+      "symbolSha": "789bd2d7eae2fcc5deeaaecdd8e35bbf753ea1af815a227e4a2624380e17e4f1"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
