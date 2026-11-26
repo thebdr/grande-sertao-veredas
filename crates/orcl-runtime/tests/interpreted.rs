@@ -1026,3 +1026,144 @@ fn a_program_error_in_a_callee_s_statement_is_named_where_it_failed() {
     };
     assert_eq!(r.state, RunState::Faulted { at: Duration::ZERO, fault: Fault::Program { error: ScanError::Program(error) } });
 }
+
+// The fifth refute round's tests: a scan type read by its shape, nothing of the program run when it is made, the
+// room grown at most once by an image past it, an index past the end the program's error, the machine's own reason
+// for refusing a program, and a program error named by its block.
+
+/// A scan type whose cycle is an enum of a `u64` discriminant holding only 0, which holds a scan of zeros and refuses
+/// every later one, is refused by its shape when made.
+#[test]
+fn a_scan_whose_cycle_holds_only_zero_is_refused_when_made() {
+    use orcl_interp::Variant;
+    // 13 = enum Zero: u64 { Zero = 0 }; 14 = Scan { now, period, cycle: Zero }; 15 = &Scan14
+    let zero = Type::Enum { name: "Zero".into(), discriminant: Int::U64, variants: vec![Variant { name: "Zero".into(), discriminant: 0, fields: vec![] }] };
+    let scan = Type::Struct { name: "Scan".into(), fields: vec![field("now", DURATION), field("period", DURATION), field("cycle", TypeId(13))] };
+    let mut other = code();
+    other.types = types(&[zero, scan, Type::Ref { to: TypeId(14), mutable: false }]);
+    other.functions = vec![leaf(&[TypeId(9), TypeId(15), TypeId(11), TypeId(12)])];
+    let made = Interpreted::<In, Out>::new(other, FunctionId(0), Regions { scan: TypeId(14), ..REGIONS }, &[Scalar::Int(Int::U32, 0)], SAFE);
+    assert_eq!(made.map(|_| ()), Err(MakeError::Scan));
+}
+
+/// `fn scan(..)`: the state's total counts the scans, whatever the inputs; the outputs' sum is that count.
+fn counting() -> Code {
+    let local = |ty| LocalDecl { ty, name: None };
+    let one = Operand::Const(Const { ty: U32, slots: vec![Scalar::Int(Int::U32, 1)] });
+    let f = Function {
+        name: "count".into(),
+        params: 4,
+        locals: vec![local(UNIT), local(TypeId(9)), local(TypeId(10)), local(TypeId(11)), local(TypeId(12))],
+        blocks: vec![Block {
+            statements: vec![
+                assign(deref(1, &[0]), Value::Binary(BinOp::Add, copy(deref(1, &[0])), one), 1),
+                assign(deref(4, &[0]), Value::Use(copy(deref(1, &[0]))), 2),
+            ],
+            terminator: Terminator::Return { at: at(3) },
+        }],
+    };
+    Code { types: types(&[]), functions: vec![f], files: vec!["count.rs".into()] }
+}
+
+/// Nothing of the program runs when it is made: a counter's first scan counts 1 from a first state of 0.
+#[test]
+fn nothing_of_the_program_runs_when_it_is_made_a_counter_s_first_scan_counting_one() {
+    let p = Interpreted::<In, Out>::new(counting(), FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE).unwrap();
+    assert_eq!(p.machine().region(orcl_runtime::interpreted::STATE).unwrap(), &[Scalar::Int(Int::U32, 0)][..], "the first state, as made");
+    let mut task = Task::new(config(), p).unwrap();
+    let mut clock = VirtualClock::new();
+    let r = task.step(&mut Feed(vec![In { x: 1, y: 1 }]), &mut clock);
+    assert_eq!((r.state, r.outputs.sum), (RunState::Running, 1));
+}
+
+/// Inputs whose image writes four slots more when `x` is 13: past the room, the largest region's five slots.
+#[derive(Clone, Copy, Default)]
+struct Longer(In);
+
+impl Image for Longer {
+    fn write(&self, slots: &mut Vec<Scalar>) {
+        self.0.write(slots);
+        if self.0.x == 13 {
+            slots.extend([Scalar::Int(Int::U32, 0); 4]);
+        }
+    }
+    fn read(slots: &[Scalar]) -> Option<Self> {
+        In::read(slots).map(Longer)
+    }
+}
+
+/// The clause's parenthesis: an image of more slots than the room grows it once, and never again.
+#[test]
+fn an_image_of_more_slots_than_the_room_grows_it_once() {
+    let state = [Scalar::Int(Int::U32, 0)];
+    let mut p = Interpreted::<Longer, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE).unwrap();
+    let scan = Scan { now: Duration::ZERO, period: Duration::from_millis(10), cycle: 0 };
+    let mut out = Out::default();
+    let (a, first) = asked_by(|| TaskProgram::scan(&mut p, &scan, &Longer(In { x: 13, y: 1 }), &mut out));
+    let (b, second) = asked_by(|| TaskProgram::scan(&mut p, &scan, &Longer(In { x: 13, y: 1 }), &mut out));
+    assert_eq!((a, b), (Err(ScanError::Host(HostError::Slots)), Err(ScanError::Host(HostError::Slots))));
+    assert_eq!((first, second), (1, 0), "the room grown once");
+}
+
+/// A program error that is no failed check (an index past the end) is the program's, by its kind.
+#[test]
+fn an_index_past_the_end_is_the_program_s_error_by_its_kind() {
+    // 13 = [u32; 2]; the entry indexes it by the inputs' x
+    let local = |ty| LocalDecl { ty, name: None };
+    let usize_ty = TypeId(14);
+    let arr = TypeId(13);
+    let f = Function {
+        name: "index".into(),
+        params: 4,
+        locals: vec![local(UNIT), local(TypeId(9)), local(TypeId(10)), local(TypeId(11)), local(TypeId(12)), local(arr), local(usize_ty)],
+        blocks: vec![Block {
+            statements: vec![
+                assign(Place::local(5), Value::Use(Operand::Const(Const { ty: arr, slots: vec![Scalar::Int(Int::U32, 0), Scalar::Int(Int::U32, 0)] })), 1),
+                assign(Place::local(6), Value::Use(Operand::Const(Const { ty: usize_ty, slots: vec![Scalar::Int(Int::Usize, 5)] })), 2),
+                assign(deref(4, &[0]), Value::Use(copy(Place { local: orcl_interp::Local(5), projections: vec![Projection::Index(orcl_interp::Local(6))] })), 3),
+            ],
+            terminator: Terminator::Return { at: at(4) },
+        }],
+    };
+    let program = Code { types: types(&[Type::Array { element: U32, len: 2 }, Type::Int(Int::Usize)]), functions: vec![f], files: vec!["index.rs".into()] };
+    let p = Interpreted::<In, Out>::new(program, FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE).unwrap();
+    let mut task = Task::new(config(), p).unwrap();
+    let r = task.step(&mut Feed(vec![In { x: 1, y: 1 }]), &mut VirtualClock::new());
+    let RunState::Faulted { fault: Fault::Program { error: ScanError::Program(e) }, .. } = r.state else { panic!("{:?}", r.state) };
+    assert_eq!((e.block, e.statement, e.at, e.kind), (BlockId(0), Some(2), at(3), ErrorKind::Bounds { index: 5, len: 2 }));
+}
+
+/// The machine's own reason for refusing a program is the one the adapter gives.
+#[test]
+fn a_program_the_machine_refuses_is_refused_by_the_machine_s_own_reason() {
+    let state = [Scalar::Int(Int::U32, 0)];
+    let mut bad = code();
+    bad.types.push(Type::Ref { to: TypeId(99), mutable: false });
+    let want = orcl_interp::Machine::load(bad.clone(), &[ACC, SCAN, IN, OUT]).err().unwrap();
+    let made = Interpreted::<In, Out>::new(bad, FunctionId(0), REGIONS, &state, SAFE).map(|_| ());
+    assert_eq!(made, Err(MakeError::Load(want)));
+}
+
+/// A program error in the entry's second block is named by that block.
+#[test]
+fn a_program_error_in_a_later_block_is_named_by_its_block() {
+    let local = |ty| LocalDecl { ty, name: None };
+    let f = Function {
+        name: "scan".into(),
+        params: 4,
+        locals: vec![local(UNIT), local(TypeId(9)), local(TypeId(10)), local(TypeId(11)), local(TypeId(12))],
+        blocks: vec![
+            Block { statements: vec![], terminator: Terminator::Goto(BlockId(1)) },
+            Block {
+                statements: vec![assign(deref(4, &[1]), Value::Binary(BinOp::Div, copy(deref(3, &[0])), copy(deref(3, &[1]))), 5)],
+                terminator: Terminator::Return { at: at(6) },
+            },
+        ],
+    };
+    let program = Code { types: types(&[]), functions: vec![f], files: vec!["div.rs".into()] };
+    let p = Interpreted::<In, Out>::new(program, FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE).unwrap();
+    let mut task = Task::new(config(), p).unwrap();
+    let r = task.step(&mut Feed(vec![In { x: 1, y: 0 }]), &mut VirtualClock::new());
+    let RunState::Faulted { fault: Fault::Program { error: ScanError::Program(e) }, .. } = r.state else { panic!("{:?}", r.state) };
+    assert_eq!((e.function, e.block, e.statement, e.at), (FunctionId(0), BlockId(1), Some(0), at(5)));
+}

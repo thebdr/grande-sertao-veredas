@@ -3,7 +3,7 @@
 use crate::task::TaskProgram;
 use core::marker::PhantomData;
 use core::time::Duration;
-use orcl_interp::{Arg, CallError, FunctionId, HostError, Int, LoadError, Machine, Program, ProgramError, RegionId, Scalar, TypeId};
+use orcl_interp::{Arg, CallError, FunctionId, HostError, Int, LoadError, Machine, Program, ProgramError, RegionId, Scalar, Type, TypeId};
 use orcl_std::Scan;
 use std::vec::Vec;
 
@@ -43,7 +43,8 @@ pub enum MakeError {
     Load(LoadError),
     /// The first state's slots are not a value of the state's type.
     State,
-    /// The scan's type does not hold a scan's slots: its time, its period, each a `Duration`, and its cycle, a `u64`.
+    /// The scan's type is not a scan's: a structure of its time and its period, each a `Duration`, and its cycle, a
+    /// `u64`, in that order.
     Scan,
     /// The inputs' default is not a value of the inputs' type.
     Inputs,
@@ -84,6 +85,21 @@ fn duration(slots: &mut Vec<Scalar>, d: Duration) {
     slots.push(Scalar::Int(Int::U32, i128::from(d.subsec_nanos())));
 }
 
+/// Whether `ty` is a scan's type: a structure of a time and a period, each a `Duration`, and a cycle, a `u64`. Its
+/// shape is read, not one value written, since a type can hold a scan of zeros and refuse every later one.
+fn is_a_scan(program: &Program, ty: TypeId) -> bool {
+    let of = |ty: TypeId| program.types.get(ty.0 as usize);
+    let Some(Type::Struct { fields, .. }) = of(ty) else { return false };
+    match fields.as_slice() {
+        [now, period, cycle] => {
+            matches!(of(now.ty), Some(Type::Duration))
+                && matches!(of(period.ty), Some(Type::Duration))
+                && matches!(of(cycle.ty), Some(Type::Int(Int::U64)))
+        }
+        _ => false,
+    }
+}
+
 fn scan_slots(slots: &mut Vec<Scalar>, scan: &Scan) {
     slots.clear();
     duration(slots, scan.now);
@@ -100,6 +116,9 @@ impl<I: Image, O: Image> Interpreted<I, O> {
         let types = [regions.state, regions.scan, regions.inputs, regions.outputs];
         let mut machine = Machine::load(program, &types).map_err(MakeError::Load)?;
         machine.set_region(STATE, state).map_err(|_| MakeError::State)?;
+        if !is_a_scan(machine.program(), regions.scan) {
+            return Err(MakeError::Scan);
+        }
         let sizes = types.map(|ty| machine.size_of(ty).unwrap_or(0) as usize);
         let room = sizes.iter().copied().max().unwrap_or(0);
         let mut slots = Vec::with_capacity(room);
