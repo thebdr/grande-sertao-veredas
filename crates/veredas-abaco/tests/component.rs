@@ -527,6 +527,9 @@ fn check_environment(whose: &str, env: &[(String, String)], toolchain: &Path) {
             }
         }
     }
+    if let Some(why) = loader_refusal(env, &toolchain, whose != "this test") {
+        panic!("{whose}: {why}");
+    }
     for (var, value) in env.iter().filter(|(k, _)| {
         k == "RUSTFLAGS"
             || k == "CARGO_ENCODED_RUSTFLAGS"
@@ -537,6 +540,84 @@ fn check_environment(whose: &str, env: &[(String, String)], toolchain: &Path) {
         let tokens: Vec<&str> = if var == "CARGO_ENCODED_RUSTFLAGS" { value.split('\x1f').collect() } else { value.split_whitespace().collect() };
         assert!(!flags_set_cfg(tokens.into_iter()), "{whose}: {var} sets a cfg: {value}");
     }
+}
+
+/// What of an environment would have the dynamic loader put other code into every rustc cargo starts
+/// (the round at 444cead9: `LD_PRELOAD` handed rustc a copy of an engine source holding a socket,
+/// the files on disk clean): `LD_PRELOAD`, `LD_AUDIT` or any `DYLD_` variable set, or (`library`,
+/// for a cargo's environment) an `LD_LIBRARY_PATH` naming any folder but `toolchain`'s own `lib`,
+/// where rustc finds its driver, the folder rustup's proxy names (a test binary's own is cargo's
+/// business: its deps folders).
+fn loader_refusal(env: &[(String, String)], toolchain: &Path, library: bool) -> Option<String> {
+    let set = |k: &str| env.iter().any(|(n, v)| n == k && !v.is_empty());
+    if let Some(var) = ["LD_PRELOAD", "LD_AUDIT"].into_iter().find(|k| set(k)) {
+        return Some(format!("{var} is set: the loader puts other code into rustc"));
+    }
+    if let Some((var, _)) = env.iter().find(|(n, v)| n.starts_with("DYLD_") && !v.is_empty()) {
+        return Some(format!("{var} is set: the loader puts other code into rustc"));
+    }
+    if library && let Some((_, value)) = env.iter().find(|(n, v)| n == "LD_LIBRARY_PATH" && !v.is_empty()) {
+        let own = toolchain.parent().map(|t| t.join("lib"));
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let foreign: Vec<PathBuf> = std::env::split_paths(value).filter(|d| own.as_deref().is_none_or(|o| canon(d) != canon(o))).collect();
+        if !foreign.is_empty() {
+            return Some(format!("LD_LIBRARY_PATH names {foreign:?}, beside the toolchain's own lib: rustc may load another driver"));
+        }
+    }
+    None
+}
+
+/// The keys of a cargo configuration's `[env]`, which cargo hands every rustc it starts, as reviewed
+/// on this machine (the round at 444cead9): the browser supervisão's tests drive and the Qt build
+/// tool; a key joining, `LD_PRELOAD` or `LD_LIBRARY_PATH` above all, fails until it is reviewed.
+const CONFIG_ENV: &[&str] = &["QMAKE", "VEREDAS_BROWSER"];
+
+/// What a cargo configuration may not hold, the first named: a top-level key that may patch or
+/// replace crates, a rustc or a wrapper in rustc's place, compiler flags setting a `cfg`, an alias
+/// giving cargo a configuration of its own, an `[env]` key not reviewed.
+fn config_refusal(t: &toml::Table) -> Option<String> {
+    let foreign: Vec<&String> = t.keys().filter(|k| !CONFIG_KEYS.contains(&k.as_str())).collect();
+    if !foreign.is_empty() {
+        return Some(format!("{foreign:?} (a key that may patch or replace crates)"));
+    }
+    // nothing compiles a crate in rustc's place
+    let build = t.get("build").and_then(|b| b.as_table());
+    if let Some(key) = ["rustc", "rustc-wrapper", "rustc-workspace-wrapper"].into_iter().find(|k| build.is_some_and(|b| b.contains_key(*k))) {
+        return Some(format!("build.{key} set"));
+    }
+    // and no compiler flag sets a cfg (a feature cargo would not see), however it is carried
+    let flags = |v: Option<&toml::Value>| match v {
+        Some(toml::Value::String(s)) => flags_set_cfg(s.split_whitespace()),
+        Some(toml::Value::Array(a)) => flags_set_cfg(a.iter().filter_map(|t| t.as_str())),
+        _ => false,
+    };
+    if flags(build.and_then(|b| b.get("rustflags"))) {
+        return Some("build.rustflags sets a cfg".into());
+    }
+    for (triple, table) in t.get("target").and_then(|t| t.as_table()).into_iter().flatten() {
+        if flags(table.get("rustflags")) {
+            return Some(format!("target.{triple}.rustflags sets a cfg"));
+        }
+    }
+    for (name, table) in t.get("profile").and_then(|t| t.as_table()).into_iter().flatten() {
+        if flags(table.get("rustflags")) {
+            return Some(format!("profile.{name}.rustflags sets a cfg"));
+        }
+    }
+    // and no alias gives cargo a configuration of its own
+    for (name, value) in t.get("alias").and_then(|a| a.as_table()).into_iter().flatten() {
+        if value.to_string().contains("--config") {
+            return Some(format!("alias {name} gives cargo a --config"));
+        }
+    }
+    // and what it hands rustc's environment is reviewed
+    if let Some(env) = t.get("env") {
+        let keys: Vec<String> = env.as_table().map(|e| e.keys().cloned().collect()).unwrap_or_else(|| vec![env.to_string()]);
+        if let Some(key) = keys.iter().find(|k| !CONFIG_ENV.contains(&k.as_str())) {
+            return Some(format!("env.{key} is no key reviewed: cargo hands it every rustc"));
+        }
+    }
+    None
 }
 
 /// The top-level keys a cargo configuration of this machine may hold: none of them names where a
@@ -677,30 +758,8 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
     }
     for config in configs.iter().filter(|c| c.is_file()) {
         let t: toml::Table = toml::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
-        let foreign: Vec<&String> = t.keys().filter(|k| !CONFIG_KEYS.contains(&k.as_str())).collect();
-        assert!(foreign.is_empty(), "{}: {foreign:?} (a key that may patch or replace crates)", config.display());
-        // nothing compiles a crate in rustc's place
-        let build = t.get("build").and_then(|b| b.as_table());
-        for key in ["rustc", "rustc-wrapper", "rustc-workspace-wrapper"] {
-            assert!(build.is_none_or(|b| !b.contains_key(key)), "{}: build.{key} set", config.display());
-        }
-        // and no compiler flag sets a cfg (a feature cargo would not see), however it is carried
-        let flags = |v: Option<&toml::Value>| match v {
-            Some(toml::Value::String(s)) => flags_set_cfg(s.split_whitespace()),
-            Some(toml::Value::Array(a)) => flags_set_cfg(a.iter().filter_map(|t| t.as_str())),
-            _ => false,
-        };
-        assert!(!flags(build.and_then(|b| b.get("rustflags"))), "{}: build.rustflags sets a cfg", config.display());
-        for (triple, table) in t.get("target").and_then(|t| t.as_table()).into_iter().flatten() {
-            assert!(!flags(table.get("rustflags")), "{}: target.{triple}.rustflags sets a cfg", config.display());
-        }
-        for (name, table) in t.get("profile").and_then(|t| t.as_table()).into_iter().flatten() {
-            assert!(!flags(table.get("rustflags")), "{}: profile.{name}.rustflags sets a cfg", config.display());
-        }
-        // and no alias gives cargo a configuration of its own
-        let aliases = t.get("alias").and_then(|a| a.as_table());
-        for (name, value) in aliases.into_iter().flatten() {
-            assert!(!value.to_string().contains("--config"), "{}: alias {name} gives cargo a --config", config.display());
+        if let Some(why) = config_refusal(&t) {
+            panic!("{}: {why}", config.display());
         }
     }
 
@@ -723,6 +782,28 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
             }
         }
     }
+}
+
+#[test]
+fn a_configuration_s_env_and_the_loader_s_variables_are_held_to_what_was_reviewed() {
+    // the round at 444cead9: cargo hands a configuration's `[env]` to every rustc it starts, and
+    // `LD_PRELOAD` there had rustc compile a copy of an engine source holding a socket
+    let config = |text: &str| config_refusal(&toml::from_str(text).unwrap());
+    assert_eq!(config("[build]\njobs = 16\n[env]\nVEREDAS_BROWSER = \"/x\"\nQMAKE = \"/y\"\n"), None);
+    for key in ["LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "RUSTC_WRAPPER", "CARGO_BUILD_RUSTC"] {
+        assert!(config(&format!("[env]\n{key} = \"/x\"\n")).is_some_and(|w| w.contains(key)), "{key}");
+        assert!(config(&format!("[env]\n{key} = {{ value = \"/x\", force = true }}\n")).is_some(), "{key} as a table");
+    }
+    assert!(config("[build]\nrustc-wrapper = \"/x\"\n").is_some());
+    let toolchain = Path::new("/home/a/.rustup/toolchains/stable/bin");
+    let env = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+    assert_eq!(loader_refusal(&env(&[("LD_LIBRARY_PATH", "/home/a/.rustup/toolchains/stable/lib")]), toolchain, true), None);
+    assert!(loader_refusal(&env(&[("LD_LIBRARY_PATH", "/home/a/.rustup/toolchains/stable/lib:/tmp/x")]), toolchain, true).is_some());
+    assert_eq!(loader_refusal(&env(&[("LD_LIBRARY_PATH", "/tmp/deps")]), toolchain, false), None, "a test binary's own");
+    for var in ["LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH"] {
+        assert!(loader_refusal(&env(&[(var, "/tmp/x.so")]), toolchain, false).is_some_and(|w| w.contains(var)), "{var}");
+    }
+    assert_eq!(loader_refusal(&env(&[("LD_PRELOAD", "")]), toolchain, true), None, "set empty, as unset");
 }
 
 /// The files a dep-info record lists, each on a line of its own ending in `:`, a space in its path
