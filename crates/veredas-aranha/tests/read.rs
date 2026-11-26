@@ -377,8 +377,9 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
         // The peer: on each read to its address, the replies scripted for it.
         let peer = {
             let (script, stop) = (script.clone(), stop.clone());
+            // (The links are open before the read starts, or its first request may go unheard.)
+            let (mut b0, mut b1) = (bench::link("b0"), bench::link("b1"));
             std::thread::spawn(move || {
-                let (mut b0, mut b1) = (bench::link("b0"), bench::link("b1"));
                 let me = Endpoint { mac: PEER, ip: a(10), port: 34964 };
                 while !stop.load(Ordering::SeqCst) {
                     let Ok(Some(f)) = b0.recv(Duration::from_millis(10)) else { continue };
@@ -815,8 +816,8 @@ mod round_1 {
             let stop = Arc::new(AtomicBool::new(false));
             let peer = {
                 let (way, icmp, objects, stop) = (way.clone(), icmp.clone(), objects.clone(), stop.clone());
+                let mut b0 = bench::link("b0");
                 std::thread::spawn(move || {
-                    let mut b0 = bench::link("b0");
                     let me = Endpoint { mac: DEVICE, ip: a(10), port: 34964 };
                     while !stop.load(Ordering::SeqCst) {
                         let Ok(Some(f)) = b0.recv(Duration::from_millis(10)) else { continue };
@@ -902,16 +903,16 @@ mod round_2 {
     use veredas_aranha::profinet::rpc::{self, PacketType, PnioStatus, ReadRequest, ReadResponse, RequestArgs, ResponseArgs, RpcPdu, flags1};
     use veredas_aranha::read::{self, ReadError, Target};
 
-    const HERE: Mac = Mac([0x02, 0x00, 0x5E, 0xC0, 0x00, 0xA0]);
-    const DEV_A: Mac = Mac([0x02, 0x00, 0x5E, 0xC0, 0x00, 0x01]);
+    pub(super) const HERE: Mac = Mac([0x02, 0x00, 0x5E, 0xC0, 0x00, 0xA0]);
+    pub(super) const DEV_A: Mac = Mac([0x02, 0x00, 0x5E, 0xC0, 0x00, 0x01]);
     const DEV_B: Mac = Mac([0x02, 0x00, 0x5E, 0xC0, 0x00, 0x02]);
     const PEER1: Mac = Mac([0x02, 0x00, 0x5E, 0xC0, 0x00, 0x09]);
 
-    fn a(last: u8) -> Ipv4Addr {
+    pub(super) fn a(last: u8) -> Ipv4Addr {
         Ipv4Addr::new(192, 168, 0, last)
     }
 
-    fn device_of(iface: &str, mac: Mac, address: Ipv4Addr) -> Device {
+    pub(super) fn device_of(iface: &str, mac: Mac, address: Ipv4Addr) -> Device {
         let identity = DeviceIdentity { name: Some("bomba-1".into()), ip: Some(IpSuite { ip: address, mask: Ipv4Addr::new(255, 255, 255, 0), gateway: Ipv4Addr::UNSPECIFIED }), ..Default::default() };
         let o = Observation { witness: Witness { probe: Probe::DcpHeard, iface: iface.into(), at_ns: 1, frame: 0 }, observed: Observed::Dcp { mac, service: dcp::Service::Hello, service_type: dcp::ServiceType::Request, identity } };
         let mut f = Fusion::new();
@@ -921,22 +922,22 @@ mod round_2 {
 
     /// One request a scripted device heard.
     #[derive(Clone)]
-    struct Req {
-        from: Endpoint,
-        to: Endpoint,
-        pdu: RpcPdu,
-        args: RequestArgs,
-        read: ReadRequest,
+    pub(super) struct Req {
+        pub(super) from: Endpoint,
+        pub(super) to: Endpoint,
+        pub(super) pdu: RpcPdu,
+        pub(super) args: RequestArgs,
+        pub(super) read: ReadRequest,
     }
 
     /// What a scripted device sends back: from, to, the UDP payload.
-    type Out = Vec<(Endpoint, Endpoint, Vec<u8>)>;
-    type Handler = Box<dyn FnMut(&Req) -> Out + Send>;
+    pub(super) type Out = Vec<(Endpoint, Endpoint, Vec<u8>)>;
+    pub(super) type Handler = Box<dyn FnMut(&Req) -> Out + Send>;
 
-    struct Scripted {
+    pub(super) struct Scripted {
         stop: Arc<AtomicBool>,
-        icmp: Arc<AtomicUsize>,
-        seen: Arc<Mutex<Vec<Req>>>,
+        pub(super) icmp: Arc<AtomicUsize>,
+        pub(super) seen: Arc<Mutex<Vec<Req>>>,
         join: Option<std::thread::JoinHandle<()>>,
     }
 
@@ -951,15 +952,16 @@ mod round_2 {
 
     /// A device on `link`: every PNIO request to one of `addresses` (port 34964) given to `handler`,
     /// what it returns sent; this machine's ICMP destination unreachable counted.
-    fn scripted(link: &str, addresses: Vec<Endpoint>, handler: Arc<Mutex<Handler>>) -> Scripted {
+    pub(super) fn scripted(link: &str, addresses: Vec<Endpoint>, handler: Arc<Mutex<Handler>>) -> Scripted {
         let stop = Arc::new(AtomicBool::new(false));
         let icmp = Arc::new(AtomicUsize::new(0));
         let seen: Arc<Mutex<Vec<Req>>> = Arc::new(Mutex::new(Vec::new()));
         let link = link.to_string();
         let join = {
             let (stop, icmp, seen) = (stop.clone(), icmp.clone(), seen.clone());
+            // (Open before the read starts, or its first request may go unheard.)
+            let mut b = bench::link(&link);
             std::thread::spawn(move || {
-                let mut b = bench::link(&link);
                 while !stop.load(Ordering::SeqCst) {
                     let Ok(Some(f)) = b.recv(Duration::from_millis(5)) else { continue };
                     let x = &f.bytes;
@@ -987,13 +989,13 @@ mod round_2 {
     }
 
     /// The answer to `r` carrying `record`, its header saying `declared` bytes, with `status`.
-    fn answer(r: &Req, record: &[u8], status: PnioStatus) -> RpcPdu {
+    pub(super) fn answer(r: &Req, record: &[u8], status: PnioStatus) -> RpcPdu {
         let mut data = ReadResponse::answering(&r.read, record.len() as u32).block().encode().unwrap();
         data.extend_from_slice(record);
         RpcPdu::pnio_response(&r.pdu, 7, &ResponseArgs::new(status, r.args.args_maximum, data))
     }
 
-    fn back(r: &Req, pdu: &RpcPdu) -> (Endpoint, Endpoint, Vec<u8>) {
+    pub(super) fn back(r: &Req, pdu: &RpcPdu) -> (Endpoint, Endpoint, Vec<u8>) {
         (r.to, r.from, pdu.encode().unwrap())
     }
 
@@ -1275,8 +1277,8 @@ mod round_2 {
         });
     }
 
-    /// An interface holding two IPv4 addresses: the read goes from one it holds (the first listed) and
-    /// is answered there.
+    /// An interface holding two IPv4 addresses, the device's network's first: the read goes from it
+    /// and is answered there (round 3 lists the others first).
     #[test]
     fn an_interface_of_two_addresses() {
         netns::isolated("round_2::an_interface_of_two_addresses", &[("a0", "b0")], || {
@@ -1321,6 +1323,309 @@ mod round_2 {
             let small = Listener::start(vec![bench::link("a0")], Options { max_frames: 8, ..Options::default() }).unwrap();
             let r = read::read(&small, "a0", &device_of("a0", DEV_A, a(10)), Target { slot: 0, subslot: 1, index: 0xAFF0 }, &read::Options { wait: Duration::from_millis(800) });
             assert!(matches!(r, Err(ReadError::Lost(n)) if n > 0), "{r:?}");
+        });
+    }
+}
+
+/// The third refute round's cases: the wait's bound, the walk's end, the datagram reader's offsets
+/// and short header, frames let go before and after the request, the wait counted from the
+/// request's going, and the interface's address on the device's network.
+mod round_3 {
+    use std::net::Ipv4Addr;
+    use std::time::Duration;
+
+    use veredas_aranha::fusion::{Device, Fusion};
+    use veredas_aranha::ip::{self, Endpoint};
+    use veredas_aranha::listen::{Listener, Options};
+    use veredas_aranha::observe::{Observation, Observed, Probe, Witness};
+    use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpSuite};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::profinet::rpc::PnioStatus;
+    use veredas_aranha::read::{self, ReadError, Target};
+    use veredas_aranha::wire::hub::Hub;
+
+    #[cfg(target_os = "linux")]
+    use super::bench;
+    #[cfg(target_os = "linux")]
+    use veredas_aranha::profinet::rpc::{PacketType, flags1};
+    #[cfg(target_os = "linux")]
+    use super::round_2::{Handler, Req, answer, back, scripted};
+    #[cfg(target_os = "linux")]
+    use std::sync::{Arc, Mutex};
+    #[cfg(target_os = "linux")]
+    use veredas_aranha::netns;
+
+    const HERE: Mac = Mac([0x02, 0x00, 0x5E, 0xD0, 0x00, 0xA0]);
+    const DEV: Mac = Mac([0x02, 0x00, 0x5E, 0xD0, 0x00, 0x01]);
+    const MASK24: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
+    const IM0: Target = Target { slot: 0, subslot: 1, index: 0xAFF0 };
+
+    fn a(last: u8) -> Ipv4Addr {
+        Ipv4Addr::new(192, 168, 0, last)
+    }
+
+    /// A device heard on `iface` by its DCP Hello, at `address` with `mask`.
+    fn device_with(iface: &str, mac: Mac, address: Ipv4Addr, mask: Ipv4Addr) -> Device {
+        let identity = DeviceIdentity { name: Some("bomba-1".into()), ip: Some(IpSuite { ip: address, mask, gateway: Ipv4Addr::UNSPECIFIED }), ..Default::default() };
+        let o = Observation { witness: Witness { probe: Probe::DcpHeard, iface: iface.into(), at_ns: 1, frame: 0 }, observed: Observed::Dcp { mac, service: dcp::Service::Hello, service_type: dcp::ServiceType::Request, identity } };
+        let mut f = Fusion::new();
+        f.apply(&o);
+        f.devices.remove(&mac).unwrap()
+    }
+
+    /// A header's checksum computed again.
+    fn resum(header: &mut [u8]) {
+        header[10..12].copy_from_slice(&[0, 0]);
+        let mut acc: u32 = header.chunks(2).map(|p| u32::from(u16::from_be_bytes([p[0], p[1]]))).sum();
+        while acc > 0xFFFF {
+            acc = (acc & 0xFFFF) + (acc >> 16);
+        }
+        header[10..12].copy_from_slice(&(!(acc as u16)).to_be_bytes());
+    }
+
+    /// A frame of no protocol the read knows, to this machine.
+    #[cfg(target_os = "linux")]
+    fn junk(i: u16) -> Vec<u8> {
+        let mut f = HERE.0.to_vec();
+        f.extend_from_slice(&DEV.0);
+        f.extend_from_slice(&[0x88, 0xB5]);
+        f.extend_from_slice(&i.to_be_bytes());
+        f.resize(60, 0);
+        f
+    }
+
+    /// "or for a wait past 10 s": the bound is ten seconds, whatever the constant says.
+    #[test]
+    fn the_wait_s_bound_is_ten_seconds() {
+        assert_eq!(read::MAX_WAIT, Duration::from_secs(10));
+        let hub = Hub::new();
+        let l = Listener::start(vec![Box::new(hub.port("hub0", HERE))], Options::default()).unwrap();
+        let on = device_with("hub0", DEV, a(10), MASK24);
+        let past = read::Options { wait: Duration::from_secs(10) + Duration::from_millis(1) };
+        assert!(matches!(read::read(&l, "hub0", &on, IM0, &past), Err(ReadError::Wait(w)) if w == past.wait));
+        let at = read::Options { wait: Duration::from_secs(10) };
+        assert!(matches!(read::read(&l, "hub0", &on, IM0, &at), Err(ReadError::NoAddress(_))));
+    }
+
+    /// "until the device answers that a subslot is not there (IODReadRes, PNIORW, 0xB2)": its error
+    /// code 2 is no part of it.
+    #[test]
+    fn the_walk_ends_at_0xb2_whatever_its_error_code_2() {
+        for code2 in [0u8, 1, 0x05, 0xFF] {
+            assert!(read::is_no_subslot(PnioStatus { code: 0xDE, decode: 0x80, code1: 0xB2, code2 }), "{code2:#x}");
+        }
+    }
+
+    /// "not a fragment": each bit of the offset alone, and more fragments alone, is a fragment;
+    /// don't fragment alone is none.
+    #[test]
+    fn every_bit_of_the_offset_is_a_fragment() {
+        let good = ip::udp_frame(Endpoint { mac: HERE, ip: a(1), port: 49152 }, Endpoint { mac: DEV, ip: a(10), port: 34964 }, 7, b"hello, device").unwrap();
+        let with = |flags_offset: u16| {
+            let mut f = good.clone();
+            f[20..22].copy_from_slice(&flags_offset.to_be_bytes());
+            resum(&mut f[14..34]);
+            f
+        };
+        for bit in 0..14 {
+            assert_eq!(ip::datagram(&with(1 << bit)), None, "flags and offset {:#06x}", 1u16 << bit);
+        }
+        assert!(ip::datagram(&with(0x4000)).is_some());
+    }
+
+    /// A header that says 16 bytes, its checksum right over those 16: none (a header is at least
+    /// 20), though what follows reads as UDP.
+    #[test]
+    fn a_16_byte_header_with_its_own_checksum_is_none() {
+        let payload = b"0123456789abcdef";
+        let total = 16 + 8 + payload.len();
+        let mut h = vec![0x44, 0, 0, 0, 0, 7, 0x40, 0, 64, 17, 0, 0, 192, 168, 0, 1];
+        h[2..4].copy_from_slice(&(total as u16).to_be_bytes());
+        resum(&mut h);
+        let mut f = DEV.0.to_vec();
+        f.extend_from_slice(&HERE.0);
+        f.extend_from_slice(&[0x08, 0x00]);
+        f.extend_from_slice(&h);
+        // "UDP": the ports a 20-byte header's destination would hold, its length, no checksum.
+        f.extend_from_slice(&[0xC0, 0xA8, 0x00, 0x0A]);
+        f.extend_from_slice(&((8 + payload.len()) as u16).to_be_bytes());
+        f.extend_from_slice(&[0, 0]);
+        f.extend_from_slice(payload);
+        f.resize(f.len().max(60), 0);
+        assert_eq!(ip::datagram(&f), None);
+    }
+
+    /// A device on `link` answering every read with `record`.
+    #[cfg(target_os = "linux")]
+    fn answering(link: &str, me: Endpoint, record: &'static [u8]) -> super::round_2::Scripted {
+        let handler: Handler = Box::new(move |r: &Req| vec![back(r, &answer(r, record, PnioStatus::OK))]);
+        scripted(link, vec![me], Arc::new(Mutex::new(handler)))
+    }
+
+    /// Frames let go before the request (a listener long past its bound) are no cause: the read
+    /// takes its answer.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn frames_let_go_before_the_request_do_not_refuse_it() {
+        netns::isolated("round_3::frames_let_go_before_the_request_do_not_refuse_it", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            let _peer = answering("b0", Endpoint { mac: DEV, ip: a(10), port: 34964 }, b"mine");
+            let small = Listener::start(vec![bench::link("a0")], Options { max_frames: 8, ..Options::default() }).unwrap();
+            let mut b = bench::link("b0");
+            for i in 0..40 {
+                b.send(&junk(i)).unwrap();
+            }
+            assert!(small.until(Duration::from_secs(3), |s| s.stats.let_go >= 30), "{:?}", small.snapshot().stats);
+            let r = read::read(&small, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &read::Options { wait: Duration::from_millis(400) });
+            assert_eq!(r.map(|r| r.data).map_err(|e| e.to_string()), Ok(b"mine".to_vec()));
+        });
+    }
+
+    /// One frame let go after the request before it was read: refused, one lost. (The read may
+    /// read the first of the device's two frames in the microseconds before the second comes: then
+    /// nothing it had not read was let go, and it takes the answer.)
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn one_frame_let_go_after_the_request_refuses_it() {
+        netns::isolated("round_3::one_frame_let_go_after_the_request_refuses_it", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            let me = Endpoint { mac: DEV, ip: a(10), port: 34964 };
+            let handler: Handler = Box::new(move |r: &Req| {
+                std::thread::sleep(Duration::from_millis(100));
+                let j = |i: u16| (me, Endpoint { port: 9, ..r.from }, format!("junk{i}").into_bytes());
+                vec![j(0), j(1), back(r, &answer(r, b"late", PnioStatus::OK))]
+            });
+            let _peer = scripted("b0", vec![me], Arc::new(Mutex::new(handler)));
+            let mut got = Vec::new();
+            for _ in 0..5 {
+                let small = Listener::start(vec![bench::link("a0")], Options { max_frames: 2, ..Options::default() }).unwrap();
+                got.push(read::read(&small, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &read::Options { wait: Duration::from_millis(400) }).map(|r| r.data));
+                small.stop();
+            }
+            assert!(got.iter().all(|r| matches!(r, Err(ReadError::Lost(1))) || r.as_ref().is_ok_and(|d| d == b"late")), "{got:#?}");
+            assert!(got.iter().any(|r| matches!(r, Err(ReadError::Lost(1)))), "{got:#?}");
+        });
+    }
+
+    /// The request itself let go (the bound one frame) is no frame after it: the answer is read.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_request_let_go_is_no_frame_after_it() {
+        netns::isolated("round_3::the_request_let_go_is_no_frame_after_it", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            let _peer = answering("b0", Endpoint { mac: DEV, ip: a(10), port: 34964 }, b"mine");
+            let small = Listener::start(vec![bench::link("a0")], Options { max_frames: 1, ..Options::default() }).unwrap();
+            let r = read::read(&small, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &read::Options { wait: Duration::from_millis(400) });
+            assert_eq!(r.map(|r| r.data).map_err(|e| e.to_string()), Ok(b"mine".to_vec()));
+        });
+    }
+
+    /// "no answer within the wait": an answer a few milliseconds after its request went, behind a
+    /// queue that takes longer than the wait, is within it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_wait_counts_from_the_request_s_going() {
+        netns::isolated("round_3::the_wait_counts_from_the_request_s_going", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            let _peer = answering("b0", Endpoint { mac: DEV, ip: a(10), port: 34964 }, b"mine");
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            // Twenty frames ahead at the default twenty a second: the request goes about a second
+            // after the call.
+            for i in 0..20 {
+                let mut f = junk(i);
+                f[..6].copy_from_slice(&DEV.0);
+                f[6..12].copy_from_slice(&HERE.0);
+                l.send("a0", f).unwrap();
+            }
+            let start = std::time::Instant::now();
+            let r = read::read(&l, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &read::Options { wait: Duration::from_millis(400) });
+            let took = start.elapsed();
+            assert_eq!(r.map(|r| r.data).map_err(|e| e.to_string()), Ok(b"mine".to_vec()), "{took:?}");
+            assert!(took >= Duration::from_millis(900), "{took:?}");
+        });
+    }
+
+    /// The read goes from the interface's address on the device's network by the device's own mask
+    /// (a device answers without a router only a source there; the first such listed), whatever
+    /// the system lists first: an office network's address before two of the device's, a
+    /// link-local one beside it, or the device's wider mask taking in an address the interface's
+    /// own mask leaves out. The device here answers only such a source.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_read_goes_from_the_interface_s_address_on_the_device_s_network() {
+        netns::isolated("round_3::the_read_goes_from_the_interface_s_address_on_the_device_s_network", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            let me = Endpoint { mac: DEV, ip: a(10), port: 34964 };
+            let wide = Ipv4Addr::new(255, 255, 0, 0);
+            let arrangements: [(&[&[&str]], Ipv4Addr, Ipv4Addr); 3] = [
+                (&[&["10.9.9.1/24"], &["192.168.0.1/24"], &["192.168.0.2/24"]], MASK24, a(1)),
+                (&[&["192.168.0.1/24"], &["169.254.7.7/16", "scope", "link"]], MASK24, a(1)),
+                (&[&["10.9.9.1/24"], &["192.168.77.1/24"]], wide, Ipv4Addr::new(192, 168, 77, 1)),
+            ];
+            for (addresses, mask, from) in arrangements {
+                netns::ip(&["addr", "flush", "dev", "a0"]);
+                for address in addresses {
+                    let mut args = vec!["addr", "add"];
+                    args.extend_from_slice(address);
+                    args.extend_from_slice(&["dev", "a0"]);
+                    netns::ip(&args);
+                }
+                assert_ne!(read::address_of("a0"), Some(from), "the source is not the first listed: {addresses:?}");
+                assert_eq!(read::address_for("a0", me.ip, mask), Some(from));
+                let on_network = move |ip: Ipv4Addr| u32::from(ip) & u32::from(mask) == u32::from(me.ip) & u32::from(mask);
+                let handler: Handler = Box::new(move |r: &Req| if on_network(r.from.ip) { vec![back(r, &answer(r, b"mine", PnioStatus::OK))] } else { vec![] });
+                let peer = scripted("b0", vec![me], Arc::new(Mutex::new(handler)));
+                let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+                let r = read::read(&l, "a0", &device_with("a0", DEV, me.ip, mask), IM0, &read::Options { wait: Duration::from_millis(400) });
+                let sources: Vec<Ipv4Addr> = peer.seen.lock().unwrap().iter().map(|q| q.from.ip).collect();
+                assert_eq!(sources, [from], "{addresses:?}");
+                assert_eq!(r.map(|r| r.data).map_err(|e| e.to_string()), Ok(b"mine".to_vec()), "{addresses:?}");
+                l.stop();
+            }
+        });
+    }
+
+    /// The request asks for its answer: a request (not maybe, not broadcast), idempotent, as a read
+    /// is.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_request_asks_for_its_answer() {
+        netns::isolated("round_3::the_request_asks_for_its_answer", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            let peer = answering("b0", Endpoint { mac: DEV, ip: a(10), port: 34964 }, b"mine");
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let r = read::read(&l, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &read::Options { wait: Duration::from_millis(400) });
+            assert_eq!(r.map(|r| r.data).map_err(|e| e.to_string()), Ok(b"mine".to_vec()));
+            let seen = peer.seen.lock().unwrap();
+            let flags: Vec<(PacketType, u8)> = seen.iter().map(|q| (q.pdu.packet_type, q.pdu.flags1)).collect();
+            assert_eq!(flags, [(PacketType::Request, flags1::IDEMPOTENT)]);
+        });
+    }
+
+    /// An interface holding addresses, none on the device's network by the device's own mask: the
+    /// read refused, nothing sent, even where the interface's mask would take the device in.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_interface_with_no_address_on_the_device_s_network_is_refused() {
+        netns::isolated("round_3::an_interface_with_no_address_on_the_device_s_network_is_refused", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            let device = Ipv4Addr::new(192, 168, 5, 10);
+            for address in ["10.9.9.1/24", "192.168.0.1/16"] {
+                netns::ip(&["addr", "flush", "dev", "a0"]);
+                netns::ip(&["addr", "add", address, "dev", "a0"]);
+                let peer = answering("b0", Endpoint { mac: DEV, ip: device, port: 34964 }, b"mine");
+                let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+                let r = read::read(&l, "a0", &device_with("a0", DEV, device, MASK24), IM0, &read::Options { wait: Duration::from_millis(400) });
+                assert_eq!(r.map(|r| r.data).map_err(|e| e.to_string()), Err("\"a0\" holds no IPv4 address on the network of 192.168.5.10 (mask 255.255.255.0): the device could not answer it".to_string()), "{address}");
+                assert_eq!(l.interface("a0").unwrap().sent, 0, "{address}");
+                assert!(peer.seen.lock().unwrap().is_empty(), "{address}");
+                l.stop();
+            }
         });
     }
 }

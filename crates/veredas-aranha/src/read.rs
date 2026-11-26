@@ -3,12 +3,13 @@
 //! come from; "Rules": it listens before it asks, every active step bounded and paced). A record of
 //! one device is read with no connection: a connectionless DCE/RPC request (PNIO's operation 5)
 //! in one UDP datagram to the device's port 34964, sent through a listener already hearing the
-//! interface the device was heard on, from that interface's MAC and IPv4 address, paced by its
-//! worker like any frame it sends. Its answer is the datagram that listener then keeps from that
-//! device's MAC and address to the request's, under the request's activity: the frame the record
-//! came from is on record, as every value's is. The interface's own address takes in the answer
-//! (an open socket on the request's port, so this machine answers the device's ARP and refuses
-//! nothing it sends back).
+//! interface the device was heard on, from that interface's MAC and its IPv4 address on the
+//! device's network (by the device's own mask: a device answers without a router only a source on
+//! it), paced by its worker like any frame it sends. Its answer is the datagram that listener then
+//! keeps from that device's MAC and address to the request's, under the request's activity: the
+//! frame the record came from is on record, as every value's is. The interface's own address takes
+//! in the answer (an open socket on the request's port, so this machine answers the device's ARP and
+//! refuses nothing it sends back).
 //!
 //! The port data (index 0x802A) of a device's ports, subslot 0x8001 of slot 0 and on until the
 //! device says a subslot is not there, gives the device's own word on each port's neighbours: the
@@ -104,6 +105,8 @@ pub enum ReadError {
     Ended { iface: String, reason: String },
     #[error("{0:?} has no IPv4 address of its own: a device could not answer it")]
     NoAddress(String),
+    #[error("{iface:?} holds no IPv4 address on the network of {device} (mask {mask}): the device could not answer it")]
+    OffNetwork { iface: String, device: Ipv4Addr, mask: Ipv4Addr },
     #[error("{device} was not heard on {iface:?}: it is not read there")]
     NotHeard { device: Mac, iface: String },
     #[error("{0} states no IPv4 address of its own (DCP's IP suite): there is nothing to read it at")]
@@ -163,26 +166,30 @@ fn next_activity() -> Uuid {
     Uuid(b)
 }
 
-/// The IPv4 address an interface holds (the first the system lists), if any.
+/// The IPv4 addresses an interface holds, in the order the system lists them.
 #[cfg(target_os = "linux")]
-pub fn address_of(iface: &str) -> Option<Ipv4Addr> {
+pub fn addresses_of(iface: &str) -> Vec<Ipv4Addr> {
     let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
     // SAFETY: getifaddrs fills `list` with a list the system owns until freeifaddrs.
     if unsafe { libc::getifaddrs(&raw mut list) } != 0 {
-        return None;
+        return Vec::new();
     }
-    let mut found = None;
+    let v4 = |sa: *const libc::sockaddr| -> Option<Ipv4Addr> {
+        // SAFETY: a non-null sockaddr of the list, its family saying its shape; an AF_INET one is
+        // a sockaddr_in.
+        (!sa.is_null() && i32::from(unsafe { (*sa).sa_family }) == libc::AF_INET).then(|| Ipv4Addr::from(u32::from_be(unsafe { (*sa.cast::<libc::sockaddr_in>()).sin_addr.s_addr })))
+    };
+    let mut found = Vec::new();
     let mut at = list;
-    while !at.is_null() && found.is_none() {
+    while !at.is_null() {
         // SAFETY: `at` is an element of the list getifaddrs returned, not yet freed.
         let a = unsafe { &*at };
         // SAFETY: a non-null `ifa_name` is a NUL-terminated string of the list.
         let name = (!a.ifa_name.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(a.ifa_name) });
-        // SAFETY: a non-null `ifa_addr` points at a sockaddr whose family says its shape.
-        if name.is_some_and(|n| n.to_bytes() == iface.as_bytes()) && !a.ifa_addr.is_null() && i32::from(unsafe { (*a.ifa_addr).sa_family }) == libc::AF_INET {
-            // SAFETY: an AF_INET address is a sockaddr_in.
-            let sin = unsafe { &*a.ifa_addr.cast::<libc::sockaddr_in>() };
-            found = Some(Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr)));
+        if name.is_some_and(|n| n.to_bytes() == iface.as_bytes())
+            && let Some(address) = v4(a.ifa_addr)
+        {
+            found.push(address);
         }
         at = a.ifa_next;
     }
@@ -192,8 +199,21 @@ pub fn address_of(iface: &str) -> Option<Ipv4Addr> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn address_of(_iface: &str) -> Option<Ipv4Addr> {
-    None
+pub fn addresses_of(_iface: &str) -> Vec<Ipv4Addr> {
+    Vec::new()
+}
+
+/// The first IPv4 address an interface holds, if any.
+pub fn address_of(iface: &str) -> Option<Ipv4Addr> {
+    addresses_of(iface).first().copied()
+}
+
+/// The interface's address on the network of a device at `device` with `mask`, by the device's own
+/// mask (the first such the system lists): a device answers without a router only a source on its
+/// network; none when the interface holds none there.
+pub fn address_for(iface: &str, device: Ipv4Addr, mask: Ipv4Addr) -> Option<Ipv4Addr> {
+    let m = u32::from(mask);
+    addresses_of(iface).into_iter().find(|a| u32::from(*a) & m == u32::from(device) & m)
 }
 
 /// The object a read is addressed to: the device's own (its vendor and device ids, its instance,
@@ -221,8 +241,13 @@ pub fn read(listener: &Listener, iface: &str, device: &Device, target: Target, o
     if !device.heard_on.contains(iface) {
         return Err(ReadError::NotHeard { device: device.mac, iface: iface.to_string() });
     }
-    let address = device.ip.current().map(|s| s.ip).filter(|a| !a.is_unspecified()).ok_or(ReadError::Unaddressed(device.mac))?;
-    let here = address_of(iface).ok_or_else(|| ReadError::NoAddress(iface.to_string()))?;
+    let suite = device.ip.current().filter(|s| !s.ip.is_unspecified()).ok_or(ReadError::Unaddressed(device.mac))?;
+    let address = suite.ip;
+    let here = match address_for(iface, address, suite.mask) {
+        Some(here) => here,
+        None if address_of(iface).is_some() => return Err(ReadError::OffNetwork { iface: iface.to_string(), device: address, mask: suite.mask }),
+        None => return Err(ReadError::NoAddress(iface.to_string())),
+    };
     let socket = UdpSocket::bind((here, 0)).map_err(|source| ReadError::Socket { address: here, source })?;
     let port = socket.local_addr().map_err(|source| ReadError::Socket { address: here, source })?.port();
 

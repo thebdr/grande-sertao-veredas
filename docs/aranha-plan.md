@@ -403,3 +403,10 @@ is pinned by a test when its phase lands.
   named in C-139 (following tshark's guess waits for a site's capture that needs it). A first
   reading of the format from its 2.4 header alone was wrong in both lengths' order and the link
   type's bits (C-139's first refute round).
+- **An interface holds more than the device's network's address.** An engineer's laptop keeps its
+  office address and adds one on the plant's network (192.168.0.x) to reach its devices, and an
+  autoconfiguring daemon adds a link-local one (169.254/16, scope link) the system may list first.
+  A device with no gateway answers only a source on its own network, by its own mask, so a read
+  from the first address listed goes unanswered: the read goes from the interface's address on the
+  device's network by the device's mask, and is refused, nothing sent, where the interface holds
+  none there (C-148's third refute round).
