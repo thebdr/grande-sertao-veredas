@@ -1479,3 +1479,36 @@ fn an_enum_given_fewer_slots_than_its_type_is_refused_as_a_constant_and_an_argum
     assert_eq!(m.start(g, &[Arg::Value(&short)]), Err(HostError::Arguments), "an argument of one slot for Option<u8>");
     assert_eq!(m.start(g, &[Arg::Value(&[int(Int::Isize, 0), Scalar::Uninit])]), Ok(()), "its two slots taken");
 }
+
+// The twentieth refute round's tests: a core operation's call to no such block, and an enum's aggregate that names
+// no variant, each refused at load.
+
+/// `_0 = Ord::max(_1, _2) -> bb9` in a function of two blocks: refused as no such block, as a function's call is.
+#[test]
+fn a_core_operation_s_call_to_no_such_block_is_refused() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let call = |next| Terminator::Call { callee: Callee::Core(CoreOp::Max(Int::U8)), args: vec![copy(1), copy(2)], dest: place(0), next: BlockId(next), at: at(1) };
+    for (next, good) in [(1, true), (9, false)] {
+        let mut p = Build { program: b.program.clone() };
+        p.function(Function { name: "f".into(), params: 2, locals: locals(&[u8t, u8t, u8t]), blocks: vec![block(vec![], call(next)), block(vec![], ret())] });
+        let got = Machine::load(p.program, &[]).map(|_| ());
+        let want = if good { Ok(()) } else { Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "no such block" }) };
+        assert_eq!(got, want, "a core call's next block {next}");
+    }
+}
+
+/// An enum's aggregate with no variant named: refused at load, as a structure's or an array's with one is.
+#[test]
+fn an_enum_s_aggregate_that_names_no_variant_is_refused() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let opt = b.option(u8t);
+    for (variant, parts, good) in [(Some(1), vec![copy(1)], true), (Some(0), vec![], true), (None, vec![], false)] {
+        let mut p = Build { program: b.program.clone() };
+        p.function(Function { name: "f".into(), params: 1, locals: locals(&[opt, u8t]), blocks: vec![block(vec![assign(place(0), Value::Aggregate(opt, variant, parts), 1)], ret())] });
+        let got = Machine::load(p.program, &[]).map(|_| ());
+        let want = if good { Ok(()) } else { Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "an aggregate of what is built otherwise" }) };
+        assert_eq!(got, want, "Option<u8> built as variant {variant:?}");
+    }
+}

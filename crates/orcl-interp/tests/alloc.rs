@@ -425,3 +425,79 @@ fn a_region_s_part_copied_whole_through_a_reference_allocates_nothing_in_a_machi
         assert_eq!(&region[..64], &region[64..], "prev = cur in {who}");
     }
 }
+
+// The twentieth refute round's tests: a copy of a machine taken mid-run, at every instruction of a chain of calls
+// and after a small value was built, allocates nothing as it goes on, as a copy of an idle machine does.
+
+/// A chain of calls `depth` deep, f1 calling f2 ... calling f{depth}, each adding one to what its callee gives.
+fn chain(depth: u32) -> (Program, FunctionId) {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let mut below = b.function(Function {
+        name: format!("f{depth}"),
+        params: 0,
+        locals: locals(&[u8t]),
+        blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 7)])), 1)], ret())],
+    });
+    for k in (1..depth).rev() {
+        below = b.function(Function {
+            name: format!("f{k}"),
+            params: 0,
+            locals: locals(&[u8t, u8t]),
+            blocks: vec![
+                block(vec![], Terminator::Call { callee: Callee::Function(below), args: vec![], dest: place(1), next: BlockId(1), at: at(k) }),
+                block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(1), konst(u8t, vec![int(Int::U8, 1)])), k)], ret()),
+            ],
+        });
+    }
+    (b.program, below)
+}
+
+/// A copy taken at every instruction of a chain of calls five deep, run to the end: no allocation, and the
+/// result the original gives.
+#[test]
+fn a_copy_taken_at_any_instruction_of_a_chain_of_calls_allocates_nothing_as_it_goes_on() {
+    let (p, entry) = chain(5);
+    let mut m = Machine::load(p, &[]).unwrap();
+    m.start(entry, &[]).unwrap();
+    let mut k = 0;
+    loop {
+        let mut copy = m.clone();
+        let (got, asked) = watching(|| copy.run(u64::MAX));
+        assert_eq!((got, asked, copy.result()), (Ok(Step::Returned), 0, &[int(Int::U8, 11)][..]), "a copy taken after {k} instructions, {} calls deep", m.depth());
+        k += 1;
+        if m.step().unwrap() == Step::Returned {
+            break;
+        }
+    }
+    assert!(k > 10, "{k} instructions");
+}
+
+/// A copy taken after an instruction built a small value, going on to build a larger one: no allocation.
+#[test]
+fn a_copy_taken_after_a_small_value_was_built_allocates_nothing_building_a_larger_one() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let arr = b.ty(Type::Array { element: u8t, len: 16 });
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[u8t, u8t, arr]),
+        blocks: vec![block(
+            vec![
+                assign(place(1), Value::Use(konst(u8t, vec![int(Int::U8, 3)])), 1),
+                assign(place(2), Value::Use(konst(arr, vec![int(Int::U8, 5); 16])), 2),
+                assign(place(0), Value::Use(copy_at(proj(2, vec![Projection::ConstantIndex(15)]))), 3),
+            ],
+            ret(),
+        )],
+    });
+    let mut m = Machine::load(b.program, &[]).unwrap();
+    m.start(f, &[]).unwrap();
+    for k in 0..4 {
+        let mut copy = m.clone();
+        let (got, asked) = watching(|| copy.run(u64::MAX));
+        assert_eq!((got, asked, copy.result()), (Ok(Step::Returned), 0, &[int(Int::U8, 5)][..]), "a copy taken after {k} instructions");
+        m.step().unwrap();
+    }
+}
