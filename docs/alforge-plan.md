@@ -102,7 +102,12 @@ Keys (each required unless a default is given):
    inputs"):
    - the component's folder, but for its top `tests/`, `benches/` and `examples/` (Q445, ruled
      "Tests left out"): what only the tests read never goes into an executable, and a file there
-     that a shipped target starts from or a shipped source names is charged as a file of its own;
+     that a shipped target starts from or a shipped source names is charged as a file of its own.
+     None is left out when a module rustc reads could reach it: in a package with a build script
+     (which may read anything in its folder, as IronCalc's xlsx lists its `tests/` to write code),
+     or one whose top holds a file rustc may read as Rust (a crate root, a `mod.rs`, a `#[path]` or
+     `include!` file, whose `mod examples;` is `examples/mod.rs`), nor one holding a package a
+     build uses; and a package nested in another's folder is that folder's no more, its own input;
    - the folder of every member it uses, alike (its normal and build dependencies by path,
      transitively; what its tests alone use never goes into an executable), and of every package
      by path outside the members (a fork kept in the tree, `forks/ironcalc`, with its own
@@ -117,7 +122,9 @@ Keys (each required unless a default is given):
      the component or a member it uses inherits (`x.workspace = true` in its package, its normal
      and build dependencies or its lints), each named `Cargo.toml: <key>` and identified by its
      value, so the member list, comments, layout and what other members alone inherit charge
-     nothing;
+     nothing. The resolver named is the one cargo uses: the workspace's, else the root package's
+     own, else its edition's. A workspace resolving with 1 is refused: under it a test's
+     dependencies and a root package turn features on in what ships, which no version names;
    - and the root's cargo configuration.
 
    Each is identified as git stores it at the commit (a part of the manifest by its value), so two
@@ -234,16 +241,26 @@ that lands this, before or after Oficina's switch to `default = ["shell"]` (Q370
 - **Both run on Debian 13:** Qt is qt.io's build (glibc 2.34, GLIBCXX 3.4.29) and KDDockWidgets needs
   glibc 2.38 and GLIBCXX 3.4.32, within the recipe's 2.41 and 3.4.33. The cut's ABI check holds the
   window and every library it ships with it to them.
-- **The bundle carries them** (Q446, ruled "The bundle carries them"): `lib/` beside `bin/` holds
-  every library of Qt and KDDockWidgets the window loads, as the builder's `ldd` resolves it, each
-  under the name it is loaded by, and what Qt loads by name at run time (the `xcb` platform plugin,
-  the QML modules Oficina imports), placed by a `qt.conf` beside the window. The window's
-  `RUNPATH` becomes `$ORIGIN/../lib` (`patchelf` in the builder), so it loads the bundle's Qt and no
-  other. About 120 MB extracted; each release carries its own Qt, and an update brings a new Qt
-  with it. `licenses/` gains Qt's and KDDockWidgets' texts and where their sources are (C-294).
+- **The bundle carries them** (Q446, ruled "The bundle carries them"): `lib/qt/`, laid out as Qt
+  lays itself out, holds what the window loads at run time. That is every library of Qt and
+  KDDockWidgets it, its plugins and its QML modules load, as the builder's `ldd` resolves them, each
+  under the name it is loaded by (`lib/qt/lib/`); the `xcb` and `offscreen` platform plugins and X's
+  OpenGL integrations (`lib/qt/plugins/`); and the QML modules Oficina's folder imports, as Qt's
+  own `qmlimportscanner` reads them (`lib/qt/qml/`). The window's `RUNPATH` becomes
+  `$ORIGIN/../lib/qt/lib` (`patchelf` in the builder), so it loads the bundle's Qt and no other, and
+  Qt finds its plugins and modules from where its own library lies, with no `qt.conf`. The builder
+  then starts the window from that layout offscreen: it must still be up after ten seconds, with
+  no module or library said unloaded. About 115 MB extracted (33 libraries); each release carries
+  its own Qt, and an update brings a new Qt with it. `licenses/` gains Qt's and KDDockWidgets' texts
+  and where their sources are (C-294). KDDockWidgets is `GPL-2.0-only OR GPL-3.0-only` (its own
+  `LICENSE.txt`), not LGPLv3 as Q446's text had it; Oficina's GPLv3 or later takes it. Qt's open
+  source licence is `LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only`. This copy of Qt carries no
+  licence text: Debian's `/usr/share/common-licenses` holds LGPL-3, GPL-2 and GPL-3.
 - **The tester machine provides** what any Qt program takes from its system (the X client
-  libraries, OpenGL, fontconfig), from Debian's packages in the recipe; its proof holds every
-  library of the window and of `lib/` to load there, none missing.
+  libraries, OpenGL, fontconfig, D-Bus, GLib), from Debian's packages in the recipe. Its boot check
+  says that every library the release's executables and `lib/qt/` load is found
+  (`VEREDAS-LIBRARIES ok`), and that the window starts offscreen and is still up after ten seconds
+  (`VEREDAS-WINDOW ok`); the proof requires both.
 - **The real cut's suite run** builds the workspace on the development machine, where cargo's
   configuration names Qt, and Oficina's own tests built alone run with `shell` on.
 
