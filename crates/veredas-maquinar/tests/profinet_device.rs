@@ -1291,7 +1291,11 @@ mod round_3 {
             let dev = start(&config(DEVICE)).unwrap();
             for round in 0..5u32 {
                 ctl.send(&dcp::identify_request(me, 500 + round, 200, &Filter::All).unwrap()).unwrap();
-                std::thread::sleep(Duration::from_millis(2));
+                // A Get after it, answered at once: the device reads in order, so the Identify was
+                // read (and its answer queued) before the mute (C-112's seventh round: a 2 ms sleep
+                // alone left the read after the mute in some rounds, the Identify rightly answered).
+                ctl.send(&dcp::get_request(dev.mac, me, 700 + round, &[(2, 2)]).unwrap()).unwrap();
+                assert_eq!(next_dcp(&ctl, Duration::from_millis(1000)).map(|p| p.xid), Some(700 + round), "the Get's answer, round {round}");
                 dev.set_muted(true);
                 dev.set_muted(false);
                 assert_eq!(next_dcp(&ctl, Duration::from_millis(2100)).map(|p| p.xid), None, "round {round}");
@@ -1942,6 +1946,142 @@ mod round_6 {
                 seen.push((p.xid, dcp::DeviceIdentity::from_blocks(&p.blocks).name));
             }
             assert_eq!((seen, dev.station()), (vec![(2, None), (1, Some("io-device-1".to_string()))], "renamed-1".to_string()));
+        });
+    }
+}
+
+/// C-112's seventh refute round: the critic's probes (`~/.cache/veredas/critic-c112-r7/probes`),
+/// kept as pins: a request waiting in the kernel when a mute is lifted answered, and the device's
+/// pace (LLDP at its 10 ms floor, an Identify of factor 1 at once), both on the machine's lock; a
+/// DCP request of another VLAN not taken, one of VLAN 0 taken.
+mod round_7 {
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::dcp::{self, DcpPdu, Filter};
+    use veredas_aranha::profinet::ether::{self, VlanTag};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::*;
+
+    const DEVICE: &str = "interface = \"b0\"\nstation = \"io-device-1\"\nalias = \"port-001.switch-1\"\nvendor_id = 7\ndevice_id = 9\nip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\nlldp_interval_ms = 200\nseed = 3\nhello = false\n";
+
+    fn config(text: &str) -> ProfinetConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn link(iface: &str, ethertype: u16) -> RawLink {
+        RawLink::open_with(iface, Options { ethertype: Some(ethertype), promiscuous: false, outgoing: false }).unwrap()
+    }
+
+    /// The next DCP frame within `within`: its tag and PDU.
+    fn next_dcp(link: &RawLink, within: Duration) -> Option<(Option<VlanTag>, DcpPdu)> {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            let r = link.recv(within.saturating_sub(started.elapsed())).unwrap()?;
+            let f = ether::parse(&r.bytes).unwrap();
+            if f.ethertype == ether::ETHERTYPE_PROFINET {
+                return Some((f.vlan, dcp::decode(f.payload).unwrap()));
+            }
+        }
+        None
+    }
+
+    /// On the machine's lock: a mute set, a request sent, the mute lifted at once, a hundred times
+    /// for each of an Identify, a Set (the signal) and a Get: the request, read after the mute was
+    /// lifted (the device reads each millisecond, the mute lasts microseconds), answered in 80 or
+    /// more (a device noting the mutes a pass late, or dropping what waited, answered almost none).
+    #[test]
+    fn a_request_waiting_when_a_mute_is_lifted_is_answered() {
+        netns::isolated("round_7::a_request_waiting_when_a_mute_is_lifted_is_answered", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            let mut answered = Vec::new();
+            for kind in ["identify", "set", "get"] {
+                let mut n = 0u32;
+                for r in 0..100u32 {
+                    let xid = r + 1;
+                    let f = match kind {
+                        "identify" => dcp::identify_request(me, xid, 1, &Filter::All).unwrap(),
+                        "set" => dcp::signal_request(dev.mac, me, xid).unwrap(),
+                        _ => dcp::get_request(dev.mac, me, xid, &[(2, 2)]).unwrap(),
+                    };
+                    dev.set_muted(true);
+                    ctl.send(&f).unwrap();
+                    dev.set_muted(false);
+                    if next_dcp(&ctl, Duration::from_millis(30)).is_some_and(|p| p.1.xid == xid) {
+                        n += 1;
+                    }
+                    while ctl.recv(Duration::from_millis(1)).unwrap().is_some() {}
+                    std::thread::sleep(Duration::from_micros(u64::from(r % 7) * 150));
+                }
+                answered.push((kind, n));
+            }
+            assert!(answered.iter().all(|(_, n)| *n >= 80), "answered of 100: {answered:?}");
+        });
+    }
+
+    /// On the machine's lock: LLDP at the 10 ms the configuration takes, its mean gap over 100
+    /// frames 9.5 to 11.5 ms, and an Identify of factor 1 answered within 5 ms, the slowest of 40
+    /// (an empty read waiting 15 ms had passed every pin: LLDP every 15.3 ms).
+    #[test]
+    fn the_shortest_lldp_interval_is_kept_and_factor_1_is_at_once() {
+        netns::isolated("round_7::the_shortest_lldp_interval_is_kept_and_factor_1_is_at_once", &[("a0", "b0")], || {
+            let lctl = link("a0", ether::ETHERTYPE_LLDP);
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let _dev = start(&config(&DEVICE.replace("lldp_interval_ms = 200", "lldp_interval_ms = 10"))).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            while lctl.recv(Duration::from_millis(1)).unwrap().is_some() {}
+            let mut at = Vec::new();
+            let started = Instant::now();
+            while at.len() < 101 && started.elapsed() < Duration::from_secs(5) {
+                if lctl.recv(Duration::from_millis(500)).unwrap().is_some() {
+                    at.push(Instant::now());
+                }
+            }
+            assert_eq!(at.len(), 101, "LLDP frames in 5 s");
+            let mean = (at[100] - at[0]) / 100;
+            let mut waits = Vec::new();
+            for xid in 0..40u32 {
+                std::thread::sleep(Duration::from_micros(u64::from(xid % 9) * 370));
+                let asked = Instant::now();
+                ctl.send(&dcp::identify_request(me, xid, 1, &Filter::All).unwrap()).unwrap();
+                next_dcp(&ctl, Duration::from_secs(1)).expect("an answer");
+                waits.push(asked.elapsed());
+            }
+            waits.sort();
+            assert!(mean >= Duration::from_micros(9_500) && mean <= Duration::from_micros(11_500), "LLDP at 10 ms: mean gap {mean:?}");
+            assert!(waits[39] < Duration::from_millis(5), "factor 1: the slowest {:?}", waits[39]);
+        });
+    }
+
+    /// A DCP Identify and a Set of VLAN 5: neither taken (the Set was applied, the Identify
+    /// answered untagged, so an asker in VLAN 5 never heard it); of VLAN 0, read as untagged: both
+    /// taken and answered untagged.
+    #[test]
+    fn a_dcp_request_of_another_vlan_is_not_taken_and_of_vlan_0_is() {
+        netns::isolated("round_7::a_dcp_request_of_another_vlan_is_not_taken_and_of_vlan_0_is", &[("a0", "b0")], || {
+            let ctl = RawLink::open_with("a0", Options { ethertype: None, promiscuous: false, outgoing: false }).unwrap();
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            let mut seen = Vec::new();
+            for vid in [5u16, 0] {
+                let tag = Some(VlanTag { priority: 0, drop_eligible: false, id: vid });
+                let identify = dcp::identify_request(me, 100 + u32::from(vid), 1, &Filter::All).unwrap();
+                let f = ether::parse(&identify).unwrap();
+                ctl.send(&ether::build_tagged(Mac::DCP_MULTICAST, me, tag, ether::ETHERTYPE_PROFINET, f.payload).unwrap()).unwrap();
+                let a = next_dcp(&ctl, Duration::from_millis(300)).map(|(t, p)| (t.map(|t| t.id), p.xid));
+                let set = dcp::set_name_request(dev.mac, me, 200 + u32::from(vid), &format!("vlan-{vid}"), true).unwrap();
+                let f = ether::parse(&set).unwrap();
+                ctl.send(&ether::build_tagged(dev.mac, me, tag, ether::ETHERTYPE_PROFINET, f.payload).unwrap()).unwrap();
+                let b = next_dcp(&ctl, Duration::from_millis(300)).map(|(t, p)| (t.map(|t| t.id), p.xid));
+                seen.push((vid, a, b, dev.station()));
+            }
+            assert_eq!(seen, [(5, None, None, "io-device-1".to_string()), (0, Some((None, 100)), Some((None, 200)), "vlan-0".to_string())]);
         });
     }
 }

@@ -575,8 +575,11 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                 continue;
             }
             // From one station alone: a group or the all-zero source is no station's (IEEE 802.3),
-            // so a request from one is not taken and no answer goes to a group (round 6).
-            ether::ETHERTYPE_PROFINET if (frame.dst == mac || frame.dst == Mac::DCP_MULTICAST) && !frame.src.is_multicast() && frame.src != Mac([0; 6]) => {}
+            // so a request from one is not taken and no answer goes to a group (round 6); and
+            // untagged or of VLAN 0, read as untagged (IEEE 802.1Q), as the ARP and IPv4 side: a
+            // frame of another VLAN is not this port's (round 7: one was applied and answered).
+            ether::ETHERTYPE_PROFINET
+                if (frame.dst == mac || frame.dst == Mac::DCP_MULTICAST) && !frame.src.is_multicast() && frame.src != Mac([0; 6]) && frame.vlan.is_none_or(|t| t.id == 0) => {}
             _ => continue,
         }
         if shared.muted.load(Ordering::SeqCst) {

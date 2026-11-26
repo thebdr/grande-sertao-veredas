@@ -517,7 +517,9 @@ Recorded as the port meets them.
   | (binary(modbus_server) & test(round_9::)) | (binary(ethernetip_adapter) & test(round_7::))
   | (binary(fisica) & test(round_6::) & test(stall))
   | (binary(bench_file) & test(round_7::the_end_gives_the_last_lines_their_two_seconds))
-  | (binary(modbus_server) & test(round_10::))`
+  | (binary(modbus_server) & test(round_10::))
+  | (binary(profinet_device) & (test(round_7::a_request_waiting_when_a_mute_is_lifted_is_answered)
+    | test(round_7::the_shortest_lldp_interval_is_kept_and_factor_1_is_at_once)))`
   (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23; the adapter's
   multiplier at 3 and its restart within a second, and its timeouts, keep-alives and counts of round 7; the PROFINET neighbour aged out by its TTL, and
   kept to its last frame's when heard again, a shorter one and another's included; the Modbus server's read-ahead filled during a delay
@@ -525,7 +527,7 @@ Recorded as the port meets them.
   300 ms, and its silence met in the middle of a frame (rounds 9 and 10); the
   executable's status lines a second apart, and its stop with a stdout nobody reads (by `stop` and by SIGTERM once its writer is far behind, its start's lines past the pipe, the status lines it dropped, and the two seconds its last lines are given); the Modbus server's delays side by side and a close
   behind many requests seen at once; the PROFINET device's strict mute, whose bursts meet the mute
-  as the load lets them, and an Identify read before a mute not taken after it, and LLDP going on while muted; `fisica`'s late count against the steps' own starts, and its runner at a 10 and a 20 ms step, a 2 s stall and a hook's stall).
+  as the load lets them, and an Identify read before a mute not taken after it, and LLDP going on while muted, a request waiting when a mute is lifted answered, and the device's pace (LLDP at 10 ms, factor 1 at once); `fisica`'s late count against the steps' own starts, and its runner at a 10 and a 20 ms step, a 2 s stall and a hook's stall).
   Free, by that rule: the bench file, the channels, the controller's rules, the component, the
   EtherCAT segment (ethercrab's own timeouts are deadlines), `fisica` but its runner, and every
   other test of the files above. A new test that measures time joins this list in its commit, and
