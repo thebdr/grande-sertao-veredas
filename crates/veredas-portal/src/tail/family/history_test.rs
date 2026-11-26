@@ -622,3 +622,76 @@ fn a_cut_after_the_start_and_a_rotation_inside_the_held_look_are_lost() {
     DURING_LOOK.lock().unwrap().retain(|(p, _)| *p != held);
     std::fs::set_permissions(dir.path().join("held.log.1"), std::fs::Permissions::from_mode(0o644)).unwrap();
 }
+
+/// C-096's fifteenth refute round. The planned active renamed in two steps, through a name
+/// outside the pattern (`current.log.rotating`, then `done_2.log` 600 ms later), is looked for by
+/// its identity and waited for: its 1 000 lines read before the history is said, at 1 100. Renamed
+/// outside the pattern for good, with another file made under its name (fixed and newest by
+/// order) or none (newest by order, vanished), its history is unread: lost, never said read.
+#[cfg(unix)]
+#[test]
+fn a_planned_active_renamed_outside_the_pattern_is_waited_for_or_lost() {
+    let start = NaiveDateTime::parse_from_str("2026-07-19 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+    let stamps = || TimestampSpec::new(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ["%Y-%m-%d %H:%M:%S"]).unwrap();
+    let backfill = || FamilyTailConfig { start: FamilyStart::Backfill(start), ..FamilyTailConfig::default() };
+    let lost = crate::tail::HISTORY_LOST;
+    let dir = tempfile::tempdir().unwrap();
+    let mut hooked: Vec<std::path::PathBuf> = Vec::new();
+    let family = |fam: &std::path::Path, mode: ActiveMode, name: &str, history: &Arc<AtomicU64>| -> Box<dyn Source> {
+        let spec = FamilySpec::new(fam, r"done_(?P<idx>\d+)\.log", None, mode).unwrap();
+        Box::new(FamilyTailSource::new(name, name, spec, backfill()).with_timestamps(stamps()).with_history_read(Arc::clone(history)))
+    };
+
+    // In two steps, the second into the pattern: waited for, read, said at 1 100.
+    let two = dir.path().join("two-step");
+    std::fs::create_dir_all(&two).unwrap();
+    write(&two.join("done_1.log"), 0..100);
+    write(&two.join("current.log"), 100..1_100);
+    once(&two.join("current.log"), |p| {
+        let (rotating, retired) = (p.with_extension("log.rotating"), p.with_file_name("done_2.log"));
+        std::fs::rename(p, &rotating).unwrap();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(600));
+            std::fs::rename(&rotating, &retired).unwrap();
+        });
+    });
+    hooked.push(two.join("current.log"));
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let source = family(&two, ActiveMode::Fixed("current.log".into()), "two", &history);
+    assert_eq!(run_cut(source, &history, 1_100), (1_100, 1_100), "renamed in two steps");
+
+    // Renamed outside the pattern for good, another file made under its name: lost.
+    for (name, mode, active) in [("out-fixed", ActiveMode::Fixed("current.log".into()), "current.log"), ("out-newest", ActiveMode::NewestByOrder, "done_2.log")] {
+        let fam = dir.path().join(name);
+        std::fs::create_dir_all(&fam).unwrap();
+        write(&fam.join("done_1.log"), 0..100);
+        write(&fam.join(active), 100..1_000);
+        once(&fam.join(active), |p| {
+            std::fs::rename(p, p.with_extension("log.old")).unwrap();
+            write(p, 90_000..90_010);
+        });
+        hooked.push(fam.join(active));
+        let history = Arc::new(AtomicU64::new(u64::MAX));
+        assert_eq!(run_cut(family(&fam, mode, name, &history), &history, 110), (110, lost), "{name}");
+    }
+
+    // Newest by order, renamed outside the pattern with nothing in its place: lost.
+    let gone = dir.path().join("out-vanished");
+    std::fs::create_dir_all(&gone).unwrap();
+    write(&gone.join("done_1.log"), 0..100);
+    write(&gone.join("done_2.log"), 100..1_000);
+    once(&gone.join("done_2.log"), |p| std::fs::rename(p, p.with_extension("log.old")).unwrap());
+    hooked.push(gone.join("done_2.log"));
+    // The vanished active is awaited for two patiences before the search: wait for the mark.
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let (tx, rx) = channel();
+    let handle = family(&gone, ActiveMode::NewestByOrder, "vanished", &history).start(tx).unwrap();
+    let started = Instant::now();
+    while history.load(Ordering::SeqCst) == u64::MAX && started.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    handle.request_stop();
+    handle.join().unwrap();
+    assert_eq!((rx.try_iter().count(), history.load(Ordering::SeqCst)), (100, lost), "renamed out, nothing in its place");
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+}

@@ -296,6 +296,38 @@ fn sweep_after_held_open(
 #[cfg(test)]
 pub(crate) static BEFORE_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
 
+/// Where a planned member's identity is now: in the family's folder (under any name, a name
+/// outside the pattern among them), gone from it (deleted), or unknown (no identity, a folder that
+/// cannot be listed): a search that cannot tell never counts as gone.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Whereabouts {
+    Here,
+    Gone,
+    Unknown,
+}
+
+fn whereabouts(spec: &FamilySpec, identity: Option<&crate::tail::cursor::Identity>) -> Whereabouts {
+    fn walk(dir: &Path, id: &crate::tail::cursor::Identity, recursive: bool) -> Result<bool, ()> {
+        for entry in std::fs::read_dir(dir).map_err(|_| ())? {
+            let entry = entry.map_err(|_| ())?;
+            let path = entry.path();
+            if entry.file_type().map_err(|_| ())?.is_dir() {
+                if recursive && walk(&path, id, true)? {
+                    return Ok(true);
+                }
+            } else if crate::tail::cursor::identity_at(&path).as_ref() == Some(id) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    match identity.map(|id| walk(spec.dir(), id, spec.recursive())) {
+        Some(Ok(true)) => Whereabouts::Here,
+        Some(Ok(false)) => Whereabouts::Gone,
+        _ => Whereabouts::Unknown,
+    }
+}
+
 /// A test's hooks, each run inside a file's look (between its length and its bytes), keyed by
 /// path: what a cut landing within the look does (C-096's thirteenth refute round).
 #[cfg(test)]
@@ -616,11 +648,15 @@ fn attach_backfill(
             };
             match opened {
                 Some(cursor) => {
-                    // Another file at the planned path (the planned one deleted, a new one made
-                    // under its name): nothing of the history is left in it to read, as when it
-                    // is gone, and what it holds is new.
+                    // Another file at the planned path: the planned one deleted (nothing of the
+                    // history left to read, as when it is gone) or renamed outside the family's
+                    // names (its history unread for good, as a file renamed away); what the new
+                    // file holds is new.
                     let history_to = if planned.identity.as_ref().is_some_and(|id| !cursor.has_identity(id)) {
-                        swept();
+                        match whereabouts(spec, planned.identity.as_deref()) {
+                            Whereabouts::Gone => swept(),
+                            Whereabouts::Here | Whereabouts::Unknown => lost(),
+                        }
                         None
                     } else {
                         Some(planned.reach.clone())
@@ -634,7 +670,13 @@ fn attach_backfill(
                     let unread = read_range_full(&planned.path, off, enc, Some(&planned.reach), cfg.drain_grace, stop, emit)?;
                     read(unread);
                     if unread == Unread::No {
-                        swept();
+                        // Read to its end at its path (the same file there), or gone from it:
+                        // deleted, or renamed outside the family's names, its history unread.
+                        let there = planned.identity.as_deref().is_some_and(|id| crate::tail::cursor::identity_at(&planned.path).as_ref() == Some(id));
+                        match if there { Whereabouts::Gone } else { whereabouts(spec, planned.identity.as_deref()) } {
+                            Whereabouts::Gone => swept(),
+                            Whereabouts::Here | Whereabouts::Unknown => lost(),
+                        }
                     }
                     match newest_catch_up(spec, cfg, (planned.key, planned.name.clone()), stop, wake_rx, emit)? {
                         None => Ok(BackfillAttach::Stopped),
@@ -707,7 +749,10 @@ fn attach_backfill(
                             // again): the history in it is gone, as when it is not there.
                             let history_to = match pending {
                                 Some(_) if planned.identity.as_ref().is_some_and(|id| !cursor.has_identity(id)) => {
-                                    swept();
+                                    match whereabouts(spec, planned.identity.as_deref()) {
+                                        Whereabouts::Gone => swept(),
+                                        Whereabouts::Here | Whereabouts::Unknown => lost(),
+                                    }
                                     None
                                 }
                                 Some(_) => Some(planned.reach.clone()),
@@ -731,9 +776,20 @@ fn attach_backfill(
                         // rotation may have renamed the active into a retiree between the sweep's
                         // listing and this open; a rename is atomic, so a listing taken after the
                         // open that found nothing shows its new name, read before the flag is.
+                        // A rename in two steps, through a name outside the pattern, leaves no retiree
+                        // in that listing: while the planned active is still owed (never read nor
+                        // seen as another file) its identity is looked for in the folder, waited
+                        // for while it is there under another name, read when gone (deleted), and
+                        // the history lost when the search cannot tell.
                         if crate::tail::single::is_not_found(&e) {
                             match retry_resolve(spec, stop) {
-                                Some(fs) if fs.iter().all(|f| f.is_active || consumed.contains(&f.file_name)) => swept(),
+                                Some(fs) if fs.iter().all(|f| f.is_active || consumed.contains(&f.file_name)) => {
+                                    match (pending.is_some(), whereabouts(spec, planned.identity.as_deref())) {
+                                        (false, _) | (true, Whereabouts::Gone) => swept(),
+                                        (true, Whereabouts::Here) => {}
+                                        (true, Whereabouts::Unknown) => lost(),
+                                    }
+                                }
                                 Some(_) => continue,
                                 None => {}
                             }
