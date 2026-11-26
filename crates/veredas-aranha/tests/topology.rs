@@ -740,3 +740,116 @@ mod round_4 {
         assert!(t.notes.contains(&format!("{} port-002 reports a neighbour with no chassis and a MAC that is no single device's ({shared}): not drawn", topology::device_id(A))), "{:?}", t.notes);
     }
 }
+
+/// The fifth refute round's cases (its critic's probe, taken in): the text a chassis is found by
+/// against the bench's own rendering, copied from maquinar's port data writer, at the edges the
+/// fourth answer left unpinned (the text subtypes 2, 3 and 6, the visible-ASCII boundary, the cut at
+/// an escape's edge, the hex cut at 127 bytes, another family of an address's length, a raw text
+/// that is not its rendering), each chassis taken off the wire through the LLDP codec.
+mod round_5 {
+        use super::{A, B};
+        use veredas_aranha::fusion::Fusion;
+        use veredas_aranha::observe::{Observation, Observed, Probe, Witness};
+        use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, PortId};
+        use veredas_aranha::profinet::mac::Mac;
+        use veredas_aranha::topology::{self, Confidence, End, Neighbour, NodeKind, Topology};
+
+    fn port_mac(dev: Mac, port: u8) -> Mac { Mac([0x02, 0, 0, 0, dev.0[5], port]) }
+
+    fn frame(dev: Mac, chassis: ChassisId, at: u64) -> Observation {
+        let mut pdu = LldpPdu::new(chassis, PortId::Local { id: "port-001".into() }, 20);
+        pdu.pn.chassis_mac = Some(dev);
+        Observation { witness: Witness { probe: Probe::LldpHeard, iface: format!("eth{at}"), at_ns: at, frame: at }, observed: Observed::Lldp { src: port_mac(dev, 1), pdu } }
+    }
+
+    fn fused(obs: &[Observation]) -> Fusion { let mut f = Fusion::new(); for o in obs { f.apply(o); } f }
+
+    fn said(device: Mac, port: u8, chassis: &str, peer_mac: Option<Mac>) -> Neighbour {
+        Neighbour { device, port: format!("port-{port:03}"), chassis: chassis.into(), peer_port: "port-001".into(), peer_mac, witnesses: 1 }
+    }
+
+    // The bench's rendering, verbatim.
+    fn text_of(s: &str) -> String { text_of_bytes(s.as_bytes()) }
+    fn text_of_bytes(data: &[u8]) -> String {
+        let mut out = String::new();
+        for &b in data {
+            let piece = if (0x20..=0x7E).contains(&b) && b != b'\\' { (b as char).to_string() } else { format!("\\x{b:02x}") };
+            if out.len() + piece.len() > 255 { break; }
+            out.push_str(&piece);
+        }
+        out
+    }
+    fn hex_of(data: &[u8]) -> String { data.iter().take(255 / 2).map(|b| format!("{b:02x}")).collect() }
+    fn address_of(data: &[u8]) -> String {
+        match data {
+            [1, a, b, c, d] => std::net::Ipv4Addr::new(*a, *b, *c, *d).to_string(),
+            [2, rest @ ..] if rest.len() == 16 => std::net::Ipv6Addr::from(<[u8; 16]>::try_from(rest).unwrap_or([0; 16])).to_string(),
+            _ => hex_of(data),
+        }
+    }
+    fn other_of(data: &[u8]) -> String {
+        match std::str::from_utf8(data) { Ok(t) if !t.is_empty() && t.bytes().all(|b| (0x20..=0x7E).contains(&b)) => text_of(t), _ => hex_of(data) }
+    }
+    fn bench(c: &ChassisId) -> String {
+        match c {
+            ChassisId::Local { id } => text_of(id),
+            ChassisId::Mac { mac } => mac.to_string(),
+            ChassisId::IfName { name } => text_of(name),
+            ChassisId::Network { data } => address_of(data),
+            ChassisId::Other { subtype: 1 | 2 | 3 | 6 | 7, data } => text_of_bytes(data),
+            ChassisId::Other { data, .. } => other_of(data),
+        }
+    }
+
+    /// A chassis as a frame gives it: encoded with its subtype byte and decoded by aranha's codec.
+    fn through_wire(subtype: u8, data: &[u8]) -> Option<ChassisId> {
+        let pdu = LldpPdu::new(ChassisId::Other { subtype, data: data.to_vec() }, PortId::Local { id: "port-001".into() }, 20);
+        let bytes = lldp::encode(&pdu).ok()?;
+        lldp::decode(&bytes).ok().map(|p| p.chassis)
+    }
+
+    /// Whether A's word finds B, announcing this chassis.
+    fn finds(c: &ChassisId, word: &str) -> bool {
+        let f = fused(&[frame(A, ChassisId::Local { id: "dev-a".into() }, 1), frame(B, c.clone(), 2)]);
+        let t = topology::build(&f, &[], &[said(A, 2, word, None)]);
+        t.links.iter().any(|l| l.confidence != Confidence::Heard && l.a == End { node: topology::device_id(A), port: "port-002".into() } && l.b == End { node: topology::device_id(B), port: "port-001".into() })
+    }
+
+    fn chassis_nodes(t: &Topology) -> Vec<(String, String)> { t.nodes.iter().filter(|n| n.kind == NodeKind::Chassis).map(|n| (n.id.clone(), n.label.clone())).collect() }
+
+    #[test]
+    fn the_bench_s_text_at_every_edge_the_fourth_answer_left_unpinned() {
+        // Another family than IPv4 or IPv6, of 4 and of 16 bytes, as a frame gives it: hex, never an address.
+        for n in [4usize, 16] {
+            let c = through_wire(5, &[[3u8].as_slice(), &vec![0x0A; n]].concat()).expect("family 3 on the wire");
+            let word = bench(&c);
+            assert!(word.chars().all(|ch| ch.is_ascii_hexdigit()), "{word}");
+            assert!(finds(&c, &word), "family 3 of {n} bytes by its hex {word}");
+        }
+        // IPv6 of another length than 16 never comes off the wire.
+        assert!(through_wire(5, &[[2u8].as_slice(), &[0u8; 17]].concat()).is_none());
+        // A name's raw text, where its rendering differs, names no device: an escape reads one way.
+        let c = ChassisId::Local { id: "plc\\1".into() };
+        assert!(!finds(&c, "plc\\1"), "raw backslash found B");
+        let (b2, c2) = (Mac([2, 0, 0, 0, 0, 0x41]), Mac([2, 0, 0, 0, 0, 0x42]));
+        let f = fused(&[frame(A, ChassisId::Local { id: "dev-a".into() }, 1), frame(b2, ChassisId::Local { id: "a\\x5cb".into() }, 2), frame(c2, ChassisId::Local { id: "a\\b".into() }, 3)]);
+        let t = topology::build(&f, &[], &[said(A, 2, "a\\x5cb", None)]);
+        assert!(t.links.iter().any(|l| l.b.node == topology::device_id(c2)) && chassis_nodes(&t).is_empty(), "{:?} {:?}", t.links, chassis_nodes(&t));
+        // Boundary bytes in a name: '~' kept, DEL, 0x1F and NUL escaped.
+        for (name, written) in [("plc~1", "plc~1"), ("plc\u{7f}1", "plc\\x7f1"), ("plc\u{1f}1", "plc\\x1f1"), ("plc\u{0}1", "plc\\x001")] {
+            assert!(finds(&ChassisId::Local { id: name.into() }, written), "{name:?} by {written}");
+        }
+        // Another subtype all visible with a '~': its text.
+        assert!(finds(&ChassisId::Other { subtype: 9, data: b"a~b".to_vec() }, "a~b"));
+        // The text subtypes 2, 3 and 6 with a byte that is not visible: \xHH, never hex.
+        for st in [2u8, 3, 6] {
+            let c = through_wire(st, &[b's', 0xE9]).unwrap();
+            assert!(finds(&c, "s\\xe9"), "subtype {st} {:?}", c.key());
+        }
+        // A name of 254 visible characters and a backslash: the escape does not fit, cut before it.
+        assert!(finds(&ChassisId::Local { id: format!("{}\\", "a".repeat(254)) }, &"a".repeat(254)));
+        // Hex cut at 127 bytes: 254 characters.
+        let c = through_wire(9, &[0x01; 200]).unwrap();
+        assert!(finds(&c, &"01".repeat(127)));
+    }
+}
