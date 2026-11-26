@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(executable)"
   ],
   "exitCode": 0,
-  "outputSha": "a43df1059429841533c69376fc26221dfe0dfdf933f7ebfd6f98ba8bfc414507",
-  "outputTail": "   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.06s\n────────────\n Nextest run ID d3adb3b9-e316-4147-acc3-7f0e07924e64 with nextest profile: default\n    Starting 8 tests across 1 binary (132 binaries skipped)\n        PASS [   0.019s] (1/8) veredas-comissionador::executable the_folders_made_for_a_refused_run_are_removed_and_no_other\n        PASS [   0.081s] (2/8) veredas-comissionador::executable check_reads_a_file_and_names_its_problems\n        PASS [   1.813s] (3/8) veredas-comissionador::executable a_replay_starts_once_its_window_is_read_however_the_plant_keeps_writing\n        PASS [   1.815s] (4/8) veredas-comissionador::executable a_log_with_no_stamps_written_live_does_not_hold_a_replay\n        PASS [   2.247s] (5/8) veredas-comissionador::executable a_late_line_in_a_rotated_member_does_not_end_the_read_in\n        PASS [   3.469s] (6/8) veredas-comissionador::executable replay_reads_the_window_the_project_s_start_fills\n        PASS [  13.911s] (7/8) veredas-comissionador::executable a_replay_waits_until_the_store_holds_what_the_start_reads\n        PASS [  22.565s] (8/8) veredas-comissionador::executable run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict\n────────────\n     Summary [  22.565s] 8 tests run: 8 passed, 0 skipped",
-  "ranAt": "2026-11-25T00:26:21.471Z",
-  "headCommit": "0145a247a08f44f67a28ce9dd8a70d849afc815f",
+  "outputSha": "7f668df54b56897191a71b91f23ed475ad71a9ea177a3c65e78cf6db3b6c21fb",
+  "outputTail": "   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.28s\n────────────\n Nextest run ID 9ed11ed5-32ed-4b85-83cf-5f947c18f662 with nextest profile: default\n    Starting 8 tests across 1 binary (146 binaries skipped)\n        PASS [   0.017s] (1/8) veredas-comissionador::executable the_folders_made_for_a_refused_run_are_removed_and_no_other\n        PASS [   0.055s] (2/8) veredas-comissionador::executable check_reads_a_file_and_names_its_problems\n        PASS [   1.710s] (3/8) veredas-comissionador::executable a_log_with_no_stamps_written_live_does_not_hold_a_replay\n        PASS [   1.810s] (4/8) veredas-comissionador::executable a_replay_starts_once_its_window_is_read_however_the_plant_keeps_writing\n        PASS [   2.205s] (5/8) veredas-comissionador::executable a_late_line_in_a_rotated_member_does_not_end_the_read_in\n        PASS [   3.404s] (6/8) veredas-comissionador::executable replay_reads_the_window_the_project_s_start_fills\n        PASS [  10.922s] (7/8) veredas-comissionador::executable a_replay_waits_until_the_store_holds_what_the_start_reads\n        PASS [  22.516s] (8/8) veredas-comissionador::executable run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict\n────────────\n     Summary [  22.517s] 8 tests run: 8 passed, 0 skipped",
+  "ranAt": "2026-11-26T07:24:15.199Z",
+  "headCommit": "3abc0b7caf4b08b3488fb931e0ecf54b9af35016",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/executable.rs",
       "file": "crates/veredas-comissionador/tests/executable.rs",
-      "fileSha": "c92bc3aff42e0b017f7d887767ff615942901a8c29e7fc96e571bdd338d461bc"
+      "fileSha": "344e7e0b09c2807b1011c064f76347e0cd23e543680bf31be5fe1509336bfbaa"
     }
   ]
 }
