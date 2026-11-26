@@ -10,15 +10,16 @@ description = "The workshop of Veredas 2 (Oficina): the one native application t
 license = "GPL-3.0-or-later"
 
 # A library whose model builds anywhere, with no Qt: the project tree and which component reads
-# each format. The window behind the `shell` feature (Qt Quick through cxx-qt, KDDockWidgets), the
-# tests' driver behind `driver` (Spix's server, compiled only into what the tests start). Neither is
-# on by default, so the suite's `cargo build --workspace` needs no Qt (docs/questions.md Q370, taken
-# meanwhile). Depends on core alone (law L5: a component outside the map uses core alone).
+# each format. The window (Qt Quick through cxx-qt, KDDockWidgets) is its `shell` feature, on by
+# default (docs/questions.md Q370, ruled 2026-11-25), so every build of the suite carries it and
+# needs Qt; `--no-default-features` builds the model alone. The tests' driver (Spix's server) is
+# `driver`, compiled only into what the tests start. Depends on core alone (law L5: a component
+# outside the map uses core alone).
 
 [features]
-# Q370 ruled 2026-11-25: the window built by default (`default = ["shell"]`), once every member's
-# build on the development machine finds Qt and the C++ libraries; until then nothing is on.
-default = []
+# The window, built by default (Q370, ruled 2026-11-25): every machine that builds the suite finds Qt
+# 6.12 through `QMAKE` (this machine's `~/.cargo/config.toml` names it) and KDDockWidgets.
+default = ["shell"]
 # The window: Qt 6.12, whose qmake `QMAKE` names in cargo's environment, KDDockWidgets in
 # `OFICINA_DEPS` (`~/.local/opt/oficina-deps` by default).
 shell = ["dep:cxx", "dep:cxx-qt", "dep:cxx-qt-lib", "dep:cxx-qt-build"]

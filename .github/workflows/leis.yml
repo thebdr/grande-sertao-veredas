@@ -25,5 +25,32 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+      # Oficina's window is built by default (docs/questions.md Q370): Qt 6.12 from Qt's own archives
+      # (aqtinstall checks each against Qt's sums) and KDDockWidgets 2.5.1 built from its tag, cached
+      # by their versions; cxx-qt finds Qt through QMAKE, Oficina's build KDDockWidgets in
+      # ~/.local/opt/oficina-deps. The window's own tests need the driver feature, not run here.
+      - name: Qt and KDDockWidgets for Oficina's window
+        id: qt
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/opt/Qt
+            ~/.local/opt/oficina-deps
+          key: oficina-qt-6.12.0-kddw-2.5.1-${{ runner.os }}-1
+      - if: steps.qt.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgl-dev libegl-dev libxkbcommon-dev libfontconfig1-dev
+          pipx run --spec aqtinstall==3.3.0 aqt install-qt linux desktop 6.12.0 linux_gcc_64 -O ~/.local/opt/Qt
+          git clone -q --depth 1 --branch v2.5.1 https://github.com/KDAB/KDDockWidgets.git "$RUNNER_TEMP/kddw"
+          cmake -S "$RUNNER_TEMP/kddw" -B "$RUNNER_TEMP/kddw/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$HOME/.local/opt/Qt/6.12.0/gcc_64" -DKDDockWidgets_QT6=ON \
+            -DKDDockWidgets_FRONTENDS=qtquick -DKDDockWidgets_EXAMPLES=OFF -DKDDockWidgets_TESTS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$HOME/.local/opt/oficina-deps"
+          cmake --build "$RUNNER_TEMP/kddw/build" && cmake --install "$RUNNER_TEMP/kddw/build"
+      # Qt's libraries load what the runner may lack (GL, EGL, xkbcommon, fontconfig), cache or not.
+      - if: steps.qt.outputs.cache-hit == 'true'
+        run: sudo apt-get update && sudo apt-get install -y libgl-dev libegl-dev libxkbcommon-dev libfontconfig1-dev
+      - run: echo "QMAKE=$HOME/.local/opt/Qt/6.12.0/gcc_64/bin/qmake" >> "$GITHUB_ENV"
       - run: cargo nextest run --workspace --no-fail-fast
       - run: cargo test --workspace --doc

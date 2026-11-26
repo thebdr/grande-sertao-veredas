@@ -282,17 +282,20 @@ only, on Linux laptops only: on a Windows laptop it goes through a target (Q45, 
 
 ## The crate
 `crates/veredas-oficina`, from 2026-11-25 (C-250): a library whose model builds on any machine the
-suite builds on, and the window behind two features, neither on by default yet. Q370 is ruled (the
-window built by default); the switch comes once every member's build on this machine finds Qt and
-the C++ libraries, and the tests' driver stays a feature of its own.
+suite builds on, the window its feature `shell`, on by default since 2026-11-26 (Q370, ruled: every
+machine that builds the suite carries Qt 6.12 and KDDockWidgets, this machine's cargo configuration
+naming `QMAKE`), and the tests' driver a feature of its own, never on by default.
 - **The model**, no Qt: `tree` (the project tree) and `formats` (which component reads each
   format). Its members are core alone, without core's default features: the header reader, with
   none of core's plant-facing layers (C-073).
-- **`shell`**, the window and the executable `veredas-oficina`: Qt Quick, its logic in Rust through
-  cxx-qt, the seam a private module (`src/shell`) with one C++ file beside it (`cpp/shell.cpp`),
-  KDDockWidgets docking. It needs `QMAKE` naming Qt 6.12's qmake in cargo's environment (cxx-qt's
-  own build scripts read it, not only Oficina's) and `OFICINA_DEPS` (`~/.local/opt/oficina-deps` by
-  default) holding KDDockWidgets.
+- **`shell`**, on by default, the window and the executable `veredas-oficina`: Qt Quick, its logic
+  in Rust through cxx-qt, the seam a private module (`src/shell`) with one C++ file beside it
+  (`cpp/shell.cpp`), KDDockWidgets docking; `--no-default-features` builds the model alone. It
+  needs `QMAKE` naming Qt 6.12's qmake in cargo's environment (cxx-qt's own build scripts read it,
+  not only Oficina's) and `OFICINA_DEPS` (`~/.local/opt/oficina-deps` by default) holding
+  KDDockWidgets. In the workspace's unified build its crates give two of Ábaco's crates a feature
+  each, `span-locations` on proc-macro2 and `std` on foldhash, which Ábaco reviewed (C-220,
+  2026-11-26).
 - **`driver`**, the tests' driver: Spix's server inside the window, started only when
   `OFICINA_SPIX_PORT` names a port; Spix and AnyRPC in `OFICINA_DEPS`. Only the tests build it:
   what ships carries no test server.
@@ -300,8 +303,7 @@ the C++ libraries, and the tests' driver stays a feature of its own.
   unless `OFICINA_TEST_PLATFORM` names another (`xcb` for X11, `windows`):
   `QMAKE=$HOME/.local/opt/Qt/6.12.0/gcc_64/bin/qmake cargo nextest run -p veredas-oficina --features driver`.
   The model's own tests (`tests/tree_model.rs`) run in the suite's default build and prove no
-  clause. The whole-suite run holds the window's tests with `--features veredas-oficina/driver`
-  and `QMAKE` set.
+  clause. The whole-suite run holds the window's tests with `--features veredas-oficina/driver`.
 - **Brought from the spike**, as its verdict kept them: the project tree (its model and its bridge),
   the formats' table, the window's docking and the test driver. The TOML document, the code editor
   and its language-server client, the table, the embedded pages and the drawing probe come over
@@ -572,9 +574,6 @@ kept, rust-analyzer is held to running nothing of the folder, and the embedded b
   47 to 52 and 54). Left: minor 53, bookkeeping (what waits on undecided work, marked so: the HMI
   creator waits for the panel HMI's plan).
 - **Q371**, Oficina's: how far back it speaks to an older controller (Q235's floor).
-- **Q370**, Oficina's, ruled 2026-11-25: the window is built by default. The switch waits until
-  every member's build on this machine finds Qt and the C++ libraries (the orchestrator's order:
-  the machine's cargo configuration first, the switch after); meanwhile it stays behind `shell`.
 - **Q36, Q37 and Q43**: ruled but for what waits on the security study (Q43, 2026-11-26): a
   signature over a download's manifest, a keyed check on each altering request, and the end date
   of certificates issued after 2038. **Q45**'s remaining readings (its points on Windows, G2, C5

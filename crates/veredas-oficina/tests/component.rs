@@ -1,5 +1,6 @@
-//! Oficina, the component (C-250): what cargo builds of it, with and without its window; that no
-//! member's default build needs Qt; that its members are core alone, without core's plant-facing
+//! Oficina, the component (C-250): what cargo builds of it, with and without its window; that the
+//! suite's default build carries the window through Oficina alone and the model needs no Qt; that
+//! its members are core alone, without core's plant-facing
 //! layers; that the bridge is one private seam; that the window that ships carries no test server;
 //! and the window itself, opened and read through the driver.
 
@@ -94,26 +95,31 @@ fn oficina_is_a_library_and_one_executable_its_window_behind_the_shell_feature()
     let features = p["features"].as_object().expect("features");
     let feature = |name: &str| strings(&features[name]);
     assert_eq!(features.len(), 3, "{features:?}");
-    assert_eq!(feature("default"), Vec::<String>::new(), "nothing on by default");
+    assert_eq!(feature("default"), s(&["shell"]), "the window built by default (Q370)");
     assert_eq!(feature("shell"), s(&["dep:cxx", "dep:cxx-qt", "dep:cxx-qt-lib", "dep:cxx-qt-build"]));
     assert_eq!(feature("driver"), s(&["shell"]));
 }
 
 #[test]
-fn no_member_s_default_build_needs_qt_and_the_shell_brings_it() {
-    // The suite's default build and its test build (a test's dev-dependencies built with it).
+fn the_suite_s_default_build_carries_the_window_through_oficina_alone_and_the_model_needs_no_qt() {
+    // The suite's default build carries the window (Q370), Oficina's own default build too.
     let everyone = tree(&["--workspace", "-e", "normal,build,dev"]);
+    let window = tree(&["-p", "veredas-oficina", "-e", "normal,build"]);
     for qt in QT {
-        assert!(!everyone.contains(qt), "{qt} in the suite's default build or its tests'");
+        assert!(everyone.contains(qt), "{qt} missing from the suite's default build: {everyone:?}");
+        assert!(window.contains(qt), "{qt} missing from Oficina's default build: {window:?}");
     }
-    let alone = tree(&["-p", "veredas-oficina", "-e", "normal,build,dev"]);
-    assert!(alone.contains("veredas-core"), "{alone:?}");
+    // Through Oficina alone: every member above a crate of the bridge is Oficina.
     for qt in QT {
-        assert!(!alone.contains(qt), "{qt} in Oficina's default build");
+        let above = tree(&["--workspace", "-e", "normal,build,dev", "--invert", qt]);
+        let members: Vec<&String> = above.iter().filter(|p| p.starts_with("veredas-") || p.starts_with("orcl-") || *p == "leis" || *p == "alforge" || *p == "mestres" || *p == "abaco-oracle").collect();
+        assert_eq!(members, [&"veredas-oficina".to_string()], "{qt} reached by another member: {above:?}");
     }
-    let window = tree(&["-p", "veredas-oficina", "--features", "shell", "-e", "normal,build"]);
+    // The model alone: no crate of the bridge, dev edges included.
+    let model = tree(&["-p", "veredas-oficina", "--no-default-features", "-e", "normal,build,dev"]);
+    assert!(model.contains("veredas-core"), "{model:?}");
     for qt in QT {
-        assert!(window.contains(qt), "{qt} missing from the shell's build: {window:?}");
+        assert!(!model.contains(qt), "{qt} in Oficina's model alone");
     }
 }
 
@@ -132,7 +138,7 @@ fn its_members_are_core_alone() {
     assert!(!names.iter().any(|n| n.starts_with("veredas-") && n != "veredas-core"), "{names:?}");
 }
 
-/// The model and its tests built and linked with no feature as a machine without Qt would build
+/// The model and its tests built and linked with the default features off, as a machine without Qt would build
 /// them: a fresh build folder (every build script run again), the home folder an empty one (no
 /// `~/.local/opt/Qt` to be found), no folder holding a qmake on `PATH`, no `LIBRARY_PATH` or
 /// `LD_LIBRARY_PATH`, `QMAKE` naming no qmake and `OFICINA_DEPS` unset; cargo's and rustup's own
@@ -151,7 +157,7 @@ fn the_model_and_its_tests_build_with_no_qt() {
     let path: Vec<PathBuf> = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).filter(|d| !qmake_names.iter().any(|q| d.join(q).exists())).collect();
     let manifest = workspace_manifest();
     let out = Command::new(env!("CARGO"))
-        .args(["build", "--offline", "--locked", "-p", "veredas-oficina", "--lib", "--tests", "--manifest-path", manifest.to_str().expect("a UTF-8 path")])
+        .args(["build", "--offline", "--locked", "-p", "veredas-oficina", "--no-default-features", "--lib", "--tests", "--manifest-path", manifest.to_str().expect("a UTF-8 path")])
         .env("CARGO_TARGET_DIR", scratch.join("target"))
         .env("HOME", &home)
         .env("USERPROFILE", &home)
@@ -174,7 +180,7 @@ fn the_model_and_its_tests_build_with_no_qt() {
 #[test]
 fn its_own_graph_holds_no_plant_stack() {
     const PLANT: [&str; 7] = ["tokio", "async-opcua-client", "async-opcua-types", "socket2", "regex", "chrono", "duckdb"];
-    for features in [&[][..], &["--features", "driver"][..]] {
+    for features in [&[][..], &["--no-default-features"][..], &["--features", "driver"][..]] {
         let mut args = vec!["-p", "veredas-oficina", "-e", "normal,build"];
         args.extend_from_slice(features);
         let graph = tree(&args);
@@ -264,7 +270,8 @@ fn the_build_script_reads_its_environment_by_name_and_the_driver_from_the_compil
 }
 
 /// What ships carries no test server: the window built as the release tool builds it (`--release
-/// --locked --offline`, `shell` without `driver`), into a build folder of its own and with the
+/// --locked --offline -p veredas-oficina --bins`, the default features: the window without the
+/// driver), into a build folder of its own and with the
 /// environment set against it (cargo's variable for the driver feature, the driver's port), holds
 /// no name of Spix's or AnyRPC's, where the driver's executable does; started with a port named,
 /// it stays up and nothing answers on that port. The first build of that folder takes minutes.
@@ -273,7 +280,7 @@ fn the_window_that_ships_carries_no_test_server() {
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("shipped");
     let manifest = workspace_manifest();
     let out = Command::new(env!("CARGO"))
-        .args(["build", "--release", "--offline", "--locked", "-p", "veredas-oficina", "--features", "shell", "--bin", "veredas-oficina", "--manifest-path", manifest.to_str().expect("a UTF-8 path")])
+        .args(["build", "--release", "--offline", "--locked", "-p", "veredas-oficina", "--bins", "--manifest-path", manifest.to_str().expect("a UTF-8 path")])
         .env("CARGO_TARGET_DIR", &target)
         .env("CARGO_FEATURE_DRIVER", "1")
         .env("OFICINA_SPIX_PORT", "1")
