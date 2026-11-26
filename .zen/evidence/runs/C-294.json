@@ -1,0 +1,34 @@
+{
+  "clause": "C-294",
+  "command": "cargo nextest run -j 4 -p alforge --test licences --test bundle",
+  "commandArgv": [
+    "cargo",
+    "nextest",
+    "run",
+    "-j",
+    "4",
+    "-p",
+    "alforge",
+    "--test",
+    "licences",
+    "--test",
+    "bundle"
+  ],
+  "exitCode": 0,
+  "outputSha": "0eda6c8840bd36ec6857e08db94c3901caabe503e6829d33516c4f67a936e8ab",
+  "outputTail": "        PASS [   0.007s] (32/44) alforge::bundle the_recipe_is_read_through_cores_header_and_refused_by_key\n        PASS [   0.005s] (33/44) alforge::bundle the_recipes_library_limits_are_versions_of_dotted_digits\n        PASS [   0.009s] (34/44) alforge::bundle the_run_together_is_refused_for_every_way_the_plant_is_not_running_each_named\n        PASS [   0.005s] (35/44) alforge::bundle the_suite_runs_the_default_profile_whatever_the_shell_holds\n        PASS [   0.564s] (36/44) alforge::bundle the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_did_not_build\n        PASS [   0.037s] (37/44) alforge::bundle the_toolchain_named_is_the_one_the_suite_runs_with\n        PASS [   0.163s] (38/44) alforge::licences a_bundles_licences_name_every_entry_of_its_component_list_with_its_files\n        PASS [   0.004s] (39/44) alforge::licences a_packages_licence_files_are_known_by_their_names\n        PASS [   0.004s] (40/44) alforge::licences an_entry_stating_no_licence_is_named\n        PASS [   0.005s] (41/44) alforge::licences the_vendored_crates_licence_files_are_kept_and_nothing_else\n        PASS [   0.898s] (42/44) alforge::bundle the_cut_refuses_a_tree_that_differs_from_head_and_a_release_already_cut\n        PASS [   0.794s] (43/44) alforge::bundle the_cut_refuses_an_untracked_file_and_a_release_already_in_releases\n        PASS [   0.835s] (44/44) alforge::bundle the_tree_is_hers_only_when_git_looks_at_every_file\n────────────\n     Summary [   3.268s] 44 tests run: 44 passed, 0 skipped",
+  "ranAt": "2026-11-26T23:39:52.185Z",
+  "headCommit": "97d20d8bfd45e7fdfa194913299d774ff276a8ba",
+  "tests": [
+    {
+      "name": "tools/alforge/tests/licences.rs",
+      "file": "tools/alforge/tests/licences.rs",
+      "fileSha": "11d33a0aa12ab45f54e4ad766862e5411b9e14b8f7403fa7d1a81bb4ed51cad8"
+    },
+    {
+      "name": "tools/alforge/tests/bundle.rs",
+      "file": "tools/alforge/tests/bundle.rs",
+      "fileSha": "dcc772aa4cc3aa81eb10b48e8f64cc8607ade2a32b389d7f2ad47139b01dc798"
+    }
+  ]
+}

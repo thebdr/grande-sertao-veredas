@@ -15,20 +15,20 @@
     "bundle"
   ],
   "exitCode": 0,
-  "outputSha": "9fe5baa1057a63187b642cad33261cc5377626ecdd28e34e6694f67805b1c6c3",
-  "outputTail": "        PASS [   0.007s] (30/42) alforge::bundle the_manifest_a_cut_writes_reads_back_as_written\n        PASS [   0.011s] (31/42) alforge::bundle the_recipe_is_read_through_cores_header_and_refused_by_key\n        PASS [   0.009s] (32/42) alforge::bundle the_recipes_library_limits_are_versions_of_dotted_digits\n        PASS [   0.013s] (33/42) alforge::bundle the_run_together_is_refused_for_every_way_the_plant_is_not_running_each_named\n        PASS [   0.006s] (34/42) alforge::bundle the_suite_runs_the_default_profile_whatever_the_shell_holds\n        PASS [   0.051s] (35/42) alforge::bundle the_toolchain_named_is_the_one_the_suite_runs_with\n        PASS [   0.217s] (36/42) alforge::bundle the_cut_refuses_a_version_another_release_pinned_at_other_code_before_building_anything\n        PASS [   0.784s] (37/42) alforge::components a_commit_lists_its_components_its_packages_by_path_and_its_crates_with_their_dependencies\n        PASS [   0.005s] (38/42) alforge::components a_crate_of_another_source_is_named_by_its_own_package_url\n        PASS [   1.466s] (39/42) alforge::bundle the_cut_refuses_a_tree_that_differs_from_head_and_a_release_already_cut\n        PASS [   1.580s] (40/42) alforge::bundle the_cut_refuses_an_untracked_file_and_a_release_already_in_releases\n        PASS [   1.729s] (41/42) alforge::bundle the_tree_is_hers_only_when_git_looks_at_every_file\n        PASS [   9.519s] (42/42) alforge::components this_repositorys_head_lists_every_component_and_every_crate_its_versions_name\n────────────\n     Summary [  13.017s] 42 tests run: 42 passed, 0 skipped",
-  "ranAt": "2026-11-26T22:13:09.782Z",
-  "headCommit": "8e04b37f9759f761ba89d7aff965e2e7825775dc",
+  "outputSha": "8b64cfe4540e88d3b407ef6b6416a1b7e6b189e84fbd35bdbfc314d4c9936655",
+  "outputTail": "        PASS [   0.004s] (31/43) alforge::bundle the_manifest_a_cut_writes_reads_back_as_written\n        PASS [   0.008s] (32/43) alforge::bundle the_recipe_is_read_through_cores_header_and_refused_by_key\n        PASS [   0.131s] (33/43) alforge::bundle the_cut_refuses_a_version_another_release_pinned_at_other_code_before_building_anything\n        PASS [   0.006s] (34/43) alforge::bundle the_recipes_library_limits_are_versions_of_dotted_digits\n        PASS [   0.004s] (35/43) alforge::bundle the_suite_runs_the_default_profile_whatever_the_shell_holds\n        PASS [   0.008s] (36/43) alforge::bundle the_run_together_is_refused_for_every_way_the_plant_is_not_running_each_named\n        PASS [   0.037s] (37/43) alforge::bundle the_toolchain_named_is_the_one_the_suite_runs_with\n        PASS [   0.777s] (38/43) alforge::bundle the_cut_refuses_a_tree_that_differs_from_head_and_a_release_already_cut\n        PASS [   0.006s] (39/43) alforge::components a_crate_of_another_source_is_named_by_its_own_package_url\n        PASS [   0.627s] (40/43) alforge::components a_commit_lists_its_components_its_packages_by_path_and_its_crates_with_their_dependencies\n        PASS [   0.820s] (41/43) alforge::bundle the_cut_refuses_an_untracked_file_and_a_release_already_in_releases\n        PASS [   1.479s] (42/43) alforge::bundle the_tree_is_hers_only_when_git_looks_at_every_file\n        PASS [   9.497s] (43/43) alforge::components this_repositorys_head_lists_every_component_and_every_crate_its_versions_name\n────────────\n     Summary [  12.509s] 43 tests run: 43 passed, 0 skipped",
+  "ranAt": "2026-11-26T23:40:05.599Z",
+  "headCommit": "97d20d8bfd45e7fdfa194913299d774ff276a8ba",
   "tests": [
     {
       "name": "tools/alforge/tests/components.rs",
       "file": "tools/alforge/tests/components.rs",
-      "fileSha": "7cbf48385b2c766acab8d97699dbd6c86b6b1250ce09e918bb6c1902ed6afd7b"
+      "fileSha": "6b59ba2222fac409f4ee2700cb9fe71ed3b12e37bacf3a234f7f139500b86d94"
     },
     {
       "name": "tools/alforge/tests/bundle.rs",
       "file": "tools/alforge/tests/bundle.rs",
-      "fileSha": "360e300d0d02749641fe0cc5e601b8ae559b50f1b01382d0f5d85fc64a31606c"
+      "fileSha": "dcc772aa4cc3aa81eb10b48e8f64cc8607ade2a32b389d7f2ad47139b01dc798"
     }
   ]
 }
