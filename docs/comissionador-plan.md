@@ -211,13 +211,14 @@ Each phase ends with `cargo nextest run --workspace -E 'rdeps(veredas-comissiona
 package(leis)'` green, its clauses recorded, refuted and verified, and a push.
 
 ## Questions
-Asked in `docs/questions.md`; Q310 to Q319 decided by the architect on 2026-11-25:
+Asked in `docs/questions.md`; Q310 to Q319 decided by the architect on 2026-11-25, Q320 and Q321
+on 2026-11-26:
 - **Q310** the test file's syntax: the design's language, refined, with the suite's stamp.
 - **Q311** the script box's language: the test language's own statements.
 - **Q312** what an acceptance report holds and who signs it: a TOML record per run with the
   evidence beside it, the PDF drawn by Oficina; anyone signs by a typed name, a signed report is
   frozen, and a test may name the roles that must sign, its report awaiting them until they have
-  ((e), to be built).
+  ((e), built: C-204).
 - **Q313** how the engine reaches portal: in process now, over portal's HTTP interface once the
   link between two portals exists (P-019), behind the one `Plant` ((c)).
 - **Q314** who arms portal's write switch for a run: the run, once the person has confirmed its
@@ -231,7 +232,9 @@ Asked in `docs/questions.md`; Q310 to Q319 decided by the architect on 2026-11-2
 - **Q319** how a replay knows a session start's read-in is done: portal says so ((a), waiting on
   portal; the stillness and its limit stand meanwhile).
 - **Q320** how a person confirms a run's gated writes with no screen, and what a run does with a
-  switch it finds armed: by the list's fingerprint (`--arm`), and leaves it as found (taken).
+  switch it finds armed: by the list's fingerprint (`--arm`), and leaves it as found.
+- **Q321** what the confirmation covers, the switch being the whole session's: the test's gated
+  writes and the session's own replies, listed and fingerprinted together ((a)).
 
 Open and not asked yet, because nothing waits on them: a step in which a person enters a
 measurement or confirms what they saw (the seed's "minimal manual work"); how many ports a
