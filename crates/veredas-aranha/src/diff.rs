@@ -13,7 +13,7 @@
 //!   nothing of what it was not told.
 //! - A link is its two ends (node and port): one in the scan only was **added**, one in the
 //!   baseline only **removed** (**rewired**, both together); its confidence and witnesses are
-//!   evidence, not wiring, so a link heard then confirmed is no change. An end is its node's id,
+//!   evidence, not wiring, so a link reported then confirmed is no change. An end is its node's id,
 //!   so a chassis node in one scan and a device in the other are two ends, never guessed one.
 //! - A conflict is its kind, value and devices: one in the scan only is **new**, one in the
 //!   baseline only **cleared**.
