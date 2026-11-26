@@ -140,7 +140,8 @@ with Veredas 1's conveyor and a probe that reaches every block of `orcl-std` and
 3. **The program file**: written and read back, its header checked, a file refused by name. Built on 2026-11-25
    (C-154): every file it accepts writes back to the very same bytes, and one small program's bytes are pinned.
 4. **`crates/orcl-front`**: the shell on stable, the driver on the nightly lowering the conveyor and the probe. A
-   clause, its run the nightly command.
+   clause, its run the nightly command. Built on 2026-11-27 (C-156), the first state and the safe outputs lowered as
+   functions a host calls until the file's format 2 carries them (Q231).
 5. **The conformance suite and the closed list** as it grows.
 
 ## Open

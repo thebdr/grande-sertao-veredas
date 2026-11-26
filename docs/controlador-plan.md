@@ -6,7 +6,8 @@ from Veredas 1 (`orcl-std`, C-150), the engine of a scan (`orcl-runtime`, C-151)
 states and commands over one cyclic task (C-152), the interpreter's machine
 on programs built by hand and its program file (`orcl-interp`, C-153 and C-154, 2026-11-25), and an
 interpreted program on the engine, its program errors faulting the task (C-151, C-155) and the
-controller as 502 `program(at)` (C-152). This
+controller as 502 `program(at)` (C-152), and the front end lowering a program's crates into the program file
+(`orcl-front`, C-156, 2026-11-27). This
 file holds what the architect decided in the briefing of 13 to 16 November 2026, in the rulings of
 15 November on its adversarial review, in the robustness round begun on 16 November
 (`docs/robustness.md`), and in the rulings of 25 November on the questions its first build raised

@@ -40,8 +40,8 @@ suite's plan, "Naming"), so its crates keep the names `orcl-*`, live under `crat
 |---|---|---|---|
 | `orcl-std` | The standard control library, `no_std`: the scan model (`Scan`, `Program`), IEC-style timers (`Ton`, `Tof`, `Tp`), edges (`RTrig`, `FTrig`), a counter (`Ctu`), bit access (`Bits`) | nothing | carried from Veredas 1 |
 | `orcl-runtime` | The engine of a scan: a task's cycle over a process image, on a clock it is handed (virtual or real), the time-error rule, safe outputs, cycle statistics; no operating-system code, `no_std` with std named where it is used (shared virtual time, the target's clock and its sleep, the slots of an interpreted program's regions); a native program or an interpreted one, whose scan may fault | `orcl-std`, `orcl-interp` | carried from Veredas 1, reworked; interpreted programs since 2026-11-25 (C-155) |
-| `orcl-interp` | The interpreter and its program format: bytecode made from the compiler's intermediate form, run one instruction at a time, suspendable at every instruction boundary | nothing (`orcl-std` for its tests) | its machine (C-153) and its program file (C-154) built, on programs built by hand; the front end and the conformance suite to come (`interpreter.md`) |
-| `orcl-front` | The front end: reads an ORCL crate through `rustc_public` on the pinned nightly and writes the program `orcl-interp` runs | `orcl-interp` | planned: a member on stable, its driver behind a feature on the pinned nightly (Q221, Q222) |
+| `orcl-interp` | The interpreter and its program format: bytecode made from the compiler's intermediate form, run one instruction at a time, suspendable at every instruction boundary | nothing (`orcl-std` for its tests) | its machine (C-153) and its program file (C-154) built, on programs built by hand and lowered by the front end (C-156); the conformance suite grows with the closed list (`interpreter.md`) |
+| `orcl-front` | The front end: reads an ORCL crate through `rustc_public` on the pinned nightly and writes the program `orcl-interp` runs | `orcl-interp`, `orcl-std` (its driver alone; `orcl-runtime` for its tests) | a member on stable, its driver behind a feature on the pinned nightly (Q221, Q222); its first increment built on 2026-11-27 (C-156), lowering the conveyor and a probe of every `orcl-std` block |
 
 A crate's row in law L5's map (`MAP` in `tools/leis`: `orcl-*` use each other and core) is settled when the crate
 lands. `orcl-front` is the name the architect ruled (Q221); `orcl-interp` is a name for its plan to argue with.
@@ -112,6 +112,15 @@ nightly is `nightly-2026-11-21` (Q222), written in the front end's toolchain fil
 header, moved on purpose a few times a year at most and never for a release being commissioned, each move a change
 of its own gated by the conformance suite. It writes the program file (`<name>.orclb`, `docs/controlador/files.md`)
 whose header records the language's version (`orcl_std::LANGUAGE`) and the nightly.
+
+Built on 2026-11-27 (C-156): `orcl-front-driver` compiles every crate it is given with `-Zalways-encode-mir
+-Zmir-opt-level=0` (no `-Cpanic=abort`: with no drop glue nothing unwinds, and an aborting crate would not link into
+an unwinding build), lowers the program crate's `Program` implementation, and writes the file only after rustc has
+finished and the interpreter's loader has checked it. Beyond `rustc_public` it reads the compiler's `TyCtxt` for
+lang and diagnostic items, names, an impl's own type and macro call sites, which `rustc_public` does not give; each
+move of the nightly runs its suite. The closed list's next members, met by the first programs and refused by name
+until then: `<[T; N] as Default>::default`, `<&T as PartialEq>::eq` (derived on an enum with data), `Range`, `From`
+and `TryFrom`, `Ord::clamp`, a slice's `get`, `Option::unwrap_or`.
 
 ### Translators
 To native PLC code, Siemens first (S7-1500 and S7-1200), program and hardware configuration (2026-11-15). Not
@@ -184,6 +193,11 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
   binary of `orcl-interp`, `orcl-runtime` and `veredas-controlador` that loads programs runs under an allocator
   refusing any one allocation past 1 GiB (`crates/orcl-interp/tests/cap/mod.rs`): a regression aborts its test
   instead; a critic's mutant runs also go under `ulimit -v` and a memory scope of their own.
+
+- **The front end's tests need the nightly's own libraries at run time**: the driver links that nightly's
+  `librustc_driver` dynamically, so a test that runs it sets `LD_LIBRARY_PATH` from `rustc +nightly-2026-11-21
+  --print sysroot` (`crates/orcl-front/tests/lowering.rs`), and nothing of the library under the feature is linked
+  into a test binary, which would need `rustc_driver` itself.
 
 ## Open
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan should give way to the prior art's
