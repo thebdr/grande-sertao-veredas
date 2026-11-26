@@ -1275,3 +1275,125 @@ fn a_duration_cast_as_a_number_is_refused() {
         );
     }
 }
+
+// The seventeenth refute round's tests: one side of a distinction the loader makes inside one line that no test met
+// (an index of every integer type but `usize`, an f64 beside an f32 in every float refusal, a function's refusal
+// naming the function at fault past the first), and the shared references two core operations take.
+
+/// A program of `first` (a function of no fault) then `f` over `types` with one statement, loaded.
+fn statement_load(types: &[Type], locals_: &[u32], value: Value) -> Result<(), LoadError> {
+    let mut b = Build::default();
+    for t in types {
+        b.program.types.push(t.clone());
+    }
+    let unit = b.unit();
+    b.function(Function { name: "first".into(), params: 0, locals: locals(&[unit]), blocks: vec![block(vec![], ret())] });
+    b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&locals_.iter().map(|t| TypeId(*t)).collect::<Vec<_>>()),
+        blocks: vec![block(vec![assign(place(0), value, 1)], ret())],
+    });
+    Machine::load(b.program, &[]).map(|_| ())
+}
+
+/// `f`'s refusal.
+fn statement_refused(types: &[Type], locals_: &[u32], value: Value) -> LoadError {
+    statement_load(types, locals_, value).expect_err("refused")
+}
+
+fn at_f(reason: &'static str) -> LoadError {
+    LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason }
+}
+
+/// `a[i]` with `i` of every integer type but `usize`, u64 and u32 among them.
+#[test]
+fn an_index_of_every_integer_type_but_usize_is_refused() {
+    for t in INTS {
+        // types: 0 u8, 1 [u8; 4], 2 the index's type
+        let types = [Type::Int(Int::U8), Type::Array { element: TypeId(0), len: 4 }, Type::Int(t)];
+        let value = Value::Use(copy_at(proj(1, vec![Projection::Index(Local(2))])));
+        let got = statement_load(&types, &[0, 1, 2], value);
+        let want = if t == Int::Usize { Ok(()) } else { Err(at_f("an index that is no usize")) };
+        assert_eq!(got, want, "an index of {t:?}");
+    }
+}
+
+/// every refusal of a float's kind met with an f64 as well as an f32.
+#[test]
+fn every_float_refusal_holds_for_an_f64_as_for_an_f32() {
+    for float in [Type::F32, Type::F64] {
+        // types: 0 the float, 1 u32, 2 bool, 3 (float, bool)
+        let pair = Type::Struct { name: "(..)".into(), fields: vec![Field { name: "0".into(), ty: TypeId(0) }, Field { name: "1".into(), ty: TypeId(2) }] };
+        let types = [float.clone(), Type::Int(Int::U32), Type::Bool, pair];
+        let k = format!("{float:?}");
+        assert_eq!(statement_refused(&types, &[0, 0, 0], Value::Binary(BinOp::BitAnd, copy(1), copy(2))), at_f("bits of what has none"), "{k} & {k}");
+        assert_eq!(statement_refused(&types, &[0, 0], Value::Unary(UnOp::Not, copy(1))), at_f("a unary operation on what it does not take"), "!{k}");
+        assert_eq!(statement_refused(&types, &[0, 0, 1], Value::Binary(BinOp::Shl, copy(1), copy(2))), at_f("a shift of what is no integer"), "{k} << u32");
+        assert_eq!(statement_refused(&types, &[1, 1, 0], Value::Binary(BinOp::Shr, copy(1), copy(2))), at_f("a shift of what is no integer"), "u32 >> {k}");
+        assert_eq!(statement_refused(&types, &[3, 0, 0], Value::Checked(BinOp::Add, copy(1), copy(2))), at_f("a checked operation that MIR has no checked form of"), "checked {k}");
+        assert_eq!(statement_refused(&types, &[0, 2], Value::Cast(copy(1), TypeId(0))), at_f("a cast `as` does not make"), "bool as {k}");
+    }
+}
+
+/// each refusal of a function names that function, when it is not the program's first.
+#[test]
+fn a_function_s_refusal_names_the_function_at_fault_past_the_first() {
+    type Case = Box<dyn Fn(&mut Build) -> Function>;
+    let cases: Vec<(&str, Case)> = vec![
+        ("no block", Box::new(|b| Function { name: "f".into(), params: 0, locals: locals(&[b.unit()]), blocks: vec![] })),
+        ("no return value, or more parameters than locals", Box::new(|b| Function { name: "f".into(), params: 1, locals: locals(&[b.unit()]), blocks: vec![block(vec![], ret())] })),
+        ("a local of no such type", Box::new(|_| Function { name: "f".into(), params: 0, locals: locals(&[TypeId(99)]), blocks: vec![block(vec![], ret())] })),
+        ("a frame too large", Box::new(|b| {
+            let u8t = b.int(Int::U8);
+            let half = b.ty(Type::Array { element: u8t, len: 1 << 31 });
+            Function { name: "f".into(), params: 0, locals: locals(&[half, half]), blocks: vec![block(vec![], ret())] }
+        })),
+    ];
+    for (reason, f) in cases {
+        let mut b = Build::default();
+        let unit = b.unit();
+        b.function(Function { name: "first".into(), params: 0, locals: locals(&[unit]), blocks: vec![block(vec![], ret())] });
+        let bad = f(&mut b);
+        b.function(bad);
+        assert_eq!(Machine::load(b.program, &[]).map(|_| ()), Err(LoadError::Function { function: "f".into(), reason }), "{reason}");
+    }
+}
+
+/// a duration's comparison and `is_none`/`is_some` take shared references, as core's `&self`
+/// methods do; a `&mut` operand is of another type.
+#[test]
+fn a_comparison_of_durations_and_is_none_through_a_mutable_reference_are_refused() {
+    let mut b = Build::default();
+    let (boolean, d) = (b.bool(), b.ty(Type::Duration));
+    let optd = b.option(d);
+    let (sd, md, mopt, sopt) = (b.reference(d, false), b.reference(d, true), b.reference(optd, true), b.reference(optd, false));
+    let cases = [
+        (CoreOp::DurationCompare(BinOp::Lt), vec![sd, sd], true),
+        (CoreOp::DurationCompare(BinOp::Lt), vec![md, sd], false),
+        (CoreOp::DurationCompare(BinOp::Lt), vec![sd, md], false),
+        (CoreOp::OptionIsNone, vec![sopt], true),
+        (CoreOp::OptionIsNone, vec![mopt], false),
+        (CoreOp::OptionIsSome, vec![mopt], false),
+    ];
+    for (op, args, good) in cases {
+        let mut p = Build { program: b.program.clone() };
+        let mut types = vec![boolean];
+        types.extend(&args);
+        p.function(Function {
+            name: "f".into(),
+            params: args.len() as u32,
+            locals: locals(&types),
+            blocks: vec![
+                block(vec![], Terminator::Call { callee: Callee::Core(op), args: (1..=args.len() as u32).map(copy).collect(), dest: place(0), next: BlockId(1), at: at(1) }),
+                block(vec![], ret()),
+            ],
+        });
+        let got = Machine::load(p.program, &[]).map(|_| ());
+        if good {
+            assert_eq!(got, Ok(()), "{op:?}({args:?})");
+        } else {
+            assert_eq!(got, Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "a core operation called with types it does not take" }), "{op:?}({args:?})");
+        }
+    }
+}
