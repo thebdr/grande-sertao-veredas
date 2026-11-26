@@ -98,8 +98,8 @@ text with them.
 
 ## Ruled to come, spelling proposed (not built)
 
-The architect ruled these additions on 2026-11-25 (`docs/questions.md` Q39, Q40, Q32), each
-term's spelling left to core. The spellings below are core's proposals. None is built: until a
+The architect ruled these additions on 2026-11-25 and 26 (`docs/questions.md` Q39, Q40, Q32, Q43,
+Q234), each term's spelling left to core. The spellings below are core's proposals. None is built: until a
 term is built with its first writer (controlador's), the reader refuses it as it refuses any term
 it does not know, and the table above stays as it is.
 
@@ -108,7 +108,11 @@ Conditions, in the fixed order: `fallback` right after `shadow`, with the debug 
 - `fallback(left)`: after an edit taken over live, the old version watching and able to take
   over again, `left` its time left in whole seconds, rounded up, so an armed fallback never
   reads 0 (Q32: "Yes, a term with its time left"). Proposed as a debug condition, giving
-  function check while it stands, as `shadow` does.
+  function check while it stands, as `shadow` does. The term goes when the right to take over
+  ends, by the time limit, by a check that ends it, or by the takeover itself ("drops the armed
+  term", `docs/controlador/live-takeover.md`, ruled 2026-11-26); the limit is the engineer's, ten
+  minutes by default, so `left` starts at 600 unless set otherwise. A takeover leaves the
+  controller in RUN with the request `fault_on_update` (reason 1 below, T3 there).
 - `last_save()`: on a target that cannot save at power loss, a start from the last save, raised
   only when cycles ran after it; no maintenance request goes with it (Q40: "No request, a
   condition"). Not a debug condition.
@@ -122,6 +126,29 @@ for the warning cycle time beside `overruns`):
 - 8 `ntp_silent`: NTP silent after its waiting time, or not set, its urgency as the situation
   stands (urgency follows, the request stays until cleared, Q39);
 - 9 `cycle_time` (not urgent): a task's cycle went over its warning cycle time.
+
+The certificates (ruled 2026-11-16, a request a year before any certificate expires; Q39 on the
+25th: "Its own and its peers'"; Q43 on the 26th: "Goes on, urgent request"):
+- 10 `certificate_expiring` (not urgent): a certificate in the controller's store, its own or a
+  peer's, ends within a year;
+- 11 `certificate_expired` (urgent): a known peer's certificate is past its end date, the secured
+  link going on, until the certificate is renewed.
+
+Running unattended (Q234: "Count and say so (Recommended)"):
+- 12 `memory_errors` (not urgent): corrected memory errors past the rate's threshold. An
+  uncorrected one in the controller's memory is the FAULT 507 `internal` the table has;
+- 13 `resource_trend` (not urgent): the controller's resident memory, open files or threads rising
+  over days against the limits set at its start. A limit reached is the FAULT 505 `resource`.
+
+The urgencies of 10, 12 and 13 are core's proposals with their names; 11's is ruled.
+
+Ruled to have no term: a controller without a credential raises nothing of its own (Q43:
+"Oficina's warning only", against "a condition in the state text"); a secured link accepted while
+the date is unconfirmed is marked on the link, the controller's own `date_unconfirmed()` aside
+(Q43: "Accept known peers, dates unjudged"). And FAULT 506 `load(download)` always names a
+download: a program handed in by its host that cannot be made comes up in STOP 104 `no_program`
+until downloads exist (Q233: "STOP no_program instead"), so `download=0` is no reading of "no
+download". The reader still takes every number the table gives.
 
 Confirmed the same day (Q45): the arguments inside `force` are always in the order in, out, var
 (K1: "Yes: in, out, var"), and a start-up phase shows by its word alone, without an `id` (K5:

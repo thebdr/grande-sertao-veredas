@@ -39,8 +39,7 @@ configuration and names no device (`docs/questions.md` Q8).
   (`docs/state-text.md`; `docs/controlador-plan.md`, "The state").
 - **The fieldbus masters:** the functions that drive a plant's devices over a standard fieldbus
   (`fieldbus`), a standard's frames being code here (Q9, revisited): a Modbus/TCP client first.
-- **The vendor description files' readers** (proposed, not built; its pending asked of the
-  orchestrator): GSDML for PROFINET, ESI for EtherCAT and EDS for EtherNet/IP, read for Oficina's
+- **The vendor description files' readers** (P-023, not built): GSDML for PROFINET, ESI for EtherCAT and EDS for EtherNet/IP, read for Oficina's
   hardware configuration, the bench and controlador ("In core", Q45's C5, ruled 2026-11-25,
   against a member of their own and Oficina). They are inputs, read and never written (Q31 entry
   23): the TOML rule's one named exception, copied into a project as their vendor wrote them.
@@ -237,8 +236,9 @@ status P-018.
   serves OPC UA. Maquinar agreed to the cut on 2026-11-22; the design is "The OPC UA server", below.
 - Ruled 2026-11-25: the masters' tests against the bench live in `tools/mestres`, a test-only
   crate of repo tooling that depends on core and maquinar, law L4 standing (Q101 and Q34).
-- Open: where the readers of GSDML, ESI and EDS files live (Q45); the review's entries 23 and 26
-  (Q31).
+- Ruled 2026-11-25 and 26: the readers of GSDML, ESI and EDS files live in core (Q45's C5), P-023
+  since 2026-11-26; the review's entries 23, 26 and 27 (Q31), as the masters' section below has
+  them.
 
 ## The fieldbus masters: how each is built (P-018)
 In the briefing's order for core (`docs/controlador-plan.md`, "Networks and devices"); each is a
