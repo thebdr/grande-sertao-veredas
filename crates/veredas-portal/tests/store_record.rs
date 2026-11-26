@@ -1,6 +1,6 @@
 //! Recording to the drive (contract: the recording clause, P-019): every row the store takes also
-//! written, in batches, to a database file of the session's own, until the file reaches its size
-//! limit; then the recording stops and nothing is deleted. Against the bench's plant and a log the
+//! written, in batches, to a database file of the session's own, its oldest rows let go at its
+//! size limit (docs/questions.md Q41). Against the bench's plant and a log the
 //! test writes, the record read back by a plain connection.
 
 mod common;
@@ -200,68 +200,95 @@ fn the_rows_the_stop_s_last_passes_take_are_recorded() {
     assert_eq!(recorded(&file, "readings") as u64, c.rows, "every row the store took on the drive");
 }
 
-/// At its size limit a recording stops: what it wrote stays, nothing is deleted, the rows after
-/// are counted and never written, the store goes on taking them, and the session says why. A
-/// record already standing at its file refuses the session by name, as a store does.
+/// At its size limit a record lets its oldest rows go (docs/questions.md Q41, ruled 2026-11-25:
+/// "the oldest is deleted"): a log written 3 000 lines at a time, each chunk recorded before the
+/// next, while the record is written every 200 ms, its limit 1 MiB. Every size published after a write is under the limit, the recording
+/// never stops, the rows let go and those the record holds add to every row written, and the
+/// record keeps the newest lines, each once, with their temperatures, source, key and state; the
+/// snapshot carries the rows let go. A record already standing at its file refuses the session by
+/// name, as a store does, and so does a limit under four times the least the record's tables take,
+/// nothing left at its file.
 #[test]
-fn at_its_size_limit_a_recording_stops_and_nothing_is_deleted() {
+fn at_its_size_limit_a_record_lets_its_oldest_rows_go() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("plant.log");
-    write_lines(&log, 0..20_000);
+    std::fs::write(&log, "").unwrap();
     let file = dir.path().join("small.record.duckdb");
     let mut cfg = SessionConfig::new("small");
-    cfg.start = Some(midnight());
     cfg.logs.push(log_source("log", &log));
     cfg.rules.push(readings_rule(None));
-    cfg.recording = Some(RecordingConfig { file: file.clone(), limit_bytes: 200 * 1024, write_every: Duration::from_secs(1) });
+    let limit = 1024 * 1024;
+    cfg.recording = Some(RecordingConfig { file: file.clone(), limit_bytes: limit, write_every: Duration::from_millis(200) });
     let session = Session::start(cfg.clone()).unwrap();
     let live = session.live();
-    assert!(wait(Duration::from_secs(30), || status(&live).stopped_why.is_some()), "{:?}", status(&live));
-    let at_stop = status(&live);
-    assert_eq!(at_stop.stopped_why, Some(format!("the record reached its size limit ({} of {} bytes)", at_stop.written_bytes, 200 * 1024)), "{at_stop:?}");
-    assert!(at_stop.written_bytes >= at_stop.limit_bytes, "{at_stop:?}");
-    assert!(at_stop.recorded_rows > 0);
-    // Fifty lines after the stop: stored, counted unrecorded, never written.
-    write_lines(&log, 20_000..20_050);
-    assert!(wait(Duration::from_secs(10), || rows_of(&live, "readings") == 20_050), "{}", rows_of(&live, "readings"));
+    let mut sizes: Vec<u64> = Vec::new();
+    let mut i = 0u32;
+    // Each chunk recorded before the next is written, so a batch holds a chunk at the most however
+    // loaded the machine (a batch over half the limit alone is the stated exception, not this case).
+    while i < 150_000 {
+        write_lines(&log, i..i + 3_000);
+        i += 3_000;
+        let until = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let st = status(&live);
+            assert_eq!(st.stopped_why, None, "the recording never stops at its limit: {st:?}");
+            if sizes.last() != Some(&st.written_bytes) {
+                sizes.push(st.written_bytes);
+            }
+            if st.recorded_rows == i as u64 || std::time::Instant::now() > until {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    assert!(wait(Duration::from_secs(30), || rows_of(&live, "readings") == 150_000), "{}", rows_of(&live, "readings"));
+    assert!(wait(Duration::from_secs(10), || status(&live).recorded_rows == 150_000), "{:?}", status(&live));
+    assert!(sizes.iter().filter(|b| **b > 0).count() >= 10, "written write after write: {sizes:?}");
+    assert!(sizes.iter().all(|b| *b <= limit), "every size published under the limit: {sizes:?}");
     for (id, r) in session.stop() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
     let end = status(&live);
-    assert_eq!(end.recorded_rows, at_stop.recorded_rows, "nothing written after the stop");
-    assert_eq!(end.recorded_rows + end.unrecorded_rows, 20_050, "{end:?}");
-    assert_eq!(end.stopped_why, at_stop.stopped_why);
-    assert_eq!(recorded(&file, "readings") as u64, end.recorded_rows, "what was written stays");
-    // Which rows: the log's first lines, each once, with their temperatures.
-    let n = end.recorded_rows;
+    assert_eq!((end.recorded_rows, end.unrecorded_rows, end.stopped_why.clone()), (150_000, 0, None), "{end:?}");
+    assert!(end.let_go_rows > 0 && end.written_bytes <= limit, "the oldest let go, the record under its limit: {end:?}");
+    let held = recorded(&file, "readings") as u64;
+    assert_eq!(held + end.let_go_rows, end.recorded_rows, "held and let go, every row written: {end:?}");
+    // Which rows: the log's newest lines, each once, with their temperatures.
     let (distinct, first, last, low, high, sum): (i64, i64, i64, f64, f64, f64) = duckdb::Connection::open(&file)
         .unwrap()
         .query_row("SELECT count(DISTINCT seq), CAST(min(seq) AS BIGINT), CAST(max(seq) AS BIGINT), min(temp), max(temp), sum(temp) FROM readings", [], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
         })
         .unwrap();
-    let want: f64 = (0..n as u32).map(temp).sum();
-    assert_eq!((distinct as u64, first, last as u64, low, high, sum), (n, 0, n - 1, temp(0), temp(n as u32 - 1), want), "lines 0 to {}", n - 1);
+    let from = 150_000 - held as u32;
+    let want: f64 = (from..150_000).map(temp).sum();
+    let (lo, hi) = (from..150_000).map(temp).fold((f64::MAX, f64::MIN), |(lo, hi), t| (lo.min(t), hi.max(t)));
+    assert_eq!((distinct as u64, first as u32, last, low, high), (held, from, 149_999, lo, hi), "lines {from} to 149 999");
+    assert!((sum - want).abs() < 1e-6 * want.abs().max(1.0), "their temperatures: {sum} against {want}");
     // And each line's source, key and state, as the rule read them (`item=A0`, `A1`, `A2` in turn).
     let whole: i64 = duckdb::Connection::open(&file)
         .unwrap()
         .query_row("SELECT count(*) FROM readings WHERE source = 'log' AND key = 'A' || CAST(seq % 3 AS VARCHAR) AND state = 'run'", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(whole as u64, n, "every line's source, key and state");
-    // The snapshot carries the recording whole: its file, its limit, its size, the rows recorded
-    // and not, and why it stopped.
+    assert_eq!(whole as u64, held, "every line's source, key and state");
+    // The snapshot carries the recording whole: its file, its limit, its size, the rows recorded,
+    // not recorded and let go, and why it stopped (it did not).
     assert_eq!(
         veredas_portal::serve::snapshot(&live)["recording"],
         json!({
             "file": file.display().to_string(),
-            "limit_bytes": 200 * 1024,
+            "limit_bytes": limit,
             "written_bytes": end.written_bytes,
             "recorded_rows": end.recorded_rows,
-            "unrecorded_rows": end.unrecorded_rows,
-            "stopped_why": end.stopped_why,
+            "unrecorded_rows": 0,
+            "let_go_rows": end.let_go_rows,
+            "stopped_why": null,
         })
     );
-    assert!(end.unrecorded_rows >= 50 && end.written_bytes >= end.limit_bytes, "{end:?}");
+    // Once closed, the size published is the one the drive holds, the log folded into the file.
+    let wal = std::path::PathBuf::from(format!("{}.wal", file.display()));
+    assert_eq!(end.written_bytes, std::fs::metadata(&file).unwrap().len() + std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0), "the size published, the drive's");
+    assert!(!wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0, "the log folded into the file");
     // Beside a store on the drive a record is refused by name before anything opens: that store
     // already holds every row.
     let mut on_disk = cfg.clone();
@@ -271,6 +298,33 @@ fn at_its_size_limit_a_recording_stops_and_nothing_is_deleted() {
     let e = Session::start(on_disk).err().expect("refused").to_string();
     assert_eq!(e, format!("a record is for a store in memory: this one is on disk at {}, where every row already goes", disk.display()));
     assert!(!disk.exists() && !dir.path().join("other.record.duckdb").exists());
+    // A limit under four times the least the record's tables take is refused by name, nothing
+    // left at its file.
+    let mut tiny = cfg.clone();
+    let tiny_file = dir.path().join("tiny.record.duckdb");
+    tiny.recording = Some(RecordingConfig { file: tiny_file.clone(), limit_bytes: 64 * 1024, write_every: Duration::from_secs(1) });
+    let e = Session::start(tiny).err().expect("refused").to_string();
+    assert!(
+        e.starts_with("the record's size limit of 65536 bytes is under four times the least its tables take on the drive (") && e.ends_with(" bytes): it cannot be held by letting the oldest go"),
+        "{e}"
+    );
+    assert!(!tiny_file.exists() && !dir.path().join("tiny.record.duckdb.wal").exists(), "nothing left at the refused record's file");
+    // The least it names, times four: a byte under refused, that many taken.
+    let floor: u64 = e.rsplit_once(" (").and_then(|(_, rest)| rest.split(' ').next()).and_then(|n| n.parse().ok()).expect("the least named");
+    for (limit, taken) in [(4 * floor - 1, false), (4 * floor, true)] {
+        let mut at = cfg.clone();
+        let at_file = dir.path().join(format!("at-{limit}.record.duckdb"));
+        at.recording = Some(RecordingConfig { file: at_file.clone(), limit_bytes: limit, write_every: Duration::from_secs(1) });
+        match Session::start(at) {
+            Ok(s) => {
+                assert!(taken, "a limit of {limit} taken, under four times {floor}");
+                for (id, r) in s.stop() {
+                    r.unwrap_or_else(|e| panic!("{id}: {e}"));
+                }
+            }
+            Err(e) => assert!(!taken && e.to_string().contains(&format!("the record's size limit of {limit} bytes")), "{limit}: {e}"),
+        }
+    }
     // A second session onto the same record file is refused by name, the record untouched.
     let before = std::fs::metadata(&file).unwrap().len();
     let e = Session::start(cfg).err().expect("refused").to_string();
@@ -354,55 +408,4 @@ fn a_record_is_written_once_a_period_whatever_the_poll_rate() {
     for (id, r) in session.stop() {
         r.unwrap_or_else(|e| panic!("{id}: {e}"));
     }
-}
-
-/// The limit stops the recording at the first write that reaches it: written in batches under it,
-/// every size published before the stop is under the limit and the one at the stop at or past
-/// it; once closed, the size published is the one the drive holds, the log folded into the file.
-#[test]
-fn the_limit_stops_the_recording_at_the_first_write_that_reaches_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let log = dir.path().join("plant.log");
-    std::fs::write(&log, "").unwrap();
-    let file = dir.path().join("chunks.record.duckdb");
-    let mut cfg = SessionConfig::new("chunks");
-    cfg.logs.push(log_source("log", &log));
-    cfg.rules.push(readings_rule(None));
-    cfg.recording = Some(RecordingConfig { file: file.clone(), limit_bytes: 400 * 1024, write_every: Duration::from_millis(200) });
-    let session = Session::start(cfg).unwrap();
-    let live = session.live();
-    let mut sizes: Vec<(u64, bool)> = Vec::new();
-    let mut i = 0u32;
-    let started = std::time::Instant::now();
-    while status(&live).stopped_why.is_none() && started.elapsed() < Duration::from_secs(60) {
-        write_lines(&log, i..i + 500);
-        i += 500;
-        let until = std::time::Instant::now() + Duration::from_millis(300);
-        while std::time::Instant::now() < until {
-            let st = status(&live);
-            if sizes.last() != Some(&(st.written_bytes, st.stopped_why.is_some())) {
-                sizes.push((st.written_bytes, st.stopped_why.is_some()));
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-    let at_stop = status(&live);
-    assert_eq!(at_stop.stopped_why, Some(format!("the record reached its size limit ({} of {} bytes)", at_stop.written_bytes, 400 * 1024)), "{at_stop:?}");
-    // The size the stop names is the drive's once the write that reached the limit landed, the
-    // session still running (a stopped record takes no write, so the drive holds still): the
-    // write measured after its rows, so the stop falls at the first write past the limit.
-    let wal = std::path::PathBuf::from(format!("{}.wal", file.display()));
-    let drive = || std::fs::metadata(&file).unwrap().len() + std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
-    assert_eq!(at_stop.written_bytes, drive(), "the size at the stop the drive's, before the session stops");
-    let under: Vec<u64> = sizes.iter().filter(|(_, stopped)| !stopped).map(|(b, _)| *b).collect();
-    assert!(under.iter().filter(|b| **b > 0).count() >= 2, "several writes under the limit first: {sizes:?}");
-    assert!(under.iter().all(|b| *b < at_stop.limit_bytes), "every size published before the stop under the limit: {sizes:?}");
-    assert!(at_stop.written_bytes >= at_stop.limit_bytes, "{at_stop:?}");
-    for (id, r) in session.stop() {
-        r.unwrap_or_else(|e| panic!("{id}: {e}"));
-    }
-    let end = status(&live);
-    assert_eq!(end.written_bytes, drive(), "the size published is the drive's");
-    assert!(!wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0, "the log folded into the file");
-    assert_eq!(recorded(&file, "readings") as u64, end.recorded_rows);
 }

@@ -68,6 +68,9 @@ pub enum Residency {
     Disk { path: PathBuf, memory_limit_mb: u32 },
 }
 
+/// The block size of a record's file (C-091): the least the engine takes, 16 KiB.
+pub(crate) const RECORD_BLOCK_BYTES: u64 = 16 * 1024;
+
 /// A base table to create: a rule's name and its value columns in the rule's order (a capture
 /// rule's key group is the `key` column, not a value column).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -252,6 +255,18 @@ impl DuckStore {
     /// Open a fresh session database, create the `samples` and base tables, then apply the view
     /// definitions (in any order: a fixpoint resolves the references). Every failure is typed.
     pub fn open(residency: &Residency, specs: &[BaseTableSpec], defs: &[TableDef]) -> Result<DuckStore, StoreError> {
+        Self::open_with(residency, specs, defs, None)
+    }
+
+    /// A record on the drive (C-091): a fresh store at `path` whose file is made of blocks of
+    /// [`RECORD_BLOCK_BYTES`], so a table holding rows takes 16 KiB of it at the least, not the
+    /// engine's 256 KiB, and a small limit can be held by letting the oldest go (probed on the
+    /// pinned engine, `.zen/evidence/C-091.md`).
+    pub(crate) fn open_record(path: &Path, memory_limit_mb: u32, specs: &[BaseTableSpec], defs: &[TableDef]) -> Result<DuckStore, StoreError> {
+        Self::open_with(&Residency::Disk { path: path.to_path_buf(), memory_limit_mb }, specs, defs, Some(RECORD_BLOCK_BYTES))
+    }
+
+    fn open_with(residency: &Residency, specs: &[BaseTableSpec], defs: &[TableDef], block: Option<u64>) -> Result<DuckStore, StoreError> {
         let conn = match residency {
             Residency::Ram => Connection::open_in_memory()?,
             Residency::Disk { path, .. } => {
@@ -261,7 +276,11 @@ impl DuckStore {
                 if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
                     std::fs::create_dir_all(parent).map_err(|e| StoreError::Open(format!("create {}: {e}", parent.display())))?;
                 }
-                Connection::open(path).map_err(|e| StoreError::Open(format!("open {}: {e}", path.display())))?
+                match block {
+                    None => Connection::open(path),
+                    Some(b) => duckdb::Config::default().with("default_block_size", &b.to_string()).and_then(|c| Connection::open_with_flags(path, c)),
+                }
+                .map_err(|e| StoreError::Open(format!("open {}: {e}", path.display())))?
             }
         };
         let built = Self::build(conn, residency, specs, defs);
@@ -541,6 +560,37 @@ impl DuckStore {
         let conn = recover(self.ingest.lock());
         conn.execute_batch("CHECKPOINT;")?;
         Ok(())
+    }
+
+    /// The bytes of the store's file its data takes: the blocks in use, the free ones left out
+    /// (a file hands no space back to the drive after a delete, but reuses it; C-091).
+    pub(crate) fn bytes_in_use(&self) -> Result<u64, StoreError> {
+        let conn = recover(self.ingest.lock());
+        let used: i64 = conn.query_row("SELECT block_size * used_blocks FROM pragma_database_size() WHERE database_name = current_database()", [], |r| r.get(0))?;
+        Ok(used.max(0) as u64)
+    }
+
+    /// The arrival below which `fraction` of the base tables' rows arrived, all tables together;
+    /// none while they hold no row. The cut a record lets go of its oldest at (C-091).
+    pub(crate) fn arrival_quantile(&self, fraction: f64) -> Result<Option<i64>, StoreError> {
+        if self.bases.is_empty() {
+            return Ok(None);
+        }
+        let union = self.bases.iter().map(|b| format!("SELECT arrival_ms FROM {}", quote_ident(&b.name))).collect::<Vec<_>>().join(" UNION ALL ");
+        let conn = recover(self.ingest.lock());
+        let cut: Option<i64> = conn.query_row(&format!("SELECT quantile_disc(arrival_ms, {fraction}) FROM ({union})"), [], |r| r.get(0))?;
+        Ok(cut)
+    }
+
+    /// The oldest arrival the base tables hold; none while they hold no row.
+    pub(crate) fn oldest_arrival(&self) -> Result<Option<i64>, StoreError> {
+        if self.bases.is_empty() {
+            return Ok(None);
+        }
+        let union = self.bases.iter().map(|b| format!("SELECT arrival_ms FROM {}", quote_ident(&b.name))).collect::<Vec<_>>().join(" UNION ALL ");
+        let conn = recover(self.ingest.lock());
+        let oldest: Option<i64> = conn.query_row(&format!("SELECT min(arrival_ms) FROM ({union})"), [], |r| r.get(0))?;
+        Ok(oldest)
     }
 
     /// The store's window: every base-table row that arrived before `cutoff_ms` (the arrival

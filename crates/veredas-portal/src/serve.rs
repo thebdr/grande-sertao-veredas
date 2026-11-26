@@ -155,6 +155,7 @@ pub fn snapshot(live: &Live) -> Json_ {
                 "written_bytes": r.written_bytes,
                 "recorded_rows": r.recorded_rows,
                 "unrecorded_rows": r.unrecorded_rows,
+                "let_go_rows": r.let_go_rows,
                 "stopped_why": r.stopped_why,
             }),
         };

@@ -231,17 +231,20 @@ where they differ.
   through the ingest connection with a plain DELETE (an in-memory store hands the space back,
   probed and pinned in C-042), the listing still counting what was seen. **Built: the recording
   (C-091)**, `record = { dir, max_mb, every_s }`: a second store on the drive with the same
-  tables and views, written in one batch every few seconds and at the stop, stopping at its size
-  limit with nothing deleted (the answer taken while Q41 was open; ruled since, below: the
-  oldest goes); refused beside a store on the drive, which already holds every row. **Built: the
+  tables and views, written in one batch every few seconds and at the stop, its oldest rows let
+  go at its size limit (Q41, below); refused beside a store on the drive, which already holds
+  every row. **Built: the
   copy at a fault (C-093)**, `SessionConfig::fault_copy_dir`: at every fault record the store is copied
   to a file of its own through the ingest connection, the record in it.
-- **What gives way at a size limit, and the window's bounds** (Q41, ruled 2026-11-25; not built):
-  a growing record on a controller's drive deletes its oldest when it reaches its limit, a fault
-  that repeats counted on its record and not written again, the running program and its fallback
-  never deleted. So the recording (C-091) lets its oldest batches go instead of stopping, and the
-  fault's copies (C-093) are limited in number, the oldest going first, at most one written per
-  shortest gap, the program able to ask for one. The window (C-090) gets a ceiling in bytes beside
+- **What gives way at a size limit, and the window's bounds** (Q41, ruled 2026-11-25): a growing
+  record on a controller's drive deletes its oldest when it reaches its limit, a fault that
+  repeats counted on its record and not written again, the running program and its fallback
+  never deleted. **Built: the recording (C-091)** lets its oldest rows go instead of stopping: a
+  file of 16 KiB blocks, folded after each batch, the oldest half of its rows (by arrival) let go
+  while the data in use is over half the limit, never the last batch; the file reuses the blocks
+  a delete frees and hands none back, so the limit is held on the data in use (probed,
+  `.zen/evidence/C-091.md`). Not built yet: the fault's copies (C-093) are limited in number,
+  the oldest going first, at most one written per shortest gap, the program able to ask for one. The window (C-090) gets a ceiling in bytes beside
   its span, the shorter of the two ruling and the controller told when the ceiling came first;
   the engine's default memory limit is never left as it is on a controller. The window holds
   everything portal reads unless the project narrows it. A data area that fails or cannot be

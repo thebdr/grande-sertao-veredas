@@ -49,8 +49,8 @@ pub const WINDOW_EVERY: Duration = Duration::from_secs(1);
 pub const RECORD_MEMORY_MB: u32 = 64;
 
 /// Recording to the drive (P-019, `docs/robustness.md` "Wear and filling"): every row the store
-/// takes also written to a database file of the session's own, in batches, until the file reaches
-/// its size limit.
+/// takes also written to a database file of the session's own, in batches, its oldest rows let go
+/// at its size limit (docs/questions.md Q41).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordingConfig {
     /// The record's database file; one already standing there refuses the session (C-041's guard).
@@ -145,7 +145,10 @@ pub struct RecordingStatus {
     pub recorded_rows: u64,
     /// Rows the store took after the recording stopped, never written to the record.
     pub unrecorded_rows: u64,
-    /// Why the recording stopped: its size limit, or a write that failed.
+    /// Rows written to the record and let go since, its oldest, to keep it under its limit.
+    pub let_go_rows: u64,
+    /// Why the recording stopped: a write that failed (its data area failed or cannot be
+    /// written), the session going on.
     pub stopped_why: Option<String>,
 }
 /// A source alive but silent this long reads as idle (a quiet log, a share away) rather than live.
@@ -251,6 +254,9 @@ pub enum SessionError {
     WindowOnDisk(String),
     #[error("a record is for a store in memory: this one is on disk at {0}, where every row already goes")]
     RecordOnDisk(String),
+    /// The limit asked, and the least the record's tables take.
+    #[error("the record's size limit of {0} bytes is under four times the least its tables take on the drive ({1} bytes): it cannot be held by letting the oldest go")]
+    RecordLimit(u64, u64),
     #[error("source `{id}`: {source}")]
     Spawn { id: String, source: SourceError },
 }
@@ -513,14 +519,17 @@ struct Recorder {
     write_every: Duration,
     written_at: Instant,
     status: RecordingStatus,
+    /// The first arrival of the last batch written: the oldest let go never reaches it.
+    last_batch_from: Option<i64>,
 }
 
 impl Recorder {
-    /// Write what is pending, then measure the record's files; at the size limit the recording
-    /// stops. Nothing already written is deleted, and what comes after is counted, not written.
-    // DECISION PENDING (docs/questions.md Q41): what gives way at a record's limit is not ruled;
-    // the recording stopping and nothing deleted is the reversible answer, as Q16 decided for a
-    // project's disk store ("nothing is refused, deleted or merged").
+    /// Write what is pending in one transaction, fold the log into the file, then let the oldest
+    /// rows go while the data in use is over half the limit (docs/questions.md Q41, ruled
+    /// 2026-11-25: at a record's limit its oldest is deleted). The file reuses the blocks a delete
+    /// frees and hands none back to the drive, so the data in use, never the file's size, is
+    /// what the limit is held on, at half of it: probed, the file then stays under the limit.
+    /// The last batch is never let go. A write that fails stops the recording with its reason.
     fn write(&mut self) {
         self.written_at = Instant::now();
         if self.status.stopped_why.is_some() {
@@ -530,23 +539,47 @@ impl Recorder {
         // or not at all; a failure stops the recording, the batch counted unrecorded.
         let batch: Vec<(usize, Vec<WideRow>)> = self.pending.iter_mut().enumerate().filter(|(_, rows)| !rows.is_empty()).map(|(i, rows)| (i, std::mem::take(rows))).collect();
         let rows: u64 = batch.iter().map(|(_, r)| r.len() as u64).sum();
+        let first = batch.iter().flat_map(|(_, r)| r.iter().map(|w| w.arrival_ms)).min();
         let tables: Vec<(usize, &[WideRow])> = batch.iter().map(|(i, r)| (*i, r.as_slice())).collect();
-        match self.store.append_wide_together(&tables) {
+        match self.store.append_wide_together(&tables).and_then(|()| self.store.checkpoint()) {
             Ok(()) => self.status.recorded_rows += rows,
             Err(e) => {
                 self.status.unrecorded_rows += rows;
                 self.status.stopped_why = Some(format!("a write to the record failed: {e}"));
             }
         }
-        self.status.written_bytes = record_bytes(&self.status.file);
-        if self.status.stopped_why.is_none() && self.status.written_bytes >= self.status.limit_bytes {
-            self.status.stopped_why = Some(format!("the record reached its size limit ({} of {} bytes)", self.status.written_bytes, self.status.limit_bytes));
+        if let Some(first) = first {
+            self.last_batch_from = Some(first);
         }
+        if self.status.stopped_why.is_none()
+            && let Err(e) = self.let_go_oldest()
+        {
+            self.status.stopped_why = Some(format!("a write to the record failed: {e}"));
+        }
+        self.status.written_bytes = record_bytes(&self.status.file);
         if self.status.stopped_why.is_some() {
             let left: u64 = self.pending.iter().map(|r| r.len() as u64).sum();
             self.status.unrecorded_rows += left;
             self.pending.iter_mut().for_each(Vec::clear);
         }
+    }
+
+    /// While the data in use is over half the limit, the oldest half of the rows (by the arrival
+    /// clock, the window's, C-090) let go, never one of the last batch's.
+    fn let_go_oldest(&mut self) -> Result<(), crate::store::StoreError> {
+        let half = self.status.limit_bytes / 2;
+        // The batch folded into the file before this, the log holds nothing: the blocks in use
+        // are the data.
+        while self.store.bytes_in_use()? > half {
+            let (Some(oldest), Some(cut)) = (self.store.oldest_arrival()?, self.store.arrival_quantile(0.5)?) else { break };
+            let cut = cut.max(oldest + 1).min(self.last_batch_from.unwrap_or(i64::MAX));
+            if cut <= oldest {
+                break;
+            }
+            self.status.let_go_rows += self.store.evict_before(cut)?;
+            self.store.checkpoint()?;
+        }
+        Ok(())
     }
 
     /// Rows the store took: pending for the next write, or counted unrecorded once stopped.
@@ -607,8 +640,12 @@ fn history_is_read(at: Option<&Arc<std::sync::atomic::AtomicU64>>, st: &Stats) -
 
 /// The size of a record's files: the database and its write-ahead log beside it.
 fn record_bytes(file: &std::path::Path) -> u64 {
-    let wal = std::path::PathBuf::from(format!("{}.wal", file.display()));
-    [file.to_path_buf(), wal].iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum()
+    std::fs::metadata(file).map(|m| m.len()).unwrap_or(0) + record_wal_bytes(file)
+}
+
+/// The size of a record's write-ahead log.
+fn record_wal_bytes(file: &std::path::Path) -> u64 {
+    std::fs::metadata(format!("{}.wal", file.display())).map(|m| m.len()).unwrap_or(0)
 }
 
 struct SeriesLastLocal {
@@ -872,13 +909,29 @@ impl Session {
         let window = window_ms(&cfg);
         let recorder = match &cfg.recording {
             None => None,
-            Some(r) => Some(Recorder {
-                store: DuckStore::open(&Residency::Disk { path: r.file.clone(), memory_limit_mb: RECORD_MEMORY_MB }, &specs, &cfg.tables)?,
-                pending: specs.iter().map(|_| Vec::new()).collect(),
-                write_every: r.write_every.max(Duration::from_millis(1)),
-                written_at: Instant::now(),
-                status: RecordingStatus { file: r.file.clone(), limit_bytes: r.limit_bytes, written_bytes: record_bytes(&r.file), ..RecordingStatus::default() },
-            }),
+            Some(r) => {
+                let store = DuckStore::open_record(&r.file, RECORD_MEMORY_MB, &specs, &cfg.tables)?;
+                // The least the record's data takes once every table holds a row: what it takes
+                // as made, and two blocks a table (probed: a table with rows adds one block or a
+                // block and a half). The data in use is held at half the limit, so a limit under
+                // four times that leaves no room past the floor, refused by name.
+                store.checkpoint()?;
+                let floor = store.bytes_in_use()? + 2 * specs.len() as u64 * crate::store::RECORD_BLOCK_BYTES;
+                if r.limit_bytes < 4 * floor {
+                    drop(store);
+                    let _ = std::fs::remove_file(&r.file);
+                    let _ = std::fs::remove_file(format!("{}.wal", r.file.display()));
+                    return Err(SessionError::RecordLimit(r.limit_bytes, floor));
+                }
+                Some(Recorder {
+                    store,
+                    pending: specs.iter().map(|_| Vec::new()).collect(),
+                    write_every: r.write_every.max(Duration::from_millis(1)),
+                    written_at: Instant::now(),
+                    status: RecordingStatus { file: r.file.clone(), limit_bytes: r.limit_bytes, written_bytes: record_bytes(&r.file), ..RecordingStatus::default() },
+                    last_batch_from: None,
+                })
+            }
         };
         let recording_status = RwLock::new(recorder.as_ref().map(|r| r.status.clone()));
         let gate = WriteGate::new(cfg.writes_armed);

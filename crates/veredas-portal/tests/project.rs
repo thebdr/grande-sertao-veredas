@@ -1139,12 +1139,14 @@ against the project file's folder.
 - `record` (optional: absent, nothing is recorded): `{ dir = "<folder>", max_mb = N, every_s = 10 }`,
   every row the store takes also written to the drive, in a database file of each run's own in
   that folder (`<name>-<yyyymmdd>-<hhmmss>.record.duckdb`, refused when one already stands there),
-  in a batch every `every_s` seconds (at least 1; 10 when absent) and at the stop, until the
-  record's files (the database and its write-ahead log) reach `max_mb` megabytes (at least 1):
-  then the recording stops, nothing written is deleted, and the rows after are counted and not
-  written (what gives way at a limit is open, `docs/questions.md` Q41). With a store kept as a
-  window, the record holds what the window lets go. Refused beside a store on the drive (`disk`
-  or `dir`), which already holds every row.
+  in a batch every `every_s` seconds (at least 1; 10 when absent) and at the stop. The record's
+  files (the database and its write-ahead log) are kept under `max_mb` megabytes (at least 1) by
+  letting the oldest rows go (`docs/questions.md` Q41, ruled 2026-11-25: at a record's limit the
+  oldest is deleted); a `max_mb` too small for the record's tables to hold rows past their own
+  floor (under four times the least they take) refuses the session by name. A write that fails
+  stops the recording with its reason, the session going on. With a store kept as a window, the
+  record holds what the window lets go. Refused beside a store on the drive (`disk` or `dir`),
+  which already holds every row.
 - `writes_armed` (default `false`): the master switch. Off, every write path (an OPC write, a
   channel send, a reply rule) is refused before anything reaches the plant; the switch is set in
   process, never over the wire.
