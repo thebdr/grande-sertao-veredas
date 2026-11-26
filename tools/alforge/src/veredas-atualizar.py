@@ -516,6 +516,8 @@ def main(argv):
     signal.pthread_sigmask(signal.SIG_BLOCK, STOPS)
     left = []
     shutil.rmtree(stage, onexc=lambda _f, p, x: left.append(f"{p} ({getattr(x, 'strerror', x)})"))
+    # The removal on the disk before any verdict is said: "as it was" holds after a power-off too.
+    os.sync()
     if left:
         line = f"its staging folder {stage} could not all be removed: {left[0]}; the next update removes it"
         if stopped is None:
