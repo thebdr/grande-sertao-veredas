@@ -37,8 +37,10 @@ users, the PLC programmer, the commissioning technician and the software enginee
   the system browser.
 - **Docking through KDDockWidgets**: panes float to other monitors, drag to re-dock, named layouts
   are saved and restored. Auto-hide side panes are written here, because the library has none on
-  its Qt Quick side.
-- **3D in Qt Quick 3D.**
+  its Qt Quick side. Docking across monitors is not declared outside the suite (entry 29's third
+  option was not chosen, Q31): it is proven where a display is, not headless.
+- **3D in Qt Quick 3D**, view-only first, its behaviours chosen from ready-made ones only (entry
+  31, Q31).
 - **Translatable from day one**, the interface alone: a component's state text and its logs stay
   English.
 - **The accent is lavanda `#B9A9E8`** (soft `#2B2838`, outline `#494360`, text on the accent
@@ -49,24 +51,36 @@ users, the PLC programmer, the commissioning technician and the software enginee
   a check of dependency licences runs in CI (the architect, 2026-11-15). The suite's permissive
   crates state `MIT OR Apache-2.0` and Oficina `GPL-3.0-or-later`, the GPL version 3 text beside
   its manifest (`COPYING`), the licence files' copyright holder thebdr (Q35, ruled 2026-11-25).
-- **Every capability's test drives the real interface**: Rust tests through the Spix tool.
+- **Two tiers of proof** (entry 29, Q31, ruled 2026-11-25): logic is proven on the Rust model, and
+  each surface by a Rust test that drives the real interface through the Spix tool, the own-shell
+  spike being the gate both stand on.
 - Qt Creator was dropped as a base and is kept as a reference.
 
 ### How it reaches a target
 - **Over SSH.** The components on a target keep listening on the loopback. Oficina logs in by SSH,
   over the same LAN or a VPN, starts and stops the components' executables, copies files, and
-  carries their interfaces inside the connection. No accounts of its own (Q20 stands).
+  carries their interfaces inside the connection. No accounts of its own (Q20 stands). Loopback is
+  no boundary (entry 33, Q31, ruled 2026-11-25): portal and supervisão require on every request a
+  random token per session, handed over SSH, and check `Host` and `Origin`; controlador's
+  engineering channel is a Unix socket (a named pipe on Windows) under the system's permissions.
 - **Portal to portal.** Oficina embeds a portal, and that portal talks to the portal embedded in
   controlador (the architect, 2026-11-15) over portal's own HTTP interface, "http (https, later)"
   (2026-11-16): the event stream, the windowed reads, the gated write surface. The interface
-  answers on the controller's loopback only.
+  answers on the controller's loopback only. On a host that runs supervisão too, Oficina and
+  supervisão share one portal instance for a project: whichever needs it first starts it, the other
+  joins, and it stops when the last leaves (entry 22, Q31, ruled 2026-11-25; Q19 amended for such a
+  host). SQL over a running session's store goes through a read-only route in portal.
 - **Commands travel on the same link** (2026-11-16): forcing, breakpoints, downloads, start, stop
   and acknowledge. Portal carries them and controlador handles them behind its portal, where the
   commissioning switch is checked (`docs/controlador-plan.md`).
 - **Everything that alters the controller is robust**: "every bit of data that alters the
   controller shall be robust, that includes commands such as variable writes, breakpoints setting,
   state change" (the architect, 2026-11-16). A download carries a hash, "so no corrupted program
-  may run". How both are built is Q36 and Q37.
+  may run". Ruled of Q37 on 2026-11-25: each altering request carries a SHA-256 of its content
+  (HTTP's `Content-Digest`, RFC 9530) that the controller checks before acting; a change is
+  applied whole, at one point of the scan; and a request whose answer is lost is shown as
+  "unknown", its outcome asked of the controller by the request's number, never assumed. The rest
+  is Q36 and Q37's remainder.
 - **Only Oficina and the target change a controller's state** (2026-11-15): a person does it in
   Oficina or at the target, and the program may stop itself. Supervisão, SCADA, MES and other
   controllers read the state and never change it.
@@ -76,13 +90,15 @@ users, the PLC programmer, the commissioning technician and the software enginee
 
 ### The first release
 The workbench, with portal's and the bench's surfaces and supervisão embedded. It does not wait for
-controlador.
+controlador. Its surfaces come in an order (entry 30, Q31, ruled 2026-11-25): the shell, the tree,
+form and text, the target over SSH, session control and health, log trailing and supervisão's tabs
+first, the rest in point releases.
 
 - **Workbench only**, no guided or task view: one project tree covering every component, tabbed
   editors, an inspector, messages and a command palette; a target selector, and a status bar
   showing the target, the switch's state and the running download.
 - **Every TOML file opens as a form and as text**, two views of one file. The form is built from
-  the file's schema; edits round-trip and keep comments.
+  core's types (entry 30, Q31, ruled 2026-11-25); edits round-trip and keep comments.
 - **Compare** offline against online and offline against offline. No Git integration.
 - **Portal's surfaces:**
   - an OPC UA address browser that writes the polling rules;
@@ -91,7 +107,8 @@ controlador.
   - certificates (the OPC UA trust list) and the project's sealed secrets file;
   - session control and health: start, stop, per-source state, lag, reconnects;
   - log trailing, and grep over logs at rest, very large files included;
-  - a database explorer for the DuckDB store: tables and views, SQL, a result grid, CSV export,
+  - a database explorer for the DuckDB store: tables and views, SQL through portal's read-only
+    route, a result grid, CSV export (a cell that would read as a formula neutralised, entry 34),
     snapshot;
   - one scope for any live or stored signal, reused later for controller variables.
 - **The bench's surfaces:** the bench file editor; a traffic monitor with decoded fields; starting
@@ -103,7 +120,9 @@ controlador.
   topology, the diff, identify, name and address, as the bench's surfaces are Oficina's.
 - **Ábaco:** the grid as a tab, with the engine and Python of each workspace in its own process; a
   Python editor with completion; run with stop-on-error; a full debugger; forms as controls on the
-  sheet and as designed dialogs. Later: a macro recorder. The grid's behaviour (Excel's navigation
+  sheet and as designed dialogs. Later: a macro recorder. The Python editor and debugger use the
+  one language-server client and the one debugger client Oficina writes for ORCL too (entry 28,
+  Q31, ruled 2026-11-25). The grid's behaviour (Excel's navigation
   and selection, the editor's modes, the clipboard, the filters) is Oficina's own code, written new:
   nothing of Veredas 1's grid is carried, neither its egui crate nor its renderer-neutral core,
   which may be read as a description of the behaviour (Q341, ruled 2026-11-25). Ábaco's worker
@@ -118,7 +137,8 @@ controlador.
   its end (Q314, ruled 2026-11-25): that confirming step is a screen of Oficina's.
 - **Controlador:**
   - the ORCL editor with a language server, and a quick switch between ORCL and a ladder view of
-    the same source (ladder read-only at first);
+    the same source (ladder read-only at first); one language-server client and one debugger
+    client on Oficina's side, shared by ORCL and ábaco's Python (entry 28, Q31);
   - inline live values; cross-reference and call tree; the subset checker's messages; static
     analysis and naming rules;
   - watch tables; forcing, with its three modes for variables;
@@ -126,16 +146,27 @@ controlador.
   - the shadow test: what would differ (outputs and a watch list), swap, accept, and the fallback
     flag in the download popup;
   - hardware configuration: the device tree and its parameters; scan, compare and merge; topology;
-    the IO mapping with live values, forcing and the per-output halt setting;
+    the IO mapping with live values, forcing and the per-output halt setting. Vendor description
+    files (GSDML, ESI, EDS) are inputs, read and never written, parsed with document type
+    definitions and entities off, their readers in core (entry 23, Q31; Q45's C5). A Modbus module
+    with no timeout of its own, or too long a one, is warned of in production too, the engineer
+    free to accept it (Q45);
   - simulator controls: virtual time, snapshots;
   - project data editors: multilingual text lists, alarms and events, recipes, units and limits;
   - the download history (the last 10) and rollback;
   - the controller's state as a strip; a click opens a detail view with the state's history and
-    the fault records, which are also shown in a loud popup.
-- **Commissioning:** IO check without a program; identify, name and address a device. Later: drive
-  parameters, a control panel, tuning, a drive scope.
+    the fault records, which are also shown in a loud popup. A fault record's snapshot of all data
+    is read through Oficina only, peers getting the cause, the number and the time (entry 35, Q31);
+  - the intervention log the target keeps (entry 37, Q31): each line with the time and who, the
+    SSH user, the peer's address and a name typed once per Oficina installation;
+  - the retained variables' saves: where the drive reports its wear, Oficina shows the years it
+    has left at the save's period and its shortest life at the shortest gap (Q40).
+- **Commissioning:** IO check without a program; identify, name and address a device, from the
+  laptop when it is on the segment and through a target's embedded aranha when it is not (Q45's G2,
+  ruled 2026-11-25). Later: drive parameters, a control panel, tuning, a drive scope.
 - **The 3D plant simulator** as an authoring environment in Qt Quick 3D: place equipment from a
-  library, set behaviours, collisions and physics. The physics and the devices' replies are
+  library, set behaviours, collisions and physics; view-only first, behaviours chosen from
+  ready-made ones only (entry 31, Q31). The physics and the devices' replies are
   computed in maquinar, headless, at a fixed step; Oficina's view draws the positions it is sent
   (`docs/maquinar-plan.md`).
 - **The HMI creator** edits the screens of a separate panel HMI, a component still to be planned
@@ -144,7 +175,8 @@ controlador.
 ### The IO check from a laptop
 With no controlador target set, a light controlador session holding only the logic to drive a
 remote IO module runs on the laptop itself, with timeouts never above 2 s and with known devices
-only. The architect kept it on 2026-11-15, under three rules:
+only, on Linux laptops only: on a Windows laptop it goes through a target (Q45, ruled
+2026-11-25). The architect kept it on 2026-11-15, under three rules:
 - the laptop session has an arming step of its own in Oficina, per session, naming the device;
 - driving outputs is refused for a device that exchanges data with another controller, and on
   Modbus when the module has no timeout of its own or too long a one; renaming such a device needs
@@ -165,7 +197,14 @@ only. The architect kept it on 2026-11-15, under three rules:
 - **The state text is never translated and never rewritten**: the same characters on every screen,
   log and test, produced by core's one writer (`docs/core-plan.md`).
 - **Green is a state, never the accent.**
-- **A test that does not drive the real interface proves no clause.**
+- **Two tiers of proof** (entry 29, Q31, ruled 2026-11-25): a clause of logic is proven on the Rust
+  model; a clause of a surface only by a test that drives the real interface.
+- **Opening a project runs nothing** (entry 32, Q31): ORCL projects have no build scripts and no
+  procedural macros; the folder's cargo configuration is not honoured; Python runs after a trust
+  prompt per folder; pages not shipped inside Oficina get no native bridge.
+- **Text from outside is plain text** (entry 34, Q31): every text from a plant, a file or a peer is
+  drawn as plain text, held by a test over the QML; the CSV export neutralises a cell that would
+  read as a formula; the interface reads the structured state, never parsed state text.
 
 ## Before the code
 - **One own-shell spike before this plan commits to its framework** (decided 2026-11-13): open a
@@ -181,8 +220,9 @@ only. The architect kept it on 2026-11-15, under three rules:
   least, and controlador if the laptop IO check's session is linked in), comes with its first edge
   to portal: law L5 lets a component outside the map use core alone, and the first code does. In
   `docs/design/README.md` (which holds the accent's tones since 2026-11-19) the syntax palette's
-  number colour (`#D2A8FF`) moves, sitting too close to the accent: with the code editor's clause,
-  the first code that draws it. The licence: `GPL-3.0-or-later` and `COPYING` (done, Q35).
+  number colour (`#D2A8FF`) moves, sitting too close to the accent, and its string green with it,
+  green being a state's (entry 24, Q31): with the code editor's clause, the first code that draws
+  it. The licence: `GPL-3.0-or-later` and `COPYING` (done, Q35).
 
 ## The crate
 `crates/veredas-oficina`, from 2026-11-25 (C-250): a library whose model builds on any machine the
@@ -465,20 +505,16 @@ kept, rust-analyzer is held to running nothing of the folder, and the embedded b
   with the crate (Before the code).
 
 ## Open
-- **Q31, the review's majors and minors**, none ruled. Those that touch Oficina: 22 (Oficina
-  starting portal sessions against Q19, and SQL beside a session that writes the store), 28
-  (Monaco has neither a language-server client nor a debugger client), 29 (Spix cannot see inside
-  the web page; docking across monitors on a headless screen), 30 (no schema a form can be built
-  from; the order of the surfaces), 31 (two scene models kept in step), 32 (opening a project must
-  run nothing), 33 (loopback and a tunnel are not a boundary), 34 (text from the plant shown as
-  plain text), 42 (opening the project from the target; pairing in one step), 43 (the outline's
-  contrast; no light theme), 45 (exports, examples, help), and the minors 51, 52 and 54.
+- **Q31, the review's majors and minors**: entries 15 to 41 ruled on 2026-11-25, those that touch
+  Oficina written above where each applies (22, 23, 24, 28 to 35, 37). Still open for Oficina: 42
+  (opening the project from the target; pairing in one step), 43 (the outline's contrast; no light
+  theme), 45 (exports, examples, help), and the minors 51, 52 and 54.
 - **Q370**, Oficina's, ruled 2026-11-25: the window is built by default. The switch waits until
   every member's build on this machine finds Qt and the C++ libraries (the orchestrator's order:
   the machine's cargo configuration first, the switch after); meanwhile it stays behind `shell`.
 - **Q36, Q37** the download's integrity and the robust link.
-  **Q43** the security round. **Q45** the briefing's readings, among them where "identify, name
-  and address" runs, on the laptop or through a target.
+  **Q43** the security round's remainder. **Q45**'s remaining readings (its points on Windows, G2,
+  C5 and a Modbus module's own timeout are ruled and written above).
 - The research behind these decisions (five PLC suites' manuals; three toolkits, Qt 6.12, Avalonia
   12.1 and Slint 1.18; studies of Qt without a GPU, of cxx-qt and KDDockWidgets, of Qt Creator as
   a platform, of softPLC debug and online-change mechanisms and of fieldbus master stacks) was
