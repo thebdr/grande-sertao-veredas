@@ -12,15 +12,15 @@
     "scan"
   ],
   "exitCode": 0,
-  "outputSha": "708ee2298566a30d5353b63be9eca2f9f3882c4bf81bd94df9e02713f21dcae5",
-  "outputTail": "\nrunning 3 tests\ntest the_documented_example_is_the_sample_scan_s_file ... ok\ntest a_scan_is_read_back_whole_and_its_witnesses_name_its_capture_s_frames ... ok\ntest a_file_of_another_format_or_version_or_with_a_key_nobody_reads_is_refused ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.14s\n     Running tests/scan.rs (target/debug/build/veredas-aranha/ed8d06c465ab3269/out/scan-ed8d06c465ab3269)",
-  "ranAt": "2026-11-25T08:46:58.044Z",
-  "headCommit": "c60329a059bf44f17cec47de89e5e5aa36b50f84",
+  "outputSha": "95be60cb5c0452494cdfd3508778ada8cfbba62bf4d8f96812bcbd1038b014f7",
+  "outputTail": "\nrunning 7 tests\ntest a_scan_is_read_back_whole_and_its_witnesses_name_its_capture_s_frames ... ok\ntest the_documented_example_is_the_sample_scan_s_file ... ok\ntest a_full_scan_reads_back_equal_and_the_schema_names_every_key_it_holds ... ok\ntest a_key_nobody_reads_is_named_where_it_is ... ok\ntest witnesses_before_a_bounded_capture_are_frames_let_go_and_none_lies_past_it ... ok\ntest a_file_of_another_format_or_version_or_with_a_key_nobody_reads_is_refused ... ok\ntest a_body_not_read_as_the_file_holds_it_is_refused ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.86s\n     Running tests/scan.rs (target/debug/build/veredas-aranha/ed8d06c465ab3269/out/scan-ed8d06c465ab3269)",
+  "ranAt": "2026-11-26T08:14:30.674Z",
+  "headCommit": "974aeabb130fc9b13ee93cbcab9e39d2229be055",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/scan.rs",
       "file": "crates/veredas-aranha/tests/scan.rs",
-      "fileSha": "8041ef5ff905ab655a8af3ca785791a9111f992578bb858a3113ee7a590c0689"
+      "fileSha": "250671909ca769fdcd41a9f43a1b845fdfaac3afe74d396ba395ff3b4c804586"
     }
   ]
 }
