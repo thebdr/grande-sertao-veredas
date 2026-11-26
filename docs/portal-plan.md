@@ -232,10 +232,36 @@ where they differ.
   probed and pinned in C-042), the listing still counting what was seen. **Built: the recording
   (C-091)**, `record = { dir, max_mb, every_s }`: a second store on the drive with the same
   tables and views, written in one batch every few seconds and at the stop, stopping at its size
-  limit with nothing deleted (Q41 open: the reversible answer, marked pending); refused beside a store
-  on the drive, which already holds every row. **Built: the copy
-  at a fault (C-093)**, `SessionConfig::fault_copy_dir`: at every fault record the store is copied
+  limit with nothing deleted (the answer taken while Q41 was open; ruled since, below: the
+  oldest goes); refused beside a store on the drive, which already holds every row. **Built: the
+  copy at a fault (C-093)**, `SessionConfig::fault_copy_dir`: at every fault record the store is copied
   to a file of its own through the ingest connection, the record in it.
+- **What gives way at a size limit, and the window's bounds** (Q41, ruled 2026-11-25; not built):
+  a growing record on a controller's drive deletes its oldest when it reaches its limit, a fault
+  that repeats counted on its record and not written again, the running program and its fallback
+  never deleted. So the recording (C-091) lets its oldest batches go instead of stopping, and the
+  fault's copies (C-093) are limited in number, the oldest going first, at most one written per
+  shortest gap, the program able to ask for one. The window (C-090) gets a ceiling in bytes beside
+  its span, the shorter of the two ruling and the controller told when the ceiling came first;
+  the engine's default memory limit is never left as it is on a controller. The window holds
+  everything portal reads unless the project narrows it. A data area that fails or cannot be
+  written stops the recording with its reason, and RUN goes on (controlador raises the
+  maintenance request). A store on a PC keeps no limit (Q16).
+- **The mark of an unconfirmed date in every sample** (Q39, ruled 2026-11-25; not built): every
+  sample of the embedded portal's store carries the controller's mark, and the store's files gain
+  it by a new format version, read by migration (law L7: migrate or refuse).
+- **A command passes both switches, and its answer tells both stages** (Q37, ruled 2026-11-25; not
+  built): portal's master write switch, then the controller's commissioning switch; the answer
+  says applied, then saved. The numbered, digested requests of Q37 are the Oficina link's, which
+  portal carries.
+- **One portal instance per project on a host that runs Oficina and supervisão** (Q31 entry 22,
+  ruled 2026-11-25; not built): the first of them to need the project starts it, the other joins,
+  it stops when the last leaves (Q19 amended for such a host); SQL over a running session's store
+  goes through a read-only route of portal's.
+- **A token on every request** (Q31 entry 33, ruled 2026-11-25; not built): a random token per
+  session, handed over SSH and required on every request to the HTTP interface, with Host and
+  Origin checks, for portal and supervisão; controlador's engineering channel is its own (Unix
+  sockets, named pipes on Windows). Q29 and P-014's two items are answered by it.
 - **The grep engine** over logs at rest is on Oficina's first-release list. **Built (C-094)** as
   the library module `grep` (the light build keeps it): Veredas 1's engine without `fancy-regex`
   and without ripgrep's crates, every file decoded by portal's own decoder in the tail's own slices
@@ -260,8 +286,10 @@ where they differ.
   write moving to it and comissionador's `plant.rs` write with it (through the orchestrator).
   Its columns follow what comissionador states it reads.
 - **Q14 stands:** portal builds no desktop UI. Oficina is a component of its own.
-- Open: the review's entries 22 and 33 (Q31); robust requests (Q37); what gives way at a size
-  limit, and the window's ceiling (Q41); the security round (Q43, P-014).
+- **The licence** (Q35, ruled 2026-11-25; done): `MIT OR Apache-2.0`, the two texts beside the
+  manifest, the copyright holder thebdr.
+- Open: the rest of the security round (Q43, P-014); how the window is built so that it hands
+  memory back, portal's to prove (Q41).
 
 ## Traps
 Recorded as the port meets them.
