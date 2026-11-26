@@ -1287,3 +1287,157 @@ fn a_held_active_renamed_outside_the_pattern_or_cut_in_place_is_read_once_in_ord
     std::fs::set_permissions(d.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(lines, (50..60).collect::<Vec<u32>>(), "the search cannot tell");
 }
+
+/// C-098's fourth refute round. A newest-by-order family whose held newest is deleted (40 to 50)
+/// or moved out of the pattern (20 to 60, and back into it once read, 20 to 30 then 40 to 50)
+/// lists an older member, there at the look, as the newest: it is followed from its end, its lines
+/// history. A copy-and-truncate made between a round's listing and the held open has its copy read
+/// from where the held file stood (20 to 55). And a held file seen cut, then retired (20 to 55,
+/// then the next active's 60 to 65), between rounds or between the listing and its open, has its
+/// copy read from where it stood before its own lines, wherever it is when it opens; seen cut,
+/// then deleted, its copy is read all the same (20 to 50, then 60 to 65).
+#[cfg(unix)]
+#[test]
+fn a_held_newest_gone_or_a_cut_held_file_moved_reads_no_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let fixed = |d: &std::path::Path| FamilySpec::new(d, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let newest = |d: &std::path::Path| FamilySpec::new(d, r"plant_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let held_newest = |name: &str| {
+        let d = dir.path().join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d.join("plant_1.log"), 0..10);
+        write(&d.join("plant_2.log"), 10..20);
+        mode(&d.join("plant_2.log"), 0o200);
+        d
+    };
+    let held_fixed = |name: &str| {
+        let d = dir.path().join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d.join("done_1.log"), 0..10);
+        write(&d.join("current.log"), 10..20);
+        mode(&d.join("current.log"), 0o200);
+        d
+    };
+    let mut hooked: Vec<std::path::PathBuf> = Vec::new();
+
+    // The held newest deleted, an older member the newest until the next is born.
+    let d = held_newest("newest-deleted");
+    let dd = d.clone();
+    let (lines, _) = at_end(newest(&d), 10, move || {
+        append(&dd.join("plant_2.log"), 20..30);
+        std::fs::remove_file(dd.join("plant_2.log")).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        write(&dd.join("plant_3.log"), 40..50);
+    });
+    assert_eq!(lines, (40..50).collect::<Vec<u32>>(), "the held newest deleted");
+
+    // The held newest moved out of the pattern.
+    let d = held_newest("newest-aside");
+    let dd = d.clone();
+    let (lines, _) = at_end(newest(&d), 20, move || {
+        append(&dd.join("plant_2.log"), 20..30);
+        std::fs::rename(dd.join("plant_2.log"), dd.join("plant_2.log.old")).unwrap();
+        mode(&dd.join("plant_2.log.old"), 0o644);
+        std::thread::sleep(Duration::from_millis(1000));
+        write(&dd.join("plant_3.log"), 40..50);
+    });
+    assert_eq!(lines, (20..30).chain(40..50).collect::<Vec<u32>>(), "the held newest moved aside");
+
+    // Moved out of the pattern, read there, and back into it, the newest again.
+    let d = held_newest("newest-back");
+    let dd = d.clone();
+    let (lines, _) = at_end(newest(&d), 20, move || {
+        append(&dd.join("plant_2.log"), 20..30);
+        std::fs::rename(dd.join("plant_2.log"), dd.join("plant_2.log.old")).unwrap();
+        mode(&dd.join("plant_2.log.old"), 0o644);
+        std::thread::sleep(Duration::from_millis(1000));
+        std::fs::rename(dd.join("plant_2.log.old"), dd.join("plant_2.log")).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        write(&dd.join("plant_3.log"), 40..50);
+    });
+    assert_eq!(lines, (20..30).chain(40..50).collect::<Vec<u32>>(), "moved aside, read, and back");
+
+    // A copy-and-truncate between the round's listing and the held open (a hook).
+    let d = held_fixed("copy-in-the-window");
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (hp, trigger) = (d.join("current.log"), Arc::clone(&armed));
+    BEFORE_OPEN.lock().unwrap().push((
+        d.join("current.log"),
+        Box::new(move || {
+            if trigger.swap(false, Ordering::SeqCst) {
+                write(&hp.with_file_name("done_2.log"), 10..50);
+                std::fs::OpenOptions::new().write(true).open(&hp).unwrap().set_len(0).unwrap();
+                append(&hp, 50..55);
+                mode(&hp, 0o644);
+            }
+        }),
+    ));
+    hooked.push(d.join("current.log"));
+    let p = d.join("current.log");
+    let (lines, _) = at_end(fixed(&d), 35, move || {
+        append(&p, 20..50);
+        std::thread::sleep(Duration::from_millis(700));
+        armed.store(true, Ordering::SeqCst);
+    });
+    assert_eq!(lines, (20..55).collect::<Vec<u32>>(), "a copy made between the listing and the open");
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+
+    // Seen cut, then retired between rounds.
+    let d = held_fixed("cut-then-retired");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 40, move || {
+        append(&p, 20..50);
+        std::thread::sleep(Duration::from_millis(500));
+        write(&dd.join("done_2.log"), 10..50);
+        std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(0).unwrap();
+        append(&p, 50..55);
+        std::thread::sleep(Duration::from_millis(700));
+        std::fs::rename(&p, dd.join("done_3.log")).unwrap();
+        mode(&dd.join("done_3.log"), 0o644);
+        write(&p, 60..65);
+    });
+    assert_eq!(lines, (20..55).chain(60..65).collect::<Vec<u32>>(), "seen cut, then retired");
+
+    // Seen cut, then deleted: its copy read from where it stood, its own lines gone with it.
+    let d = held_fixed("cut-then-deleted");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 35, move || {
+        append(&p, 20..50);
+        std::thread::sleep(Duration::from_millis(500));
+        write(&dd.join("done_2.log"), 10..50);
+        std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(0).unwrap();
+        append(&p, 50..55);
+        std::thread::sleep(Duration::from_millis(700));
+        std::fs::remove_file(&p).unwrap();
+        write(&p, 60..65);
+    });
+    assert_eq!(lines, (20..50).chain(60..65).collect::<Vec<u32>>(), "seen cut, then deleted");
+
+    // Seen cut, then retired between the round's listing and the held open (a hook).
+    let d = held_fixed("cut-then-retired-in-the-window");
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (hp, trigger) = (d.join("current.log"), Arc::clone(&armed));
+    BEFORE_OPEN.lock().unwrap().push((
+        d.join("current.log"),
+        Box::new(move || {
+            if trigger.swap(false, Ordering::SeqCst) {
+                std::fs::rename(&hp, hp.with_file_name("done_3.log")).unwrap();
+                mode(&hp.with_file_name("done_3.log"), 0o644);
+                write(&hp, 60..65);
+            }
+        }),
+    ));
+    hooked.push(d.join("current.log"));
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 40, move || {
+        append(&p, 20..50);
+        std::thread::sleep(Duration::from_millis(500));
+        write(&dd.join("done_2.log"), 10..50);
+        std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(0).unwrap();
+        append(&p, 50..55);
+        std::thread::sleep(Duration::from_millis(700));
+        armed.store(true, Ordering::SeqCst);
+    });
+    assert_eq!(lines, (20..55).chain(60..65).collect::<Vec<u32>>(), "seen cut, then retired before its open");
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+}

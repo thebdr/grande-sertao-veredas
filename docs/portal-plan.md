@@ -370,7 +370,11 @@ Recorded as the port meets them.
   by its identity and read where it is, its identity kept so the landing reads nothing twice. A
   held file cannot be read, so a copy-and-truncate beside it is told by its length alone: watched
   while it stands at its path, a file shorter than the most of it seen was cut. Its bytes, which
-  would tell a copy from a file dropped in, are the one thing a held file never shows.
+  would tell a copy from a file dropped in, are the one thing a held file never shows. What is
+  born beside it waits for its open, wherever that happens (round 4): a held file seen cut may
+  retire or leave the pattern before it opens, and its copy is still read before its own lines.
+  A newest-by-order family whose held newest goes lists an older member, one of the history, as
+  the newest: followed from its end, never read.
 - **A fixed active the sweep's open finds gone may have been renamed after the listing** (C-096,
   round 3): a rename is atomic, so a listing taken after that open shows it, and only then is
   the history read.

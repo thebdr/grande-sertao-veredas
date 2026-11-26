@@ -205,6 +205,62 @@ fn read_range_full(
 #[cfg(test)]
 mod history_test;
 
+/// The members of a listing among `names`, in rotation order.
+fn beside_members(files: &[FamilyFile], names: &HashSet<String>) -> Vec<FamilyFile> {
+    let mut members: Vec<FamilyFile> = files.iter().filter(|f| !f.is_active && names.contains(&f.file_name)).cloned().collect();
+    members.sort_by(|a, b| rank(a).cmp(&rank(b)));
+    members
+}
+
+/// The members born after the look while a held file stood at the active's path (C-098), decided
+/// once the held file opens, before its first line: cut in place, its copy (the oldest holding the
+/// look's length, `at_look`) read from where the held file stood, the ones after it whole (copies
+/// of later cuts); not cut, or before the copy, dropped in (a live tail does not replay them,
+/// C-036). Each read awaited while it is there and not readable; each marked read. False on a stop.
+#[allow(clippy::too_many_arguments)]
+fn read_beside(
+    members: &[FamilyFile],
+    cut: bool,
+    at_look: u64,
+    read_new: &mut HashSet<String>,
+    cfg: &FamilyTailConfig,
+    stop: &AtomicBool,
+    wake_rx: &Receiver<()>,
+    emit: &mut dyn FnMut(String),
+) -> Result<bool, SourceError> {
+    let mut copied = false;
+    for g in members {
+        let from = if !cut {
+            None
+        } else if copied {
+            Some(0)
+        } else if std::fs::metadata(&g.path).is_ok_and(|m| m.len() >= at_look) {
+            copied = true;
+            Some(at_look)
+        } else {
+            None
+        };
+        if let Some(from) = from {
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    return Ok(false);
+                }
+                match TailedFile::open_as_of(&g.path, from) {
+                    Ok(mut r) => {
+                        r.drain_stable(cfg.drain_grace, stop, emit)?;
+                        r.flush_pending(emit);
+                        break;
+                    }
+                    Err(e) if crate::tail::single::is_not_found(&e) => break,
+                    Err(_) => wait_tick(wake_rx, cfg.poll_interval),
+                }
+            }
+        }
+        read_new.insert(g.file_name.clone());
+    }
+    Ok(true)
+}
+
 /// A held active owed (C-098): its name, the offset its lines after the look start at (the look's
 /// length; 0 for an active held in turn, all of it new), its identity, the most of it seen at the
 /// active's path, and whether it was seen cut in place there (shorter than that).
@@ -396,6 +452,7 @@ fn newest_catch_up(
     spec: &FamilySpec,
     cfg: &FamilyTailConfig,
     mut consumed: (OrderKey, String),
+    read: &[Identity],
     stop: &AtomicBool,
     wake_rx: &Receiver<()>,
     emit: &mut dyn FnMut(String),
@@ -424,15 +481,21 @@ fn newest_catch_up(
             if stop.load(Ordering::Relaxed) {
                 return Ok(None);
             }
+            // A held file read where it was, out of the pattern, before it landed here (C-098).
+            if !read.is_empty() && crate::tail::cursor::identity_at(&f.path).is_some_and(|id| read.contains(&id)) {
+                continue;
+            }
             read_full(&f.path, cfg.drain_grace, stop, emit)?;
         }
         let cand = &pending[pending.len() - 1];
+        // The newest a held file read already (C-098): followed from its end.
+        let start = if !read.is_empty() && crate::tail::cursor::identity_at(&cand.path).is_some_and(|id| read.contains(&id)) { FileStart::End } else { FileStart::Begin };
         let deadline = Instant::now() + PATIENCE;
         let opened = loop {
             if stop.load(Ordering::Relaxed) {
                 return Ok(None);
             }
-            match TailedFile::open(&cand.path, FileStart::Begin) {
+            match TailedFile::open(&cand.path, start) {
                 Ok(c) => break Some(c),
                 Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
                 Err(_) => break None,
@@ -675,7 +738,7 @@ fn attach_backfill(
                             Whereabouts::Here | Whereabouts::Unknown => lost(),
                         }
                     }
-                    match newest_catch_up(spec, cfg, (planned.key, planned.name.clone()), stop, wake_rx, emit)? {
+                    match newest_catch_up(spec, cfg, (planned.key, planned.name.clone()), &[], stop, wake_rx, emit)? {
                         None => Ok(BackfillAttach::Stopped),
                         Some((c, k, nm)) => Ok(BackfillAttach::Attached { cursor: Box::new(c), key: k, name: nm, known: consumed, history_to: None }),
                     }
@@ -853,6 +916,8 @@ fn run_family(
     let mut at_look: Option<HashSet<String>> = None;
     let mut read_new: HashSet<String> = HashSet::new();
     let mut read_ids: Vec<Identity> = Vec::new();
+    // The members born after the look while the held file stood at the active's path, undecided.
+    let mut beside: HashSet<String> = HashSet::new();
 
     // A backfill start replays history from the located point first; the cursor it returns IS
     // the seam: the same handle, the exact offset, live from here.
@@ -908,7 +973,7 @@ fn run_family(
                         // The generic convergence reads every generation from the family's first
                         // file onward and opens the newest: no birth-window generation slips past.
                         let sentinel = (OrderKey::NONE, String::new());
-                        match newest_catch_up(&spec, &cfg, sentinel, &stop, &wake_rx, &mut emit)? {
+                        match newest_catch_up(&spec, &cfg, sentinel, &[], &stop, &wake_rx, &mut emit)? {
                             None => return Ok(()),
                             Some((c, k, n)) => break (c, k, n),
                         }
@@ -973,7 +1038,10 @@ fn run_family(
                 if let Some(look) = at_look.clone() {
                     let active_now = files.iter().find(|f| f.is_active);
                     // The held file still standing at the active's path: the most of it seen there,
-                    // and a cut in place (shorter than that) remembered.
+                    // and a cut in place (shorter than that) remembered; a member born after the
+                    // look meanwhile is no generation (no rotation moved the held file): its copy,
+                    // made by a copy-and-truncate, or a file dropped in, told apart once the held
+                    // file opens, wherever it is then.
                     let mut held_at_active = false;
                     if let (Some(h), Some(a)) = (held.as_mut(), active_now)
                         && let Some(id) = h.identity.as_ref()
@@ -985,6 +1053,15 @@ fn run_family(
                             h.cut = true;
                         } else if !h.cut {
                             h.seen = len;
+                        }
+                        for f in &files {
+                            if !f.is_active
+                                && !look.contains(&f.file_name)
+                                && !read_new.contains(&f.file_name)
+                                && !crate::tail::cursor::identity_at(&f.path).is_some_and(|i| read_ids.contains(&i))
+                            {
+                                beside.insert(f.file_name.clone());
+                            }
                         }
                     }
                     // The held file retired unopened: a member of its identity, no longer the
@@ -1011,16 +1088,28 @@ fn run_family(
                         match crate::tail::cursor::locate_identity(spec.dir(), id, spec.recursive()) {
                             crate::tail::cursor::Located::At(path) => found = Some((path, None)),
                             // Gone from the folder (deleted, or moved out of it), what it took after
-                            // the look went with it; a search that cannot tell reads none of it.
-                            crate::tail::cursor::Located::Gone | crate::tail::cursor::Located::Unknown => held = None,
+                            // the look went with it; a search that cannot tell reads none of it. The
+                            // members born beside it are decided by what was seen of it.
+                            crate::tail::cursor::Located::Gone | crate::tail::cursor::Located::Unknown => {
+                                let (cut, at_look) = held.as_ref().map_or((false, 0), |h| (h.cut, h.from));
+                                if !read_beside(&beside_members(&files, &beside), cut, at_look, &mut read_new, &cfg, &stop, &wake_rx, &mut emit)? {
+                                    return Ok(());
+                                }
+                                beside.clear();
+                                held = None;
+                            }
                         }
                     }
                     if let (Some((path, name)), Some(h)) = (&found, held.as_ref()) {
-                        let from = if h.cut { 0 } else { h.from };
                         #[cfg(test)]
                         before_open(path);
-                        match TailedFile::open_held(path, from, h.identity.as_ref()) {
-                            Ok(mut c) if h.identity.as_ref().is_none_or(|id| c.has_identity(id)) => {
+                        match TailedFile::open_held_against(path, h.from, h.identity.as_ref(), h.seen, h.cut) {
+                            Ok((mut c, cut)) if h.identity.as_ref().is_none_or(|id| c.has_identity(id)) => {
+                                // What was born beside it first, then its own lines.
+                                if !read_beside(&beside_members(&files, &beside), cut, h.from, &mut read_new, &cfg, &stop, &wake_rx, &mut emit)? {
+                                    return Ok(());
+                                }
+                                beside.clear();
                                 c.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
                                 c.flush_pending(&mut emit);
                                 if let Some(name) = name {
@@ -1040,8 +1129,10 @@ fn run_family(
                     // Every generation born after the look and not read yet, in order, whole; a
                     // member of an identity read already (the held file, read where it was before
                     // it landed in the pattern) taken as read.
-                    let mut younger: Vec<&FamilyFile> =
-                        files.iter().filter(|f| !f.is_active && !look.contains(&f.file_name) && !read_new.contains(&f.file_name)).collect();
+                    let mut younger: Vec<&FamilyFile> = files
+                        .iter()
+                        .filter(|f| !f.is_active && !look.contains(&f.file_name) && !read_new.contains(&f.file_name) && !beside.contains(&f.file_name))
+                        .collect();
                     younger.sort_by(|a, b| rank(a).cmp(&rank(b)));
                     younger.retain(|g| {
                         let read = crate::tail::cursor::identity_at(&g.path).is_some_and(|id| read_ids.contains(&id));
@@ -1050,9 +1141,6 @@ fn run_family(
                         }
                         !read
                     });
-                    // While the held file stands at the active's path, a member born after the look
-                    // is no generation (no rotation moved it): its copy, made by a copy-and-truncate,
-                    // or a file dropped in, told apart at its open.
                     let mut awaiting = false;
                     if !held_at_active {
                         for g in &younger {
@@ -1074,63 +1162,59 @@ fn run_family(
                         continue;
                     };
                     // The active: the held file still there, from where it stood (from its top
-                    // when cut in place; another file at its path whole); born after the look,
-                    // whole; held in turn if it does not open.
+                    // when cut in place); born after the look, whole; a newest-by-order member
+                    // that was there at the look (the newest gone, an older one the newest again),
+                    // from its end, its lines history; held in turn if it does not open.
+                    let history_member = matches!(spec.active_mode(), ActiveMode::NewestByOrder)
+                        && look.contains(&active.file_name)
+                        && held.as_ref().is_none_or(|h| h.name != active.file_name);
                     #[cfg(test)]
                     before_open(&active.path);
                     let before = crate::tail::cursor::identity_at(&active.path);
                     let opened = match &held {
+                        _ if history_member => TailedFile::open(&active.path, FileStart::End).map(|c| (c, false)),
                         Some(h) => TailedFile::open_held_against(&active.path, h.from, h.identity.as_ref(), h.seen, h.cut),
                         None => TailedFile::open(&active.path, FileStart::Begin).map(|c| (c, false)),
                     };
                     match opened {
+                        // The round saw the held file at the active's path and the open found
+                        // another file there: it moved since the listing, and is looked for again.
+                        Ok((c, _)) if held_at_active && held.as_ref().and_then(|h| h.identity.as_ref()).is_some_and(|id| !c.has_identity(id)) => {
+                            continue;
+                        }
                         Ok((c, cut)) => {
-                            // The members born beside the held file: cut in place, its copy (the
-                            // oldest holding the look's length) read from where it stood, the ones
-                            // after it whole (copies of later cuts), before its first line; not
-                            // cut, or before the copy, they were dropped in (a live tail does not
-                            // replay them, C-036).
-                            if held_at_active {
-                                let at_look = held.as_ref().map_or(0, |h| h.from);
-                                let mut copied = false;
-                                for g in &younger {
-                                    let from = if !cut {
-                                        None
-                                    } else if copied {
-                                        Some(0)
-                                    } else if std::fs::metadata(&g.path).is_ok_and(|m| m.len() >= at_look) {
-                                        copied = true;
-                                        Some(at_look)
-                                    } else {
-                                        None
-                                    };
-                                    if let Some(from) = from {
-                                        loop {
-                                            if stop.load(Ordering::Relaxed) {
-                                                return Ok(());
-                                            }
-                                            match TailedFile::open_as_of(&g.path, from) {
-                                                Ok(mut r) => {
-                                                    r.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
-                                                    r.flush_pending(&mut emit);
-                                                    break;
-                                                }
-                                                Err(e) if crate::tail::single::is_not_found(&e) => break,
-                                                Err(_) => wait_tick(&wake_rx, cfg.poll_interval),
-                                            }
-                                        }
+                            // The held file opened where it stood: the members born beside it,
+                            // those listed since the round's listing too (made between it and this
+                            // open), read before its first line.
+                            if held_at_active && let Some(h) = held.as_ref() {
+                                let Some(again) = retry_resolve(&spec, &stop) else {
+                                    return Ok(());
+                                };
+                                for f in &again {
+                                    if !f.is_active
+                                        && !look.contains(&f.file_name)
+                                        && !read_new.contains(&f.file_name)
+                                        && !crate::tail::cursor::identity_at(&f.path).is_some_and(|i| h.identity.as_ref() == Some(&i) || read_ids.contains(&i))
+                                    {
+                                        beside.insert(f.file_name.clone());
                                     }
-                                    read_new.insert(g.file_name.clone());
                                 }
+                                if !read_beside(&beside_members(&again, &beside), cut, h.from, &mut read_new, &cfg, &stop, &wake_rx, &mut emit)? {
+                                    return Ok(());
+                                }
+                                beside.clear();
                             }
                             known = look;
                             known.extend(read_new.iter().cloned());
                             known.insert(active.file_name.clone());
                             // An open of the fixed path: what retired between the round's listing
-                            // and this open is read before the active's first line.
+                            // and this open is read before the active's first line. The held file
+                            // opened where it stood, nothing retired from that path, and a member
+                            // born after the listing again was dropped in (C-036's live tail).
                             let (len, identity) =
                                 held.as_ref().map(|h| (if cut || h.cut { 0 } else { h.from }, h.identity.as_ref())).unwrap_or((0, None));
                             if matches!(spec.active_mode(), ActiveMode::Fixed(_))
+                                && !held_at_active
                                 && !sweep_after_held_open(&spec, &mut known, len, identity, c.identity(), &read_ids, &cfg, &stop, &wake_rx, &mut emit)?
                             {
                                 return Ok(());
@@ -1138,7 +1222,7 @@ fn run_family(
                             break (c, active.key, active.file_name.clone());
                         }
                         Err(e) => {
-                            if held.is_none() && !crate::tail::single::is_not_found(&e) {
+                            if held.is_none() && !history_member && !crate::tail::single::is_not_found(&e) {
                                 let after = crate::tail::cursor::identity_and_len_at(&active.path);
                                 held = Some(match after {
                                     Some((id, len)) if before.as_ref() == Some(&id) => {
@@ -1274,7 +1358,7 @@ fn run_family(
                         cursor.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
                         cursor.flush_pending(&mut emit);
                         let consumed = (current_key, current_name.clone());
-                        match newest_catch_up(&spec, &cfg, consumed, &stop, &wake_rx, &mut emit)? {
+                        match newest_catch_up(&spec, &cfg, consumed, &read_ids, &stop, &wake_rx, &mut emit)? {
                             None => return Ok(()),
                             Some((c, k, n)) => {
                                 cursor = c;
