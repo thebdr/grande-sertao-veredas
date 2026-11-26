@@ -3842,3 +3842,32 @@ upgrade, and costs nothing a project does on purpose; (c) is right in the long r
 
 **Reversible?** Yes: the refusal is one function (`config::engine_reads_otherwise`); reading the
 forms as the engine does again would put round 24's `as_the_engine_reads` back in its place.
+
+---
+
+## Q321 - What a run's confirmation covers when the switch it arms lets the session's replies through
+
+**Raised** 2026-11-26, by the comissionador session, from C-205's fourth refute round.
+
+Portal's write switch is the whole session's: a channel's automatic replies (a project's
+`replies`, answering each announcement) wait on it as a test's writes do (`docs/portal-plan.md`).
+So when a run arms it for the gated writes the person confirmed (Q314 (b)), the project's replies
+reach the plant too: the critic's run of the worked example, confirmed for its three sends, let 74
+messages through, its replies among them, none of them shown. Options:
+- (a) The confirmation covers both: the refusal lists the test's gated writes and the session's
+  replies, and the fingerprint is of both (with the texts they depend on), so editing a reply rule
+  asks again.
+- (b) A run whose session has replies is never armed by the run: the person arms the switch
+  themselves, or the project drops its replies. A test that needs the replies (the worked example)
+  then cannot be confirmed by its run.
+- (c) Portal gives a gate narrower than the session's, arming a run's writes and leaving the
+  replies as the project's switch has them. Needs portal, and a test that needs the replies still
+  needs them armed.
+
+The assistant recommends (a): the person sees and confirms everything the armed switch lets reach
+the plant, and the tests that rely on replies still run.
+
+**Taken meanwhile**: (a). C-202 and C-205 state it, the tests hold it.
+
+**Reversible?** Yes: the replies are handed to the plant beside the arming (`LivePlant::with_arming`)
+and read by one method (`Plant::also_armed`); refusing instead is one branch of the binding.
