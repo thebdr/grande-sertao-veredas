@@ -471,3 +471,98 @@ fn a_history_rewritten_under_its_header_is_lost_and_one_deleted_is_read() {
     }
     BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
 }
+
+/// Cuts `path` as a copy-and-truncate under a writer without `O_APPEND` does: emptied, ten lines
+/// written at the old end, a hole of NULs before them.
+fn cut_sparse(path: &std::path::Path) {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    let end = f.metadata().unwrap().len();
+    f.set_len(0).unwrap();
+    f.seek(SeekFrom::Start(end)).unwrap();
+    let body: String = (90_000..90_010u32).map(|i| format!("2026-07-19 {:02}:{:02}:{:02} temp={i} state=run\n", 1 + i / 3600, (i / 60) % 60, i % 60)).collect();
+    f.write_all(body.as_bytes()).unwrap();
+}
+
+/// C-096's thirteenth refute round. A cut landing inside a file's look (between its length and
+/// its bytes) leaves the look a file that shrank under it or a hole at an end: lost, never said
+/// read, a sparse regrowth and a shorter rewrite alike, the shorter one grown past the old end
+/// before the first read too. A file holding a hole of NULs when the
+/// start looks (copy-truncated before it, its history gone with the copy) is lost too, a file read
+/// from its start and a fixed-name family's active at the locate alike.
+#[cfg(unix)]
+#[test]
+fn a_cut_inside_the_look_and_a_hole_at_the_look_are_lost() {
+    use super::DURING_LOOK;
+    use crate::tail::{FileStart, FileTailSource, TailConfig};
+    let start = NaiveDateTime::parse_from_str("2026-07-19 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+    let stamps = || TimestampSpec::new(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ["%Y-%m-%d %H:%M:%S"]).unwrap();
+    let lost = crate::tail::HISTORY_LOST;
+    let dir = tempfile::tempdir().unwrap();
+    let file_source = |path: &std::path::Path, history: &Arc<AtomicU64>| {
+        FileTailSource::new("one", "one", path, TailConfig { start: FileStart::Begin, ..TailConfig::default() }).with_history_read(Arc::clone(history))
+    };
+    let mut looked: Vec<std::path::PathBuf> = Vec::new();
+
+    // Inside the look: a sparse regrowth, and a shorter rewrite.
+    for (name, sparse) in [("sparse.log", true), ("shorter.log", false)] {
+        let file = dir.path().join(name);
+        write(&file, 0..50_000);
+        let (at, mut done) = (file.clone(), false);
+        DURING_LOOK.lock().unwrap().push((
+            file.clone(),
+            Box::new(move || {
+                if !done {
+                    done = true;
+                    if sparse { cut_sparse(&at) } else { write(&at, 90_000..90_010) }
+                }
+            }),
+        ));
+        looked.push(file.clone());
+        let history = Arc::new(AtomicU64::new(u64::MAX));
+        assert_eq!(run_cut(Box::new(file_source(&file, &history)), &history, 10).1, lost, "{name}, cut inside the look");
+    }
+
+    // Cut shorter inside the look, then grown past the old end before the first read: the look
+    // saw it shrink, whatever it grew to after.
+    let regrown = dir.path().join("regrown.log");
+    write(&regrown, 0..50_000);
+    let (at, mut done) = (regrown.clone(), false);
+    DURING_LOOK.lock().unwrap().push((
+        regrown.clone(),
+        Box::new(move || {
+            if !done {
+                done = true;
+                write(&at, 90_000..90_010);
+            }
+        }),
+    ));
+    looked.push(regrown.clone());
+    once(&regrown, |p| {
+        use std::io::Write;
+        let body: String = (100_000..160_000u32).map(|i| format!("2026-07-19 {:02}:{:02}:{:02} temp={i} state=run\n", 1 + (i % 50_000) / 3600, (i / 60) % 60, i % 60)).collect();
+        std::fs::OpenOptions::new().append(true).open(p).unwrap().write_all(body.as_bytes()).unwrap();
+    });
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    assert_eq!(run_cut(Box::new(file_source(&regrown, &history)), &history, 60_010).1, lost, "cut shorter inside the look, then grown");
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| *at != regrown);
+
+    // A hole already there when the start looks: a file, and a fixed-name family's active.
+    let holed = dir.path().join("holed.log");
+    write(&holed, 0..50_000);
+    cut_sparse(&holed);
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    assert_eq!(run_cut(Box::new(file_source(&holed, &history)), &history, 10).1, lost, "a file with a hole at its look");
+    let fixed = dir.path().join("fixed");
+    std::fs::create_dir_all(&fixed).unwrap();
+    write(&fixed.join("done_1.log"), 0..100);
+    write(&fixed.join("current.log"), 100..50_000);
+    cut_sparse(&fixed.join("current.log"));
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let spec = FamilySpec::new(&fixed, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let source = FamilyTailSource::new("fixed", "fixed", spec, FamilyTailConfig { start: FamilyStart::Backfill(start), ..FamilyTailConfig::default() })
+        .with_timestamps(stamps())
+        .with_history_read(Arc::clone(&history));
+    assert_eq!(run_cut(Box::new(source), &history, 110).1, lost, "a fixed family's active with a hole at the locate");
+    DURING_LOOK.lock().unwrap().retain(|(at, _)| !looked.contains(at));
+}

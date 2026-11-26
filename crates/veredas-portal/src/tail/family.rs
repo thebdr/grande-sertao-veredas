@@ -296,6 +296,22 @@ fn sweep_after_held_open(
 #[cfg(test)]
 pub(crate) static BEFORE_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
 
+/// A test's hooks, each run inside a file's look (between its length and its bytes), keyed by
+/// path: what a cut landing within the look does (C-096's thirteenth refute round).
+#[cfg(test)]
+pub(crate) static DURING_LOOK: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn during_look(path: &Path) {
+    if let Ok(mut hooks) = DURING_LOOK.lock() {
+        for (at, hook) in hooks.iter_mut() {
+            if at == path {
+                hook();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn before_open(path: &Path) {
     if let Ok(mut hooks) = BEFORE_OPEN.lock() {

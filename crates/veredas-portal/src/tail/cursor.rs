@@ -80,13 +80,29 @@ pub(crate) struct Reach {
     pub head: Vec<u8>,
     /// The bytes just before `len`.
     pub tail: Vec<u8>,
+    /// The look found the file cut in place, its history gone with the copy: a hole of NULs at an
+    /// end (no log's text holds 64 NUL bytes; a copy-and-truncate under a writer without
+    /// `O_APPEND` leaves one), or the file shrinking while it looked. Never reached.
+    pub cut: bool,
+}
+
+/// Whether `head` or `tail` is a hole: bytes there, every one NUL.
+fn is_hole(head: &[u8], tail: &[u8]) -> bool {
+    let nul = |b: &[u8]| !b.is_empty() && b.iter().all(|x| *x == 0);
+    nul(head) || nul(tail)
 }
 
 impl Reach {
     /// The reach of a file whose whole content is `bytes`.
     pub(crate) fn of_bytes(bytes: &[u8]) -> Reach {
         let n = bytes.len().min(HEAD_BYTES);
-        Reach { len: bytes.len() as u64, head: bytes[..n].to_vec(), tail: bytes[bytes.len() - n..].to_vec() }
+        let (head, tail) = (bytes[..n].to_vec(), bytes[bytes.len() - n..].to_vec());
+        Reach { len: bytes.len() as u64, cut: is_hole(&head, &tail), head, tail }
+    }
+
+    /// A held file's reach: its length at the look alone, its bytes unreadable then.
+    pub(crate) fn of_len(len: u64) -> Reach {
+        Reach { len, head: Vec::new(), tail: Vec::new(), cut: false }
     }
 }
 
@@ -343,16 +359,27 @@ impl TailedFile {
     }
 
     /// The file's reach now: its length and its first and last bytes, the cursor's position kept.
+    ///
+    /// The look is several calls, not one: the file shrinking under it (a read coming back short,
+    /// the length after it less than before) or a hole at an end marks it cut. A rewrite from the
+    /// top under the same first bytes, landing between those calls and already past the old
+    /// length, is the limit no look of its own can see.
     pub(crate) fn reach_now(&mut self) -> Result<Reach, SourceError> {
         let len = self.disk_len()?;
+        #[cfg(test)]
+        crate::tail::family::during_look(&self.path);
         let n = (len.min(HEAD_BYTES as u64)) as usize;
-        Ok(Reach { len, head: self.bytes_at(0, n)?, tail: self.bytes_at(len - n as u64, n)? })
+        let head = self.bytes_at(0, n)?;
+        let tail = self.bytes_at(len - n as u64, n)?;
+        let shrank = head.len() < n || tail.len() < n || self.disk_len()? < len;
+        Ok(Reach { len, cut: shrank || is_hole(&head, &tail), head, tail })
     }
 
     /// Whether this file's read reached `reach`: past the length the start found, its first bytes
     /// and the bytes before that length the same. Bytes that cannot be read now reached nothing.
     pub(crate) fn reached(&mut self, reach: &Reach) -> bool {
-        self.offset >= reach.len
+        !reach.cut
+            && self.offset >= reach.len
             && self.bytes_at(0, reach.head.len()).is_ok_and(|h| h == reach.head)
             && self.bytes_at(reach.len - reach.tail.len() as u64, reach.tail.len()).is_ok_and(|t| t == reach.tail)
     }
