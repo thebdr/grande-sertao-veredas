@@ -1266,8 +1266,10 @@ fn round_six_leftovers_of_its_own_shapes_alone_and_an_interruption_a_refusal_or_
         let opt = m.path("opt/veredas");
         wait_for(&|| std::fs::read_dir(&opt).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".atualizar-")), "the run did not start reading");
         signal(&child, sig);
-        let out = within(child, 30);
+        // The bundle's end closed at once: a run that missed its signal ends on the cut bundle and
+        // says so, rather than waiting on the FIFO.
         drop(writer);
+        let out = within(child, 30);
         assert_eq!(
             (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned()),
             (Some(2), format!("veredas-atualizar: not installed, the machine is as it was:\n  stopped by SIG{sig} before anything was installed\n")),
@@ -1301,6 +1303,7 @@ fn round_six_leftovers_of_its_own_shapes_alone_and_an_interruption_a_refusal_or_
         assert_eq!(std::fs::read_link(m.path(&format!("usr/local/bin/{b}"))).unwrap(), PathBuf::from(format!("/opt/veredas/current/bin/{b}")), "{b}");
     }
     assert!(std::fs::symlink_metadata(m.path("usr/local/bin/veredas-velho")).is_err(), "the dropped executable's link gone");
+    assert_eq!(m.calls().matches("restart").count(), 1, "the services restarted on it before the interruption was taken");
     assert!(!std::fs::read_dir(m.path("opt/veredas")).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".")), "no staging or scratch link left");
 
     // Interrupted while it watches the services: installed, the way back said (exit 3).
@@ -1331,6 +1334,96 @@ fn round_six_leftovers_of_its_own_shapes_alone_and_an_interruption_a_refusal_or_
             Some(2),
             format!("veredas-atualizar: not installed, the machine is as it was:\n  {} is not a link a release made: an executable of the release would replace it\n", m.path("usr/local/bin/veredas-outro").display())
         )
+    );
+    assert_eq!(m.snapshot(), before);
+}
+
+#[test]
+fn round_seven_a_shutdowns_two_signals_and_an_interruption_inside_the_archives_reading() {
+    use std::io::{BufRead, Write};
+    let wait_for = |what: &dyn Fn() -> bool, label: &str| {
+        let start = std::time::Instant::now();
+        while !what() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(60), "{label}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    };
+    // A shutdown's SIGTERM and SIGHUP, back to back, as systemd stops a login session.
+    let both = |child: &std::process::Child| {
+        let p = child.id();
+        assert!(Command::new("sh").arg("-c").arg(format!("kill -TERM {p}; kill -HUP {p}")).status().unwrap().success());
+    };
+    // While it reads the bundle: the first taken, the refusal said whole, the staging removed.
+    let m = Machine::new();
+    let w = tempfile::tempdir().unwrap();
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |_| {});
+    let bytes = std::fs::read(&b).unwrap();
+    let fifo = w.path().join("slow.tar.gz");
+    assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let before = m.snapshot();
+    let child = m.command(&[&fifo], &[("VEREDAS_SETTLE", "0")]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    let mut writer = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+    writer.write_all(&bytes[..bytes.len() / 2]).unwrap();
+    writer.flush().unwrap();
+    let opt = m.path("opt/veredas");
+    wait_for(&|| std::fs::read_dir(&opt).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".atualizar-")), "the run did not start reading");
+    both(&child);
+    drop(writer);
+    let out = within(child, 30);
+    // Both pending at once, Python takes them in the signals' order: the first taken is said.
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(
+        ["SIGTERM", "SIGHUP"].iter().any(|s| err == format!("veredas-atualizar: not installed, the machine is as it was:\n  stopped by {s} before anything was installed\n")),
+        "{err}"
+    );
+    assert_eq!(m.snapshot(), before, "the machine as it was, no staging left");
+    // While it watches the services: installed, the way back said whole.
+    let m = Machine::new();
+    let w = tempfile::tempdir().unwrap();
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |_| {});
+    let child = m.command(&[&b], &[("VEREDAS_SETTLE", "3")]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    wait_for(&|| m.calls().contains("restart"), "the services were not restarted");
+    both(&child);
+    let out = within(child, 30);
+    let back = format!("sudo ln -sfn veredas-1.0.0-{TARGET} /opt/veredas/current && sudo systemctl restart veredas-bancada.service veredas-supervisao.service");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(3), "{err}");
+    assert!(
+        ["SIGTERM", "SIGHUP"].iter().any(|s| err == format!("veredas-atualizar: installed, and stopped by {s} before the bench and supervisão were seen to stay up on it; to go back: {back}\n")),
+        "{err}"
+    );
+
+    // Interrupted inside the archive's reading, where every reading error is a damaged bundle: an
+    // interruption is said as one, never as the bundle's fault. The bundle holds a sparse GiB of
+    // zeros, whose gzip stream takes its time to read; the reserve is set so that the copy fits and
+    // the extraction would not, so nothing large is ever written.
+    let m = Machine::new();
+    let w = tempfile::tempdir().unwrap();
+    let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal"], |d| {
+        std::fs::File::create(d.join("planta/zeros.bin")).unwrap().set_len(1 << 30).unwrap();
+        bundle::write_sums(d).unwrap();
+    });
+    let avail = Command::new("df").args(["--output=avail", "-B1"]).arg(m.path("opt/veredas")).output().unwrap();
+    let avail: u64 = String::from_utf8_lossy(&avail.stdout).lines().nth(1).unwrap().trim().parse().unwrap();
+    let reserve_mb = ((avail - (512 << 20)) >> 20).to_string();
+    let before = m.snapshot();
+    let mut child = m
+        // Its lines handed over as they are printed, so the test sees the digest when it is said.
+        .command(&[&b], &[("VEREDAS_SETTLE", "0"), ("VEREDAS_RESERVE_MB", reserve_mb.as_str()), ("PYTHONUNBUFFERED", "1")])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // The archive's digest said: the copy is done and its reading begins.
+    let mut lines = std::io::BufReader::new(child.stdout.take().unwrap()).lines();
+    let first = lines.next().unwrap().unwrap();
+    assert!(first.contains(" (SHA-256 "), "{first}");
+    assert!(Command::new("kill").arg("-INT").arg(child.id().to_string()).status().unwrap().success());
+    let out = within(child, 60);
+    assert_eq!(
+        (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned()),
+        (Some(2), "veredas-atualizar: not installed, the machine is as it was:\n  stopped by SIGINT before anything was installed\n".to_string())
     );
     assert_eq!(m.snapshot(), before);
 }

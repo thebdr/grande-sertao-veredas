@@ -87,7 +87,17 @@ class Stopped(BaseException):
 STOPS = [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]
 
 
+# The signal that stopped this run, once taken: a shutdown sends SIGTERM and SIGHUP together, and
+# Python runs each one's handler in turn; the second is ignored, so the first one's refusal or way
+# back is said whole.
+STOPPED_BY = []
+
+
 def stopping(signum, _frame):
+    if STOPPED_BY:
+        return
+    STOPPED_BY.append(signum)
+    signal.pthread_sigmask(signal.SIG_BLOCK, STOPS)
     raise Stopped(signal.Signals(signum).name)
 
 
@@ -508,15 +518,19 @@ def main(argv):
     print("veredas-atualizar: the plant's files in the home folder left as they are; the release's own plant is in /opt/veredas/current/planta")
     print(f"veredas-atualizar: restarting the bench and supervisão on it, and watching them for {2 * SETTLE:g} s")
     sys.stdout.flush()
+    # The restart run whole while an interruption is still held (one held since the install waits for
+    # it), so the services run the release `current` names; then the watch, interruptible.
+    restart = subprocess.run(["systemctl", "restart", *SERVICES], capture_output=True, text=True)
+    failed = (restart.stderr.strip() or f"systemctl exited {restart.returncode}") if restart.returncode != 0 else None
     try:
         signal.pthread_sigmask(signal.SIG_UNBLOCK, STOPS)
-        restart = subprocess.run(["systemctl", "restart", *SERVICES], capture_output=True, text=True)
-        why = (restart.stderr.strip() or f"systemctl exited {restart.returncode}") if restart.returncode != 0 else staying_up()
+        why = failed or staying_up()
     except Stopped as e:
-        signal.pthread_sigmask(signal.SIG_BLOCK, STOPS)
-        back = f"sudo ln -sfn {os.path.basename(old)} /opt/veredas/current && sudo systemctl restart {' '.join(SERVICES)}"
-        print(f"veredas-atualizar: installed, and stopped by {e.name} before the bench and supervisão were seen to stay up on it; to go back: {back}", file=sys.stderr)
-        return 3
+        why = failed
+        if why is None:
+            back = f"sudo ln -sfn {os.path.basename(old)} /opt/veredas/current && sudo systemctl restart {' '.join(SERVICES)}"
+            print(f"veredas-atualizar: installed, and stopped by {e.name} before the bench and supervisão were seen to stay up on it; to go back: {back}", file=sys.stderr)
+            return 3
     if why:
         back = f"sudo ln -sfn {os.path.basename(old)} /opt/veredas/current && sudo systemctl restart {' '.join(SERVICES)}"
         print(f"veredas-atualizar: the bench and supervisão did not stay up on it ({why}); to go back: {back}", file=sys.stderr)
