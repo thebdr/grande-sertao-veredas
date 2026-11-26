@@ -465,7 +465,8 @@ fn resolve(names: &[Name], token: &Token, sheet: Option<&str>) -> Option<usize> 
     // a name by the engine's fold (`Kx` with the Kelvin sign is `kx`), the first of two the file
     // holds, as the engine reads it; a sheet by its own
     let key = name_key(token.text);
-    let same_sheet = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+    // a sheet by the engine's fold, upper case (the round at 340e3e2e: one fold for every sheet key)
+    let same_sheet = |a: &str, b: &str| a == b || a.to_uppercase() == b.to_uppercase();
     let scope = token.sheet.as_deref().or(sheet);
     scope
         .and_then(|sc| {
@@ -1049,12 +1050,27 @@ fn calls_unknown(wb: &Workbook, sheet: u32, a: Addr, formula: &str, scope: Optio
 fn engine_only_error(formula: &str) -> Option<String> {
     const ENGINE_ONLY: [&str; 5] = ["#N/IMPL!", "#ERROR!", "#CIRC!", "#SPILL!", "#CALC!"];
     let mut quote: Option<char> = None;
+    // a structured reference's brackets, where `'` escapes the character after it (`['#n]`) and
+    // opens no quote (the round at 340e3e2e)
+    let mut brackets = 0usize;
+    let mut escaped = false;
     for (i, c) in formula.char_indices() {
+        if brackets > 0 {
+            match c {
+                _ if escaped => escaped = false,
+                '\'' => escaped = true,
+                '[' => brackets += 1,
+                ']' => brackets -= 1,
+                _ => {}
+            }
+            continue;
+        }
         match quote {
             // a doubled quote inside is the quote itself, read as closing and opening again
             Some(q) if c == q => quote = None,
             Some(_) => {}
             None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == '[' => brackets = 1,
             None if c == '#' => {
                 if let Some(error) = ENGINE_ONLY.iter().find(|e| formula[i..].starts_with(**e)) {
                     return Some(error.to_string());
@@ -1064,6 +1080,16 @@ fn engine_only_error(formula: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The first 3-D reference a formula states (`Janeiro:Dezembro!A1`, `'Jan:Dez'!A1:A3`), which the
+/// engine does not read: it would write another formula (`Janeiro:(Dezembro!A1)`) cached `#NAME?`
+/// or `#REF!` (the round at 340e3e2e).
+fn three_d_reference(formula: &str) -> Option<String> {
+    refs::tokens(formula)
+        .into_iter()
+        .find(|t| !t.external && t.sheet_last.is_some())
+        .map(|t| format!("{}:{}!", t.sheet.unwrap_or_default(), t.sheet_last.unwrap_or_default()))
 }
 
 /// Whether an earlier edit of the list wrote the cell now at `a` of `sheet` (through the moves so
@@ -1470,6 +1496,11 @@ pub fn patch(
                             "{canonical}!{a}: {error} is an error of the engine's own, which no file's formula holds (MS-XLSX's `error-constant`)"
                         )));
                     }
+                    if let Some(prefix) = three_d_reference(&target) {
+                        return Err(PatchError::Unsupported(format!(
+                            "{canonical}!{a}: {prefix} is a 3-D reference, which the engine does not read (the patcher writes no formula it would read as another)"
+                        )));
+                    }
                     if let Some(name) = calls_unknown(&wb, s, a, &target, Some(&canonical)) {
                         return Err(PatchError::Unsupported(format!(
                             "{canonical}!{a}: {name} is a function the engine does not compute (the patcher writes no formula it would cache as #NAME?)"
@@ -1581,7 +1612,7 @@ pub fn patch(
             }
             Edit::AddSheet { name } => {
                 let taken = wb.sheet_index(name).is_ok()
-                    || file_sheets.iter().chain(new_sheets.iter()).any(|n| n.to_lowercase() == name.to_lowercase());
+                    || file_sheets.iter().chain(new_sheets.iter()).any(|n| n.to_uppercase() == name.to_uppercase());
                 if taken {
                     return Err(fail(format!("a sheet named {name:?} exists")));
                 }
@@ -1604,6 +1635,11 @@ pub fn patch(
                         "name {name}: {error} is an error of the engine's own, which no file's formula holds (MS-XLSX's `error-constant`)"
                     )));
                 }
+                if let Some(prefix) = three_d_reference(body) {
+                    return Err(PatchError::Unsupported(format!(
+                        "name {name}: {prefix} is a 3-D reference, which the engine does not read (the patcher writes no formula it would read as another)"
+                    )));
+                }
                 if let Some(called) = calls_unknown(&wb, at, Addr::new(1, 1), body, scope.as_deref()) {
                     return Err(PatchError::Unsupported(format!(
                         "name {name}: {called} is a function the engine does not compute (the patcher writes no formula it cannot read)"
@@ -1621,7 +1657,7 @@ pub fn patch(
                 }
                 wb.set_name(name, &user, scope.as_deref())
                     .map_err(|e| fail(e.to_string()))?;
-                let key = (name_key(name), scope.as_ref().map(|s| s.to_lowercase()));
+                let key = (name_key(name), scope.as_ref().map(|s| s.to_uppercase()));
                 deleted_names.retain(|k| *k != key);
                 set_names.push(key);
                 names_touched = true;
@@ -1631,7 +1667,7 @@ pub fn patch(
                     .map_err(|e| fail(e.to_string()))?;
                 // the file's other names the engine reads as this one go with it
                 delete_every_name(&mut wb, name, scope.as_deref()).map_err(fail)?;
-                let key = (name_key(name), scope.as_ref().map(|s| s.to_lowercase()));
+                let key = (name_key(name), scope.as_ref().map(|s| s.to_uppercase()));
                 set_names.retain(|k| *k != key);
                 deleted_names.push(key);
                 names_touched = true;
@@ -1782,7 +1818,7 @@ pub fn patch(
         if w.content.is_some()
             && let Some((row, col)) = map_pos(&w.sheet, w.after, w.row, w.col)
         {
-            last_content.insert((w.sheet.to_lowercase(), row, col), i);
+            last_content.insert((w.sheet.to_uppercase(), row, col), i);
         }
     }
     for (index, w) in writes.iter().enumerate() {
@@ -1795,7 +1831,7 @@ pub fn patch(
             .entry((row, col))
             .or_default();
         entry.style.extend(w.style.iter().copied());
-        let last = last_content.get(&(w.sheet.to_lowercase(), row, col)) == Some(&index);
+        let last = last_content.get(&(w.sheet.to_uppercase(), row, col)) == Some(&index);
         if let Some(c) = w.content.as_ref().filter(|_| last) {
             let s = wb
                 .sheet_index(&w.sheet)
@@ -1882,7 +1918,7 @@ pub fn patch(
                 .into_iter()
                 .map(|(name, _, cells)| {
                     let at = cells.keys().filter_map(|&(r, c)| map_pos(&name, 0, r, c)).collect();
-                    (name.to_lowercase(), at)
+                    (name.to_uppercase(), at)
                 })
                 .collect(),
         )
@@ -1890,7 +1926,7 @@ pub fn patch(
         None
     };
     let holds_cell = |name: &str, at: (i32, i32)| {
-        in_file.as_ref().is_none_or(|f| f.get(&name.to_lowercase()).is_some_and(|s| s.contains(&at)))
+        in_file.as_ref().is_none_or(|f| f.get(&name.to_uppercase()).is_some_and(|s| s.contains(&at)))
     };
     // exempt: unstable before the edits and, where it is now, after them
     let unstable = |i: usize, orig: &(i32, i32), now: (i32, i32)| {
@@ -2773,7 +2809,7 @@ fn rewrite_defined_names(
                 .is_some_and(|e| !e.is_worksheet());
             // still in the model? (a deleted name goes; a built-in one the engine may not hold,
             // `_xlnm._FilterDatabase`, stays unless an edit deleted it)
-            let key = (name_key(&name), scope.as_ref().map(|s| s.to_lowercase()));
+            let key = (name_key(&name), scope.as_ref().map(|s| s.to_uppercase()));
             let in_model = (on_a_chart_sheet
                 || model_names.iter().any(|n| {
                 name_key(&n.name) == name_key(&name)
@@ -2786,7 +2822,7 @@ fn rewrite_defined_names(
             }
             seen.push((
                 name_key(&name),
-                scope.as_ref().map(|s| s.to_lowercase()),
+                scope.as_ref().map(|s| s.to_uppercase()),
             ));
             let element = &inner[a..b];
             let body_raw = if t.self_closing {
@@ -2805,7 +2841,7 @@ fn rewrite_defined_names(
             // a name the edits set: its new formula, from the model
             let key = (
                 name_key(&name),
-                scope.as_ref().map(|s| s.to_lowercase()),
+                scope.as_ref().map(|s| s.to_uppercase()),
             );
             if set_names.contains(&key)
                 && let Some(m) = model_names.iter().find(|n| {
@@ -2839,7 +2875,7 @@ fn rewrite_defined_names(
     for n in &model_names {
         let key = (
             name_key(&n.name),
-            n.scope.as_ref().map(|s| s.to_lowercase()),
+            n.scope.as_ref().map(|s| s.to_uppercase()),
         );
         if seen.contains(&key) {
             continue;
@@ -2916,7 +2952,7 @@ fn move_model_names(wb: &mut Workbook, sheet: &str, shift: Shift) -> Result<(), 
         // of two names of a scope that fold to one, the engine reads, sets and deletes the first
         // alone (fork change 34): the second moves in the file's text and nowhere else, since
         // setting it would set the first
-        let key = (name_key(&n.name), n.scope.as_ref().map(|s| s.to_lowercase()));
+        let key = (name_key(&n.name), n.scope.as_ref().map(|s| s.to_uppercase()));
         if moved_keys.contains(&key) {
             continue;
         }
@@ -3011,11 +3047,11 @@ fn verify(
     // engine recomputes the rest, so its reading of the file cannot show a stale cache)
     let caches: std::collections::HashMap<(String, i32, i32), Value> = cached::read(dest)?
         .into_iter()
-        .map(|((s, r, c), cell)| ((s.to_lowercase(), r, c), cell.value))
+        .map(|((s, r, c), cell)| ((s.to_uppercase(), r, c), cell.value))
         .collect();
     let mut stale: Vec<String> = Vec::new();
     for (sheet, row, col, want) in expected {
-        let cached = caches.get(&(sheet.to_lowercase(), *row, *col)).cloned().unwrap_or(Value::Empty);
+        let cached = caches.get(&(sheet.to_uppercase(), *row, *col)).cloned().unwrap_or(Value::Empty);
         if !cache_holds(&cached, want) {
             stale.push(format!("{sheet}!{}: cached {cached:?}, the engine {want:?}", Addr::new(*row, *col)));
         }

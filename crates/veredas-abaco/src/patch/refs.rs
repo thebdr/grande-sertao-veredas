@@ -584,15 +584,32 @@ pub fn targets(t: &RefToken, sheet: &str, home: Option<&str>, order: &[String]) 
         return false;
     }
     match (&t.sheet, &t.sheet_last) {
-        (None, _) => home.is_some_and(|h| h.eq_ignore_ascii_case(sheet)),
-        (Some(s), None) => s.eq_ignore_ascii_case(sheet),
+        (None, _) => home.is_some_and(|h| names_sheet(h, sheet, order)),
+        (Some(s), None) => names_sheet(s, sheet, order),
         (Some(a), Some(z)) => {
-            let pos = |n: &str| order.iter().position(|o| o.eq_ignore_ascii_case(n));
+            let pos = |n: &str| sheet_position(n, order);
             match (pos(a), pos(z), pos(sheet)) {
                 (Some(a), Some(z), Some(s)) => a.min(z) <= s && s <= a.max(z),
                 _ => false,
             }
         }
+    }
+}
+
+/// Where the engine finds the sheet a formula names `name` among `order`: its own spelling first,
+/// then in any case by the engine's fold, upper case (fork change 37; `área!A1` is `Área!A1`, the
+/// round at 340e3e2e).
+pub fn sheet_position(name: &str, order: &[String]) -> Option<usize> {
+    let upper = name.to_uppercase();
+    order.iter().position(|o| o == name).or_else(|| order.iter().position(|o| o.to_uppercase() == upper))
+}
+
+/// Whether a formula's `name` is `sheet` to the engine: the sheet it finds among `order`, or, with
+/// neither among them, the same name by the engine's fold.
+fn names_sheet(name: &str, sheet: &str, order: &[String]) -> bool {
+    match (sheet_position(name, order), order.iter().position(|o| o == sheet)) {
+        (Some(found), Some(at)) => found == at,
+        _ => name == sheet || name.to_uppercase() == sheet.to_uppercase(),
     }
 }
 

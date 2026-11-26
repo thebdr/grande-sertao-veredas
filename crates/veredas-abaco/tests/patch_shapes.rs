@@ -2993,3 +2993,117 @@ fn a_name_of_the_file_format_s_characters_moves_is_set_and_reads() {
         }
     }
 }
+
+// ---- refute round 18 --------------------------------------------------------------------------
+
+#[test]
+fn a_reference_to_a_sheet_in_another_case_beyond_ascii_moves_with_the_sheet() {
+    // the engine reads `área!A1` as `Área!A1` (fork change 37); the patcher's text moves compared
+    // sheets in ASCII case and left such a reference where it was
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("area.xlsx");
+    let area = r#"<row r="1"><c r="A1"><v>5</v></c></row><row r="2"><c r="A2"><v>6</v></c></row><row r="3"><c r="A3"><v>7</v></c></row>"#;
+    let after = r#"<conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>área!$A$1&gt;0</formula></cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="list" sqref="B1"><formula1>área!$A$1:$A$3</formula1></dataValidation></dataValidations>"#;
+    let s = r#"<row r="1"><c r="A1"><v>1</v></c><c r="C1"><f>área!A1*2</f><v>10</v></c></row>"#;
+    plain_book(&src, &[("Área", worksheet(area, "")), ("S", worksheet(s, after))], "<definedName name=\"Lista\">área!$A$1:$A$3</definedName>", &[]);
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        let dst = dir.path().join("inserted.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[rows("Área", 1, 1)], &options).unwrap();
+        let book = part(&dst, "xl/workbook.xml");
+        assert!(book.contains("<definedName name=\"Lista\">área!$A$2:$A$4</definedName>"), "{book}");
+        let sheet = part(&dst, "xl/worksheets/sheet2.xml");
+        assert!(sheet.contains("<formula>área!$A$2&gt;0</formula>") && sheet.contains("<formula1>área!$A$2:$A$4</formula1>"), "{sheet}");
+        assert_eq!(element(&sheet, "C1"), Some(r#"<c r="C1"><f>área!A2*2</f><v>10</v></c>"#), "{sheet}");
+        let dst = dir.path().join("deleted.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[Edit::DeleteRows { sheet: "Área".into(), at: 1, count: 1 }], &options).unwrap();
+        let book = part(&dst, "xl/workbook.xml");
+        assert!(book.contains("<definedName name=\"Lista\">área!$A$1:$A$2</definedName>"), "{book}");
+        let sheet = part(&dst, "xl/worksheets/sheet2.xml");
+        assert!(sheet.contains("<formula1>área!$A$1:$A$2</formula1>"), "{sheet}");
+        assert!(sheet.contains("#REF!"), "{sheet}");
+    }
+}
+
+#[test]
+fn an_error_of_the_engine_s_own_after_a_structured_reference_s_escape_is_refused() {
+    // `'` escapes `#` inside a structured reference's brackets and opens no quote there
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("table.xlsx");
+    let text = |c: &str, t: &str| format!(r#"<c r="{c}" t="inlineStr"><is><t>{t}</t></is></c>"#);
+    let data = format!(
+        r#"<row r="2">{}{}</row><row r="3">{}<c r="B3"><v>3</v></c></row><row r="4">{}<c r="B4"><v>4</v></c></row>"#,
+        text("A2", "Name"),
+        text("B2", "#n"),
+        text("A3", "a"),
+        text("A4", "b")
+    );
+    let table = format!(
+        r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><table xmlns="{MAIN}" id="1" name="Table1" displayName="Table1" ref="A2:B4" totalsRowShown="0"><autoFilter ref="A2:B4"/><tableColumns count="2"><tableColumn id="1" name="Name"/><tableColumn id="2" name="#n"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>"##
+    );
+    plain_book(
+        &src,
+        &[("T", worksheet(&data, r#"<tableParts count="1"><tablePart r:id="rId1"/></tableParts>"#))],
+        "",
+        &[("xl/worksheets/_rels/sheet1.xml.rels", rels(&[rel("rId1", "table", "../tables/table1.xml")])), ("xl/tables/table1.xml", table)],
+    );
+    let formula = |f: &str| Edit::Formula { sheet: "T".into(), cell: "D1".into(), formula: f.into(), expect: None };
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        for f in ["=SUM(Table1['#n])+IFERROR(#CIRC!,1)", "=SUM(Table1[['#n]])+IFERROR(#N/IMPL!,1)"] {
+            let dst = dir.path().join("out.xlsx");
+            let e = patch(&src, &dst, &[formula(f)], &options).unwrap_err();
+            assert!(e.to_string().contains("an error of the engine's own"), "{f}: {e}");
+            assert!(!dst.exists());
+        }
+        let dst = dir.path().join("fine.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        let report = patch(&src, &dst, &[formula("=SUM(Table1['#n])")], &options).unwrap();
+        assert_eq!(report.outcomes[0].status, Status::Applied);
+    }
+}
+
+#[test]
+fn an_edit_s_3d_reference_is_refused_and_writes_nothing() {
+    // the engine reads `Janeiro:Dezembro!A1` as a name joined to a reference and writes
+    // `Janeiro:(Dezembro!A1)`, cached `#NAME?`: a formula and a name holding one are refused
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("months.xlsx");
+    let one = worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, "");
+    plain_book(&src, &[("Janeiro", one.clone()), ("Dezembro", one.clone()), ("S", worksheet("", ""))], "", &[]);
+    let formula = |f: &str| Edit::Formula { sheet: "S".into(), cell: "B1".into(), formula: f.into(), expect: None };
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        for edit in [
+            formula("=SUM(Janeiro:Dezembro!A1)"),
+            formula("=SUM(Janeiro:Dezembro!A1:A3)*2"),
+            formula("=SUM('Janeiro:Dezembro'!A1)"),
+            Edit::SetName { name: "Ano".into(), formula: "=SUM(Janeiro:Dezembro!$A$1)".into(), scope: None },
+        ] {
+            let dst = dir.path().join("out.xlsx");
+            let e = patch(&src, &dst, std::slice::from_ref(&edit), &options).unwrap_err();
+            assert!(e.to_string().contains("is a 3-D reference"), "{edit:?}: {e}");
+            assert!(!dst.exists());
+        }
+    }
+}
+
+#[test]
+fn two_sheets_the_engine_tells_apart_each_take_their_edit() {
+    // `Kx` with the Kelvin sign and `kx`: two sheets to the engine, whose fold is upper case, and
+    // so to the patcher's keys, which folded in lower case and lost one sheet's edit
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("kelvin.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>A1*2</f><v>2</v></c></row>"#;
+    plain_book(&src, &[("\u{212A}x", worksheet(data, "")), ("kx", worksheet(data, ""))], "", &[]);
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        let dst = dir.path().join("out.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[value("\u{212A}x", "A1", serde_json::json!(5)), value("kx", "A1", serde_json::json!(7))], &options).unwrap();
+        let first = part(&dst, "xl/worksheets/sheet1.xml");
+        let second = part(&dst, "xl/worksheets/sheet2.xml");
+        assert_eq!(element(&first, "A1"), Some(r#"<c r="A1"><v>5</v></c>"#), "{first}");
+        assert_eq!(element(&first, "B1"), Some(r#"<c r="B1"><f>A1*2</f><v>10</v></c>"#), "{first}");
+        assert_eq!(element(&second, "A1"), Some(r#"<c r="A1"><v>7</v></c>"#), "{second}");
+        assert_eq!(element(&second, "B1"), Some(r#"<c r="B1"><f>A1*2</f><v>14</v></c>"#), "{second}");
+    }
+}

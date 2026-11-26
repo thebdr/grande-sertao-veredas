@@ -266,14 +266,15 @@ impl Workbook {
         self.model.workbook.get_worksheet_names()
     }
 
-    /// The index of the sheet called `name` (exact, then case-insensitive,
-    /// as Excel resolves sheet names).
+    /// The index of the sheet called `name` (exact, then in any case by the engine's fold, upper
+    /// case, as its parser and its model find a sheet, fork change 37).
     pub fn sheet_index(&self, name: &str) -> Result<u32, ModelError> {
         let names = self.sheet_names();
+        let upper = name.to_uppercase();
         names
             .iter()
             .position(|n| n == name)
-            .or_else(|| names.iter().position(|n| n.eq_ignore_ascii_case(name)))
+            .or_else(|| names.iter().position(|n| n.to_uppercase() == upper))
             .map(|i| i as u32)
             .ok_or_else(|| ModelError::UnknownSheet(name.to_string()))
     }
