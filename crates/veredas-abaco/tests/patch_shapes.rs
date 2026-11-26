@@ -1783,6 +1783,26 @@ fn a_function_the_engine_does_not_compute_is_refused_in_a_formula_and_a_name() {
     assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{:?}", report.outcomes);
     assert_eq!(read_back(&dst, "S", "D1"), Value::Number(9.0));
     assert_eq!(read_back(&dst, "S", "D2"), Value::Number(4.0));
+    // and a LAMBDA calling its own parameter, a name a debug print escapes (`\h`, an NFD `h` with
+    // its accent, a joiner), in a formula and in a name: the engine computes it (the round at
+    // 444cead9: refused as a function it does not)
+    for h in ["h", "\\h", "h\u{301}", "g\u{200D}h"] {
+        let _ = std::fs::remove_file(&dst);
+        let report = patch(
+            &src,
+            &dst,
+            &[
+                Edit::Formula { sheet: "S".into(), cell: "D3".into(), formula: format!("=LAMBDA({h},{h}(A1))(LAMBDA(y,y*2))"), expect: None },
+                Edit::SetName { name: "Twice".into(), formula: format!("=LAMBDA({h},{h}(S!$A$2))(LAMBDA(y,y*2))"), scope: None },
+                Edit::Formula { sheet: "S".into(), cell: "D4".into(), formula: "=Twice".into(), expect: None },
+            ],
+            &verified(),
+        )
+        .unwrap_or_else(|e| panic!("{h:?}: {e}"));
+        assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{h:?}: {:?}", report.outcomes);
+        assert_eq!(read_back(&dst, "S", "D3"), Value::Number(2.0), "{h:?}");
+        assert_eq!(read_back(&dst, "S", "D4"), Value::Number(4.0), "{h:?}");
+    }
 }
 
 #[test]
@@ -3373,14 +3393,20 @@ fn a_call_a_let_or_a_lambda_binds_is_no_volatile_name_of_its_spelling() {
             ),
             "W",
         ),
+    ]
+    .into_iter()
+    .map(|(n, f)| (n.to_string(), f))
+    // and a LAMBDA's parameter `g`, and the names a debug print escapes (`\g`, an NFD `g` with an
+    // accent, a joiner: the round at 444cead9, read from the print, matched no parameter)
+    .chain(["g", "\\g", "g\u{301}", "g\u{200D}h"].into_iter().map(|g| {
         (
-            concat!(
-                r#"<definedName name="g" localSheetId="1">_xlfn.LAMBDA(_xlpm.x,_xlpm.x+RAND())</definedName>"#,
-                r#"<definedName name="Apply">_xlfn.LAMBDA(_xlpm.g,_xlpm.v,_xlpm.g(_xlpm.v))</definedName>"#
+            format!(
+                r#"<definedName name="{g}" localSheetId="1">_xlfn.LAMBDA(_xlpm.x,_xlpm.x+RAND())</definedName><definedName name="Apply">_xlfn.LAMBDA(_xlpm.{g},_xlpm.v,_xlpm.{g}(_xlpm.v))</definedName>"#
             ),
             "Apply(_xlfn.LAMBDA(_xlpm.y,_xlpm.y*2),A1)",
-        ),
-    ] {
+        )
+    })) {
+        let names = names.as_str();
         let src = dir.path().join("bound.xlsx");
         plain_book(&src, &[("Sheet1", worksheet("", "")), ("Data", worksheet(&data.replace("FORMULA", formula), ""))], names, &[]);
         for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {

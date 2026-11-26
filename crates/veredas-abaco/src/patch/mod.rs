@@ -453,13 +453,6 @@ fn bound_key(name: &str) -> String {
     name_key(name.trim_start_matches("_xlpm."))
 }
 
-/// A LAMBDA parameter's name, which the engine keeps private but prints: `NamedVariable { name: "x", … }`.
-fn parameter_name(p: &impl std::fmt::Debug) -> Option<String> {
-    let text = format!("{p:?}");
-    let start = text.find("name: \"")? + "name: \"".len();
-    Some(text[start..start + text[start..].find('"')?].to_string())
-}
-
 fn node_volatile_bound(node: &Node, sheet: u32, names: &ParsedNames, volatile: &[bool], bound: &mut Vec<String>) -> bool {
     let marked = |i: Option<usize>| i.is_some_and(|i| volatile[i]);
     let go = |n: &Node, bound: &mut Vec<String>| node_volatile_bound(n, sheet, names, volatile, bound);
@@ -488,7 +481,9 @@ fn node_volatile_bound(node: &Node, sheet: u32, names: &ParsedNames, volatile: &
         }
         Node::LambdaDefKind { parameters, body } => {
             let depth = bound.len();
-            bound.extend(parameters.iter().filter_map(parameter_name).map(|p| bound_key(&p)));
+            // the parameter's name as the formula spells it (fork change 41): its debug print
+            // escapes a backslash or a combining mark a name may hold (the round at 444cead9)
+            bound.extend(parameters.iter().map(|p| bound_key(p.name())));
             let found = go(body, bound);
             bound.truncate(depth);
             found
@@ -980,7 +975,7 @@ fn unknown_call(node: &Node, bound: &mut Vec<String>, names: &[String]) -> Optio
             let bare = name.trim_start_matches("_xlfn.").trim_start_matches("_xlpm.");
             // the engine's fold, for a bound name as for a defined one (`ÁREA` is `área`)
             let key = name_key(bare);
-            let known = bound.iter().any(|b| name_key(b) == key) || names.iter().any(|n| name_key(n) == key);
+            let known = bound.iter().any(|b| bound_key(b) == key) || names.iter().any(|n| name_key(n) == key);
             if !known {
                 return Some(bare.to_uppercase());
             }
@@ -988,7 +983,7 @@ fn unknown_call(node: &Node, bound: &mut Vec<String>, names: &[String]) -> Optio
         }
         Node::LambdaDefKind { parameters, body } => {
             let depth = bound.len();
-            bound.extend(parameters.iter().filter_map(parameter_name));
+            bound.extend(parameters.iter().map(|p| p.name().to_string()));
             let found = unknown_call(body, bound, names);
             bound.truncate(depth);
             found
@@ -3299,6 +3294,18 @@ mod tests {
         assert!(!v("LET(f,LAMBDA(x,x*2),f(1))", other, data), "the LET's f");
         assert!(!v("LAMBDA(f,f(1))(LAMBDA(y,y*2))", other, data), "the LAMBDA's parameter f");
         assert!(v("LET(g,LAMBDA(x,x*2),f(1))", other, data), "a LET binding another name");
+        // and a parameter whose name a debug print escapes, read whole (fork change 41; the round
+        // at 444cead9)
+        for f in ["\\f", "f\u{301}", "g\u{200D}f"] {
+            wb.set_name(f, "LAMBDA(x,x+RAND())", Some("Data")).unwrap();
+            let names = ParsedNames::of(&wb);
+            let v = |formula: &str| {
+                let node = parsed_at(&wb, other, Addr::new(2, 2), formula).unwrap_or_else(|| panic!("{formula}"));
+                node_volatile(&node, data, &names, &names.volatile_from(data))
+            };
+            assert!(v(&format!("{f}(1)")), "{f:?}: Data's own");
+            assert!(!v(&format!("LAMBDA({f},{f}(1))(LAMBDA(y,y*2))")), "{f:?}: the LAMBDA's parameter");
+        }
     }
 
     #[test]
