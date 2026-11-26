@@ -11,15 +11,15 @@
     "manifest"
   ],
   "exitCode": 0,
-  "outputSha": "2dff97f786951239dd035dbe739cd5e1be557a3e4da1f8d81badcaf8d0b49ade",
-  "outputTail": "        PASS [   0.417s] (33/45) alforge::manifest a_version_or_an_executable_that_differs_is_refused\n        PASS [   0.316s] (34/45) alforge::manifest round_nineteen_the_lock_by_requirement_a_package_by_path_through_the_lock_and_a_later_conflict\n        PASS [   0.359s] (35/45) alforge::manifest replace_refs_and_grafts_change_neither_objects_nor_ancestry\n        PASS [   0.324s] (36/45) alforge::manifest round_twenty_a_pre_release_git_dependency_is_charged_and_every_unread_pin_says_why\n        PASS [   0.350s] (37/45) alforge::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.364s] (38/45) alforge::manifest the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them\n        PASS [   0.563s] (39/45) alforge::manifest a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none\n        PASS [   0.612s] (40/45) alforge::manifest a_false_pin_charges_no_true_release_and_hides_no_conflict\n        PASS [   0.739s] (41/45) alforge::manifest round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_path\n        PASS [   1.034s] (42/45) alforge::manifest build_inputs_that_do_not_read_are_refused_where_a_version_is_pinned_twice\n        PASS [   1.651s] (43/45) alforge::manifest a_version_names_everything_its_build_reads_but_the_toolchain\n        PASS [   3.568s] (44/45) alforge::manifest every_release_of_this_repository_checks_against_its_history\n        PASS [   4.695s] (45/45) alforge::manifest every_road_into_a_build_charges_the_components_it_reaches\n────────────\n     Summary [   4.702s] 45 tests run: 45 passed, 0 skipped",
-  "ranAt": "2026-11-25T10:53:52.991Z",
-  "headCommit": "e359418787e150f94519b360112ce79e758124f0",
+  "outputSha": "0619fcf01982d7cb64646f07a284aaae5d0e9498b1ba6994cf0bf3e8ca781c3d",
+  "outputTail": "        PASS [   0.265s] (34/46) alforge::manifest round_nineteen_the_lock_by_requirement_a_package_by_path_through_the_lock_and_a_later_conflict\n        PASS [   0.262s] (35/46) alforge::manifest round_twenty_a_pre_release_git_dependency_is_charged_and_every_unread_pin_says_why\n        PASS [   0.214s] (36/46) alforge::manifest settings_outside_the_history_change_nothing_that_is_read\n        PASS [   0.229s] (37/46) alforge::manifest round_twenty_three_a_replaced_or_patched_package_behind_a_git_crate_in_either_order_and_a_path_line_beside_a_registry_one\n        PASS [   0.266s] (38/46) alforge::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.287s] (39/46) alforge::manifest the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them\n        PASS [   0.454s] (40/46) alforge::manifest a_commit_whose_tree_does_not_read_is_its_own_refusal_and_hides_none\n        PASS [   0.588s] (41/46) alforge::manifest a_false_pin_charges_no_true_release_and_hides_no_conflict\n        PASS [   0.696s] (42/46) alforge::manifest round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_path\n        PASS [   0.975s] (43/46) alforge::manifest build_inputs_that_do_not_read_are_refused_where_a_version_is_pinned_twice\n        PASS [   1.581s] (44/46) alforge::manifest a_version_names_everything_its_build_reads_but_the_toolchain\n        PASS [   3.110s] (45/46) alforge::manifest every_release_of_this_repository_checks_against_its_history\n        PASS [   4.235s] (46/46) alforge::manifest every_road_into_a_build_charges_the_components_it_reaches\n────────────\n     Summary [   4.242s] 46 tests run: 46 passed, 0 skipped",
+  "ranAt": "2026-11-26T07:24:10.550Z",
+  "headCommit": "82e3e3e48a55da02bfbb860b63b16ea8acffc908",
   "tests": [
     {
       "name": "tools/alforge/tests/manifest.rs",
       "file": "tools/alforge/tests/manifest.rs",
-      "fileSha": "e75d01de4110f88a491e2d1e8de820960f02c0b85159f9e178f123f5c2d35cfa"
+      "fileSha": "09a64b2d29739679d5c3281c832da2d79bde3b421bfeafbc2b59ffb1cb86c4bb"
     }
   ]
 }
