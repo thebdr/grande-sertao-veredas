@@ -38,9 +38,20 @@ fn cargo(args: &[&str]) -> String {
 }
 
 fn git(args: &[&str]) -> String {
-    let out = Command::new("git").args(args).current_dir(root()).output().unwrap();
+    git_in(&root(), args)
+}
+
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git").args(args).current_dir(dir).output().unwrap();
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap()
+}
+
+/// The subjects of the commits after `base` that changed the engine, every one: a merge's other
+/// side too, which git's default reading drops when the merge keeps one parent's tree (the round at
+/// d7cb0b35), and the merge itself.
+fn engine_commit_subjects(dir: &Path, base: &str) -> String {
+    git_in(dir, &["log", "--full-history", "--format=%s", &format!("{base}..HEAD"), "--", "forks/ironcalc/base", "forks/ironcalc/xlsx"])
 }
 
 fn metadata() -> serde_json::Value {
@@ -165,7 +176,7 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
     assert_eq!(git(&["rev-parse", &format!("{base}:forks/ironcalc/xlsx")]).trim(), UPSTREAM_XLSX_TREE);
     // every later commit touching the engine is a change the record lists, one row each: its
     // subject names the change (`(fork change 7)`, a refinement `(fork change 1, refined)` row 1b)
-    let later = git(&["log", "--format=%s", &format!("{base}..HEAD"), "--", "forks/ironcalc/base", "forks/ironcalc/xlsx"]);
+    let later = engine_commit_subjects(&root(), base);
     // each commit names one change, never two
     for subject in later.lines() {
         assert!(subject.to_lowercase().matches("(fork change ").count() <= 1, "a commit names more than one change: {subject}");
@@ -195,6 +206,38 @@ fn the_fork_is_upstream_at_its_commit_then_each_listed_change_a_commit() {
         })
         .collect();
     assert!(dirty.is_empty(), "the fork changed outside a commit:\n{}", dirty.join("\n"));
+}
+
+#[test]
+fn an_engine_commit_a_merge_drops_from_git_s_default_reading_is_read_too() {
+    // the round at d7cb0b35: a side branch's commit to the engine, merged `-s ours`, which git's
+    // default reading of the engine's history drops; the check's reading lists it and the merge
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let run = |args: &[&str]| git_in(repo, &[&["-c", "user.name=critic", "-c", "user.email=critic@example.org", "-c", "commit.gpgsign=false"], args].concat());
+    run(&["init", "-q", "-b", "main"]);
+    let write = |path: &str, text: &str| {
+        let at = repo.join(path);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(at, text).unwrap();
+    };
+    write("forks/ironcalc/base/README.md", "upstream\n");
+    run(&["add", "-A"]);
+    run(&["commit", "-q", "-m", "ironcalc: upstream at its commit"]);
+    let base = run(&["rev-parse", "HEAD"]).trim().to_string();
+    run(&["checkout", "-q", "-b", "side"]);
+    write("forks/ironcalc/base/README.md", "changed, no change named\n");
+    run(&["commit", "-q", "-am", "an unnamed engine change"]);
+    run(&["checkout", "-q", "main"]);
+    write("notes.md", "unrelated\n");
+    run(&["add", "notes.md"]);
+    run(&["commit", "-q", "-m", "an unrelated commit"]);
+    run(&["merge", "-q", "-s", "ours", "--no-edit", "-m", "a merge keeping main's tree", "side"]);
+    let default = run(&["log", "--format=%s", &format!("{base}..HEAD"), "--", "forks/ironcalc/base", "forks/ironcalc/xlsx"]);
+    assert_eq!(default, "", "git's default reading drops the side's commit");
+    let read = engine_commit_subjects(repo, &base);
+    assert!(read.lines().any(|s| s == "an unnamed engine change") && read.lines().any(|s| s == "a merge keeping main's tree"), "{read}");
+    assert!(regex_free_change_ids(&read).len() < read.lines().count(), "the check fails on it");
 }
 
 /// Ábaco's normal graph on every platform, by crate name, as reviewed on 2026-11-22: the engine,
@@ -2475,6 +2518,47 @@ fn outside_code_spans(line: &str) -> String {
     out
 }
 
+/// Whether every link of a line, `](` and its target, closes its target on the line by `)` with no
+/// space, backtick, quote, bracket or `<` in it: GitHub reads a link's target before a code span,
+/// so a backtick in it pairs with no other, and a title may run to the next line.
+fn links_closed(line: &str) -> Result<(), &'static str> {
+    let mut rest = line;
+    while let Some(at) = rest.find("](") {
+        let target = &rest[at + 2..];
+        let end = target.find(|c: char| c.is_whitespace() || "`<>\"'()[]".contains(c));
+        match end {
+            Some(e) if target[e..].starts_with(')') => rest = &target[e + 1..],
+            _ => return Err("whose target does not close on its line by `)` with no space, backtick, quote, bracket or `<` in it"),
+        }
+    }
+    Ok(())
+}
+
+/// A line's text after the markers of every quote and list item that holds it, at any depth (a
+/// nested item's marker past the fourth column too), and the spaces before it.
+fn after_every_container(line: &str) -> &str {
+    let mut t = line.trim_start_matches(' ');
+    loop {
+        if let Some(rest) = t.strip_prefix('>') {
+            t = rest.trim_start_matches(' ');
+            continue;
+        }
+        let digits = t.chars().take_while(char::is_ascii_digit).count();
+        let marker = if t.starts_with(['-', '+', '*']) {
+            1
+        } else if (1..=9).contains(&digits) && t[digits..].starts_with(['.', ')']) {
+            digits + 1
+        } else {
+            0
+        };
+        if marker > 0 && (t.len() == marker || t[marker..].starts_with(' ')) {
+            t = t[marker..].trim_start_matches(' ');
+            continue;
+        }
+        return t;
+    }
+}
+
 /// The header and the delimiter of the record's one table, as written.
 const RECORD_HEADER: &str = "| # | Change | Where | Upstream |";
 const RECORD_DELIMITER: &str = "|---|---|---|---|";
@@ -2501,21 +2585,32 @@ fn change_rows(record: &str) -> Result<Vec<String>, String> {
     // the whole record, before the section too, in what GitHub reads one way only (the round at
     // 7a0bedec): no white space but the space (a no-break space or a tab GitHub's lexer and the
     // reading's take apart: a fence closed to one and not the other, a setext paragraph split), no
-    // fence, no `<` but in a code span (raw HTML in a cell ends or adds a row), no line opening a
-    // link reference or a footnote's definition
+    // `<` but in a code span (raw HTML in a cell ends or adds a row); and (the round at d7cb0b35) no
+    // run of three backticks or tildes (a fence, in an item at any depth), every backtick a code
+    // span's own on its line (no span GitHub reads across a line break), every link's target closed
+    // on its line by `)` with no space, backtick, quote, bracket or `<` in it (a link GitHub reads
+    // before a code span, taking a backtick of it), and no line opening with `[` after its
+    // containers' markers at any depth (a link reference or a footnote's definition, its label over
+    // two lines too)
     for (k, l) in lines.iter().enumerate() {
         if let Some(c) = l.chars().find(|c| c.is_whitespace() && *c != ' ') {
             return Err(format!("line {} of the record holds white space other than a space ({c:?})", k + 1));
         }
-        let text = without_containers(l).0.trim_start_matches(' ');
-        if text.starts_with("```") || text.starts_with("~~~") {
-            return Err(format!("line {} of the record opens a fence", k + 1));
+        if l.contains("```") || l.contains("~~~") {
+            return Err(format!("line {} of the record holds three backticks or tildes, which may open a fence", k + 1));
         }
-        if outside_code_spans(l).contains('<') {
+        let outside = outside_code_spans(l);
+        if outside.contains('<') {
             return Err(format!("line {} of the record holds a `<` outside a code span", k + 1));
         }
-        if text.starts_with('[') && text.contains("]:") {
-            return Err(format!("line {} of the record opens a link reference or a footnote's definition", k + 1));
+        if outside.contains('`') {
+            return Err(format!("line {} of the record holds a backtick no code span of its line closes", k + 1));
+        }
+        if let Err(why) = links_closed(l) {
+            return Err(format!("line {} of the record holds a link {why}", k + 1));
+        }
+        if after_every_container(l).starts_with('[') {
+            return Err(format!("line {} of the record opens with `[`, which may open a link reference or a footnote's definition", k + 1));
         }
     }
     let heading = lines.iter().position(|l| *l == "## Local changes").ok_or("the record has no line `## Local changes`")?;
@@ -2580,6 +2675,11 @@ fn change_rows(record: &str) -> Result<Vec<String>, String> {
         let cells = gfm_cells(l);
         if !(l.starts_with("| ") && l.ends_with(" |") && cells.len() == 4) {
             return Err(leaves(k, "a row is a line of four cells opening and closing with a pipe"));
+        }
+        // GitHub splits a row into its cells before it reads a code span: each cell's spans its
+        // own, its escaped pipes read as pipes first (the round at d7cb0b35)
+        if cells.iter().any(|c| outside_code_spans(&c.replace("\\|", "|")).contains(['`', '<'])) {
+            return Err(leaves(k, "a cell's backticks are its own code spans' and its `<` stands in one"));
         }
         rows.push(cells[0].clone());
         k += 1;
@@ -3027,6 +3127,38 @@ fn the_record_is_read_in_its_one_form() {
     // and a `<` in a code span of a row is the cell's text
     assert_eq!(change_rows(&canon("| 1 | `<v>9</v>` | `a <b>` | none |\n")), Ok(vec!["1".to_string()]));
     assert_eq!(outside_code_spans("a `<b>` c ``d ` e`` \\`<x>\\` ```f"), "a  c  \\`<x>\\` ```f");
+    // the round at d7cb0b35: a backtick GitHub pairs otherwise (a row's span across its cells, a
+    // backtick in a link's target, a span across a line break) letting raw HTML through, a
+    // definition's label over two lines, a fence in a nested item
+    for row in [
+        "| 41 | a | `x.rs`, ` | none</td></tr><tr><td>41</td><td>an uncommitted change</td><td>base</td><td>none ` |",
+        "| 41 | a | b | [none](#n`) </td></tr><tr><td>41</td><td>an uncommitted change</td><td>base</td><td>none `x` |",
+        "| 41 | a | b | c ` |",
+    ] {
+        assert!(refused(&canon(&format!("| 1 | a | b | c |\n{row}\n"))), "{row:?}");
+    }
+    for before_heading in [
+        "A note on the `x\ny` <details> `z` copy.",
+        "A note on the [copy](#c`) <details> `x`.",
+        "A note on the [copy](#c \"the\n`\") <details> ` copy.",
+        "A [copy](#c 'the') of it.",
+        "[Each change\nlisted]: #a \"The rows below are\nnot every change\"",
+        "[^a\nb]: x",
+        "- A note:\n    - ```\n      Shown as code, not prose.",
+        "- a\n    - [x]: #y",
+        "Escaped \\` backtick.",
+    ] {
+        let record = format!("# Fork\n\n{before_heading}\n\n## Local changes\nProse.\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n");
+        assert!(refused(&record), "{before_heading:?}");
+    }
+    assert!(refused(&format!("# Fork\n\n## Local changes\n[Each change\nlisted]: #a\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n")));
+    // and a link closed on its line is read, as the real record's first lines hold one
+    assert_eq!(
+        change_rows(&format!("# Fork\n\nA copy of [IronCalc](https://example.org/a_b) and `<x>`.\n\n## Local changes\nProse.\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | `a \\| b` | c | none |\n")),
+        Ok(vec!["1".to_string()])
+    );
+    assert_eq!(after_every_container("- a"), "a");
+    assert_eq!(after_every_container("    - > 1. [x]: y"), "[x]: y");
     // the table after the heading with no blank line, a delimiter of another spelling, no table
     assert!(refused(&format!("## Local changes\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n")));
     assert!(refused(&format!("## Local changes\n\n{RECORD_HEADER}\n|:--|---|---|---|\n| 1 | a | b | c |\n")));
