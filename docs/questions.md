@@ -865,6 +865,83 @@ Q102, the file names of entry 25 with Q224):
   target over SSH, session control and health, log trailing and supervisão's tabs first, the rest in
   point releases).
 
+**Ruled in part** 2026-11-25, by the architect, four more entries, three of them the security
+round's (Q43):
+
+- Entry 31. Asked "The 3D scene is authored in Qt Quick 3D inside Oficina while bodies, collisions
+  and sensors live in the bench's `fisica`, so two scene models must be kept in step, and Qt Quick
+  3D brings little for editing. Which options hold? (The review's pick: both.)", both chosen: "(a)
+  View-only 3D first", "(b) Ready-made behaviours only".
+
+- Entry 32. Asked "The laptop holds the SSH keys to every plant. Is this the rule? Opening a project
+  runs nothing: ORCL projects have no build scripts and no procedural macros; the folder's cargo
+  configuration is not honoured; Python runs after a trust prompt per folder; pages not shipped
+  inside Oficina get no native bridge.", "Yes, opening runs nothing (Recommended)".
+
+- Entry 33. Asked "Every component listens on loopback with no accounts, so any process on the
+  target or the laptop, and a web page by DNS rebinding, reaches the write paths. On Q29 you left
+  this for the security round. What closes it?", "(c) Both; token alone for the web (Recommended)":
+  a random token per session, handed over SSH and required on every request, with Host and Origin
+  checks, for portal and supervisão; and Unix sockets (named pipes on Windows) with the system's
+  permissions for controlador's engineering channel. Q29 and P-014's two items are answered by it.
+
+- Entry 34. Asked "A device named `<font color=green>RUN</font>` can paint a false state, a CSV cell
+  beginning with `=` becomes a formula, trailed logs pass terminal escapes. Is this the rule? Text
+  from outside is always shown as plain text (held by a test over the QML), the CSV export
+  neutralises formula cells, and the interface uses the structured state, never parsed state text.",
+  "Yes, the whole rule (Recommended)".
+
+**Ruled in part** 2026-11-25, by the architect, four more entries of the security round's list:
+
+- Entry 35. Asked "A fault record holds a snapshot of all data and faults are published to peers;
+  and the source of the last ten downloads sits on every machine delivered (your choice). Which
+  options hold? (The review's pick: both.)", both chosen: "(a) Peers get cause, number, time" (the
+  snapshot read through Oficina only), "(b) Source on target, a setting", on by default.
+
+- Entry 36. Asked "A bench device with a real device's station name, started from a laptop plugged
+  into the plant network, can be taken by a real controller, its \"guard closed\" then coming from a
+  behaviour model. Which options hold? (The review's pick: all three.)", chosen: "(a) Interfaces
+  declared isolated" and "(c) Bench identity refused"; not chosen: "(b) A scan refuses a live
+  network".
+
+- Entry 37. Asked "No record says who did what (no accounts, by your choice); forces and breakpoints
+  are recorded only at a fault. The Machinery Regulation (EU) 2023/1230 asks a machine builder for
+  evidence of interventions from January 2027 (read from secondary sources). Which options hold?
+  (The review's pick: both.)", both chosen: "(a) An intervention log" (append-only, on the target,
+  each line with the time and who: the SSH user, the peer's address, a name typed once per Oficina
+  installation; retention set per target), "(b) Not a safety component".
+
+- Entry 38. Asked "The Cyber Resilience Act (EU) 2024/2847 applies in general from 11 December 2027.
+  An unpaid open-source release keeps its author outside \"manufacturer\"; paid support or delivery
+  as a product changes that. Which options hold? (The review's pick: all three. No legal advice.)",
+  all three chosen: "(a) The plan states the intent", "(b) Security file, component list", "(c) Gap
+  list against Annex I". Which intent the plan states is put next.
+
+**Ruled in part** 2026-11-25, by the architect, four more answers:
+
+- Entry 38, the intent. Asked "Following your answer: which intent does the plan state for the suite
+  under the Cyber Resilience Act? (No legal advice; the regulation's terms are its own.)",
+  "Undecided, say so": the plan says the intent is not decided yet, and what each choice would
+  bring.
+
+- Entry 39. Asked "The fieldbus organisations have terms (ODVA's Terms of Usage for EtherNet/IP; the
+  EtherCAT group's master agreement; PROFINET certification and its specification licence). Which
+  options hold? (The review's pick: all three. Medium confidence, secondary sources.)", chosen: "(c)
+  \"Compatible with\" until certified"; not chosen: signing the agreements before each network
+  ships, and asking the organisations in writing.
+
+- Entry 40. Asked "In release 1 the only way in is ORCL text (your choice: ladder later, as a
+  read-only view). `orcl-std` has the three timers, both edge detectors and the up counter; it lacks
+  the down counter and the set and reset latches. Which options hold? (The review's pick: (a) and
+  (c) now, (b) when you know.)", chosen: "(a) The standard library, completed" and "(b) Name
+  ladder's release"; not chosen: "(c) Release 1 is for text writers". Which release is put next.
+
+- Entry 41. Asked "The first temperature loop has no PID (technology objects are out, by your
+  choice), and nothing reads tags or types from another tool. Which options hold? (The review's
+  pick: (a) and (b).)", the architect's own words with one option: "technology objects later", and
+  "(b) Say what release 1 serves" (discrete IO, no closed loops, no axes). Not chosen: a PID
+  function block in the standard library now, and an import from PLCopen XML.
+
 ## Q32 - What disqualifies an edit from a live takeover?
 
 **Raised** 2026-11-15, by the architect, ruling on the review's entry 5.
