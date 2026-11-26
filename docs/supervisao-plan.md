@@ -241,20 +241,36 @@ The architect's decisions of 13 to 15 November 2026 that touch supervisão
 - **It stays web.** The browser still decides nothing and there are no scripts: the architect was
   restating the border, not relaxing it. Oficina embeds its pages as tabs.
 - **Colour, size, position and visibility become expressions of values**, in the binding file's
-  rules, computed and tested in Rust.
+  rules, computed and tested in Rust. A colour expression resolves to a state class, which brings
+  its mark and word, or to a declared scale with a legend; the syntax palette's green for strings
+  moves with the number colour (Q31 entry 24, ruled 2026-11-25, "(b) A class or a declared scale").
 - **Edit mode gets a behaviour editor.** The binding file gains object types: a type holds the
   behaviour and objects may override it. Applying is either to all objects of a type, or to the
   selected objects, where the first selected is the master and only compatible parameters are
   applied.
 - **Translatable from day one**, the interface alone.
-- **Green means a good state** (`docs/questions.md` Q22, reversed on 2026-11-15). No state takes
-  it yet: which state "good" is stays open (Q45). The other half of that ruling is built: the
+- **Green means a good state** (`docs/questions.md` Q22, reversed on 2026-11-15), and "good" is
+  the colour of the normal class, no class of its own (Q45 K12, ruled 2026-11-25, "The colour of
+  normal"): the normal state takes green when it is built. The other half of Q22 is built: the
   accent moved from green to lavanda `#B9A9E8` on 2026-11-19 (C-051), after the architect's
   "lavanda is important" that day.
-- Open: the review's entries 22 (Oficina starting sessions against Q19), 24 (a colour by
-  expression against the rule of a mark and a word; the string colour of the syntax palette) and
-  43 (contrast, a light theme), all under Q31; whether "good" is a new state class or the colour
-  of the normal one (Q45).
+- **One portal instance for a host that runs both** (Q31 entry 22, ruled 2026-11-25, the
+  architect's own words "if oficina and supervisao run on the same host they share one portal
+  instance", then "Whichever comes first"): the first of Oficina and supervisão to need a project
+  starts its instance, the other finds it running and joins, and it stops when the last one
+  leaves; Oficina's SQL reaches a running store through a read-only route in portal. This amends
+  Q19 for such a host; supervisão's host starts its sessions as today until portal offers the
+  shared instance, nothing of it built before portal's side exists.
+- **A token for the web** (Q31 entry 33, ruled 2026-11-25, "(c) Both; token alone for the web",
+  answering Q29 and P-014's two items): a random token per session, handed over SSH and required
+  on every request, with Host and Origin checks, for portal and supervisão. Not built before
+  portal's side exists; until then C-054 keeps a write posted by another site's page as a stated
+  limit.
+- **Text from outside is always plain text** (Q31 entry 34, ruled 2026-11-25, "Yes, the whole
+  rule"): a name or a value from a device, a log or a file is shown as text, never as markup; the
+  interface reads the structured state, never parsed state text; a CSV export, when there is one,
+  neutralises formula cells.
+- Open: the review's entry 43 (contrast, a light theme), under Q31.
 - **A linked CSV read both ways** (`docs/questions.md` Q131, ruled 2026-11-25, "Show both, operator
   picks"): a file that fits two dialects comes from portal with both readings and their first rows,
   and a page shows them for the operator to pick, the pick written into the view. Whether that page
