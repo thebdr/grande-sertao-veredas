@@ -3504,6 +3504,40 @@ judged against the version's inputs.
 
 ---
 
+## Q449 - Does a release ship an executable only another toolchain builds?
+
+**Raised** 2026-11-27, by the release member, from the first trial cut after Q443's ruling ("With
+the features its executables need").
+
+ORCL's front end, `orcl-front`, has one executable, `orcl-front-driver`, which requires its `driver`
+feature. That feature needs `rustc_private`, which only the nightly pinned in the crate's own
+`rust-toolchain` (`nightly-2026-11-21`) builds, with its `rustc-dev` component. On the suite's stable
+toolchain the crate is a shell (Q221). Under Q443 (c) the builder turns `driver` on, and the cut stops:
+`extern crate rustc_span` finds no crate. The driver runs as the compiler of a program's crates, so
+it is of use only beside that nightly's whole toolchain, its standard library and its
+`librustc_driver` among it. Executables of no other component need another toolchain.
+
+Options:
+- (a) A release ships no executable only another toolchain builds: a bin whose package's folder names
+  a toolchain of its own (`rust-toolchain`) is not shipped; its library is, built with the suite's
+  toolchain, and the cut says so.
+- (b) The builder installs the pinned nightly with `rustc-dev` beside the suite's toolchain and builds
+  the driver with it, and the bundle and the tester machine carry that toolchain, about 600 MB, so a
+  tester can lower a program there. The version of `orcl-front` then names its nightly too.
+- (c) The driver is built and shipped alone, its `librustc_driver` beside it; it runs only where that
+  nightly is installed.
+
+**Recommended**: (a): the driver is a tool for whoever writes ORCL programs, who holds the nightly;
+the tester machine runs the programs, never compiles them. (b) when compiling ORCL programs on the
+tester machine is something a tester does.
+
+**Taken meanwhile** (most reversible): (a): nothing is published, and a later release ships the
+driver by naming it.
+
+**Reversible?** Yes: the manifest's `bins` say what each release ships.
+
+---
+
 ## Q229 - A pulse that comes back with no new edge, and which preset a timer is judged against
 
 **Raised** 2026-11-23, by the controlador session, from C-150's refute rounds 11 and 12.
