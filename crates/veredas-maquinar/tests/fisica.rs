@@ -533,6 +533,8 @@ mod round_1 {
 
     use veredas_maquinar::fisica::{self, Placement, World};
 
+    use super::{begun_late, step_starts};
+
     fn scene(body: &str) -> fisica::Scene {
         fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")).unwrap()
     }
@@ -575,6 +577,7 @@ mod round_1 {
     fn a_stalled_runner_catches_up_and_counts_its_late_steps() {
         let s = scene("[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, 1000.0]\n");
         let h = fisica::start(&s).unwrap();
+        let starts = step_starts(&h);
         std::thread::sleep(Duration::from_millis(100));
         let (first, begun, late0) = (h.steps(), Instant::now(), h.status().late);
         let mut once = false;
@@ -587,12 +590,16 @@ mod round_1 {
         std::thread::sleep(Duration::from_millis(1000));
         let (n, elapsed) = (h.steps() - first, begun.elapsed());
         let due = (elapsed.as_millis() / 4) as u64;
-        let late = h.status().late;
+        let late = h.status().late - late0;
         println!("P2 steps {n} due {due} late {late} in {elapsed:?}");
         assert!(n + 3 >= due && n <= due + 2, "caught up: {n} steps against {due}");
-        // The 50 steps the stall put behind, counted late, and no more (refute round 2: a count
-        // of only steps nine behind, or of every step, passed a floor alone).
-        assert!((46..=55).contains(&(late - late0)), "the steps the stall put behind counted late: {}", late - late0);
+        // The 50 steps the stall put behind, counted late, and no more than began late (refute
+        // round 2: a count of only steps nine behind, or of every step, passed a floor alone); the
+        // steps the machine's load put behind besides are judged as the runner test judges them
+        // (a fixed 46 to 55 failed once beside a build, 2026-11-25).
+        let (surely, perhaps) = begun_late(&starts.lock().unwrap(), Duration::from_millis(4), first);
+        assert!(late >= 46, "the steps the stall put behind counted late: {late}");
+        assert!(late as usize + 3 >= surely && late as usize <= perhaps + 3, "{late} of {n} steps counted late, {surely} to {perhaps} began late");
     }
 
     /// P3: dropped while running, its thread ends: the hooks it ran stop being called and are dropped.
