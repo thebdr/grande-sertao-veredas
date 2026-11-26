@@ -2306,3 +2306,189 @@ mod round_5 {
         assert_eq!(spec.profinet[0].1.seed, None, "the bench gives an unseeded PROFINET device no seed");
     }
 }
+
+/// C-033's sixth refute round: the critic's probes (`~/.cache/veredas/critic-c033-r6/probes`), kept
+/// as pins: a stdout nobody reads holding neither a stop nor a signal once the writer is far behind,
+/// nor the start of a bench whose start's lines pass the pipe; a status line the writer is far
+/// behind on dropped; the exit codes with a stderr closed; an unseeded PROFINET device given no seed
+/// at start.
+mod round_6 {
+    use super::*;
+    use std::io::Read;
+    use std::process::{Child, ExitStatus};
+
+    const EXE: &str = env!("CARGO_BIN_EXE_veredas-maquinar");
+
+    /// A bench of `parts` Modbus servers on port 0.
+    fn modbus_bench(dir: &Path, parts: usize) -> PathBuf {
+        let path = dir.join("bench.toml");
+        let mut text = header().to_string();
+        for i in 0..parts {
+            text.push_str(&format!("[[modbus]]\nname = \"m{i:04}\"\nport = 0\n\n"));
+        }
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    fn ended_within(child: &mut Child, within: Duration) -> Option<ExitStatus> {
+        let begun = Instant::now();
+        while begun.elapsed() < within {
+            if let Some(s) = child.try_wait().unwrap() {
+                return Some(s);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        None
+    }
+
+    /// A run of `parts` Modbus servers whose stdout nobody reads for `unread`, then asked to stop by
+    /// `how` (`stop` on stdin, else the signal `kill` takes): how it ended within `grace`.
+    fn held(tag: &str, parts: usize, unread: Duration, how: &str, grace: Duration) -> Option<ExitStatus> {
+        let dir = scratch(tag);
+        let path = modbus_bench(&dir, parts);
+        let mut child = Command::new(EXE).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        std::thread::sleep(unread);
+        let mut stdin = child.stdin.take().unwrap();
+        match how {
+            "stop" => stdin.write_all(b"stop\n").unwrap(),
+            signal => assert!(Command::new("kill").arg(signal).arg(child.id().to_string()).status().unwrap().success()),
+        }
+        let ended = ended_within(&mut child, grace);
+        if ended.is_none() {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        drop(stdin);
+        std::fs::remove_dir_all(&dir).unwrap();
+        ended
+    }
+
+    /// On the machine's lock: 400 status lines a second fill the pipe and pass the writer's 1024
+    /// within 7 s; `stop` then ends the run (a bounded queue held the end's line for good).
+    #[test]
+    fn a_stop_after_the_writer_is_far_behind_ends_the_run() {
+        let ended = held("r6-stop", 400, Duration::from_secs(7), "stop", Duration::from_secs(6));
+        assert_eq!(ended.map(|s| s.code()), Some(Some(0)), "the run held by its unread stdout after `stop`");
+    }
+
+    /// On the machine's lock: SIGTERM likewise.
+    #[cfg(unix)]
+    #[test]
+    fn a_sigterm_after_the_writer_is_far_behind_ends_the_run() {
+        let ended = held("r6-term", 400, Duration::from_secs(7), "-TERM", Duration::from_secs(6));
+        assert_eq!(ended.map(|s| s.code()), Some(Some(0)), "the run held by its unread stdout after SIGTERM");
+    }
+
+    /// On the machine's lock: a bench of 1200 parts, whose start's 2401 lines pass the pipe and the
+    /// writer's 1024 (the start's lines once held the stop's threads from starting).
+    #[test]
+    fn a_bench_whose_start_s_lines_pass_the_pipe_still_stops() {
+        let ended = held("r6-start", 1200, Duration::from_secs(5), "stop", Duration::from_secs(10));
+        assert_eq!(ended.map(|s| s.code()), Some(Some(0)), "the run held at its start by its unread stdout");
+    }
+
+    /// On the machine's lock: 400 parts unread for 7 s, then stopped and read: the status lines the
+    /// writer was 1024 behind on are dropped (some 3 200 undropped; under 2 000 dropped), the end's
+    /// line last.
+    #[test]
+    fn a_status_line_the_writer_is_far_behind_on_is_dropped() {
+        let dir = scratch("r6-dropped");
+        let path = modbus_bench(&dir, 400);
+        let mut child = Command::new(EXE).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        std::thread::sleep(Duration::from_secs(7));
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(b"stop\n").unwrap();
+        let reader = std::thread::spawn(move || {
+            let mut text = String::new();
+            stdout.read_to_string(&mut text).unwrap();
+            text
+        });
+        let ended = ended_within(&mut child, Duration::from_secs(6));
+        if ended.is_none() {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        drop(stdin);
+        let text = reader.join().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let status = lines.iter().filter(|l| l.starts_with("modbus ")).count();
+        assert_eq!((ended.map(|s| s.code()), lines.last().copied()), (Some(Some(0)), Some("stopped")));
+        assert!((800..2000).contains(&status), "{status} status lines of 400 parts over 7 s");
+    }
+
+    /// A stderr whose reader is gone: the exit codes stay the ones stated (2 refused, 2 cannot
+    /// start, 1 a usage error; a write to it had panicked, 101).
+    #[test]
+    fn the_exit_codes_hold_with_a_closed_stderr() {
+        let dir = scratch("r6-stderr");
+        let bad = dir.join("bad.toml");
+        std::fs::write(&bad, format!("{}[[modbus]]\nname = \" \"\n", header())).unwrap();
+        let squat = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let busy = dir.join("busy.toml");
+        std::fs::write(&busy, format!("{}[[modbus]]\nname = \"m\"\nport = {}\n", header(), squat.local_addr().unwrap().port())).unwrap();
+        let mut got = Vec::new();
+        for (what, args, want) in [
+            ("a refused file", vec![bad.clone()], 2),
+            ("a refused file checked", vec![bad.clone(), PathBuf::from("--check")], 2),
+            ("a part that cannot start", vec![busy.clone()], 2),
+            ("no file", vec![], 1),
+            ("an unknown option", vec![PathBuf::from("--nope")], 1),
+        ] {
+            let (read, write) = std::io::pipe().unwrap();
+            drop(read);
+            let closed = Command::new(EXE).args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(write).status().unwrap();
+            let open = Command::new(EXE).args(&args).stdin(Stdio::null()).output().unwrap();
+            got.push((what, closed.code(), open.status.code(), !open.stderr.is_empty(), want));
+        }
+        drop(squat);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(got.iter().all(|(_, closed, open, said, want)| *closed == Some(*want) && *open == Some(*want) && *said), "{got:?}");
+    }
+
+    /// The bench gives an unseeded PROFINET device no seed at start, so it takes the clock: two runs
+    /// under the bench's seed 7 spread their Identify answers (each up to 500 ms) unalike. A load
+    /// only makes them less alike, so it is not on the machine's lock.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_unseeded_profinet_device_takes_the_clock_at_start() {
+        use veredas_aranha::profinet::dcp::{self, Filter};
+        use veredas_aranha::profinet::ether;
+        use veredas_aranha::wire::raw::{Options, RawLink};
+        veredas_aranha::netns::isolated("round_6::an_unseeded_profinet_device_takes_the_clock_at_start", &[("a0", "b0")], || {
+            let dir = scratch("r6-seed");
+            let text = format!("{}seed = 7\n[[profinet]]\nname = \"d\"\ninterface = \"b0\"\nstation = \"io-device-1\"\nhello = false\nlldp_interval_ms = 0\n", header());
+            let ctl = RawLink::open_with("a0", Options { ethertype: Some(ether::ETHERTYPE_PROFINET), promiscuous: false, outgoing: false }).unwrap();
+            let me = ctl.mac();
+            let answered = |within: Duration| -> bool {
+                let begun = Instant::now();
+                while begun.elapsed() < within {
+                    let Some(r) = ctl.recv(within.saturating_sub(begun.elapsed())).unwrap() else { return false };
+                    let f = ether::parse(&r.bytes).unwrap();
+                    if f.ethertype == ether::ETHERTYPE_PROFINET && dcp::decode(f.payload).is_ok() {
+                        return true;
+                    }
+                }
+                false
+            };
+            let mut runs: Vec<Vec<i64>> = Vec::new();
+            for run in 0..2u32 {
+                let bench = Bench::start(load(&text, &dir).unwrap()).unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+                let mut waits = Vec::new();
+                for xid in 0..12u32 {
+                    let asked = Instant::now();
+                    ctl.send(&dcp::identify_request(me, 1000 * run + xid, 50, &Filter::All).unwrap()).unwrap();
+                    assert!(answered(Duration::from_secs(2)), "an answer");
+                    waits.push(asked.elapsed().as_millis() as i64);
+                }
+                bench.stop();
+                runs.push(waits);
+            }
+            std::fs::remove_dir_all(&dir).unwrap();
+            let alike = runs[0].iter().zip(&runs[1]).all(|(a, b)| (a - b).abs() < 30);
+            assert!(!alike, "two runs under the bench's seed 7 spread their answers alike: {runs:?}");
+        });
+    }
+}

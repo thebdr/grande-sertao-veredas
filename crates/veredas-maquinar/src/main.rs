@@ -7,12 +7,14 @@
 //!
 //! Exit codes: 0 when the bench ran and stopped, the check passed or the version was printed; 2 when
 //! the file or a referenced file is refused, or a part could not start, with the reason on stderr;
-//! 1 on a usage error. A stdout closed or no longer read changes none of them.
+//! 1 on a usage error. A stdout closed or no longer read changes none of them, nor a stderr closed.
 
 use std::ffi::OsString;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 const USAGE: &str = "usage: veredas-maquinar <bench.toml> [--check] | --version";
@@ -24,36 +26,55 @@ fn say(line: &str) {
     let _ = out.flush();
 }
 
-/// A run's lines go out through a thread of their own, so a consumer that has stopped reading never
-/// holds a stop, a signal or the end of the run; its write's failure is ignored.
+/// Writes a line to stderr, a stderr closed or failing ignored: the exit code stays the one stated.
+fn complain(line: &str) {
+    let _ = writeln!(std::io::stderr().lock(), "{line}");
+}
+
+/// Lines enough for some seconds of a large bench's status: a status line that finds the writer this
+/// far behind is dropped (a second later another says the same).
+const BEHIND: usize = 1024;
+
+/// A run's lines go out through a thread of their own that the run never waits for, so a consumer
+/// that has stopped reading never holds the start, a stop, a signal or the end of the run (round 6:
+/// a bounded queue held the end once it was full); its write's failure is ignored.
 struct Out {
-    lines: SyncSender<String>,
+    lines: Sender<String>,
+    queued: Arc<AtomicUsize>,
     done: Receiver<()>,
 }
 
 impl Out {
     fn start() -> Out {
-        // Lines enough for some seconds of a large bench's status: a status line that finds the
-        // writer this far behind is dropped (a second later another says the same).
-        let (lines, rx) = mpsc::sync_channel::<String>(1024);
+        let (lines, rx) = mpsc::channel::<String>();
+        let queued = Arc::new(AtomicUsize::new(0));
         let (done_tx, done) = mpsc::channel();
+        let written = Arc::clone(&queued);
         std::thread::spawn(move || {
             for line in rx {
                 say(&line);
+                written.fetch_sub(1, Ordering::SeqCst);
             }
             let _ = done_tx.send(());
         });
-        Out { lines, done }
+        Out { lines, queued, done }
     }
 
-    /// A line that must go out: the start's and the end's.
+    /// A line that must go out, the start's and the end's: queued however far behind the writer is.
     fn send(&self, line: String) {
-        let _ = self.lines.send(line);
+        self.queued.fetch_add(1, Ordering::SeqCst);
+        if self.lines.send(line).is_err() {
+            self.queued.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
-    /// A status line, dropped while the writer is this far behind.
+    /// A status line, dropped while the writer is `BEHIND` lines behind.
     fn offer(&self, line: String) -> bool {
-        !matches!(self.lines.try_send(line), Err(TrySendError::Full(_)))
+        if self.queued.load(Ordering::SeqCst) >= BEHIND {
+            return false;
+        }
+        self.send(line);
+        true
     }
 
     /// Every line handed over written, or a few seconds past: a reader that never reads again does
@@ -83,10 +104,10 @@ fn main() {
             check = true;
         } else if bytes.first() == Some(&b'-') && bytes != b"-" {
             // Any argument beginning with a dash is an option (`-` alone is a file's name).
-            eprintln!("unknown option `{}`\n{USAGE}", a.to_string_lossy());
+            complain(&format!("unknown option `{}`\n{USAGE}", a.to_string_lossy()));
             std::process::exit(1);
         } else if file.is_some() {
-            eprintln!("a second bench file `{}`\n{USAGE}", a.to_string_lossy());
+            complain(&format!("a second bench file `{}`\n{USAGE}", a.to_string_lossy()));
             std::process::exit(1);
         } else {
             file = Some(PathBuf::from(a));
@@ -97,13 +118,13 @@ fn main() {
     #[cfg(unix)]
     let signals = (!check).then(stop_signals).flatten();
     let Some(file) = file else {
-        eprintln!("{USAGE}");
+        complain(USAGE);
         std::process::exit(1);
     };
     let spec = match bench::load_file(&file) {
         Ok(spec) => spec,
         Err(e) => {
-            eprintln!("{}: {e}", file.display());
+            complain(&format!("{}: {e}", file.display()));
             std::process::exit(2);
         }
     };
@@ -118,21 +139,12 @@ fn main() {
     let bench = match Bench::start(spec) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("{}: {e}", file.display());
+            complain(&format!("{}: {e}", file.display()));
             std::process::exit(2);
         }
     };
-    let out = Out::start();
-    out.send(format!("{}: {} part(s) running; close stdin or end the process to stop", file.display(), plan.len()));
-    for line in &plan {
-        out.send(format!("  {line}"));
-    }
-    // Every part's status at once, with the addresses the servers got: a consumer that started the
-    // bench on port 0 reads its port here rather than a second later.
-    for line in bench.lines() {
-        out.send(line);
-    }
-    // Stdin closing is the stop signal: a line "stop" too, and on Unix a SIGTERM or a SIGINT.
+    // Stdin closing is the stop signal: a line "stop" too, and on Unix a SIGTERM or a SIGINT, each
+    // heard from before the start's lines go out.
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     #[cfg(unix)]
     if let Some(signals) = signals {
@@ -158,6 +170,16 @@ fn main() {
         }
         let _ = tx.send(());
     });
+    let out = Out::start();
+    out.send(format!("{}: {} part(s) running; close stdin or end the process to stop", file.display(), plan.len()));
+    for line in &plan {
+        out.send(format!("  {line}"));
+    }
+    // Every part's status at once, with the addresses the servers got: a consumer that started the
+    // bench on port 0 reads its port here rather than a second later.
+    for line in bench.lines() {
+        out.send(line);
+    }
     loop {
         if rx.recv_timeout(Duration::from_secs(1)).is_ok() {
             break;
