@@ -383,6 +383,12 @@ Recorded as the port meets them.
   path takes as "born beside" is checked after it is taken (round 6), as the live loop's are, and so
   is the held file's cut (round 7): judged at the open alone, a copy-and-truncate just after it was
   missed. A generation the held branch never opened is the one it cannot follow (a stated limit).
+- **A new `pub` name in portal is read by supervisão.** Its `writes` test reads portal's public
+  functions and fields by name from the sources and refuses any of them among its own tokens
+  unless reviewed; `Reach`'s `pub head` and `pub tail` turned it red on main (2026-11-26), and the
+  `no-browser` profile leaves that binary out of the pre-push run. A name the crate alone reads is
+  `pub(crate)`; before a push that adds a `pub` name, `cargo nextest run -p veredas-supervisao
+  --test writes -E 'test(a_write_is_refused_on_the_wire)'` (one test, seconds).
 - **A fixed active the sweep's open finds gone may have been renamed after the listing** (C-096,
   round 3): a rename is atomic, so a listing taken after that open shows it, and only then is
   the history read.
