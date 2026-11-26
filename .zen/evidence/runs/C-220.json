@@ -14,15 +14,15 @@
     "real_tree"
   ],
   "exitCode": 0,
-  "outputSha": "f927acc4e07d46f9274073e119d266c0a5a89afede7fa466327f40fc240f6696",
-  "outputTail": "test in_the_suites_workspace_build_its_graph_is_the_reviewed_one ... ok\ntest its_sources_are_its_own_and_core_s_header_reader_alone ... ok\ntest a_build_script_sets_no_cfg_links_no_library_and_compiles_its_crate_s_files_alone ... ok\ntest the_fork_s_own_suite_passes_on_the_versions_abaco_builds ... ok\ntest no_socket_in_its_sources_or_the_engine_s has been running for over 60 seconds\ntest no_socket_in_its_sources_or_the_engine_s ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 61.05s\n\n   Compiling ironcalc_base v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/base)\n   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/crates/veredas-abaco)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.49s\n     Running tests/real_tree.rs (target/debug/build/leis/d36ed3829d15a811/out/real_tree-d36ed3829d15a811)\n     Running tests/component.rs (target/debug/build/veredas-abaco/0199b3847176d2de/out/component-0199b3847176d2de)",
-  "ranAt": "2026-11-26T19:45:35.139Z",
-  "headCommit": "c19b857274720c3429894db8742f2e1d73b91a22",
+  "outputSha": "a75751132d41fccf37d50d40a3afb9bc39978d3d76862328ed43ff996d6d7715",
+  "outputTail": "test no_source_reaches_outside_its_crate_by_a_path_or_an_include_on_any_platform ... ok\ntest in_the_suites_workspace_build_its_graph_is_the_reviewed_one ... ok\ntest its_sources_are_its_own_and_core_s_header_reader_alone ... ok\ntest no_socket_in_its_sources_or_the_engine_s ... ok\ntest the_fork_s_own_suite_passes_on_the_versions_abaco_builds ... ok\ntest a_build_script_sets_no_cfg_links_no_library_and_compiles_its_crate_s_files_alone ... ok\n\ntest result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 46.51s\n\n   Compiling ironcalc_base v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/base)\n   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/crates/veredas-abaco)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.93s\n     Running tests/real_tree.rs (target/debug/build/leis/d36ed3829d15a811/out/real_tree-d36ed3829d15a811)\n     Running tests/component.rs (target/debug/build/veredas-abaco/0199b3847176d2de/out/component-0199b3847176d2de)",
+  "ranAt": "2026-11-26T21:24:58.351Z",
+  "headCommit": "99d4d185094726f533fcc5ed7f56c19c9749eedd",
   "tests": [
     {
       "name": "crates/veredas-abaco/tests/component.rs",
       "file": "crates/veredas-abaco/tests/component.rs",
-      "fileSha": "a16c8c1164f84d6ad91ec51b13eea1e2e5969a39d9cfd2355896ce89134da364"
+      "fileSha": "789bd2d7eae2fcc5deeaaecdd8e35bbf753ea1af815a227e4a2624380e17e4f1"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
