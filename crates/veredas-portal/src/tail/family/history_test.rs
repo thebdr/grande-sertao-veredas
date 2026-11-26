@@ -695,3 +695,76 @@ fn a_planned_active_renamed_outside_the_pattern_is_waited_for_or_lost() {
     assert_eq!((rx.try_iter().count(), history.load(Ordering::SeqCst)), (100, lost), "renamed out, nothing in its place");
     BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
 }
+
+/// C-096's sixteenth refute round. A member holding history renamed outside the pattern before
+/// the replay opens it is looked for by its identity: there under another name, its history
+/// unread, lost (a fixed-name family's member, a newest-by-order family's, and a planned active's
+/// remains after it rotated into the pattern at the fixed seam). And the search reads each entry's
+/// identity from the listing itself: a rename landing between the listing and the entries' look
+/// (the second step of a two-step rename) still finds the file, waited for and read, said at 1 100.
+#[cfg(unix)]
+#[test]
+fn a_member_renamed_outside_the_pattern_is_lost_and_the_search_holds_under_a_rename() {
+    use super::DURING_WALK;
+    let start = NaiveDateTime::parse_from_str("2026-07-19 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+    let stamps = || TimestampSpec::new(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ["%Y-%m-%d %H:%M:%S"]).unwrap();
+    let backfill = || FamilyTailConfig { start: FamilyStart::Backfill(start), ..FamilyTailConfig::default() };
+    let lost = crate::tail::HISTORY_LOST;
+    let dir = tempfile::tempdir().unwrap();
+    let mut hooked: Vec<std::path::PathBuf> = Vec::new();
+    let family = |fam: &std::path::Path, mode: ActiveMode, name: &str, history: &Arc<AtomicU64>| -> Box<dyn Source> {
+        let spec = FamilySpec::new(fam, r"done_(?P<idx>\d+)\.log", None, mode).unwrap();
+        Box::new(FamilyTailSource::new(name, name, spec, backfill()).with_timestamps(stamps()).with_history_read(Arc::clone(history)))
+    };
+    let out = |p: &std::path::Path| std::fs::rename(p, p.with_extension("log.old")).unwrap();
+
+    // A member renamed out before its replay: fixed name, and newest by order.
+    for (name, mode, active) in [("member-fixed", ActiveMode::Fixed("current.log".into()), "current.log"), ("member-newest", ActiveMode::NewestByOrder, "done_3.log")] {
+        let fam = dir.path().join(name);
+        std::fs::create_dir_all(&fam).unwrap();
+        write(&fam.join("done_1.log"), 0..100);
+        write(&fam.join("done_2.log"), 100..1_100);
+        write(&fam.join(active), 1_100..1_200);
+        once(&fam.join("done_2.log"), out);
+        hooked.push(fam.join("done_2.log"));
+        let history = Arc::new(AtomicU64::new(u64::MAX));
+        assert_eq!(run_cut(family(&fam, mode, name, &history), &history, 200), (200, lost), "{name}");
+    }
+
+    // The planned active rotated into the pattern at the fixed seam, then renamed out before its
+    // remains are read.
+    let remains = dir.path().join("remains");
+    std::fs::create_dir_all(&remains).unwrap();
+    write(&remains.join("done_1.log"), 0..100);
+    write(&remains.join("current.log"), 100..1_100);
+    once(&remains.join("current.log"), |p| {
+        std::fs::rename(p, p.with_file_name("done_2.log")).unwrap();
+        write(p, 90_000..90_010);
+    });
+    once(&remains.join("done_2.log"), out);
+    hooked.extend([remains.join("current.log"), remains.join("done_2.log")]);
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    assert_eq!(run_cut(family(&remains, ActiveMode::Fixed("current.log".into()), "remains", &history), &history, 110), (110, lost), "the remains renamed out");
+
+    // The second step of a two-step rename landing inside the search's walk.
+    let walked = dir.path().join("walked");
+    std::fs::create_dir_all(&walked).unwrap();
+    write(&walked.join("done_1.log"), 0..100);
+    write(&walked.join("current.log"), 100..1_100);
+    once(&walked.join("current.log"), |p| std::fs::rename(p, p.with_extension("log.rotating")).unwrap());
+    hooked.push(walked.join("current.log"));
+    let (rotating, retired, mut done) = (walked.join("current.log.rotating"), walked.join("done_2.log"), false);
+    DURING_WALK.lock().unwrap().push((
+        walked.clone(),
+        Box::new(move || {
+            if !done && rotating.exists() {
+                done = true;
+                std::fs::rename(&rotating, &retired).unwrap();
+            }
+        }),
+    ));
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    assert_eq!(run_cut(family(&walked, ActiveMode::Fixed("current.log".into()), "walked", &history), &history, 1_100), (1_100, 1_100), "renamed inside the walk");
+    DURING_WALK.lock().unwrap().retain(|(at, _)| *at != walked);
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+}

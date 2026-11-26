@@ -106,6 +106,68 @@ impl Reach {
     }
 }
 
+/// Where a file's identity is now: in a folder (under any name), gone from it, or unknown (no
+/// identity, a folder that cannot be listed, a folder that kept changing under the search): a
+/// search that cannot tell never counts as gone.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Whereabouts {
+    Here,
+    Gone,
+    Unknown,
+}
+
+/// Looks for `identity` among the files of `dir` (its subfolders too when `recursive`). Each
+/// entry's identity is taken from the listing itself where the system gives it (the inode a Unix
+/// listing carries), else by a lookup, an entry gone at its lookup meaning the folder changed under
+/// the search. A listing races a rename (an entry renamed while the folder is listed may be missed),
+/// so the file is gone only when two walks in a row say so (C-096's sixteenth refute round).
+pub(crate) fn find_identity(dir: &Path, identity: Option<&Identity>, recursive: bool) -> Whereabouts {
+    fn walk(dir: &Path, id: &Identity, recursive: bool) -> Result<bool, ()> {
+        let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir).map_err(|_| ())?.collect::<Result<_, _>>().map_err(|_| ())?;
+        #[cfg(test)]
+        crate::tail::family::during_walk(dir);
+        #[cfg(unix)]
+        let dev = {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(dir).map_err(|_| ())?.dev()
+        };
+        for entry in entries {
+            let path = entry.path();
+            if entry.file_type().map_err(|_| ())?.is_dir() {
+                if recursive && walk(&path, id, true)? {
+                    return Ok(true);
+                }
+                continue;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirEntryExt;
+                if (dev, entry.ino()) == *id {
+                    return Ok(true);
+                }
+            }
+            #[cfg(not(unix))]
+            match identity_at(&path) {
+                Some(other) if other == *id => return Ok(true),
+                Some(_) => {}
+                None => return Err(()),
+            }
+        }
+        Ok(false)
+    }
+    let Some(id) = identity else { return Whereabouts::Unknown };
+    let mut gone_once = false;
+    for _ in 0..5 {
+        match walk(dir, id, recursive) {
+            Ok(true) => return Whereabouts::Here,
+            Ok(false) if gone_once => return Whereabouts::Gone,
+            Ok(false) => gone_once = true,
+            Err(()) => gone_once = false,
+        }
+    }
+    Whereabouts::Unknown
+}
+
 /// A file's whole content and its identity, read through one handle: one state of one file.
 pub(crate) fn read_whole_identified(path: &Path) -> std::io::Result<(Vec<u8>, Option<std::sync::Arc<Identity>>)> {
     let mut handle = Handle::from_path(path)?;

@@ -178,8 +178,9 @@ fn read_range_full(
         match TailedFile::open_at(path, offset, encoding) {
             Ok(c) => break c,
             Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            // Gone (renamed by a rotation, whose new name is read in its turn, or deleted).
-            Err(e) if crate::tail::single::is_not_found(&e) => return Ok(Unread::No),
+            // Gone from its path: renamed by a rotation (its new name read in its turn, or a name
+            // outside the pattern) or deleted; the caller holding its history looks for it.
+            Err(e) if crate::tail::single::is_not_found(&e) => return Ok(Unread::Missing),
             // There and not readable (held by a writer, no read allowed, a share failing):
             // skipped, its lines unread.
             Err(_) => return Ok(Unread::Held),
@@ -226,7 +227,7 @@ fn read_retired(
     for g in younger {
         loop {
             match read_range_full(&g.path, 0, None, None, cfg.drain_grace, stop, emit)? {
-                Unread::No => break,
+                Unread::No | Unread::Missing => break,
                 Unread::Stopped => return Ok(false),
                 Unread::Held => wait_tick(wake_rx, cfg.poll_interval),
             }
@@ -296,35 +297,28 @@ fn sweep_after_held_open(
 #[cfg(test)]
 pub(crate) static BEFORE_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
 
-/// Where a planned member's identity is now: in the family's folder (under any name, a name
-/// outside the pattern among them), gone from it (deleted), or unknown (no identity, a folder that
-/// cannot be listed): a search that cannot tell never counts as gone.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Whereabouts {
-    Here,
-    Gone,
-    Unknown,
+use crate::tail::cursor::Whereabouts;
+
+/// Where a planned member's identity is now, in the family's folder (its subfolders too when the
+/// family is recursive).
+fn whereabouts(spec: &FamilySpec, identity: Option<&crate::tail::cursor::Identity>) -> Whereabouts {
+    crate::tail::cursor::find_identity(spec.dir(), identity, spec.recursive())
 }
 
-fn whereabouts(spec: &FamilySpec, identity: Option<&crate::tail::cursor::Identity>) -> Whereabouts {
-    fn walk(dir: &Path, id: &crate::tail::cursor::Identity, recursive: bool) -> Result<bool, ()> {
-        for entry in std::fs::read_dir(dir).map_err(|_| ())? {
-            let entry = entry.map_err(|_| ())?;
-            let path = entry.path();
-            if entry.file_type().map_err(|_| ())?.is_dir() {
-                if recursive && walk(&path, id, true)? {
-                    return Ok(true);
-                }
-            } else if crate::tail::cursor::identity_at(&path).as_ref() == Some(id) {
-                return Ok(true);
+/// A test's hooks, each run inside an identity search's walk, after a folder is listed and before
+/// its entries are looked at, keyed by the folder: a rename landing in the walk (C-096's sixteenth
+/// refute round).
+#[cfg(test)]
+pub(crate) static DURING_WALK: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn during_walk(dir: &Path) {
+    if let Ok(mut hooks) = DURING_WALK.lock() {
+        for (at, hook) in hooks.iter_mut() {
+            if at == dir {
+                hook();
             }
         }
-        Ok(false)
-    }
-    match identity.map(|id| walk(spec.dir(), id, spec.recursive())) {
-        Some(Ok(true)) => Whereabouts::Here,
-        Some(Ok(false)) => Whereabouts::Gone,
-        _ => Whereabouts::Unknown,
     }
 }
 
@@ -371,11 +365,13 @@ pub(crate) fn before_open(path: &Path) {
     }
 }
 
-/// Whether a file a backfill meant to read was there and left unread, or the stop came first.
+/// Whether a file a backfill meant to read was there and left unread, gone from its path, or the
+/// stop came first.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Unread {
     No,
     Held,
+    Missing,
     Stopped,
 }
 
@@ -589,11 +585,14 @@ fn attach_backfill(
     swept: &dyn Fn(),
     lost: &dyn Fn(),
 ) -> Result<BackfillAttach, SourceError> {
-    // A member there and left unread: the start's history is not whole, and never says read.
-    let read = |unread: Unread| {
-        if unread == Unread::Held {
-            lost();
-        }
+    // A member there and left unread: the start's history is not whole, and never says read. A
+    // member holding history gone from its path is looked for by its identity: gone (deleted),
+    // nothing of it left; there under another name (outside the pattern), or a search that cannot
+    // tell, its history unread.
+    let read = |unread: Unread, identity: Option<Option<&crate::tail::cursor::Identity>>| match (unread, identity) {
+        (Unread::Held, _) => lost(),
+        (Unread::Missing, Some(id)) if whereabouts(spec, id) != Whereabouts::Gone => lost(),
+        _ => {}
     };
     let Some(ts) = ts else {
         return Err(SourceError::NotConfigured("a Backfill start point requires a timestamp spec".into()));
@@ -618,7 +617,7 @@ fn attach_backfill(
             return Ok(BackfillAttach::Stopped);
         }
         let (off, enc) = if i == 0 { (plan.first_offset, plan.first_encoding) } else { (0, None) };
-        read(read_range_full(&f.path, off, enc, Some(&f.reach), cfg.drain_grace, stop, emit)?);
+        read(read_range_full(&f.path, off, enc, Some(&f.reach), cfg.drain_grace, stop, emit)?, Some(f.identity.as_deref()));
         consumed.insert(f.name.clone());
     }
 
@@ -668,8 +667,8 @@ fn attach_backfill(
                     // newest by rank. Gone (names are stable in this mode: deleted) or read to its
                     // end, every member of the history is read; whatever is born newer is new.
                     let unread = read_range_full(&planned.path, off, enc, Some(&planned.reach), cfg.drain_grace, stop, emit)?;
-                    read(unread);
-                    if unread == Unread::No {
+                    read(unread, None);
+                    if matches!(unread, Unread::No | Unread::Missing) {
                         // Read to its end at its path (the same file there), or gone from it:
                         // deleted, or renamed outside the family's names, its history unread.
                         let there = planned.identity.as_deref().is_some_and(|id| crate::tail::cursor::identity_at(&planned.path).as_ref() == Some(id));
@@ -713,7 +712,8 @@ fn attach_backfill(
                             Some(seek) => (Some(&planned.reach), seek),
                             None => (None, (0, None)),
                         };
-                        read(read_range_full(&f.path, off, enc, to, cfg.drain_grace, stop, emit)?);
+                        let owed = to.map(|_| planned.identity.as_deref());
+                        read(read_range_full(&f.path, off, enc, to, cfg.drain_grace, stop, emit)?, owed);
                         consumed.insert(f.file_name.clone());
                     }
                     continue;

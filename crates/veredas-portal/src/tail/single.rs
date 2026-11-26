@@ -92,15 +92,11 @@ pub(crate) fn is_not_found(e: &SourceError) -> bool {
 /// name: renamed away, not deleted. An identity the look could not read, or a folder that cannot
 /// be listed, cannot tell, and counts as moved (an unread history is never said read).
 fn moved_within_folder(path: &Path, identity: Option<&crate::tail::cursor::Identity>) -> bool {
-    let Some(id) = identity else { return true };
     let dir = match path.parent() {
         Some(d) if !d.as_os_str().is_empty() => d,
         _ => Path::new("."),
     };
-    match std::fs::read_dir(dir) {
-        Ok(entries) => entries.flatten().any(|e| crate::tail::cursor::identity_at(&e.path()).as_ref() == Some(id)),
-        Err(_) => true,
-    }
+    crate::tail::cursor::find_identity(dir, identity, false) != crate::tail::cursor::Whereabouts::Gone
 }
 
 /// Tell the start that the worker has looked at its path, once.
