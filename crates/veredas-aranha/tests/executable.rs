@@ -98,12 +98,14 @@ fn every_usage_it_cannot_follow_is_refused_with_its_reason() {
         (vec!["identify", "eth0", "--name", "a", "--name", "a"], "--name or --alias is given twice"),
         (vec!["identify", "eth0", "--wait", "1", "--wait", "1"], "--wait is given twice"),
         (vec!["diff", s], "diff takes two scan files"),
-        (vec!["diff", s, s], "x.toml: "),
+        (vec!["diff", s, s], &format!("veredas-aranha: {s}: ")),
     ] {
         let out = aranha(&args);
         assert_eq!(out.status.code(), Some(2), "{args:?}: {}", text(&out.stderr));
         assert!(text(&out.stderr).starts_with("veredas-aranha: ") && text(&out.stderr).contains(says), "{args:?}: {}", text(&out.stderr));
         assert!(out.stdout.is_empty(), "{args:?}");
+        // A file not read named once.
+        assert_eq!(text(&out.stderr).matches(s).count(), usize::from(text(&out.stderr).contains(s)), "{args:?}: {}", text(&out.stderr));
     }
     assert!(!scan.exists());
 
@@ -475,6 +477,22 @@ fn the_diff_prints_every_kind_of_change_a_line_each_its_texts_quoted() {
     let lines: Vec<&str> = std::str::from_utf8(&out.stdout).unwrap().lines().collect();
     assert_eq!(lines, want.iter().map(String::as_str).collect::<Vec<_>>());
     assert!(!lines.contains(&"no change"));
+
+    // A value one scan alone states and an interface one scan alone listened on: said, then `no
+    // change`, status 0 (neither a change nor silence), either way round.
+    let stated = scan(&[hello(a, "a", Some(ten), 1), arp(a, ten, 3)], &["eth1"], &[]);
+    let unstated = scan(&[hello(a, "a", Some(ten), 1)], &["eth1", "eth2"], &[]);
+    let (sf, uf) = (d.join("stated.toml"), d.join("unstated.toml"));
+    stated.write_file(&sf).unwrap();
+    unstated.write_file(&uf).unwrap();
+    for (x, y, want) in [
+        (&sf, &uf, [format!("one-sided {a} arp address: baseline \"192.168.0.10\", scan none"), "interface added \"eth2\"".to_string(), "no change".to_string()]),
+        (&uf, &sf, [format!("one-sided {a} arp address: baseline none, scan \"192.168.0.10\""), "interface removed \"eth2\"".to_string(), "no change".to_string()]),
+    ] {
+        let out = aranha(&["diff", x.to_str().unwrap(), y.to_str().unwrap()]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+        assert_eq!(text(&out.stdout).lines().collect::<Vec<_>>(), want.iter().map(String::as_str).collect::<Vec<_>>());
+    }
 }
 
 /// The scan and its capture are checked before anything is opened, and a scan that cannot be

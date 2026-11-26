@@ -893,3 +893,43 @@ mod round_3 {
         }
     }
 }
+
+/// A change of what was heard is every kind but two: a value one scan alone states, and an
+/// interface one scan alone listened on, are said and are no change (the plan: neither a change
+/// nor silence), so a diff holding only those is no change, though it is not empty.
+#[test]
+fn one_sided_values_and_interfaces_alone_are_no_change() {
+    let m = Mac([0x02, 0, 0, 0, 0, 0x0A]);
+    let device = DeviceRef { mac: m, label: "a".into() };
+    let change = Change { mac: m, what: Said::StationName, from: "a".into(), to: "b".into() };
+    let one_sided = OneSided { mac: m, what: Said::ArpAddress, baseline: Some("192.168.0.10".into()), scan: None };
+    let end = |node: &str, port: &str| End { node: node.into(), port: port.into() };
+    let link = Link { a: end("dev:02:00:00:00:00:0a", "port-001"), b: end("if:eth1", ""), confidence: Confidence::Heard, witnesses: 1 };
+    let conflict = Conflict { kind: ConflictKind::DuplicateName, value: "a".into(), macs: vec![m] };
+    assert!(!Diff::default().has_change() && Diff::default().is_empty());
+    let quiet = [
+        Diff { one_sided: vec![one_sided.clone()], ..Diff::default() },
+        Diff { interfaces_added: vec!["eth2".into()], ..Diff::default() },
+        Diff { interfaces_removed: vec!["eth2".into()], ..Diff::default() },
+        Diff { one_sided: vec![one_sided], interfaces_added: vec!["eth3".into()], interfaces_removed: vec!["eth2".into()], ..Diff::default() },
+    ];
+    for d in &quiet {
+        assert!(!d.has_change() && !d.is_empty(), "{d:?}");
+    }
+    let changes = [
+        Diff { appeared: vec![device.clone()], ..Diff::default() },
+        Diff { vanished: vec![device], ..Diff::default() },
+        Diff { renamed: vec![change.clone()], ..Diff::default() },
+        Diff { readdressed: vec![Change { what: Said::IpSuite, ..change }], ..Diff::default() },
+        Diff { links_added: vec![link.clone()], ..Diff::default() },
+        Diff { links_removed: vec![link], ..Diff::default() },
+        Diff { conflicts_new: vec![conflict.clone()], ..Diff::default() },
+        Diff { conflicts_cleared: vec![conflict], ..Diff::default() },
+    ];
+    for d in &changes {
+        assert!(d.has_change(), "{d:?}");
+        // With one-sided values and interfaces beside it, still a change.
+        let beside = Diff { interfaces_added: vec!["eth2".into()], ..d.clone() };
+        assert!(beside.has_change(), "{beside:?}");
+    }
+}

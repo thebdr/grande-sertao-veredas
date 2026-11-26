@@ -106,16 +106,25 @@ fn diff_files(args: &[OsString]) -> Result<ExitCode, Refused> {
     let [baseline, scan] = args else {
         return Err(Refused(format!("diff takes two scan files\n{USAGE}")));
     };
-    let read = |p: &OsString| Scan::read_file(Path::new(p)).map_err(|e| Refused(format!("{}: {e}", Path::new(p).display())));
+    // A file not read names its path once (the reading's own error names it already).
+    let read = |p: &OsString| {
+        Scan::read_file(Path::new(p)).map_err(|e| match e {
+            veredas_aranha::scan::ScanError::Io { .. } => Refused(e.to_string()),
+            e => Refused(format!("{}: {e}", Path::new(p).display())),
+        })
+    };
     let (b, s) = (read(baseline)?, read(scan)?);
     let d = diff::diff(&b, &s)?;
     for line in lines(&d) {
         say(&line);
     }
-    Ok(if d.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+    // 1 for a change of what was heard, as diff(1)'s: one-sided values and interfaces alone are
+    // said, and are no change.
+    Ok(if d.has_change() { ExitCode::from(1) } else { ExitCode::SUCCESS })
 }
 
-/// The diff as lines, one a change, in the diff's order; "no change" when there is none.
+/// The diff as lines, one an entry, in the diff's order; "no change" last when nothing changed
+/// (one-sided values and interfaces alone are no change).
 fn lines(d: &Diff) -> Vec<String> {
     let mut out = Vec::new();
     for x in &d.appeared {
@@ -163,7 +172,7 @@ fn lines(d: &Diff) -> Vec<String> {
     for i in &d.interfaces_removed {
         out.push(format!("interface removed {i:?}"));
     }
-    if out.is_empty() {
+    if !d.has_change() {
         out.push("no change".to_string());
     }
     out

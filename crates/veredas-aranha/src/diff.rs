@@ -114,6 +114,15 @@ impl Diff {
     pub fn is_empty(&self) -> bool {
         *self == Diff::default()
     }
+
+    /// A change of what was heard: a device appeared, vanished, renamed or readdressed, a link
+    /// added or removed, a conflict new or cleared. A value one scan alone states, and an
+    /// interface one scan alone listened on, are said and are no change (`docs/aranha-plan.md`:
+    /// neither a change nor silence).
+    pub fn has_change(&self) -> bool {
+        let Diff { appeared, vanished, renamed, readdressed, one_sided: _, links_added, links_removed, conflicts_new, conflicts_cleared, interfaces_added: _, interfaces_removed: _ } = self;
+        !(appeared.is_empty() && vanished.is_empty() && renamed.is_empty() && readdressed.is_empty() && links_added.is_empty() && links_removed.is_empty() && conflicts_new.is_empty() && conflicts_cleared.is_empty())
+    }
 }
 
 /// What `d` states of `what` now, as text (none when it states nothing of it).
