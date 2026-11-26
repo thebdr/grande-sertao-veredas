@@ -234,6 +234,11 @@ pub fn after_build(
     if !outside.is_empty() {
         return Err(refused(outside.join("\n")));
     }
+    // What the release carries of its licences (crate::licences, Q35): the component list's every
+    // entry, the vendored crates' files the build kept, Qt's and KDDockWidgets' texts.
+    let kdd_doc = recipe.builder.qt.as_ref().and_then(|q| builder::qt_folders(q).ok()).map(|(_, deps)| deps.join("share/doc/KDDockWidgets-qt6"));
+    let _ = std::fs::remove_dir_all(built.out.join("licenses"));
+    crate::licences::assemble(sbom, root, commit, &work.join("vendored-licences"), kdd_doc.as_deref(), Path::new("/usr/share/common-licenses"), &built.out.join("licenses"))?;
     let bins: Vec<String> = held.values().flat_map(|h| h.bins.iter().cloned()).collect();
     let components: Vec<String> = held.keys().cloned().collect();
     let packed = bundle::assemble(recipe, root, commit, name, &built.out.join("bin"), &bins, &components, text, sbom, work)?;
@@ -405,6 +410,11 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     }
     // The component list, from the commit alone (crate::components), before anything runs.
     let sbom = crate::components::list(root, &commit, Some(&o.release.to_string())).map_err(|e| refused(format!("the component list: {e}")))?;
+    // Every component and every package their builds may compile states its licence (Q35).
+    let unlicensed = crate::licences::unlicensed(&sbom);
+    if !unlicensed.is_empty() {
+        return Err(refused(unlicensed.iter().map(|r| format!("{r} states no licence (`license` or `license-file`): a release carries every package's licence")).collect::<Vec<_>>().join("\n")));
+    }
     if o.run_suite {
         eprintln!("alforge: the whole suite at {commit}, behind the machine's lock");
         // Its temporary files on disk, outside any repository: /tmp is a tmpfs of the machine's

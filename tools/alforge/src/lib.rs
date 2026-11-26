@@ -10,6 +10,7 @@ pub mod components;
 pub mod cut;
 pub mod git;
 pub mod inputs;
+pub mod licences;
 pub mod machine;
 pub mod manifest;
 pub mod maquina;

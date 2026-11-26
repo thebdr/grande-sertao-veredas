@@ -622,7 +622,7 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
     r.git(&["init", "-q", "-b", "main"]);
     r.write(".gitignore", "/target/\n");
     r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n");
-    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\n");
     r.write("crates/veredas-core/src/lib.rs", "\n");
     // The recipe's base at an address nothing answers: a cut whose suite passes stops at the
     // builder's first download, so nothing is built here.
@@ -1112,7 +1112,7 @@ fn repo_for_cut(workspace: &str, recipe: Option<&str>) -> (Repo, String) {
     r.git(&["init", "-q", "-b", "main"]);
     r.write(".gitignore", "/target/\n");
     r.write("Cargo.toml", workspace);
-    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\n");
     r.write("crates/veredas-core/src/lib.rs", "\n");
     if let Some(text) = recipe {
         r.write("tools/alforge/maquina/maquina.toml", text);
@@ -1172,6 +1172,14 @@ fn every_refusal_before_the_build_stops_the_cut_with_nothing_built() {
         }
         assert!(!left, "{to}");
     }
+
+    // A component stating no licence (docs/questions.md Q35): refused before anything runs.
+    let (r, _) = repo_for_cut(workspace, Some(&recipe_with("cpus = 4", "cpus = 4")));
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    r.commit("core states no licence");
+    let (got, left) = trial_cut(r.dir.path());
+    assert_eq!(message(got), "veredas-core@2.0.0 states no licence (`license` or `license-file`): a release carries every package's licence");
+    assert!(!left);
 
     // The commit's components refused (its root manifest no workspace).
     let (r, c) = repo_for_cut("[package]\nname = \"veredas-raiz\"\nversion = \"2.0.0\"\nedition = \"2024\"\n", Some(&recipe_with("cpus = 4", "cpus = 4")));

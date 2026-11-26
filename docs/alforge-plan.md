@@ -212,16 +212,17 @@ component's interface does not change.
 Every crate but Oficina states `MIT OR Apache-2.0` and carries `LICENSE-MIT` and `LICENSE-APACHE`
 beside its manifest, the copyright holder thebdr; Oficina is `GPL-3.0-or-later` (Q35, ruled
 2026-11-25). A release ships that code and what it links (no legal advice):
-- **The cut refuses**, before building, a component whose manifest states no `license` (nor a
-  `license-file`), and a crate its build compiles whose manifest states neither. It holds once each
-  member has stated its licence, as Q35 asks; no cut is due before alpha.2.
-- **The bundle carries `licenses/`**:
-  - for each shipped component, its licence expression and the licence files of its folder
-    (`LICENSE*`, `COPYING*`, `NOTICE*`) as git stores them;
-  - `licenses/THIRD-PARTY.md`, listing every crate the components' builds compile (the lock entries
-    their versions name, with name, version, source and licence expression), together with the
-    licence files each one ships, taken from the vendored sources;
-  - with Oficina's window, Qt's and KDDockWidgets' texts and where their sources are (Q446).
+- **The cut refuses**, before it runs or builds anything, a release whose component list (C-295)
+  holds an entry stating no `license` (nor a `license-file`): a component, a package by path, a
+  crate cargo resolves for them. Every member states its licence since 2026-11-26, and every
+  package the list holds at HEAD states one (C-294).
+- **The bundle carries `licenses/`**, made from the component list:
+  - for each component and each package by path, the licence files of its top folder (`LICENSE*`,
+    `COPYING*`, `NOTICE*` and the like) as git stores them, in `components/<name>/`;
+  - for each crate, the licence files its vendored sources ship, in `crates/<name>-<version>/`;
+  - with Oficina's window, Qt's texts (Debian's own LGPL-3, GPL-2 and GPL-3) and KDDockWidgets'
+    (its `LICENSE.txt` and GPL texts), and where their sources are (Q446);
+  - `THIRD-PARTY.md`: every entry with its version, its licence, its source and the files kept.
 - **The tester machine carries the bundle whole:** `/opt/veredas/current/licenses/`, beside the docs
   on the desktop. Its Debian system carries Debian's own (`/usr/share/doc/*/copyright`).
 - **Oficina's source:** a bundle holding Oficina that is handed out goes with its corresponding

@@ -592,6 +592,15 @@ It is P-022's update, the release C-290 states and C-291 cuts.
 - **Evidence:** .zen/evidence/C-293.md
 - **Status:** verified
 
+## C-294: A release's licences: every package stating one, the bundle carrying their texts
+- **Date:** 2026-11-27
+- **Source:** user (docs/questions.md Q35, ruled 2026-11-25: every crate but Oficina `MIT OR Apache-2.0` with both texts beside its manifest, Oficina `GPL-3.0-or-later`; Q446, ruled 2026-11-26: the bundle carries Qt's and KDDockWidgets' texts and where their sources are); ingest (docs/alforge-plan.md "What a release carries of its licences")
+- **Description:** The cut (C-291) refuses, before it runs or builds anything, a release whose component list (C-295) holds an entry stating no licence (neither `license` nor `license-file` in its manifest), each named by its reference: a component, a package by path its builds use, a crate cargo resolves for them. The bundle carries `licenses/`, made from that list: each component's and each package by path's licence files of its top folder as git stores them at the commit (`components/<name>/`; a file named `LICENSE`, `LICENCE`, `COPYING`, `NOTICE`, `UNLICENSE` or `COPYRIGHT`, with any ending), each crate's as its vendored sources ship them (`crates/<name>-<version>/`, kept from the builder's input before its sources go), Qt's texts (Debian's own LGPL-3, GPL-2 and GPL-3, `qt/`) and KDDockWidgets' (its `LICENSE.txt` and GPL texts, `kddockwidgets/`) when the list names them, refused when one of those is missing; and `THIRD-PARTY.md`, a row for every entry of the list with its version, its licence as the list states it, where it comes from (this repository's folder, a crate's package URL, the address of Qt's and KDDockWidgets' sources) and the files kept for it, saying that a bundle holding Oficina, GPL-3.0-or-later, goes with its corresponding source when handed out. The tester machine carries the bundle whole (C-292).
+It is Q35's ruling held at every cut; the list it reads is C-295's, the bundle C-291's.
+- **Verification:** automated → tools/alforge/tests/licences.rs, tools/alforge/tests/bundle.rs | the names of licence files; an entry stating no licence named; the vendored crates' licence files kept and nothing else; a real suite's list (a component, a fork by path, a crate locked offline, the recipe's Qt) made into `licenses/` and every file and row read back, Qt's texts missing refused; the cut stopping on a component that states no licence, nothing built. The cut's own trial (tools/alforge/tests/cut.rs, C-291) carries this repository's.
+- **Evidence:** .zen/evidence/C-294.md
+- **Status:** pending verification
+
 ## C-295: The component list: a commit's CycloneDX document, the same from `alforge components` and from the cut, carried in every bundle
 - **Date:** 2026-11-26
 - **Source:** user (docs/questions.md Q31 entry 38, ruled "(b) Security file, component list"; Q447, ruled 2026-11-26 "GitHub's private reporting", which `SECURITY.md` names with no address); ingest (docs/alforge-plan.md "The component list")

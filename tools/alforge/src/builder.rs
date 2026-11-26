@@ -397,6 +397,9 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, builds: &[B
     for f in [&disk, &out_raw, &in_tar] {
         let _ = std::fs::remove_file(f);
     }
+    // The vendored crates' licence files, which the bundle carries (crate::licences), kept before
+    // their sources go.
+    crate::licences::keep_vendored(&input.join("vendor"), &work.join("vendored-licences"))?;
     let _ = std::fs::remove_dir_all(&input);
     Ok(Built { out, toolchain, libc })
 }
