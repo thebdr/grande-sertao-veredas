@@ -7,11 +7,17 @@
 //! veredas-aranha listen <interface>... [--for <seconds>] [--identify] [--ports] --out <scan.toml>
 //! veredas-aranha identify <interface> [--name <station> | --alias <alias>] [--wait <ms>]
 //! veredas-aranha diff <baseline.toml> <scan.toml>
+//! veredas-aranha --version | --help
 //! ```
 //!
 //! Exit status: 0 done (for `diff`, no change), 1 for `diff` when something changed, 2 for an error
-//! (a usage refused, a file not read, an interface not opened), its reason on stderr.
+//! (a usage refused, a file not read, an interface not opened), its reason on stderr. Arguments are
+//! read as the system gives them (a path need not be UTF-8); a stdout or stderr closed or no longer
+//! read changes neither what is done nor the exit status (C-033's rounds 5 and 6 found both in the
+//! bench's executable).
 
+use std::ffi::{OsStr, OsString};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -22,7 +28,8 @@ use veredas_aranha::scan::{Capture, Scan};
 const USAGE: &str = "usage:
   veredas-aranha listen <interface>... [--for <seconds>] [--identify] [--ports] --out <scan.toml>
   veredas-aranha identify <interface> [--name <station> | --alias <alias>] [--wait <ms>]
-  veredas-aranha diff <baseline.toml> <scan.toml>";
+  veredas-aranha diff <baseline.toml> <scan.toml>
+  veredas-aranha --version | --help";
 
 /// The longest listening asked for: an hour.
 const MAX_FOR: u64 = 3600;
@@ -36,43 +43,74 @@ impl<E: std::fmt::Display> From<E> for Refused {
     }
 }
 
+/// A line on stdout, a stdout closed or failing ignored.
+fn say(line: &str) {
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{line}");
+    let _ = out.flush();
+}
+
+/// A line on stderr, a stderr closed or failing ignored: the exit status stays the one stated.
+fn complain(line: &str) {
+    let _ = writeln!(std::io::stderr().lock(), "{line}");
+}
+
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let run = match args.first().map(String::as_str) {
-        Some("--help" | "-h" | "help") => {
-            println!("{USAGE}");
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let first = args.first().map(|a| a.to_str());
+    let run = match first {
+        Some(Some("--help" | "-h" | "help")) => {
+            say(USAGE);
             return ExitCode::SUCCESS;
         }
-        Some("listen") => listen(&args[1..]).map(|()| ExitCode::SUCCESS),
-        Some("identify") => identify(&args[1..]).map(|()| ExitCode::SUCCESS),
-        Some("diff") => diff_files(&args[1..]),
-        Some(other) => Err(Refused(format!("no command {other:?}\n{USAGE}"))),
+        Some(Some("--version")) => {
+            say(&format!("veredas-aranha {}", env!("CARGO_PKG_VERSION")));
+            return ExitCode::SUCCESS;
+        }
+        Some(Some("listen")) => listen(&args[1..]).map(|()| ExitCode::SUCCESS),
+        Some(Some("identify")) => identify(&args[1..]).map(|()| ExitCode::SUCCESS),
+        Some(Some("diff")) => diff_files(&args[1..]),
+        Some(_) => Err(Refused(format!("no command {:?}\n{USAGE}", args[0]))),
         None => Err(Refused(USAGE.to_string())),
     };
     match run {
         Ok(code) => code,
         Err(Refused(why)) => {
-            eprintln!("veredas-aranha: {why}");
+            complain(&format!("veredas-aranha: {why}"));
             ExitCode::from(2)
         }
     }
 }
 
-/// The value after a flag.
-fn value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, Refused> {
-    *i += 1;
-    args.get(*i).map(String::as_str).ok_or_else(|| Refused(format!("{flag} needs a value\n{USAGE}")))
+/// An argument as text: a flag, a number, a name. Only a path may be other than UTF-8.
+fn text<'a>(arg: &'a OsStr, what: &str) -> Result<&'a str, Refused> {
+    arg.to_str().ok_or_else(|| Refused(format!("{what} {arg:?} is not UTF-8")))
 }
 
-fn diff_files(args: &[String]) -> Result<ExitCode, Refused> {
+/// The value after a flag.
+fn value<'a>(args: &'a [OsString], i: &mut usize, flag: &str) -> Result<&'a OsStr, Refused> {
+    *i += 1;
+    args.get(*i).map(OsString::as_os_str).ok_or_else(|| Refused(format!("{flag} needs a value\n{USAGE}")))
+}
+
+/// An option given once: a second is refused, never taken over the first.
+fn once<T>(slot: &mut Option<T>, flag: &str, v: T) -> Result<(), Refused> {
+    if slot.is_some() {
+        return Err(Refused(format!("{flag} is given twice\n{USAGE}")));
+    }
+    *slot = Some(v);
+    Ok(())
+}
+
+fn diff_files(args: &[OsString]) -> Result<ExitCode, Refused> {
     let [baseline, scan] = args else {
         return Err(Refused(format!("diff takes two scan files\n{USAGE}")));
     };
-    let read = |p: &String| Scan::read_file(Path::new(p)).map_err(|e| Refused(format!("{p}: {e}")));
+    let read = |p: &OsString| Scan::read_file(Path::new(p)).map_err(|e| Refused(format!("{}: {e}", Path::new(p).display())));
     let (b, s) = (read(baseline)?, read(scan)?);
     let d = diff::diff(&b, &s)?;
     for line in lines(&d) {
-        println!("{line}");
+        say(&line);
     }
     Ok(if d.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }
@@ -146,23 +184,33 @@ fn open(_iface: &str) -> Result<Box<dyn veredas_aranha::wire::Wire>, Refused> {
     Err(Refused("raw frames are read on Linux alone for now (docs/questions.md Q281)".to_string()))
 }
 
-fn identify(args: &[String]) -> Result<(), Refused> {
+fn identify(args: &[OsString]) -> Result<(), Refused> {
     use veredas_aranha::ask::{self, Identify};
     use veredas_aranha::listen::{Listener, Options};
     use veredas_aranha::profinet::dcp::Filter;
     let mut iface = None;
     let mut ask = Identify::default();
+    let (mut filter, mut wait) = (None, None);
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
-            "--name" => ask.filter = Filter::Name(value(args, &mut i, "--name")?.to_string()),
-            "--alias" => ask.filter = Filter::Alias(value(args, &mut i, "--alias")?.to_string()),
-            "--wait" => ask.wait = Duration::from_millis(value(args, &mut i, "--wait")?.parse().map_err(|_| Refused(format!("--wait takes milliseconds\n{USAGE}")))?),
+        match text(&args[i], "an argument")? {
+            "--name" => once(&mut filter, "--name or --alias", Filter::Name(text(value(args, &mut i, "--name")?, "a station name")?.to_string()))?,
+            "--alias" => once(&mut filter, "--name or --alias", Filter::Alias(text(value(args, &mut i, "--alias")?, "an alias")?.to_string()))?,
+            "--wait" => {
+                let ms: u64 = text(value(args, &mut i, "--wait")?, "--wait")?.parse().map_err(|_| Refused(format!("--wait takes milliseconds\n{USAGE}")))?;
+                once(&mut wait, "--wait", Duration::from_millis(ms))?;
+            }
             flag if flag.starts_with("--") => return Err(Refused(format!("identify takes no {flag}\n{USAGE}"))),
             name if iface.is_none() => iface = Some(name.to_string()),
             _ => return Err(Refused(format!("identify asks on one interface\n{USAGE}"))),
         }
         i += 1;
+    }
+    if let Some(f) = filter {
+        ask.filter = f;
+    }
+    if let Some(w) = wait {
+        ask.wait = w;
     }
     let iface = iface.ok_or_else(|| Refused(format!("identify needs an interface\n{USAGE}")))?;
     let l = Listener::start(vec![open(&iface)?], Options::default())?;
@@ -173,30 +221,33 @@ fn identify(args: &[String]) -> Result<(), Refused> {
         let d = s.fusion.devices.get(&a.mac);
         let ip = a.identity.ip.as_ref().map_or("none".to_string(), |s| s.ip.to_string());
         let ids = a.identity.vendor_id.zip(a.identity.device_id).map_or("none".to_string(), |(v, d)| format!("{v:#06x}/{d:#06x}"));
-        println!("{} {:?} {} ids {} frame {}{}", a.mac, a.identity.name.clone().unwrap_or_default(), ip, ids, a.frame, d.map_or(String::new(), |d| format!(" ({})", d.label())));
+        say(&format!("{} {:?} {} ids {} frame {}{}", a.mac, a.identity.name.clone().unwrap_or_default(), ip, ids, a.frame, d.map_or(String::new(), |d| format!(" ({})", d.label()))));
     }
-    println!("{} answer(s) on {iface}, {} other(s), {} lost", asked.answers.len(), asked.others, asked.lost);
+    say(&format!("{} answer(s) on {iface}, {} other(s), {} lost", asked.answers.len(), asked.others, asked.lost));
     Ok(())
 }
 
-fn listen(args: &[String]) -> Result<(), Refused> {
+fn listen(args: &[OsString]) -> Result<(), Refused> {
     use veredas_aranha::listen::{Listener, Options};
     use veredas_aranha::topology::{self, Interface};
     use veredas_aranha::{ask, read};
     let mut ifaces: Vec<String> = Vec::new();
-    let (mut seconds, mut asks, mut ports, mut out) = (10u64, false, false, None::<PathBuf>);
+    let (mut seconds, mut asks, mut ports, mut out) = (None::<u64>, None, None, None::<PathBuf>);
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        // (A flag's value is taken by `value` with its flag, so a path after `--out` is never read
+        // as text here.)
+        match text(&args[i], "an argument")? {
             "--for" => {
-                seconds = value(args, &mut i, "--for")?.parse().map_err(|_| Refused(format!("--for takes whole seconds\n{USAGE}")))?;
-                if seconds == 0 || seconds > MAX_FOR {
+                let n: u64 = text(value(args, &mut i, "--for")?, "--for")?.parse().map_err(|_| Refused(format!("--for takes whole seconds\n{USAGE}")))?;
+                if n == 0 || n > MAX_FOR {
                     return Err(Refused(format!("--for takes 1 to {MAX_FOR} seconds")));
                 }
+                once(&mut seconds, "--for", n)?;
             }
-            "--identify" => asks = true,
-            "--ports" => ports = true,
-            "--out" => out = Some(PathBuf::from(value(args, &mut i, "--out")?)),
+            "--identify" => once(&mut asks, "--identify", true)?,
+            "--ports" => once(&mut ports, "--ports", true)?,
+            "--out" => once(&mut out, "--out", PathBuf::from(value(args, &mut i, "--out")?))?,
             flag if flag.starts_with("--") => return Err(Refused(format!("listen takes no {flag}\n{USAGE}"))),
             name => {
                 if ifaces.iter().any(|n| n == name) {
@@ -207,6 +258,7 @@ fn listen(args: &[String]) -> Result<(), Refused> {
         }
         i += 1;
     }
+    let (seconds, asks, ports) = (seconds.unwrap_or(10), asks.unwrap_or(false), ports.unwrap_or(false));
     let out = out.ok_or_else(|| Refused(format!("listen writes its scan to --out <scan.toml>\n{USAGE}")))?;
     if ifaces.is_empty() {
         return Err(Refused(format!("listen needs an interface\n{USAGE}")));
@@ -224,7 +276,7 @@ fn listen(args: &[String]) -> Result<(), Refused> {
         std::thread::sleep(Duration::from_secs(1).min(total));
         for iface in &ifaces {
             let asked = ask::identify(&l, iface, &ask::Identify::default())?;
-            eprintln!("{iface}: {} device(s) answered the Identify", asked.answers.len());
+            complain(&format!("{iface}: {} device(s) answered the Identify", asked.answers.len()));
         }
     }
     std::thread::sleep(total.saturating_sub(started.elapsed()));
@@ -239,7 +291,7 @@ fn listen(args: &[String]) -> Result<(), Refused> {
             }
             match read::ports(&l, iface, d, &read::Options::default()) {
                 Ok(p) => neighbours.extend(p.neighbours),
-                Err((subslot, e)) => eprintln!("{} {}: subslot {subslot:#06x} not read: {e}", d.mac, d.label()),
+                Err((subslot, e)) => complain(&format!("{} {}: subslot {subslot:#06x} not read: {e}", d.mac, d.label())),
             }
         }
     }
@@ -261,11 +313,11 @@ fn listen(args: &[String]) -> Result<(), Refused> {
     for d in &scan.devices {
         let ip = d.ip.current().map_or("none".to_string(), |s| s.ip.to_string());
         let on: Vec<&str> = d.heard_on.iter().map(String::as_str).collect();
-        println!("{} {:?} {} on {}", d.mac, d.label(), ip, on.join(","));
+        say(&format!("{} {:?} {} on {}", d.mac, d.label(), ip, on.join(",")));
     }
     for c in &scan.conflicts {
-        println!("conflict {} {:?}: {}", spelled(c.kind), c.value, c.macs.iter().map(|m| m.to_string()).collect::<Vec<_>>().join(", "));
+        say(&format!("conflict {} {:?}: {}", spelled(c.kind), c.value, c.macs.iter().map(|m| m.to_string()).collect::<Vec<_>>().join(", ")));
     }
-    println!("{} device(s), {} link(s), {} frame(s) heard; {} and {}", scan.devices.len(), scan.topology.links.len(), scan.stats.heard, out.display(), capture_path.display());
+    say(&format!("{} device(s), {} link(s), {} frame(s) heard; {} and {}", scan.devices.len(), scan.topology.links.len(), scan.stats.heard, out.display(), capture_path.display()));
     Ok(())
 }

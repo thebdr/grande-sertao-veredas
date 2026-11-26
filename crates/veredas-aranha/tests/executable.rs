@@ -24,6 +24,35 @@ fn started(args: &[&str]) -> std::process::Child {
     child
 }
 
+/// The executable run with its stdout or its stderr a pipe whose reader is gone before it writes
+/// anything: every write fails (a broken pipe), which must change neither what it does nor its
+/// exit status.
+fn closed(args: &[&std::ffi::OsStr], stdout: bool) -> Output {
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_veredas-aranha"));
+    cmd.args(args);
+    if stdout {
+        cmd.stdout(writer).stderr(std::process::Stdio::piped());
+    } else {
+        cmd.stderr(writer).stdout(std::process::Stdio::piped());
+    }
+    cmd.output().unwrap()
+}
+
+fn os(s: &str) -> &std::ffi::OsStr {
+    std::ffi::OsStr::new(s)
+}
+
+/// A path that is not UTF-8, as a system may give one.
+#[cfg(unix)]
+fn not_utf8(tail: &str) -> std::ffi::OsString {
+    use std::os::unix::ffi::OsStringExt;
+    let mut b = vec![0xFF, b'-'];
+    b.extend_from_slice(tail.as_bytes());
+    std::ffi::OsString::from_vec(b)
+}
+
 fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
@@ -37,6 +66,8 @@ fn dir(name: &str) -> PathBuf {
 
 #[test]
 fn every_usage_it_cannot_follow_is_refused_with_its_reason() {
+    let version = aranha(&["--version"]);
+    assert_eq!((version.status.code(), text(&version.stdout)), (Some(0), format!("veredas-aranha {}\n", env!("CARGO_PKG_VERSION"))));
     let help = aranha(&["--help"]);
     assert_eq!(help.status.code(), Some(0));
     assert!(text(&help.stdout).starts_with("usage:\n  veredas-aranha listen <interface>..."), "{}", text(&help.stdout));
@@ -58,6 +89,14 @@ fn every_usage_it_cannot_follow_is_refused_with_its_reason() {
         (vec!["identify"], "identify needs an interface"),
         (vec!["identify", "eth0", "eth1"], "identify asks on one interface"),
         (vec!["identify", "eth0", "--wait", "soon"], "--wait takes milliseconds"),
+        // An option given twice is refused, never the second taken over the first.
+        (vec!["listen", "eth0", "--for", "1", "--for", "2", "--out", s], "--for is given twice"),
+        (vec!["listen", "eth0", "--out", s, "--out", s], "--out is given twice"),
+        (vec!["listen", "eth0", "--identify", "--identify", "--out", s], "--identify is given twice"),
+        (vec!["listen", "eth0", "--ports", "--ports", "--out", s], "--ports is given twice"),
+        (vec!["identify", "eth0", "--name", "a", "--alias", "b"], "--name or --alias is given twice"),
+        (vec!["identify", "eth0", "--name", "a", "--name", "a"], "--name or --alias is given twice"),
+        (vec!["identify", "eth0", "--wait", "1", "--wait", "1"], "--wait is given twice"),
         (vec!["diff", s], "diff takes two scan files"),
         (vec!["diff", s, s], "x.toml: "),
     ] {
@@ -67,6 +106,28 @@ fn every_usage_it_cannot_follow_is_refused_with_its_reason() {
         assert!(out.stdout.is_empty(), "{args:?}");
     }
     assert!(!scan.exists());
+
+    // Arguments as the system gives them: a path need not be UTF-8 (read, and named in the
+    // refusal), anything else that is not is refused by name; never a panic.
+    #[cfg(unix)]
+    {
+        let odd = d.join(not_utf8("baseline.toml"));
+        let out = Command::new(env!("CARGO_BIN_EXE_veredas-aranha")).arg("diff").arg(&odd).arg(&scan).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{}", text(&out.stderr));
+        assert!(text(&out.stderr).starts_with(&format!("veredas-aranha: {}: ", odd.display())), "{}", text(&out.stderr));
+        let out = Command::new(env!("CARGO_BIN_EXE_veredas-aranha")).arg("listen").arg(not_utf8("eth")).arg("--out").arg(&scan).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{}", text(&out.stderr));
+        assert!(text(&out.stderr).starts_with("veredas-aranha: an argument ") && text(&out.stderr).contains("is not UTF-8"), "{}", text(&out.stderr));
+        let out = Command::new(env!("CARGO_BIN_EXE_veredas-aranha")).arg(not_utf8("listen")).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{}", text(&out.stderr));
+        assert!(text(&out.stderr).starts_with("veredas-aranha: no command "), "{}", text(&out.stderr));
+    }
+    // A stdout or a stderr closed changes no exit status.
+    for (args, stdout, code) in [(vec!["--help"], true, 0), (vec!["--version"], true, 0), (vec!["frob"], false, 2), (vec!["diff", s, s], false, 2)] {
+        let out = closed(&args.iter().map(|a| os(a)).collect::<Vec<_>>(), stdout);
+        assert_eq!(out.status.code(), Some(code), "{args:?}: {}{}", text(&out.stdout), text(&out.stderr));
+        assert!(!text(&out.stderr).contains("panicked") && !text(&out.stdout).contains("panicked"), "{args:?}");
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -132,6 +193,12 @@ fn a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did()
         assert_eq!(out.status.code(), Some(2));
         assert!(text(&out.stderr).starts_with("veredas-aranha: nosuch0: "), "{}", text(&out.stderr));
         assert!(!nowhere.exists() && !d.join("nowhere.pcap").exists());
+        // A scan file's path that is not UTF-8 is taken: it is the interface that is refused.
+        #[cfg(unix)]
+        {
+            let out = Command::new(env!("CARGO_BIN_EXE_veredas-aranha")).args(["listen", "nosuch0", "--out"]).arg(d.join(not_utf8("x.toml"))).output().unwrap();
+            assert!(text(&out.stderr).starts_with("veredas-aranha: nosuch0: "), "{}", text(&out.stderr));
+        }
 
         // The first scan: both devices, the second's name found by asking alone (it says no
         // Hello), each one's ports read.
@@ -184,6 +251,12 @@ fn a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did()
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines[0].starts_with(&format!("{FIRST} \"bomba-2\" 192.168.0.20 ids ")), "{lines:?}");
         assert_eq!(lines[1], "1 answer(s) on a0, 0 other(s), 0 lost");
+        // Listening with its stderr closed: the Identify's count goes nowhere, the scan is written
+        // all the same and the status is 0.
+        let quiet = d.join("quiet.toml");
+        let out = closed(&[os("listen"), os("a0"), os("--for"), os("1"), os("--identify"), os("--out"), quiet.as_os_str()], false);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stdout));
+        assert!(Scan::read_file(&quiet).is_ok() && d.join("quiet.pcap").exists());
         // A name no device holds now: no answer.
         assert_eq!((nobody.status.code(), text(&nobody.stdout)), (Some(0), "0 answer(s) on a0, 0 other(s), 0 lost\n".to_string()));
     });
@@ -209,4 +282,7 @@ fn a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did()
     );
     let same = aranha(&["diff", before.to_str().unwrap(), before.to_str().unwrap()]);
     assert_eq!((same.status.code(), text(&same.stdout)), (Some(0), "no change\n".to_string()));
+    // A reader that stops reading (`diff a b | head -1`) changes neither status.
+    assert_eq!(closed(&[os("diff"), before.as_os_str(), after.as_os_str()], true).status.code(), Some(1));
+    assert_eq!(closed(&[os("diff"), before.as_os_str(), before.as_os_str()], true).status.code(), Some(0));
 }
