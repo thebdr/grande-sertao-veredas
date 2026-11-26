@@ -1533,9 +1533,11 @@ fn round_eight_an_interruption_inside_a_refusals_cleanup_or_the_leftovers_and_a_
     assert!(out.contains(&format!("the old release kept at {}\n", m.path(&format!("opt/veredas/veredas-1.0.0-{TARGET}")).display())), "{out}");
 }
 
-/// A library preloaded before libc's: every `sync()` (the whole machine's, `sync`), every `syncfs`,
-/// `fsync` and `fdatasync` (one file's or one file system's, `fsync`), and every rename, unlink,
-/// rmdir and symlink with its path, appended in order to the file `ALFORGE_TRACE`.
+/// A library preloaded before libc's, appending in order to the file `ALFORGE_TRACE`: every `sync()`
+/// (the whole machine's, `sync`); every `syncfs`, `fsync` and `fdatasync` (one file system's or one
+/// file's, `fsync`); every rename, unlink, rmdir and symlink with its path; every file created (an
+/// open with `O_CREAT`, `create`); and every line written to the standard output or error (`say`),
+/// so where each sync falls against the extraction, the switch and the verdict can be read.
 fn trace_syncs(dir: &Path) -> PathBuf {
     let c = dir.join("trace.c");
     std::fs::write(
@@ -1543,31 +1545,43 @@ fn trace_syncs(dir: &Path) -> PathBuf {
         r#"#define _GNU_SOURCE
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <unistd.h>
-static void note(const char *what, const char *path) {
+static void note2(const char *what, const char *text, size_t n) {
     const char *t = getenv("ALFORGE_TRACE");
     if (!t) return;
-    int fd = open(t, O_CREAT | O_WRONLY | O_APPEND, 0644);
+    int fd = syscall(SYS_openat, AT_FDCWD, t, O_CREAT | O_WRONLY | O_APPEND, 0644);
     if (fd < 0) return;
-    write(fd, what, strlen(what));
-    if (path) { write(fd, " ", 1); write(fd, path, strlen(path)); }
-    write(fd, "\n", 1);
-    close(fd);
+    syscall(SYS_write, fd, what, strlen(what));
+    if (text) {
+        syscall(SYS_write, fd, " ", 1);
+        for (size_t i = 0; i < n && text[i]; i++) { char c = text[i] == '\n' ? ' ' : text[i]; syscall(SYS_write, fd, &c, 1); }
+    }
+    syscall(SYS_write, fd, "\n", 1);
+    syscall(SYS_close, fd);
 }
+static void note(const char *what, const char *path) { note2(what, path, path ? strlen(path) : 0); }
 void sync(void) { note("sync", 0); void (*f)(void) = dlsym(RTLD_NEXT, "sync"); f(); }
 int syncfs(int d) { note("fsync", 0); int (*f)(int) = dlsym(RTLD_NEXT, "syncfs"); return f(d); }
 int fsync(int d) { note("fsync", 0); int (*f)(int) = dlsym(RTLD_NEXT, "fsync"); return f(d); }
 int fdatasync(int d) { note("fsync", 0); int (*f)(int) = dlsym(RTLD_NEXT, "fdatasync"); return f(d); }
+int rename(const char *a, const char *b) { note("rename", a); int (*f)(const char *, const char *) = dlsym(RTLD_NEXT, "rename"); return f(a, b); }
+int renameat(int d1, const char *a, int d2, const char *b) { note("rename", a); int (*f)(int, const char *, int, const char *) = dlsym(RTLD_NEXT, "renameat"); return f(d1, a, d2, b); }
+int renameat2(int d1, const char *a, int d2, const char *b, unsigned fl) { note("rename", a); int (*f)(int, const char *, int, const char *, unsigned) = dlsym(RTLD_NEXT, "renameat2"); return f(d1, a, d2, b, fl); }
 int unlink(const char *p) { note("unlink", p); int (*f)(const char *) = dlsym(RTLD_NEXT, "unlink"); return f(p); }
 int unlinkat(int d, const char *p, int fl) { note("unlink", p); int (*f)(int, const char *, int) = dlsym(RTLD_NEXT, "unlinkat"); return f(d, p, fl); }
 int rmdir(const char *p) { note("rmdir", p); int (*f)(const char *) = dlsym(RTLD_NEXT, "rmdir"); return f(p); }
 int symlink(const char *t, const char *l) { note("symlink", l); int (*f)(const char *, const char *) = dlsym(RTLD_NEXT, "symlink"); return f(t, l); }
 int symlinkat(const char *t, int d, const char *l) { note("symlink", l); int (*f)(const char *, int, const char *) = dlsym(RTLD_NEXT, "symlinkat"); return f(t, d, l); }
-int rename(const char *a, const char *b) { note("rename", a); int (*f)(const char *, const char *) = dlsym(RTLD_NEXT, "rename"); return f(a, b); }
-int renameat(int d1, const char *a, int d2, const char *b) { note("rename", a); int (*f)(int, const char *, int, const char *) = dlsym(RTLD_NEXT, "renameat"); return f(d1, a, d2, b); }
-int renameat2(int d1, const char *a, int d2, const char *b, unsigned fl) { note("rename", a); int (*f)(int, const char *, int, const char *, unsigned) = dlsym(RTLD_NEXT, "renameat2"); return f(d1, a, d2, b, fl); }
+static int mode_of(int flags, va_list ap) { return (flags & O_CREAT) ? va_arg(ap, int) : 0; }
+int open(const char *p, int flags, ...) { va_list ap; va_start(ap, flags); int m = mode_of(flags, ap); va_end(ap); if (flags & O_CREAT) note("create", p); int (*f)(const char *, int, ...) = dlsym(RTLD_NEXT, "open"); return f(p, flags, m); }
+int open64(const char *p, int flags, ...) { va_list ap; va_start(ap, flags); int m = mode_of(flags, ap); va_end(ap); if (flags & O_CREAT) note("create", p); int (*f)(const char *, int, ...) = dlsym(RTLD_NEXT, "open64"); return f(p, flags, m); }
+int openat(int d, const char *p, int flags, ...) { va_list ap; va_start(ap, flags); int m = mode_of(flags, ap); va_end(ap); if (flags & O_CREAT) note("create", p); int (*f)(int, const char *, int, ...) = dlsym(RTLD_NEXT, "openat"); return f(d, p, flags, m); }
+int openat64(int d, const char *p, int flags, ...) { va_list ap; va_start(ap, flags); int m = mode_of(flags, ap); va_end(ap); if (flags & O_CREAT) note("create", p); int (*f)(int, const char *, int, ...) = dlsym(RTLD_NEXT, "openat64"); return f(d, p, flags, m); }
+ssize_t write(int fd, const void *b, size_t n) { if (fd == 1 || fd == 2) note2("say", (const char *)b, n < 120 ? n : 120); ssize_t (*f)(int, const void *, size_t) = dlsym(RTLD_NEXT, "write"); return f(fd, b, n); }
 "#,
     )
     .unwrap();
@@ -1579,47 +1593,58 @@ int renameat2(int d1, const char *a, int d2, const char *b, unsigned fl) { note(
 
 #[test]
 fn round_nine_the_switch_is_on_the_disk_before_anything_names_it_and_before_it_is_said() {
-    // The new release's files synced before its folder and `current` move to it (a power-off soon
-    // after an update would otherwise leave `current` naming files whose data never reached the
-    // disk), and the switch synced again before the command says it is installed.
+    // The whole machine's sync (one folder's writes none of the files' data) between the last file
+    // extracted and the release's folder moving in; between the PATH's last change and "installed
+    // at"; and between a refusal's staging removal and "not installed". Each order read from what
+    // the run did, its lines written as it says them; on an exit 0 and on an exit 3 alike.
     let tools = tempfile::tempdir().unwrap();
     let trace = trace_syncs(tools.path());
-    let m = Machine::new();
     let w = tempfile::tempdir().unwrap();
     let b = bundle_of(w.path(), "1.1.0", TARGET, &["veredas-portal", "veredas-novo"], |_| {});
-    let log = tools.path().join("calls");
-    let out = m.command(&[&b], &[("VEREDAS_SETTLE", "0"), ("LD_PRELOAD", trace.to_str().unwrap()), ("ALFORGE_TRACE", log.to_str().unwrap())]).output().unwrap();
-    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
-    let calls = std::fs::read_to_string(&log).unwrap();
-    let lines: Vec<&str> = calls.lines().collect();
-    let folder = lines.iter().position(|l| l.starts_with("rename ") && l.ends_with(&format!("/veredas-1.1.0-{TARGET}"))).unwrap_or_else(|| panic!("{calls}"));
-    let current = lines.iter().position(|l| l.starts_with("rename ") && l.contains(".current.atualizar-")).unwrap_or_else(|| panic!("{calls}"));
-    assert!(folder < current, "{calls}");
-    // The whole machine's sync, since the release's files are many (one folder's `fsync` writes none
-    // of their data): before the folder moves in, and after the PATH's last change (a link made, or
-    // the dropped executable's removed), before it is said.
-    assert!(lines[..folder].contains(&"sync"), "a sync before the release's folder moves in: {calls}");
-    let path_dir = m.path("usr/local/bin").display().to_string();
-    let last_path = lines
-        .iter()
-        .rposition(|l| ["rename ", "unlink ", "symlink "].iter().any(|k| l.starts_with(k)) && (l.contains(&path_dir) || l.contains("veredas-velho")))
-        .unwrap_or_else(|| panic!("{calls}"));
-    assert!(lines.iter().any(|l| l.starts_with("unlink ") && l.ends_with("usr/local/bin/veredas-velho")), "the dropped executable's link removed: {calls}");
-    assert!(lines[last_path..].contains(&"sync"), "a sync after the PATH's last change, before it is said: {calls}");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("installed at ") && stdout.ends_with("restarted on it and stayed up\n"), "{stdout}");
-    // A refusal's cleanup on the disk before its verdict: a sync after the staging folder's last
-    // removal.
+    let run = |m: &Machine, bundle: &Path, log: &Path| -> (Option<i32>, Vec<String>) {
+        let out = m
+            .command(&[bundle], &[("VEREDAS_SETTLE", "0"), ("LD_PRELOAD", trace.to_str().unwrap()), ("ALFORGE_TRACE", log.to_str().unwrap()), ("PYTHONUNBUFFERED", "1")])
+            .output()
+            .unwrap();
+        (out.status.code(), std::fs::read_to_string(log).unwrap().lines().map(String::from).collect())
+    };
+    let synced = |lines: &[String], from: usize, to: usize| lines[from..to].iter().any(|l| l == "sync");
+    let installed = |m: &Machine, lines: &[String], label: &str| {
+        let calls = lines.join("\n");
+        let last_create = lines.iter().rposition(|l| l.starts_with("create ") && l.contains(".atualizar-")).unwrap_or_else(|| panic!("{label}: {calls}"));
+        let folder = lines.iter().position(|l| l.starts_with("rename ") && l.ends_with(&format!("/veredas-1.1.0-{TARGET}"))).unwrap_or_else(|| panic!("{label}: {calls}"));
+        let current = lines.iter().position(|l| l.starts_with("rename ") && l.contains(".current.atualizar-")).unwrap_or_else(|| panic!("{label}: {calls}"));
+        assert!(last_create < folder && folder < current, "{label}: {calls}");
+        assert!(synced(lines, last_create, folder), "{label}: a sync after the last file extracted, before the folder moves in: {calls}");
+        let path_dir = m.path("usr/local/bin").display().to_string();
+        let last_path = lines
+            .iter()
+            .rposition(|l| ["rename ", "unlink ", "symlink "].iter().any(|k| l.starts_with(k)) && l.contains(&path_dir))
+            .unwrap_or_else(|| panic!("{label}: {calls}"));
+        assert!(lines.iter().any(|l| l.starts_with("unlink ") && l.ends_with("usr/local/bin/veredas-velho")), "{label}: the dropped executable's link removed: {calls}");
+        let said = lines.iter().position(|l| l.starts_with("say ") && l.contains("installed at ")).unwrap_or_else(|| panic!("{label}: {calls}"));
+        assert!(last_path < said && synced(lines, last_path, said), "{label}: a sync after the PATH's last change, before \"installed at\": {calls}");
+    };
+    // Installed, the services staying up (exit 0).
     let m = Machine::new();
-    let w = tempfile::tempdir().unwrap();
+    let (code, lines) = run(&m, &b, &tools.path().join("installed"));
+    assert_eq!(code, Some(0), "{}", lines.join("\n"));
+    installed(&m, &lines, "exit 0");
+    // Installed, the restart failing (exit 3): the same order before "installed at".
+    let m = Machine::new();
+    m.systemctl(1);
+    let (code, lines) = run(&m, &b, &tools.path().join("exit3"));
+    assert_eq!(code, Some(3), "{}", lines.join("\n"));
+    installed(&m, &lines, "exit 3");
+    // Refused: the staging folder's removal synced before "not installed".
+    let m = Machine::new();
     let older = bundle_of(w.path(), "0.9.0", TARGET, &["veredas-portal"], |_| {});
-    let log = tools.path().join("refused");
-    let out = m.command(&[&older], &[("VEREDAS_SETTLE", "0"), ("LD_PRELOAD", trace.to_str().unwrap()), ("ALFORGE_TRACE", log.to_str().unwrap())]).output().unwrap();
-    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
-    let calls = std::fs::read_to_string(&log).unwrap();
-    let lines: Vec<&str> = calls.lines().collect();
+    let (code, lines) = run(&m, &older, &tools.path().join("refused"));
+    assert_eq!(code, Some(2), "{}", lines.join("\n"));
+    let calls = lines.join("\n");
     let removed = lines.iter().rposition(|l| (l.starts_with("rmdir ") || l.starts_with("unlink ")) && l.contains(".atualizar-")).unwrap_or_else(|| panic!("{calls}"));
-    assert!(lines[removed..].contains(&"sync"), "a sync after the staging folder's removal: {calls}");
+    let said = lines.iter().position(|l| l.starts_with("say ") && l.contains("not installed")).unwrap_or_else(|| panic!("{calls}"));
+    assert!(removed < said && synced(&lines, removed, said), "a sync after the staging folder's removal, before \"not installed\": {calls}");
     // An installed manifest that does not state what the command reads of it (a power-off before
     // this fix could leave it empty): said as the installed release that does not read, by its keys.
     let m = Machine::new();
