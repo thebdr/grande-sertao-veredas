@@ -95,3 +95,34 @@ text with them.
   the condition, `devices` the phase and the condition), told apart by their arguments. A
   `HOLD` at a breakpoint writes `breakpoint(set)` too while breakpoints are set.
 - The text carries no version, and a term the reader does not know is refused.
+
+## Ruled to come, spelling proposed (not built)
+
+The architect ruled these additions on 2026-11-25 (`docs/questions.md` Q39, Q40, Q32), each
+term's spelling left to core. The spellings below are core's proposals. None is built: until a
+term is built with its first writer (controlador's), the reader refuses it as it refuses any term
+it does not know, and the table above stays as it is.
+
+Conditions, in the fixed order: `fallback` right after `shadow`, with the debug conditions;
+`last_save` and then `date_unconfirmed` after `retain(reset)`, with what the controller suffers.
+- `fallback(left)`: after an edit taken over live, the old version watching and able to take
+  over again, `left` its time left in whole seconds, rounded up, so an armed fallback never
+  reads 0 (Q32: "Yes, a term with its time left"). Proposed as a debug condition, giving
+  function check while it stands, as `shadow` does.
+- `last_save()`: on a target that cannot save at power loss, a start from the last save, raised
+  only when cycles ran after it; no maintenance request goes with it (Q40: "No request, a
+  condition"). Not a debug condition.
+- `date_unconfirmed()`: while the controller's date is unconfirmed (Q39: "Yes, a condition
+  term"). Not a debug condition; the maintenance requests below carry the health.
+
+Maintenance reasons, the next numbers (Q39: "Two reasons" for the clock, and a reason of its own
+for the warning cycle time beside `overruns`):
+- 7 `clock_lost`: the clock chip lost its time (a board with no clock chip counts as one), its
+  urgency as the situation stands;
+- 8 `ntp_silent`: NTP silent after its waiting time, or not set, its urgency as the situation
+  stands (urgency follows, the request stays until cleared, Q39);
+- 9 `cycle_time` (not urgent): a task's cycle went over its warning cycle time.
+
+Confirmed the same day (Q45): the arguments inside `force` are always in the order in, out, var
+(K1: "Yes: in, out, var"), and a start-up phase shows by its word alone, without an `id` (K5:
+"Word alone, no id"), both as this file already states them.

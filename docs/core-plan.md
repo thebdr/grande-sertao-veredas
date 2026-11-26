@@ -39,6 +39,14 @@ configuration and names no device (`docs/questions.md` Q8).
   (`docs/state-text.md`; `docs/controlador-plan.md`, "The state").
 - **The fieldbus masters:** the functions that drive a plant's devices over a standard fieldbus
   (`fieldbus`), a standard's frames being code here (Q9, revisited): a Modbus/TCP client first.
+- **The vendor description files' readers** (proposed, not built; its pending asked of the
+  orchestrator): GSDML for PROFINET, ESI for EtherCAT and EDS for EtherNet/IP, read for Oficina's
+  hardware configuration, the bench and controlador ("In core", Q45's C5, ruled 2026-11-25,
+  against a member of their own and Oficina). They are inputs, read and never written (Q31 entry
+  23): the TOML rule's one named exception, copied into a project as their vendor wrote them.
+  GSDML and ESI are XML from outside, parsed with document type definitions and entities switched
+  off; EDS is ODVA's keyword text. The test fixtures are descriptions written here, never a
+  vendor's file, those being their vendors' copyright.
 - **Test-fixture plumbing:** the in-process OPC UA demo plant (`opc::demo`, behind the
   `demo-server` feature), seeded randomness.
 - **Later phases:** plain-text file schemas with their version stamps (the first being a
@@ -238,7 +246,10 @@ module of `fieldbus`, a clause of its own, proven against its bench device in ma
 from a crate law L4 allows (Q34, Q101), its frames held to the standard's own examples in core's
 test.
 - **Modbus/TCP client** (`fieldbus::modbus`, C-071): built, on tokio-modbus's framing, and met
-  against the bench's Modbus server (C-110) from `tools/mestres` (Q101).
+  against the bench's Modbus server (C-110) from `tools/mestres` (Q101). A Modbus module's own
+  timeout is checked by the hardware configuration in production too, as a warning the engineer
+  may accept (Q45, ruled 2026-11-25); the check is the configuration's, and what it needs of the
+  client is asked when the configuration is built.
 
 Each master is a cargo feature of core, off by default (`modbus` the first), as the OPC demo
 plant is: a component that only polls or serves (portal, supervisão) carries no fieldbus code and
@@ -257,10 +268,15 @@ tests switch them on through the self dev-dependency.
   output; `Spec::first_input` shortens it for a test.
 - **PROFINET IO controller** (`fieldbus::profinet`): written here on aranha's codecs (DCP, the
   real-time frames), moved into core when the controller needs them (the cut asked of aranha
-  through the orchestrator). Raw Ethernet frames.
+  through the orchestrator). Raw Ethernet frames. Modbus TCP is the bus on which controlador's
+  runtime is first proven, and PROFINET stays the first fieldbus written; from its first clause
+  the PROFINET work has a real device in the loop and captures of a real controller's traffic as
+  fixtures, beside maquinar's device (Q31 entry 26, ruled 2026-11-25).
 - **EtherCAT master** (`fieldbus::ethercat`): on ethercrab 0.7.1 (MIT or Apache-2.0), its
   MainDevice over a raw socket. Raw Ethernet frames; its bench device is maquinar's emulated
-  SubDevice.
+  SubDevice, a partial emulator and said to be one (functional, never exact in time), with real
+  terminals in the loop besides (Q31 entry 27, ruled 2026-11-25). EtherNet/IP is not moved to a
+  later release ("later" not chosen, the same entry).
 
 Raw frames in tests need no privilege from the sessions the desktop app starts: an unprivileged
 user and network namespace (`unshare -Urn`) holds a veth pair whose ends take raw sockets, the
