@@ -256,7 +256,23 @@ impl<'tcx> Defs<'tcx> {
         let (Some(item), Some(parent)) = (def.associated_item(), def.def_id().parent()) else { return fallback() };
         match (&item.kind, &item.container, args.0.first()) {
             (AssocKind::Fn { name, .. }, AssocContainer::Trait, Some(GenericArgKind::Type(this))) => {
-                format!("<{this} as {}>::{name}", parent.trimmed_name())
+                // the trait's own arguments follow `Self`, before the function's
+                let own = def.generics_of().parent_count;
+                let trait_args: Vec<String> = args
+                    .0
+                    .iter()
+                    .take(own)
+                    .skip(1)
+                    .filter_map(|a| match a {
+                        GenericArgKind::Type(t) => Some(format!("{t}")),
+                        _ => None,
+                    })
+                    .collect();
+                let tr = parent.trimmed_name();
+                match trait_args.as_slice() {
+                    [] => format!("<{this} as {tr}>::{name}"),
+                    _ => format!("<{this} as {tr}<{}>>::{name}", trait_args.join(", ")),
+                }
             }
             _ => fallback(),
         }
