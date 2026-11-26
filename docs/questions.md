@@ -4206,3 +4206,27 @@ run that arms it for its confirmed writes also lets the project's automatic repl
 (a critic's run confirmed for 3 sends let 74 messages through). What does the confirmation cover?
 Taken meanwhile: both.", "Writes and replies (Recommended)", (a), against never arming a session
 that has replies and a narrower gate in portal. What was taken stands.
+
+---
+
+## Q48 - Which browsers does supervisão's page claim?
+
+**Raised** 2026-11-26, by the orchestrator, from the architect's exploratory testing of the page
+(a try-out host built from `main` at 1e6f9173, on a plant of the orchestrator's beside the
+reference one). The architect found that "the moving objects align with the path only at a
+certain zoom level", in Firefox, on the layout view's own zoom; supervisão's page tests drive
+Chrome for Testing alone, so no test has run the page in another engine. A marker's place is
+computed with a call the two engines answer differently for a drawing's outermost element (the
+orchestrator's reading of `web/src/layout.ts`, `placeAt`; not verified).
+
+Options, as the orchestrator named them to the architect: Chromium alone, as tested today (the
+tester machine ships Chromium, Q433); Chromium and Firefox, with a second engine in the browser
+tests; any current browser, tested in two.
+
+**Decided** 2026-11-26, by the architect, before the question was put as a dialog: told that
+supervisão would raise "which browsers supervisão's page claims and is tested in. Today that is
+Chromium alone, the tester machine ships Chromium, and you explore in Firefox", the architect
+answered "chromium is sufficient". So the page is claimed and tested in Chromium; what it does in
+another engine is outside the claim, the misalignment found in Firefox with it. The architect's
+other finding of the same sitting stands apart from the engine: the layout view's zoom level "is
+not written anywhere".
