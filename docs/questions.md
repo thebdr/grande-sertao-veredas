@@ -3723,3 +3723,33 @@ headless, and leaving a switch as found changes nothing for anyone else.
 
 **Reversible?** Yes: the fingerprint is one function (`run::writes_fingerprint`) and one option
 (`--arm`); a prompt or another form of confirmation would call the same `RunOptions::confirming`.
+
+---
+
+## Q281 - How does a Windows laptop send and hear raw frames?
+
+**Raised** 2026-11-26, after reading Npcap's licence (`docs/aranha-plan.md`, "Npcap's licence";
+Q45's G2: identify, name and address runs from the laptop on the segment too).
+
+On Linux aranha sends and hears raw frames itself (`AF_PACKET`). Windows has no such socket; Veredas
+1 used Npcap. Npcap's free licence lets the engineer install it on up to five computers (a virtual
+machine counting as one) and recommends that software ask its users to install it themselves; it
+forbids bundling it, has no silent installer, and its opening line says it "may not be
+redistributed or used in other software without special permission", which it leaves undefined.
+
+Options:
+- (a) The engineer installs the free Npcap from npcap.com; aranha neither ships nor starts its
+  installer, and says so where it needs it. Up to five machines per engineer; a note to the
+  publisher would settle what "used in other software" means for software that only drives it.
+- (b) The suite buys Npcap OEM: the redistribution licence (from $39,980 perpetual, or $6,980 a
+  quarter) to ship it and install it silently, or the internal-use licence (from $4,980 for 100
+  installs) for an organisation's own laptops.
+- (c) No raw frames on Windows: a Windows laptop identifies, names and addresses through a target's
+  embedded aranha, as its IO check goes through a target (Q45, ruled 2026-11-25); the laptop path
+  of G2 is Linux only.
+
+**Recommended and taken meanwhile**: (c), the Windows phase being later: nothing of Windows is
+built until it is ruled, and a target serves a Windows laptop already.
+
+**Reversible?** Yes: a Windows wire is one more implementation of the wire seam (C-139); nothing
+above it changes, whichever of (a) or (b) comes.

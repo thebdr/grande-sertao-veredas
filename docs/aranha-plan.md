@@ -65,8 +65,8 @@ controller's hardware configuration has nothing of the suite's own to compare ag
     tables);
   - **writes**: DCP Set of a station name, an IP suite, the identification signal (blink), gated
     (below, "Rules");
-  - **Windows**: raw frames there need a packet driver (Npcap in Veredas 1), whose licence for this
-    use is open (`docs/questions.md` Q45).
+  - **Windows**: raw frames there need a packet driver (Npcap in Veredas 1); its licence, read
+    2026-11-26 (below, "Npcap's licence"), leaves a choice (`docs/questions.md` Q281).
 
 Not in scope, for good: opening an application relation (an IO exchange is the controller's, and
 a second controller contending for a device disturbs the first); any frame sent onto a bus that an
@@ -95,8 +95,9 @@ plant in production.
   named by its MAC (the codec refuses a multicast or broadcast target); an arming step naming that
   device; a confirmation per action; a running listener. Renaming a device that exchanges data
   with a controller needs the arming step and a confirmation (the architect, 2026-11-15,
-  `docs/oficina-plan.md`, "The IO check from a laptop"). Where the step runs, laptop or target, is
-  open (Q45); the gates are the same either way.
+  `docs/oficina-plan.md`, "The IO check from a laptop"). It runs both from the laptop on the
+  segment and through a target's embedded aranha when the laptop is not (Q45's G2, ruled
+  2026-11-25); the gates are the same either way.
 - **The codecs are written to core's rules from their first line**, so their move into core is a
   move and not a rewrite: they depend on no member and on nothing of aranha; they are
   content-agnostic (no vendor, product or device is named in their code, comments, tests or
@@ -146,7 +147,7 @@ Read before the port: `docs/aranha-plan.md` and `docs/aranha-usage.md`, all of
 | `probes/pnrpc.rs` (the RPC header, the implicit read of I&M0) | `profinet::rpc`, the implicit read in deep identity | the RPC framing serves the controller's connect as much as the read; its own header says it was never checked against a real device |
 | (new) | `profinet::{rt, alarm}`, the connect, control, write and release blocks | the IO controller and the bench device need them; Veredas 1 had none of the cyclic exchange |
 | `wire.rs` (`Wire`, `ReplayWire`, `Hub`), `pcap.rs` | `wire` | the seam and its file and memory kinds; pcap written as well as read |
-| `npcap.rs`, `adapters.rs` (Windows, `wpcap.dll` and `GetAdaptersAddresses` bound by hand) | later, the Windows phase | the Linux raw link comes first (`AF_PACKET`, the interface's MAC from the kernel); Npcap waits for Q45 |
+| `npcap.rs`, `adapters.rs` (Windows, `wpcap.dll` and `GetAdaptersAddresses` bound by hand) | later, the Windows phase | the Linux raw link comes first (`AF_PACKET`, the interface's MAC from the kernel); Npcap waits for Q281 |
 | `observe.rs`, `fusion.rs`, `engine.rs` | `observe`, `fusion`, `listen` | as they were, with typed decode errors and the own-machine filter |
 | `capture.rs` (a thread per adapter, the one paced sender) | `listen` | the listener is the only sender on its interface, so asking is paced where it is heard |
 | `active.rs` (Identify-All, the ARP sweep) | `ask` | the ARP sweep with the IP-layer probes, later |
@@ -239,8 +240,40 @@ The architect's decisions of 13 to 16 November 2026 that touch aranha (`docs/bri
   holds.
 - **Renaming a device that exchanges data with another controller** needs an arming step and a
   confirmation (the rules of the laptop IO check).
-- Open: where "identify, name and address" runs, laptop or target (Q45); where the readers of
-  GSDML, ESI and EDS files live (Q45); whether Npcap's licence allows what Windows needs (Q45).
+- Ruled 2026-11-25 (Q45): "identify, name and address" runs from the laptop when it is on the
+  segment and through a target's embedded aranha when it is not (G2); the readers of GSDML, ESI
+  and EDS files live in core (C5), so aranha's deep identity reads a device's description from
+  core when it needs one.
+- Open: how a Windows laptop sends and hears raw frames, Npcap's licence read (Q281).
+
+## Npcap's licence (read 2026-11-26)
+A fact for the record, not a decision, and no legal advice. Read from its publisher, Nmap Software
+LLC: the licence text (`github.com/nmap/npcap`, `LICENSE`, the copyright line 2013-2025, no version
+line; npcap.com/license points to it), npcap.com, and its OEM pages (`npcap.com/oem`,
+`/oem/redist`, `/oem/internal`); Npcap 1.90 of 2026-10-21 was current.
+- **The engineer installing it, free**: the free edition may be installed and used on up to five
+  computers, by up to five users, a virtual machine or a container counting as a computer; copies
+  used only with Nmap, Wireshark or Microsoft Defender for Identity do not count. No exception for
+  internal or commercial use: an organisation's laptops count against the five as anyone's.
+- **A suite that asks the engineer to install it**: the licence itself recommends that authors who
+  would redistribute it ask their users to download and install it themselves, free up to the five
+  copies, so a suite that points the engineer to npcap.com holds no Npcap licence of its own. Its
+  opening line says it "may not be redistributed or used in other software without special
+  permission", which it does not define, while the publisher's pages say software built on the
+  libpcap API works with the free edition and developers build against its SDK: a strict reading
+  of "used in other software" is unsettled by the text. A suite's installer that fetches or starts
+  Npcap's installer for the engineer is not addressed; the reading that is safe is the engineer
+  downloading and running it.
+- **A suite that bundles it**: forbidden under the free licence (no redistribution without written
+  consent, no copies but archival ones), and the free edition has no silent installer. Bundling or
+  installing it silently needs the OEM redistribution licence (published from $39,980 perpetual,
+  or $6,980 a quarter; the licence says a quarterly term, the home page an annual one), and an
+  organisation's own installs past five the OEM internal-use licence (from $4,980 for 100
+  installs). No exception for free or open-source software: the licence invites such authors to ask.
+- **Beside it**: the libpcap, WinPcap and radiotap licences it carries (BSD-style) ask for their
+  acknowledgement in a redistributor's documentation; the Npcap licence is silent on a suite's own
+  MIT or Apache-2.0 licence, which grants nothing of Npcap's; and on Windows Server it adds nothing,
+  but the five users of a shared machine.
 
 ## Traps
 Known before the code, from reading Veredas 1 against the standard and from this machine; each
