@@ -2448,3 +2448,346 @@ mod round_8 {
         assert_eq!((server.registers(Table::HoldingRegister, 1, 1).unwrap(), s.unanswered), (vec![0x44], 1 + 5460));
     }
 }
+
+
+/// C-110's ninth refute round: the critic's probes (`~/.cache/veredas/critic-c110-r9/probes`), kept
+/// as pins (on the machine's lock: each meets silence at a moment its sleeps choose): a request any
+/// byte of which was read while silent withheld with no delay too, at every split; its control; two
+/// touched stretches outstanding at once; a frame of another protocol at a stretch keeping the
+/// stream's offsets; a malformed length inside a stretch; a frame touched after its header or at its
+/// last byte alone.
+mod round_9 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::modbus::*;
+
+    fn config(text: &str) -> ModbusConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn wait(within: Duration, mut what: impl FnMut() -> bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            if what() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        what()
+    }
+
+    fn connect(addr: SocketAddr) -> TcpStream {
+        let s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s.set_nodelay(true).unwrap();
+        s
+    }
+
+    fn frame_p(transaction: u16, protocol: u16, pdu: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&transaction.to_be_bytes());
+        f.extend_from_slice(&protocol.to_be_bytes());
+        f.extend_from_slice(&(pdu.len() as u16 + 1).to_be_bytes());
+        f.push(1);
+        f.extend_from_slice(pdu);
+        f
+    }
+
+    fn frame(transaction: u16, pdu: &[u8]) -> Vec<u8> {
+        frame_p(transaction, 0, pdu)
+    }
+
+    const READ: [u8; 5] = [0x03, 0x00, 0x00, 0x00, 0x01];
+
+    fn w(addr: u8, v: u8) -> [u8; 5] {
+        [0x06, 0x00, addr, 0x00, v]
+    }
+
+    fn read_answer(s: &mut TcpStream) -> std::io::Result<(u16, Vec<u8>)> {
+        let mut h = [0u8; 7];
+        s.read_exact(&mut h)?;
+        let length = u16::from_be_bytes([h[4], h[5]]);
+        let mut pdu = vec![0u8; length as usize - 1];
+        s.read_exact(&mut pdu)?;
+        Ok((u16::from_be_bytes([h[0], h[1]]), pdu))
+    }
+
+    fn answers_within(s: &mut TcpStream, d: Duration) -> Vec<u16> {
+        s.set_read_timeout(Some(d)).unwrap();
+        let mut got = Vec::new();
+        while let Ok((t, _)) = read_answer(s) {
+            got.push(t);
+        }
+        got
+    }
+
+    fn answered(s: &ModbusStatus) -> u64 {
+        s.answered.values().sum()
+    }
+
+    fn read_by_server(server: &ModbusHandle, t: u16) {
+        assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == t)), "transaction {t} read");
+    }
+
+    fn pulse(server: &ModbusHandle) {
+        server.set_silent(true);
+        std::thread::sleep(Duration::from_millis(30));
+        server.set_silent(false);
+    }
+
+    /// No delay: a write's first 6 bytes read while silent, its last 6 after silence ended.
+    /// Round 8's rule ("judged by its whole span, withheld when any byte of it was read" while silent)
+    /// withholds it, as it withholds its twin inside a delay and round 8's, finished while silent (round 9:
+    /// answered and done, 30 of 30).
+    #[test]
+    fn a_request_begun_while_silent_and_finished_after_is_withheld() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        assert_eq!(read_answer(&mut c).unwrap().0, 1);
+        server.set_silent(true);
+        let r2 = frame(2, &w(1, 0x33));
+        c.write_all(&r2[..6]).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        server.set_silent(false);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&r2[6..]).unwrap();
+        let got = answers_within(&mut c, Duration::from_millis(1500));
+        let s = server.status();
+        let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+        assert_eq!((got, reg, answered(&s), s.unanswered), (vec![], vec![0], 1, 1), "begun while silent, finished after");
+    }
+
+    /// No delay: the whole header and 2 PDU bytes (9 bytes) read while silent, the rest after.
+    #[test]
+    fn a_request_whose_header_was_read_while_silent_is_withheld() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        assert_eq!(read_answer(&mut c).unwrap().0, 1);
+        server.set_silent(true);
+        let r2 = frame(2, &w(1, 0x33));
+        c.write_all(&r2[..9]).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        server.set_silent(false);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&r2[9..]).unwrap();
+        let got = answers_within(&mut c, Duration::from_millis(1500));
+        let s = server.status();
+        let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+        assert_eq!((got, reg, answered(&s), s.unanswered), (vec![], vec![0], 1, 1), "its header read while silent");
+    }
+
+    /// The delay twin of the first: the same 6 bytes read ahead while silent during a delay, the rest
+    /// after the delay and silence ended.
+    #[test]
+    fn a_request_begun_while_silent_in_a_delay_and_finished_after_is_withheld() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_delay(Duration::from_millis(400));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        read_by_server(&server, 1);
+        server.set_silent(true);
+        let r2 = frame(2, &w(1, 0x33));
+        c.write_all(&r2[..6]).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        server.set_silent(false);
+        // Past request 1's delay.
+        std::thread::sleep(Duration::from_millis(500));
+        server.set_delay(Duration::ZERO);
+        c.write_all(&r2[6..]).unwrap();
+        let got = answers_within(&mut c, Duration::from_millis(1500));
+        let s = server.status();
+        let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+        assert_eq!((got, reg, answered(&s), s.unanswered), (vec![], vec![0], 0, 2), "begun while silent in a delay");
+    }
+
+    /// Its control: no byte read while silent (silence came and went while the server waited for the
+    /// tail): answered, as the clause has it.
+    #[test]
+    fn a_request_no_byte_of_which_was_read_while_silent_is_answered() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        let mut c = connect(server.addr);
+        let r2 = frame(2, &w(1, 0x33));
+        c.write_all(&r2[..6]).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        pulse(&server);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&r2[6..]).unwrap();
+        let got = answers_within(&mut c, Duration::from_millis(1500));
+        let s = server.status();
+        let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+        assert_eq!((got, reg, answered(&s), s.unanswered), (vec![2], vec![0x33], 1, 0), "no byte read while silent");
+    }
+
+    /// Two touched stretches outstanding at once: requests 2 and 3 read ahead during request 1's
+    /// untouched delay; request 4 read ahead during request 2's touched delay (stretch A); request 3,
+    /// untainted, done and its delay touched with request 5 read ahead then (stretch B). 4 and 5 are
+    /// withheld and not done; 6, sent after, answered.
+    #[test]
+    fn two_touched_stretches_outstanding_at_once_withhold_both() {
+        let server = start(&config("port = 0\nholding_registers = 4\n")).unwrap();
+        server.set_delay(Duration::from_millis(600));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        read_by_server(&server, 1);
+        c.write_all(&[frame(2, &READ), frame(3, &w(1, 0x33))].concat()).unwrap();
+        assert_eq!(read_answer(&mut c).unwrap().0, 1);
+        read_by_server(&server, 2);
+        c.write_all(&frame(4, &w(2, 0x44))).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        pulse(&server);
+        read_by_server(&server, 3);
+        c.write_all(&frame(5, &w(3, 0x55))).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        pulse(&server);
+        assert!(wait(Duration::from_secs(5), || server.status().recent.iter().any(|x| x.transaction == 5)), "5 read");
+        std::thread::sleep(Duration::from_millis(50));
+        server.set_delay(Duration::ZERO);
+        c.write_all(&frame(6, &READ)).unwrap();
+        let got = answers_within(&mut c, Duration::from_millis(2500));
+        let s = server.status();
+        let regs = server.registers(Table::HoldingRegister, 0, 4).unwrap();
+        assert_eq!((got, regs, answered(&s), s.unanswered), (vec![6], vec![0, 0x33, 0, 0], 2, 4), "two stretches outstanding");
+    }
+
+    /// A frame of another protocol straddling a touched stretch's start, a write behind it in the
+    /// stretch: the foreign frame dropped, the write withheld and not done, the next request answered.
+    #[test]
+    fn a_foreign_frame_straddling_a_stretch_s_start_keeps_the_write_behind_it_withheld() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_delay(Duration::from_millis(600));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        read_by_server(&server, 1);
+        let f3 = frame_p(3, 7, &w(0, 0x22));
+        c.write_all(&[frame(2, &READ), f3[..6].to_vec()].concat()).unwrap();
+        assert_eq!(read_answer(&mut c).unwrap().0, 1);
+        read_by_server(&server, 2);
+        std::thread::sleep(Duration::from_millis(50));
+        server.set_silent(true);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&[f3[6..].to_vec(), frame(4, &w(1, 0x44))].concat()).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        server.set_silent(false);
+        assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 4)), "4 read");
+        server.set_delay(Duration::ZERO);
+        c.write_all(&frame(5, &READ)).unwrap();
+        let got = answers_within(&mut c, Duration::from_millis(1500));
+        let s = server.status();
+        let regs = server.registers(Table::HoldingRegister, 0, 2).unwrap();
+        assert_eq!((got, regs, answered(&s), s.unanswered, s.dropped), (vec![5], vec![0, 0], 2, 2, 1), "a foreign frame at a stretch's start");
+    }
+
+    /// A foreign frame and a write read ahead while silent during a delay (one stretch): both
+    /// judged (dropped, withheld), and a request after it all answered.
+    #[test]
+    fn a_foreign_frame_inside_a_stretch_keeps_the_offsets() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_delay(Duration::from_millis(600));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        read_by_server(&server, 1);
+        server.set_silent(true);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&[frame_p(2, 7, &w(0, 0x22)), frame(3, &w(1, 0x33))].concat()).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        server.set_silent(false);
+        assert!(wait(Duration::from_secs(5), || server.status().recent.back().is_some_and(|x| x.transaction == 3)), "3 read");
+        server.set_delay(Duration::ZERO);
+        c.write_all(&frame(4, &READ)).unwrap();
+        let got = answers_within(&mut c, Duration::from_millis(1500));
+        let s = server.status();
+        let regs = server.registers(Table::HoldingRegister, 0, 2).unwrap();
+        assert_eq!((got, regs, answered(&s), s.unanswered, s.dropped), (vec![4], vec![0, 0], 1, 2, 1), "a foreign frame inside a stretch");
+    }
+
+    /// A malformed length inside a touched stretch: the connection closed, counted malformed; the
+    /// requests before it withheld, nothing done.
+    #[test]
+    fn a_malformed_length_inside_a_stretch_closes_the_connection_and_does_nothing() {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_delay(Duration::from_millis(400));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        read_by_server(&server, 1);
+        server.set_silent(true);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&[frame(2, &w(1, 0x33)), vec![0, 9, 0, 0, 0, 0, 1, 3]].concat()).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        server.set_silent(false);
+        c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut b = [0u8; 1];
+        let end = c.read(&mut b);
+        let regs = server.registers(Table::HoldingRegister, 0, 2).unwrap();
+        assert!(matches!(end, Ok(0) | Err(_)) && !matches!(&end, Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut));
+        assert!(wait(Duration::from_secs(3), || server.status().malformed == 1));
+        let s = server.status();
+        assert_eq!((regs, answered(&s), s.unanswered), (vec![0, 0], 0, 2), "a malformed length inside a stretch");
+    }
+
+    /// Round 8's straddle split after the header: 9 bytes in the untouched delay, 3 in the touched one.
+    #[test]
+    fn a_frame_touched_after_its_header_is_withheld() {
+        straddle(9, "touched after its header");
+    }
+
+    /// Round 8's straddle with only the last byte read in the touched delay.
+    #[test]
+    fn a_frame_touched_at_its_last_byte_alone_is_withheld() {
+        straddle(11, "touched at its last byte alone");
+    }
+
+    fn straddle(at: usize, tag: &str) {
+        let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+        server.set_delay(Duration::from_millis(600));
+        let mut c = connect(server.addr);
+        c.write_all(&frame(1, &READ)).unwrap();
+        read_by_server(&server, 1);
+        let r3 = frame(3, &w(1, 0x33));
+        c.write_all(&[frame(2, &READ), r3[..at].to_vec()].concat()).unwrap();
+        assert_eq!(read_answer(&mut c).unwrap().0, 1);
+        read_by_server(&server, 2);
+        std::thread::sleep(Duration::from_millis(50));
+        server.set_silent(true);
+        std::thread::sleep(Duration::from_millis(20));
+        c.write_all(&r3[at..]).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        server.set_silent(false);
+        let got = answers_within(&mut c, Duration::from_millis(2500));
+        let s = server.status();
+        let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+        assert_eq!((got, reg, answered(&s), s.unanswered), (vec![], vec![0], 1, 2), "{tag}");
+    }
+
+
+    /// The first `at` bytes of a write read while silent, silence lifted, the rest sent: withheld and
+    /// not done at every split, the MBAP header alone (7) included.
+    #[test]
+    fn a_request_begun_while_silent_is_withheld_at_every_split() {
+        let mut wrong = Vec::new();
+        for at in [1usize, 6, 7] {
+            for _ in 0..3 {
+                let server = start(&config("port = 0\nholding_registers = 2\n")).unwrap();
+                let mut c = connect(server.addr);
+                c.write_all(&frame(1, &READ)).unwrap();
+                assert_eq!(read_answer(&mut c).unwrap().0, 1);
+                server.set_silent(true);
+                let r2 = frame(2, &w(1, 0x33));
+                c.write_all(&r2[..at]).unwrap();
+                std::thread::sleep(Duration::from_millis(60));
+                server.set_silent(false);
+                std::thread::sleep(Duration::from_millis(10));
+                c.write_all(&r2[at..]).unwrap();
+                let got = answers_within(&mut c, Duration::from_millis(600));
+                let reg = server.registers(Table::HoldingRegister, 1, 1).unwrap();
+                if !got.is_empty() || reg != [0] {
+                    wrong.push(format!("{at} byte(s) read while silent: answered {got:?}, register {reg:?}"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+}

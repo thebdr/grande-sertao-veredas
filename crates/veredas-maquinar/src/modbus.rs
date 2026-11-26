@@ -978,8 +978,12 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
     let mut withheld: std::collections::VecDeque<(u64, u64)> = std::collections::VecDeque::new();
     loop {
         let mut header = [0u8; 7];
+        // A byte of the frame read from the socket while silent withholds it, as a byte read ahead
+        // during a touched delay does (round 9: a request begun while silent and finished after,
+        // with no delay, was answered and done).
+        let mut read_silent = false;
         tokio::select! {
-            r = fill_exact(&mut rd, &mut ahead, &mut header) => if r.is_err() { return },
+            r = fill_exact(&mut rd, &mut ahead, &mut header, &shared.silent, &mut read_silent) => if r.is_err() { return },
             _ = ended(&mut gone, generation) => return,
         }
         let transaction = u16::from_be_bytes([header[0], header[1]]);
@@ -993,7 +997,7 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
         }
         let mut pdu = vec![0u8; length as usize - 1];
         tokio::select! {
-            r = fill_exact(&mut rd, &mut ahead, &mut pdu) => if r.is_err() { return },
+            r = fill_exact(&mut rd, &mut ahead, &mut pdu, &shared.silent, &mut read_silent) => if r.is_err() { return },
             _ = ended(&mut gone, generation) => return,
         }
         // Judged by its whole span: the stretches ending before it are gone, so the first left
@@ -1011,7 +1015,7 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
         }
         // The silence count is read before the silence: a switch between the two is seen by one.
         let epoch = shared.silenced.load(Ordering::SeqCst);
-        let silent = shared.silent.load(Ordering::SeqCst) || frame_tainted;
+        let silent = shared.silent.load(Ordering::SeqCst) || frame_tainted || read_silent;
         let response = {
             let mut state = shared.lock();
             let response = if silent {
@@ -1128,13 +1132,23 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mu
 /// counted, the next request done), and a request is judged by silence when it is read.
 const READ_AHEAD: usize = 64 * 1024;
 
-/// Fills `out` from what was read ahead first, then from the socket.
-async fn fill_exact(rd: &mut tokio::net::tcp::OwnedReadHalf, ahead: &mut Vec<u8>, out: &mut [u8]) -> std::io::Result<()> {
+/// Fills `out` from what was read ahead first, then from the socket, noting in `read_silent` a read
+/// that came while `silent` was set.
+async fn fill_exact(rd: &mut tokio::net::tcp::OwnedReadHalf, ahead: &mut Vec<u8>, out: &mut [u8], silent: &AtomicBool, read_silent: &mut bool) -> std::io::Result<()> {
     let n = ahead.len().min(out.len());
     out[..n].copy_from_slice(&ahead[..n]);
     ahead.drain(..n);
-    if n < out.len() {
-        rd.read_exact(&mut out[n..]).await?;
+    // A read at a time, each noted when it comes while silent.
+    let mut at = n;
+    while at < out.len() {
+        let k = rd.read(&mut out[at..]).await?;
+        if k == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        if silent.load(Ordering::SeqCst) {
+            *read_silent = true;
+        }
+        at += k;
     }
     Ok(())
 }
