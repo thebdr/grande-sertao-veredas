@@ -178,7 +178,7 @@ fn proof(console: &str, share: f64, after: &str) -> Proof {
 #[test]
 fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     let card = format!("VEREDAS-CARD ens4 {}", maquina::PROOF_MAC);
-    let promised = "VEREDAS-BUNDLE abababababababababababababababababababababababababababababababab\nVEREDAS-PACKAGES ok\nVEREDAS-SERVICES-USER ok\nVEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\nVEREDAS-ATUALIZAR ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
+    let promised = "VEREDAS-BUNDLE abababababababababababababababababababababababababababababababab\nVEREDAS-PACKAGES ok\nVEREDAS-SERVICES-USER ok\nVEREDAS-SSH absent\nVEREDAS-CLOUD-INIT disabled\nVEREDAS-ON-PATH ok\nVEREDAS-ATUALIZAR ok\nVEREDAS-LIBRARIES ok\nVEREDAS-WINDOW ok\n[    7.123998] systemd[1]: Initializing machine ID from random generator.\n";
     // The kernel's own lines for the disk and the card, as a proof boot's console holds them.
     let kernel = "[    1.838046] vmxnet3 0000:00:04.0 ens4: renamed from eth0\n[    1.961659] scsi host0: VMware PVSCSI storage adapter rev 2, req/cmp/msg rings: 8/8/1 pages, cmd_per_lun=254\n\
                   [    1.967761] vmw_pvscsi 0000:00:03.0: VMware PVSCSI rev 2 host #0\n[    2.616482] sd 0:0:0:0: [sda] Attached SCSI disk\n\
@@ -227,6 +227,13 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
         ("VEREDAS-ON-PATH ok", "VEREDAS-ON-PATH missing veredas-portal", "the release's executables are not all on the PATH (no `VEREDAS-ON-PATH ok` on the console)"),
         ("VEREDAS-ATUALIZAR ok", "VEREDAS-ATUALIZAR missing", "the update command is not installed (no `VEREDAS-ATUALIZAR ok` on the console)"),
         (
+            "VEREDAS-LIBRARIES ok",
+            "VEREDAS-LIBRARIES missing libxcb-cursor.so.0 ",
+            "a library the release's executables or its own libraries load is not on the machine (no `VEREDAS-LIBRARIES ok` on the console)",
+        ),
+        ("VEREDAS-WINDOW ok", "VEREDAS-WINDOW failed veredas-oficina 1", "the release's window did not stay up offscreen on the machine (`VEREDAS-WINDOW failed veredas-oficina 1`)"),
+        ("VEREDAS-WINDOW ok", "VEREDAS-WINDOW", "the release's window did not stay up offscreen on the machine (`VEREDAS-WINDOW nothing`)"),
+        (
             "systemd[1]: Initializing machine ID from random generator.",
             "systemd[1]: Detected first boot.",
             "the shipped disk carries a machine identity (no `Initializing machine ID from random generator` on the console)",
@@ -234,6 +241,8 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     ] {
         assert_eq!(maquina::proof_faults(&proof(&good.replace(said, instead), 0.3, "a"), "2.0.0"), vec![fault.to_string()], "{said}");
     }
+    // A release that ships no window says so, and that is no fault.
+    assert_eq!(maquina::proof_faults(&proof(&good.replace("VEREDAS-WINDOW ok", "VEREDAS-WINDOW none"), 0.3, "a"), "2.0.0"), Vec::<String>::new());
     // The boot's check said after a login started on the serial console: named.
     // The disk on another SCSI host (the board's IDE, as the kernel prints it) with the pvscsi
     // host idle; the proof's card one another driver names: each named.
@@ -610,7 +619,12 @@ if [ -z "$others" ]; then echo "VEREDAS-SERVICES-USER ok"; else echo "VEREDAS-SE
 missing=
 for b in /opt/veredas/current/bin/*; do n=$(basename "$b"); [ "$(command -v "$n")" = "/usr/local/bin/$n" ] || missing="$missing $n"; done
 if [ -z "$missing" ]; then echo "VEREDAS-ON-PATH ok"; else echo "VEREDAS-ON-PATH missing$missing"; fi
-if [ -x /usr/local/sbin/veredas-atualizar ] && python3 -c 'import tomllib, tarfile' 2>/dev/null; then echo "VEREDAS-ATUALIZAR ok"; else echo "VEREDAS-ATUALIZAR missing"; fi"##
+if [ -x /usr/local/sbin/veredas-atualizar ] && python3 -c 'import tomllib, tarfile' 2>/dev/null; then echo "VEREDAS-ATUALIZAR ok"; else echo "VEREDAS-ATUALIZAR missing"; fi
+missing=$(for f in /opt/veredas/current/bin/* $(find /opt/veredas/current/lib -name '*.so*' 2>/dev/null); do ldd "$f" 2>/dev/null | awk '$3 == "not" {{print $1}}'; done | sort -u | tr '\n' ' ')
+if [ -z "$missing" ]; then echo "VEREDAS-LIBRARIES ok"; else echo "VEREDAS-LIBRARIES missing $missing"; fi
+window=none
+for b in /opt/veredas/current/bin/*; do if ldd "$b" 2>/dev/null | grep -q '/lib/qt/lib/'; then rc=0; QT_QPA_PLATFORM=offscreen HOME=/tmp timeout 10 "$b" > /dev/null 2>&1 || rc=$?; if [ "$rc" = 124 ]; then window=ok; else window="failed $(basename "$b") $rc"; break; fi; fi; done
+echo "VEREDAS-WINDOW $window""##
     );
     assert_eq!(commands, want.lines().collect::<Vec<_>>());
     let said: Vec<usize> = commands

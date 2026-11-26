@@ -113,7 +113,9 @@ cat > /usr/local/libexec/veredas-verifica <<'SCRIPT'
 # The release's files checked against its SHA256SUMS, the network cards the machine sees, and
 # what the provisioning promised: the recipe's packages installed, the bench and supervisão services
 # of the recipe's user, no SSH server, cloud-init off, every executable on the PATH, the update
-# command there. The release is the one `current` names, as an update moves it.
+# command there; every library the release's executables and its own libraries load found, and a
+# window it ships (one loading the bundle's Qt) started offscreen and still up after ten seconds.
+# The release is the one `current` names, as an update moves it.
 cd /opt/veredas/current
 rel=$(sed -n 's/^release = "\(.*\)"$/\1/p' release.toml)
 if sha256sum --quiet -c SHA256SUMS; then echo "VEREDAS-SUMS-OK $rel"; else echo "VEREDAS-SUMS-FAILED $rel"; fi
@@ -131,6 +133,11 @@ missing=
 for b in /opt/veredas/current/bin/*; do n=$(basename "$b"); [ "$(command -v "$n")" = "/usr/local/bin/$n" ] || missing="$missing $n"; done
 if [ -z "$missing" ]; then echo "VEREDAS-ON-PATH ok"; else echo "VEREDAS-ON-PATH missing$missing"; fi
 if [ -x /usr/local/sbin/veredas-atualizar ] && python3 -c 'import tomllib, tarfile' 2>/dev/null; then echo "VEREDAS-ATUALIZAR ok"; else echo "VEREDAS-ATUALIZAR missing"; fi
+missing=$(for f in /opt/veredas/current/bin/* $(find /opt/veredas/current/lib -name '*.so*' 2>/dev/null); do ldd "$f" 2>/dev/null | awk '$3 == "not" {{print $1}}'; done | sort -u | tr '\n' ' ')
+if [ -z "$missing" ]; then echo "VEREDAS-LIBRARIES ok"; else echo "VEREDAS-LIBRARIES missing $missing"; fi
+window=none
+for b in /opt/veredas/current/bin/*; do if ldd "$b" 2>/dev/null | grep -q '/lib/qt/lib/'; then rc=0; QT_QPA_PLATFORM=offscreen HOME=/tmp timeout 10 "$b" > /dev/null 2>&1 || rc=$?; if [ "$rc" = 124 ]; then window=ok; else window="failed $(basename "$b") $rc"; break; fi; fi; done
+echo "VEREDAS-WINDOW $window"
 SCRIPT
 chmod 755 /usr/local/libexec/veredas-verifica
 cat > /etc/systemd/system/veredas-verifica.service <<'UNIT'
@@ -829,7 +836,7 @@ pub fn prove(r: &Recipe, ova: &Path, release: &str, canvas: (u8, u8, u8), bundle
 }
 
 /// The lines the boot's check says, by their first word, in the order it says them.
-pub const CHECK_LINES: [&str; 9] = [
+pub const CHECK_LINES: [&str; 11] = [
     "VEREDAS-SUMS-",
     "VEREDAS-BUNDLE ",
     "VEREDAS-CARD ",
@@ -839,6 +846,8 @@ pub const CHECK_LINES: [&str; 9] = [
     "VEREDAS-SERVICES-USER ",
     "VEREDAS-ON-PATH ",
     "VEREDAS-ATUALIZAR ",
+    "VEREDAS-LIBRARIES ",
+    "VEREDAS-WINDOW ",
 ];
 
 /// The console with each line a kernel record cut put back whole. The kernel prints a record at
@@ -965,11 +974,18 @@ pub fn proof_faults(p: &Proof, release: &str) -> Vec<String> {
         ("VEREDAS-CLOUD-INIT disabled", "cloud-init is not disabled"),
         ("VEREDAS-ON-PATH ok", "the release's executables are not all on the PATH"),
         ("VEREDAS-ATUALIZAR ok", "the update command is not installed"),
+        ("VEREDAS-LIBRARIES ok", "a library the release's executables or its own libraries load is not on the machine"),
         ("Initializing machine ID from random generator", "the shipped disk carries a machine identity"),
     ] {
         if !console.contains(line) {
             out.push(format!("{what} (no `{line}` on the console)"));
         }
+    }
+    // A window the release ships started from it and still up (Qt's own, the system's libraries),
+    // or none shipped.
+    if !console.contains("VEREDAS-WINDOW ok") && !console.contains("VEREDAS-WINDOW none") {
+        let said = console.lines().find_map(|l| l.split_once("VEREDAS-WINDOW ").map(|(_, w)| w.trim().to_string())).unwrap_or_else(|| "nothing".into());
+        out.push(format!("the release's window did not stay up offscreen on the machine (`VEREDAS-WINDOW {said}`)"));
     }
     // The root disk on the paravirtual SCSI host and the proof's card driven by vmxnet3, as the
     // kernel says them: the drivers' names alone are said by a controller with nothing on it.
