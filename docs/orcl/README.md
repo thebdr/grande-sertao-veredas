@@ -56,8 +56,12 @@ indices, text, time types, 128-bit integers, the prior art's proposals (`languag
 
 ### The standard library
 What a program builds on, `no_std`, every operation with a defined result. Checked on 2026-11-15: the on-delay,
-off-delay and pulse timers, both edge detectors and the up counter, and nothing else. Technology objects (axes, PID,
-cams, counters as hardware objects) are out of scope (`docs/controlador-plan.md`, "Out of scope").
+off-delay and pulse timers, both edge detectors and the up counter, and nothing else. It is a named first-release
+item and is completed, with the IEC names and behaviour: the down counter and the set and reset latches join it
+(2026-11-25, the review's entry 40, `docs/questions.md` Q31). Below `f64` ORCL's types (`char`, text, time, date)
+become the library's own, each with a fixed representation (2026-11-25, Q44), for the translators' type table.
+Technology objects (axes, PID, cams, counters as hardware objects) are out of scope, "technology objects later",
+and no PID block joins the library now (`docs/controlador-plan.md`, "Out of scope").
 
 ### The engine of a scan
 What every host of a program shares, so that a scan means the same thing in `cargo test`, in maquinar's `reflexo`,
@@ -111,8 +115,10 @@ whose header records the language's version (`orcl_std::LANGUAGE`) and the night
 
 ### Translators
 To native PLC code, Siemens first (S7-1500 and S7-1200), program and hardware configuration (2026-11-15). Not
-started. The type table the architect began is open (Q44), and so is the reading that readable SCL and the ladder
-view need a second front end that reads the source (Q44, the assistant's reading).
+started. The type table the architect began is still a draft outside this repository; decided on 2026-11-25
+(Q44): the library's own types with a fixed representation, a column per CPU family (a program using a type its
+target lacks refused for that target), and a second front end that reads the source, for readable SCL and the
+ladder view, "not yet", decided when the conversion is the work in hand.
 
 ## Rules
 - **A translatable subset of real Rust.** A rule enters the language only if every target in view can represent it;
@@ -172,11 +178,9 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
 - **The interpreter's design** (`interpreter.md`), before `crates/orcl-interp`.
 
 ## Open
-- **Q44** the type table, and a second front end for the translators.
 - **Q230** a program whose functions call themselves: refused when the interpreter loads it, taken meanwhile.
 - **Q231** where an interpreted program's first state and safe outputs come from: handed in by its host, taken
   meanwhile.
 - **Q232** an instruction budget per scan for an interpreted program: none, taken meanwhile.
-- **Q45** the reading that the conformance suite is only as good as the list of core operations ORCL allows.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan should give way to the prior art's
   LET, at the end of its logical period (`language/README.md`, "Not settled yet").

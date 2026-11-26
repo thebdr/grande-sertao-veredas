@@ -10,7 +10,8 @@ controller as 502 `program(at)` (C-152). This
 file holds what the architect decided in the briefing of 13 to 16 November 2026, in the rulings of
 15 November on its adversarial review, in the robustness round begun on 16 November
 (`docs/robustness.md`), and in the rulings of 25 November on the questions its first build raised
-(Q220 to Q229, and Q33 with Q223). The list that was reviewed and the review itself are kept as they were
+(Q220 to Q229, and Q33 with Q223), on the robustness round (Q35 to Q42) and on the review's entries and
+the briefing's readings (Q31 up to entry 41, Q32 in part, Q44, Q45). The list that was reviewed and the review itself are kept as they were
 delivered (`docs/briefing/deliverables.md`, `docs/briefing/review.md`); where they differ from this
 file, this file is the later word. What is not decided is a question in `docs/questions.md`, named
 under "Open" below; nothing open is written here as settled.
@@ -40,8 +41,10 @@ time."
 ## Scope
 
 ### Execution
-- **Production on Linux with a real-time kernel only.** Windows is for development and simulation.
-  A production target refused real-time scheduling does not run: it stays in STOP.
+- **Production on Linux with a real-time kernel only.** Windows is for development and simulation,
+  and gains no third use: the IO check from a laptop runs on a Linux laptop, where controlador runs
+  for real, and a Windows laptop's goes through a target ("Linux laptops only", 2026-11-25, Q45). A
+  production target refused real-time scheduling does not run: it stays in STOP.
 - **64-bit processors only** (the architect, 2026-11-16), **and 64-bit systems**: the build refuses a
   32-bit target, whose 32-bit time value would come back (2026-11-25, Q39).
 - **Programs run in our own interpreter**, a crate of the ORCL family that maquinar uses too. Its
@@ -157,7 +160,8 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   chosen at the time: once now, before each scan, or always (held at every write, marked `[!]`,
   behind a confirmation).
 - **A force belongs to the controller** until someone removes it (2026-11-15): it shows in the
-  state text, a restart clears it, and a lost connection changes nothing.
+  state text, a restart clears it, and a lost connection changes nothing. A force suspended while
+  the program is halted applies again by itself when the program continues (2026-11-25, Q45's K3).
 - **Breakpoints and stepping** on the real target and in the simulator. A hit halts every task.
 - **Outputs at a halt** follow a per-output setting: safe by default, held if the engineer chose
   it. A forced output follows the same setting. Each target has a longest time outputs may stay
@@ -166,6 +170,10 @@ think Siemens did a great job in the PLC implementation") and kept every family 
 - **A halted target stays halted** if Oficina disconnects.
 - **Pause on command** (the program halts at the end of the scan), **single cycle** (one scan,
   then halted again) and **dry run** (the logic runs on live inputs, every output stays safe).
+  Since a single cycle would energise every output its scan writes for milliseconds, on a real
+  target it runs only in a dry run, or with outputs held between cycles after a confirmation that
+  says so; and leaving a dry run goes through STOP and a start, so no output jumps to a value from
+  the middle of a sequence (2026-11-25, the review's entry 16, Q31).
 
 ### The commissioning switch
 - **One switch gates every engineering change** (2026-11-15): download, swap, accept, rollback,
@@ -184,7 +192,13 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   data, carried by name and type; a retyped variable is reinitialised alone, and Oficina lists
   every added, removed and reinitialised variable before the switch.
 - **What may differ:** logic, data and the IO mapping. Hardware configuration and task timing may
-  not.
+  not. With the mapping allowed to differ, the comparison is per variable name, not per physical
+  channel (2026-11-25, Q45's K4), so a signal moved to another channel shows as one line; an output
+  channel that loses its writer at the swap goes to its safe value, the popup before the swap
+  listing each one for confirmation; and a rollback is a download like any other, through the shadow
+  test or through a stop, never a direct replacement (the review's entry 15, Q31).
+- **An unaccepted shadow test at a power cycle is dropped**: the version that was driving drives
+  again, and a person starts the test again (2026-11-25, Q45).
 - **Entry check:** a controller enters a shadow test only after a check that the doubled scan fits
   the task's period. In the first release only an application with one cyclic task may enter one
   (2026-11-15).
@@ -206,7 +220,8 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   while the old version watches and may still take over, the state text carries a term with the
   time it has left (Q32).
 - **The last 10 downloads are kept** on the controller: hash, time, origin, kind, source revision,
-  the program itself and the source archive.
+  the program itself and the source archive. Keeping the source on the target is a project setting,
+  on by default (2026-11-25, the review's entry 35, Q31).
 
 ### Faults
 - **The whole controller faults, never one task alone.** One kind of fault only.
@@ -230,7 +245,8 @@ think Siemens did a great job in the PLC implementation") and kept every family 
   it, and the handler's outcome. Its details are in the popup and in the fault history. On `main`
   the snapshot is portal's copy of its store at the fault (C-093), which holds what the store
   holds. It is all the controller's data only once portal reads the controller's memory, which
-  is not built yet (see "The engineering link").
+  is not built yet (see "The engineering link"). Peers get a fault's cause, number and time; the
+  snapshot is read through Oficina only (2026-11-25, the review's entry 35, Q31).
 - **The program may** raise a fault with a code, request a stop, raise a maintenance request, or
   record an event only.
 
@@ -270,14 +286,15 @@ in a fixed order, with counts and identifiers and never lists.
 |---|---|---|
 | unknown | 0 | |
 | STOP | 1 | 101 `command(source)`, 102 `power_on(was)`, 103 `acknowledged`, 104 `no_program`, 105 `realtime_refused` |
-| STARTUP | 2 | 201 `warm`, 202 `cold`; its phases are a small enum of their own: 1 load, 2 restore, 3 handler, 4 `devices(up, of)` |
+| STARTUP | 2 | 201 `warm`, 202 `cold`; its phases are a small enum of their own: 1 load, 2 restore, 3 handler, 4 `devices(up, of)`, each shown by its word alone, no `id` (Q45's K5) |
 | RUN | 3 | |
 | HOLD | 4 | 401 `breakpoint(at)`, 402 `command(source)`, 403 `step`, 404 `cycle` |
 | FAULT | 5 | 501 `watchdog(task)`, 502 `program(at)`, 503 `user(code)`, 504 `handler(event)`, 505 `resource(kind)`, 506 `load(download)`, 507 `internal` |
 
 - **Command sources:** `oficina`, `local` and `program`. The source `peer` was withdrawn on
   2026-11-15, with the rule that no peer changes the state.
-- **Conditions, in this order:** `breakpoint(set)`, `force(in, out, var)`, `shadow(drives,
+- **Conditions, in this order:** `breakpoint(set)`, `force(in, out, var)` (its arguments always in
+  that order, Q45's K1), `shadow(drives,
   watches)` (what someone did to the controller); `dry`, `sim`, `no_realtime` (the mode it runs
   in); `devices(missing)`, `overruns(count)`, `retain(reset)` (what it is suffering); then each
   `maintenance_request(id, reason, urgent)`. `breakpoint(at)` appears only on HOLD; `shadow` names
@@ -297,9 +314,9 @@ in a fixed order, with counts and identifiers and never lists.
 - **Health.** The standard health value (NE 107, OPC UA's DeviceHealth) is derived from the state:
   FAULT gives failure; STOP, STARTUP, HOLD and any debug condition give function check; a
   maintenance request gives maintenance required; a clean RUN gives normal.
-- **Not ruled:** the review's entries 17 to 21 on this text (one name meaning two things, the
-  spelling rules, the `id` of a maintenance request, a version for the text, what a debug
-  condition is), Q31. The terms the rulings of 2026-11-25 add join core's table of the state text,
+- **Ruled with Q100** (2026-11-25): the review's entries 17 to 21 on this text (one name meaning
+  two things, the spelling rules, the `id` of a maintenance request, a version for the text, what a
+  debug condition is), as core's writer and reader took them. The terms the rulings of 2026-11-25 add join core's table of the state text,
   their spelling and numbers core's to propose: conditions for an unconfirmed date (Q39), a start
   from the last save (Q40, a condition and no request) and an armed fallback with its time left
   (Q32); maintenance reasons for the clock chip that lost its time and for NTP silent or not set
@@ -313,16 +330,31 @@ in a fixed order, with counts and identifiers and never lists.
   here on aranha's codecs, since no open controller exists; join PROFINET International and
   certify later), then EtherCAT master (on the ethercrab crate), EtherNet/IP scanner (fork a young
   Rust crate, test on real devices), Modbus TCP client (existing crates).
+- **Modbus TCP proves the runtime first** (2026-11-25, the review's entry 26, Q31): it is the bus on
+  which the runtime is first proven while the membership runs; PROFINET stays the first fieldbus
+  written, and from its first clause the PROFINET work has a real device in the loop and captures of
+  a real controller's traffic as fixtures. Until a network is certified, controlador is written
+  "compatible with" it (the review's entry 39).
 - **The functions that drive hardware live in `veredas-core`**: safe in controlador on Linux, and
   callable by other crates for testing only ("testers should be near a kill switch or estop
   anyway"). The architect kept this on 2026-11-15 against the review, with core's rules amended
   (`docs/core-plan.md`; `docs/questions.md` Q9).
 - **Vendor description files** (GSDML, ESI, EDS) are copied into the project and read directly;
-  the chosen configuration is written as Veredas TOML.
+  the chosen configuration is written as Veredas TOML. They are inputs, read and never written, the
+  TOML rule's one named exception, parsed with document type definitions and entities switched off;
+  their readers live in core (2026-11-25, the review's entry 23 and Q45's C5).
 - **The hardware configuration** stands on an embedded aranha, whose scan feeds the compare and
-  merge of the configuration and the topology view.
+  merge of the configuration and the topology view. Identifying, naming and addressing a device runs
+  from the laptop when it is on the segment, and through a target's embedded aranha when it is not
+  (2026-11-25, Q45's G2).
 - **IO check** runs through a controlador target; with none set, through the laptop session
-  (`docs/oficina-plan.md`, "The IO check from a laptop").
+  (`docs/oficina-plan.md`, "The IO check from a laptop"), on a Linux laptop only (Q45). It refuses
+  to drive outputs on a Modbus module with no timeout of its own or too long a one; the hardware
+  configuration checks that timeout in production too, as a warning the engineer may accept
+  (2026-11-25, Q45).
+- **A bench device never passes for a real one** (2026-11-25, the review's entry 36): bench devices
+  carry an identity that controlador refuses outside simulation, and each interface a bench uses is
+  declared isolated in its bench file (the bench's side).
 - **Fixture first:** the bench devices for all four networks live in maquinar
   (`docs/maquinar-plan.md`). Core's masters are tested against them in the test-only tool
   `tools/mestres`, and controlador's own tests sit beside them when it drives real devices (Q101
@@ -355,6 +387,15 @@ in a fixed order, with counts and identifiers and never lists.
 - **Oficina's portal talks to it over portal's own HTTP interface**, on the controller's loopback
   behind SSH, commands on the same link (2026-11-16; `docs/oficina-plan.md`, "How it reaches a
   target"). Controlador handles the commands behind its portal and checks the switch there.
+- **Loopback is no boundary** (2026-11-25, the review's entry 33): controlador's engineering channel
+  is a Unix socket (a named pipe on Windows) with the system's permissions, and portal's HTTP
+  interface takes a random token per session, handed over SSH and required on every request, with
+  Host and Origin checks.
+- **An intervention log** (2026-11-25, the review's entry 37): append-only, on the target: download,
+  swap, accept, rollback, force set and removed, breakpoint, start and stop with their source, switch
+  change, each line with the time and who (the SSH user, the peer's address, a name the engineer
+  types once per Oficina installation), its retention set per target. The documents state that
+  controlador is not a safety component.
 - **Everything that alters the controller is robust** (2026-11-16), a download above all: it
   carries a hash, "so no corrupted program may run". Ruled point by point on 2026-11-25:
   - **a download** (Q36) is a manifest listing every part with its SHA-256 and length, the
@@ -396,18 +437,26 @@ in a fixed order, with counts and identifiers and never lists.
   source fed with every state and fault record (C-092), and the fault folder named (C-093).
 
 ### Language and project data
-- **ORCL text first; ladder later**, as a view of the same source.
+- **ORCL text first; ladder later**, as a view of the same source; the release in which ladder
+  becomes editable is to be named (the review's entry 40, Q31, put next).
 - **Project data:** multilingual text lists, alarm and event definitions, recipes, units and
   limits on variables.
 - **A simulator** with the bench as plant, virtual time and snapshots.
 - Checked on 2026-11-15: Veredas 1's `orcl-std` holds the on-delay, off-delay and pulse timers,
-  both edge detectors and the up counter, and nothing else.
+  both edge detectors and the up counter, and nothing else. **The standard library is a named
+  first-release item and is completed**, with the IEC names and behaviour: the down counter and the
+  set and reset latches join it (2026-11-25, the review's entry 40, Q31).
 
 ### Conversion to native PLC code
 The goal, stated outright by the architect on 2026-11-15: controlador's ORCL program **and its
 hardware configuration** convert to native PLC code, Siemens S7-1500 and S7-1200 first. Veredas
 1's ORCL notes already planned the program translators, Siemens first; the hardware configuration
-is new. The architect began a table mapping ORCL data types to S7 types; its open points are Q44.
+is new. The architect began a table mapping ORCL data types to S7 types, still a draft outside this
+repository. Decided on 2026-11-25 (Q44): the types below `f64` (`char`, text, time, date) become
+`orcl-std`'s own types with a fixed representation; the table has a column per CPU family, a program
+using a type its target lacks being refused for that target; and a second front end that reads the
+source, for readable SCL and the ladder view, is "not yet", decided when the conversion is the work
+in hand.
 
 ### What keeps it running for decades
 The robustness round's rulings, stated in `docs/robustness.md`, bind controlador and its embedded
@@ -453,9 +502,15 @@ Ruled on 2026-11-25:
   each rule is proven by injecting faults on the bench.
 
 ### Out of scope
-Technology objects entirely (axes, PID, cams, counters). Security features, until the security
-round (Q43). Certified functional safety. Know-how protection. Synchronous cycle, motion control
-and redundancy blocks.
+Technology objects entirely (axes, PID, cams, counters): "technology objects later", and release 1
+says which machines it serves, discrete IO, no closed loops, no axes (the architect, 2026-11-25, the
+review's entry 41; no PID block in the standard library now, no import from PLCopen XML). Security
+features, until the security round (Q43); under the Cyber Resilience Act the suite's intent is not
+decided yet, and before the first public release come a security file with a reporting channel and
+a component list, the security study's first output being the gap list against its Annex I (the
+review's entry 38). Certified functional safety. Know-how protection for now: a way to protect a
+block's source is a requirement, later (2026-11-25, Q45). Synchronous cycle, motion control and
+redundancy blocks.
 
 ## Rules
 - **The only production component past portal, and only on the real-time path.** Everything else
@@ -499,17 +554,14 @@ Where each item stands on 2026-11-25:
   `orcl-*` crates; `orcl-*` use each other). The interpreter in maquinar is P-020's change.
 
 ## Open
-- **Q31**, the review's majors and minors, none ruled. Those that touch controlador: 15 (outputs
-  without an owner at a swap; rollback's path), 16 (a single cycle pulses every output; leaving a
-  dry run), 17 to 21 (the state text), 23 (vendor description files), 26 and 27 (PROFINET first;
-  the EtherCAT bench device; the EtherNet/IP fork), 35 (what the controller keeps and publishes),
-  36 (a bench device passing for a real one), 37 (no record of who did what), 38 and 39 (the Cyber
-  Resilience Act; the fieldbus organisations' terms), 40 and 41 (no language a PLC programmer
-  knows; no closed loop), 44 (libraries; structures), 46 (what a Rust engineer gets), and the
-  minors 47 to 50, 53 and 55.
+- **Q31**, the review's majors and minors, ruled entry by entry on 2026-11-25 up to entry 41, each
+  written above where it binds controlador. Still open for controlador: the release in which ladder
+  becomes editable (entry 40 (b), put next), 44 (libraries; structures), 46 (what a Rust engineer
+  gets), and the minors 47 to 50, 53 and 55.
 - **Q32** the specification of what disqualifies an edit from a live takeover, proposed in
-  `docs/controlador/live-takeover.md` for the architect to rule. **Q42** the robustness round's areas not opened. **Q43** the security round.
-  **Q44** the conversion's type table. **Q45** the briefing's readings.
+  `docs/controlador/live-takeover.md` for the architect to rule. **Q42** the robustness round's
+  areas not opened. **Q43** the security round. **Q45**, ruled point by point on 2026-11-25, all
+  but one fact still to check: whether Npcap's licence allows what raw frames on Windows need.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan gives way to the
   prior art's LET. **Q230** a program whose functions call themselves. **Q231** where an
   interpreted program's first state and safe outputs come from. **Q232** an instruction budget per
