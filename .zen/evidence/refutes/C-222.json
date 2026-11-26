@@ -1,13 +1,13 @@
 {
   "clause": "C-222",
   "verdict": "holds",
-  "ranAt": "2026-11-26T14:43:43.786Z",
-  "headCommit": "782e32868a225cf765e569028a1fba6513eae66c",
+  "ranAt": "2026-11-26T22:30:09.204Z",
+  "headCommit": "64aefb7f03fefba5021dff7f58d2bc78b54dac23",
   "tests": [
     {
       "name": "tools/abaco-oracle/tests/parity.rs",
       "file": "tools/abaco-oracle/tests/parity.rs",
-      "symbolSha": "582ed44996d5f6750f637d2f4d9d8d44a07e0fbd2de0514ae47c8d635f76f922"
+      "symbolSha": "36a944c8e9e3a09a5816f110b9c49b8a9141f9cd522454f0e22ead673b232d9b"
     }
   ]
 }
