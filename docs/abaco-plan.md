@@ -338,6 +338,11 @@ own to close in a fork change of its own:
   sheet's name in any case is its known behaviour and the model's own lookup's, not measured here.
   The fallback folds by `to_uppercase`, so `STRASSE!A1` would find a sheet `Straße`, which Excel's
   own lookup may not (C-222's twentieth round); a sheet's own spelling is found first.
+- **Sheets folding to one, and `ß`:** with `MASS` before `Maß`, `INDIRECT("maß!A1")` reads `MASS`
+  (the engine's fold, upper case); whether Excel's keeps `ß` apart is not measured. The oracle
+  leaves a workbook holding such a pair unmeasured, which can only undercount. A linked workbook's
+  sheet is found by `same_sheet_name`, lower case, the first that folds equal (C-222's
+  twenty-first round).
 - **A capital `ẞ` read two ways:** `MAẞ(1)` is held as `maß` and calls the name `Maß`, where a
   bare `MAẞ` is `#NAME?`: a called name is held in lower case first (change 33), and `name_key`
   folds `maß` to `mass`, `Maß`'s key, but `MAẞ` to `maß`. Both read back the same.
