@@ -346,6 +346,12 @@ own to close in a fork change of its own:
 - **A capital `ẞ` read two ways:** `MAẞ(1)` is held as `maß` and calls the name `Maß`, where a
   bare `MAẞ` is `#NAME?`: a called name is held in lower case first (change 33), and `name_key`
   folds `maß` to `mass`, `Maß`'s key, but `MAẞ` to `maß`. Both read back the same.
+- **A date before 1900-03-01, one day off Excel's:** Excel counts serial 1 as 1900-01-01 and holds
+  a 29 February 1900 (serial 60, its 1900 leap-year bug); upstream's serials are the calendar's,
+  matching Excel's from serial 61, its fictional day emulated in `DAYS360` alone. So `DAY(6)` is 5
+  where Excel's is 6, and `DAY`, `MONTH`, `WEEKDAY` and a date's format of serials 1 to 60 read one
+  day early (found answering C-223's twenty-first round, 2026-11-26; Excel's values its documented
+  1900 system, not measured here).
 
 ## On this machine
 - No Excel, no Office: Excel's acceptance of a written file is owed elsewhere (Rules).
