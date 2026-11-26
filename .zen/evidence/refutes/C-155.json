@@ -1,0 +1,13 @@
+{
+  "clause": "C-155",
+  "verdict": "holds",
+  "ranAt": "2026-11-26T10:17:48.261Z",
+  "headCommit": "ea5136ee126c6869992d193523d3b6d115ca0fdb",
+  "tests": [
+    {
+      "name": "crates/orcl-runtime/tests/interpreted.rs",
+      "file": "crates/orcl-runtime/tests/interpreted.rs",
+      "symbolSha": "52845a109cc1091dc1286823477558097c2b51626c6eb3042b8ffb396e8229a0"
+    }
+  ]
+}
