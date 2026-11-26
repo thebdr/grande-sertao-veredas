@@ -88,8 +88,19 @@ fn documented_keys() -> Vec<(String, Vec<(String, String)>)> {
     out
 }
 
+/// A port free just now, below the range the system hands out for port 0 (32768 and up), each
+/// process walking its own way through it: one freed and taken again by another test binding port
+/// 0 in between had made a start fail with "address already in use" (C-033's seventh round).
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    loop {
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        let port = 20000 + ((std::process::id().wrapping_mul(7919).wrapping_add(n.wrapping_mul(131))) % 12000) as u16;
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() && std::net::UdpSocket::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
 }
 
 fn scratch(tag: &str) -> PathBuf {
@@ -2490,5 +2501,106 @@ mod round_6 {
             let alike = runs[0].iter().zip(&runs[1]).all(|(a, b)| (a - b).abs() < 30);
             assert!(!alike, "two runs under the bench's seed 7 spread their answers alike: {runs:?}");
         });
+    }
+}
+
+/// C-033's seventh refute round: the critic's probes (`~/.cache/veredas/critic-c033-r7/probes`),
+/// kept as pins: a stdin left non-blocking and silent holding the run; every key of an OPC UA
+/// server reaching its configuration; the file's order within a kind at the start for Modbus
+/// servers and adapters; and on the machine's lock, the last lines given their two seconds.
+mod round_7 {
+    use super::*;
+
+    const EXE: &str = env!("CARGO_BIN_EXE_veredas-maquinar");
+
+    /// A stdin open, silent and non-blocking (a parent's shared terminal leaves it so) read
+    /// `WouldBlock`, which ended the run at once with exit 0; now the run goes on until `stop`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_silent_non_blocking_stdin_holds_the_run() {
+        use std::io::Read;
+        use std::os::fd::AsRawFd;
+        let dir = scratch("r7-nonblocking");
+        let path = dir.join("bench.toml");
+        std::fs::write(&path, format!("{}[[modbus]]\nname = \"m\"\nport = 0\n", header())).unwrap();
+        let (r, mut w) = std::io::pipe().unwrap();
+        // SAFETY: fcntl on a descriptor this test owns, flags only.
+        unsafe {
+            let fd = r.as_raw_fd();
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            assert_eq!(libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK), 0);
+        }
+        let mut child = Command::new(EXE).arg(&path).stdin(r).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        std::thread::sleep(Duration::from_millis(1500));
+        let early = child.try_wait().unwrap();
+        w.write_all(b"st").unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        w.write_all(b"op\n").unwrap();
+        let status = child.wait().unwrap();
+        drop(w);
+        let mut out = String::new();
+        child.stdout.take().unwrap().read_to_string(&mut out).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((early, status.code(), out.lines().last()), (None, Some(0), Some("stopped")), "a line split across reads still `stop`");
+    }
+
+    /// An OPC UA server's bind, user, nodes per read and sessions, each a value of its own, reach
+    /// its configuration (dropped on the way, they had passed the key walk).
+    #[test]
+    fn every_key_of_an_opc_ua_server_reaches_its_configuration() {
+        let dir = scratch("r7-opc");
+        let spec = load(&format!("{}[[opc]]\nname = \"s\"\nbind = \"127.0.0.9\"\nport = 0\nuser = {{ name = \"u\", password = \"p\" }}\nmax_nodes_per_read = 10\nmax_sessions = 2\n", header()), &dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let s = &spec.servers[0].1;
+        assert_eq!((s.bind.as_str(), s.user.as_ref().map(|u| (u.name.as_str(), u.password.as_str())), s.max_nodes_per_read, s.max_sessions), ("127.0.0.9", Some(("u", "p")), Some(10), Some(2)));
+    }
+
+    /// Two Modbus servers and then two adapters, each on a taken port: the first of each in the
+    /// file starts first and is named (adapters started last to first had passed).
+    #[test]
+    fn the_first_of_a_kind_that_cannot_start_is_named_for_servers_and_adapters() {
+        let dir = scratch("r7-first");
+        let taken: Vec<std::net::TcpListener> = (0..2).map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap()).collect();
+        let (t1, t2) = (taken[0].local_addr().unwrap().port(), taken[1].local_addr().unwrap().port());
+        let modbus = start_err(load(&format!("{}[[modbus]]\nname = \"first\"\nport = {t1}\n\n[[modbus]]\nname = \"second\"\nport = {t2}\n", header()), &dir).unwrap());
+        let adapters = start_err(load(&format!("{}[[ethernetip]]\nname = \"first\"\nport = {t1}\nio_port = 0\n\n[[ethernetip]]\nname = \"second\"\nport = {t2}\nio_port = 0\n", header()), &dir).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(modbus.starts_with("modbus `first`: "), "{modbus}");
+        assert!(adapters.starts_with("ethernetip `first`: "), "{adapters}");
+    }
+
+    /// On the machine's lock: 400 parts with their stdout unread, then `stop`: the run ends no
+    /// sooner than 1.9 s and within 6 s, exit 0, the last lines given their two seconds (200 ms
+    /// had passed the bound from above alone).
+    #[test]
+    fn the_end_gives_the_last_lines_their_two_seconds() {
+        let dir = scratch("r7-two-seconds");
+        let path = dir.join("bench.toml");
+        let mut text = header().to_string();
+        for i in 0..400 {
+            text.push_str(&format!("[[modbus]]\nname = \"m{i:04}\"\nport = 0\n\n"));
+        }
+        std::fs::write(&path, text).unwrap();
+        let mut child = Command::new(EXE).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        std::thread::sleep(Duration::from_secs(3));
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(b"stop\n").unwrap();
+        let asked = Instant::now();
+        let mut ended = None;
+        while asked.elapsed() < Duration::from_secs(6) {
+            if let Some(s) = child.try_wait().unwrap() {
+                ended = Some((s.code(), asked.elapsed()));
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if ended.is_none() {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        drop(stdin);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let (code, took) = ended.expect("ended within 6 s");
+        assert!(code == Some(0) && took >= Duration::from_millis(1900), "exit {code:?} {took:?} after `stop`");
     }
 }

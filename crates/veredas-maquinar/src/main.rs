@@ -155,16 +155,18 @@ fn main() {
         });
     }
     std::thread::spawn(move || {
-        // Read as bytes: a line that is not UTF-8 is a line like any other, not an end.
+        // Read as bytes: a line that is not UTF-8 is a line like any other, not an end. A stdin
+        // left non-blocking (a parent's shared terminal) has nothing yet, not its end: it is read
+        // again a moment later, the part of a line already read kept (round 7: it ended the run).
         let mut stdin = std::io::stdin().lock();
         let mut line = Vec::new();
         loop {
-            line.clear();
             match stdin.read_until(b'\n', &mut line) {
                 Ok(0) => break,
                 Ok(_) if String::from_utf8_lossy(&line).trim() == "stop" => break,
-                Ok(_) => continue,
+                Ok(_) => line.clear(),
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(50)),
                 Err(_) => break,
             }
         }
