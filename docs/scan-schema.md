@@ -15,8 +15,16 @@ rather than repeating every type.
   `veredas-scan` is not known here (this reader knows 1)`), before the body is looked at. A later
   version is read by a migration or refused, never guessed at.
 - Then the body, whole: every key is one the reader takes, or the file is refused, naming each key
-  nothing took (`a scan file holds no key `colour`: refused, not ignored`); a key missing or of the
-  wrong kind is no scan (`not a scan file: ...`).
+  nothing took, wherever it sits (`a scan file holds no key `colour`: refused, not ignored`); a key
+  missing or of the wrong kind is no scan (`not a scan file: ...`); and what was read is what the
+  file holds, written back as TOML's own values, or the file is refused, naming the first place it
+  differs (an element past what its list takes, a table written as a list, a word written as a
+  table, a repeat a set keeps once: `a scan file's `capture` is not what its reader keeps`).
+- Read whole, it must be a scan: its devices by MAC, each once, and no witness, nor a port's last
+  leaving or other frame, naming a frame past its capture's last record (`not a scan: ...`). A
+  witness may name a frame before its capture's first: one the listener let go past its bound
+  (counted in `stats.let_go`), which the capture does not hold. A scan that is no scan is refused
+  when written too.
 - Every number is one of TOML's integers (64 bits, signed). Stamps are nanoseconds since the
   epoch, the frames' clock, so a scan holds stamps until 2262; a scan holding a number past them
   is refused when it is written, never left for another reader to refuse.
@@ -28,24 +36,27 @@ rather than repeating every type.
 - `taken_ns`: when it was written.
 - `capture` (absent when no capture was written): the capture of the frames beside it, in the scan
   file's folder: `file` (its name), `first_frame` (the number of its first record) and `frames`
-  (how many it holds). A witness's frame `n` is the capture's record `n - first_frame`, so every
-  value can be read again from the frame it came from (`wire::pcap`, C-139).
+  (how many it holds). A witness's frame `n`, from `first_frame` on, is the capture's record
+  `n - first_frame`, so every value witnessed there can be read again from the frame it came from
+  (`wire::pcap`, C-139); a frame before it was let go.
 - `stats`: the listener's counts (C-142): `heard`, `let_go` (frames let go past its bound), the
   heard frames by class (`by_class`: `dcp`, `cyclic`, `alarm`, `profinet-other`, `lldp`, `arp`,
   `ipv4`, `ipv6`, `ethercat`, `powerlink`, `mrp`, `ptp`, `other:0x....`, `malformed`),
   `observations` fused, `own` (left out as this machine's), the last fifty `damage` lines and the
   `damaged_frames`, the earliest and latest stamps heard (`first_ns`, `last_ns`, absent when nothing
-  was heard), and each interface's account under `interfaces.<name>`: its `mac` (absent for a
+  was heard), and each interface's account under `interfaces` by its name: its `mac` (absent for a
   capture), `heard`, `sent`, `refused`, `queued`, `unsent`, `withdrawn`, and why its worker
   `ended`, when it did.
 - `devices`, by MAC (C-141): each with its `mac`; every field of what it said as the list of its
   values, each with the `value`, its `first` and `last` witness and its `count`, the first heard
   first: DCP's `name`, `alias`, `ip` (`ip`, `mask`, `gateway`), `ip_status` (`set`, `conflict`),
-  `pn_id` (vendor and device ids), `vendor`, `role`, `instance`; LLDP's `chassis` (a key,
-  `mac:...` or `local:...`), `sys_name`, `sys_desc`, `sys_caps`, `mgmt_ips` (each PDU's IPv4
+  `pn_id` (vendor and device ids), `vendor`, `role`, `instance`; LLDP's `chassis` (a key by the
+  chassis id's subtype: `mac:...`, `local:...`, `ifname:...`, `net:...` or `other<subtype>:...`,
+  the last two in hex), `sys_name`, `sys_desc`, `sys_caps`, `mgmt_ips` (each PDU's IPv4
   management addresses); `arp_ip`; its `ports` by short name, each with its `id`, `port_mac`,
-  `desc`, `pn_status`, `delays`, `mrp` (`domain_uuid`, `mrrt`), `pvid`, `mau_type` (fields as
-  above), the interfaces it was `heard_on`, its last leaving frame and last other frame (`leaving`,
+  `desc`, `pn_status` (PROFINET's RTClass 2 and 3 port status, `rtc2` and `rtc3`), `delays`
+  (`rx_local`, `rx_remote`, `tx_local`, `tx_remote` and `cable_local`, in nanoseconds), `mrp`
+  (`domain_uuid`, `mrrt`), `pvid`, `mau_type` (fields as above), the interfaces it was `heard_on`, its last leaving frame and last other frame (`leaving`,
   `spoke`: a stamp and a frame number each, absent when none) and when it left (`left_ns`, absent
   unless its last frame said so), its `first_ns`, `last_ns` and `frames`; what it was `heard`
   doing (`dcp-heard`, `dcp-request-heard`, `lldp-heard`, `arp-heard`), on which interfaces
