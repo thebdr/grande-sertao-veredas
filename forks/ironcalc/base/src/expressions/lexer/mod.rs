@@ -94,9 +94,11 @@ fn is_valid_r1c1_identifier(name: &str, next_char: Option<char>) -> bool {
     utils::is_valid_identifier(name) || next_char != Some('[')
 }
 
-/// A character that can be part of an identifier (see `consume_identifier`)
+/// A character that can be part of an identifier (see `consume_identifier`, which also keeps `\`
+/// out where it separates an array constant's columns, a locale whose decimal is a comma): a
+/// defined name's, as MS-XLSX's grammar takes them (`utils::is_name_char`; Veredas fork change 38)
 fn is_identifier_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == '.'
+    utils::is_name_char(c)
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -231,7 +233,11 @@ impl<'a> Lexer<'a> {
                     ':' => TokenType::Colon,
                     ';' => TokenType::Semicolon,
                     '@' => TokenType::At,
-                    '\\' => TokenType::Backslash,
+                    // a name opening with `\` (`\Loads`) where `\` separates nothing: a locale
+                    // whose decimal is `.` (Veredas fork change 38)
+                    '\\' if !(self.locale.numbers.symbols.decimal == "." && self.peek_char().is_some_and(is_identifier_char)) => {
+                        TokenType::Backslash
+                    }
                     ',' => {
                         if self.locale.numbers.symbols.decimal == "," {
                             match self.consume_number(',') {
@@ -329,7 +335,7 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     _ => {
-                        if char.is_alphabetic() || char == '_' {
+                        if utils::is_name_start_char(char) {
                             // At this point is one of the following:
                             //   1. A range with sheet: Sheet3!A3:D7
                             //   2. A boolean: TRUE or FALSE (dependent on the language)
@@ -634,7 +640,7 @@ impl<'a> Lexer<'a> {
         let mut position = self.position;
         while position < self.len {
             let next_char = self.chars[position];
-            if next_char.is_alphanumeric() || next_char == '_' || next_char == '.' {
+            if is_identifier_char(next_char) && (next_char != '\\' || self.locale.numbers.symbols.decimal == ".") {
                 position += 1;
             } else {
                 break;

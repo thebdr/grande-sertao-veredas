@@ -156,15 +156,14 @@ fn name_reads_as_a_cell_in(name: &str, upper: &str) -> bool {
     a1 || rc(&upper) || c_alone || parsed || reference_spelling
 }
 
-/// Whether `name` is spelled as Excel spells a name: a letter (any script's), `_` or `\\` first,
-/// then letters, digits, `_` and `.`, 255 characters at most, and neither `TRUE` nor `FALSE`. A name
-/// opening with an operator (`@B1`, `(B1)`, `+B1`) or holding one (`B1+0`) is none: a formula
+/// Whether `name` is spelled as a file spells a name (MS-XLSX 2.2.2's `name`): a letter, `_`, `\\`
+/// or any character beyond ASCII first, then those, digits, `.` and `?`, 255 characters at most in
+/// capitals, neither `TRUE` nor `FALSE` nor a cell: the engine's own rule (`is_valid_identifier`,
+/// fork changes 35 and 38), so a name this takes the engine defines, sets and reads in a formula. A
+/// name opening with an operator (`@B1`, `(B1)`, `+B1`) or holding one (`B1+0`) is none: a formula
 /// naming it reads the cell.
 pub fn name_is_spelled_as_a_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    let first_ok = chars.next().is_some_and(|c| c.is_alphabetic() || c == '_' || c == '\\');
-    let upper = name.to_uppercase();
-    first_ok && chars.all(|c| c.is_alphanumeric() || c == '_' || c == '.') && name.chars().count() <= 255 && upper != "TRUE" && upper != "FALSE"
+    ironcalc_base::expressions::utils::is_valid_identifier(name)
 }
 
 impl ModelError {

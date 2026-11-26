@@ -330,6 +330,12 @@ own to close in a fork change of its own:
   intersected. Found by C-222's nineteenth round beside the corpus; Excel's values are its
   documentation's, not measured here.
 - **Excel's newer error literals** (`#GETTING_DATA`, `#BLOCKED!` and their kin) do not lex.
+- **A name opening with `\` in a comma-decimal locale:** there `\` separates an array constant's
+  columns, so `\Loads` is no name in a formula spelled in that locale (fork change 37 lets `\` open
+  a name only where the decimal is `.`); a name holding white space beyond ASCII (a no-break space)
+  is refused, the lexer reading white space as a token's end.
+- **A sheet named in another case** is read as Excel reads it (fork change 37): that Excel takes a
+  sheet's name in any case is its known behaviour and the model's own lookup's, not measured here.
 - **A capital `ẞ` read two ways:** `MAẞ(1)` is held as `maß` and calls the name `Maß`, where a
   bare `MAẞ` is `#NAME?`: a called name is held in lower case first (change 33), and `name_key`
   folds `maß` to `mass`, `Maß`'s key, but `MAẞ` to `maß`. Both read back the same.

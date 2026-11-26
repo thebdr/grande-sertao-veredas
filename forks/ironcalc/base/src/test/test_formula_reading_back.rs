@@ -219,7 +219,8 @@ fn a_name_opens_with_a_letter_of_any_script() {
     assert_eq!(model.get_cell_formula(0, 2, 1).unwrap().unwrap(), "=Área");
     assert_eq!(model.formulas_reading_back_otherwise(), Vec::<(u32, i32, i32)>::new());
     // a digit, a dot or a sign first is still no name
-    for name in ["1x", ".x", "·x", "-x"] {
+    // (a character beyond ASCII but a letter, `·x`, opens one since change 38)
+    for name in ["1x", ".x", "-x"] {
         assert!(!crate::expressions::utils::is_valid_identifier(name), "{name}");
     }
 }
@@ -241,5 +242,62 @@ fn an_error_is_spelled_as_the_lexer_reads_it() {
     assert_eq!(model.formulas_reading_back_otherwise(), Vec::<(u32, i32, i32)>::new());
     for (locale, language) in [("en", "en"), ("de", "de"), ("es", "es"), ("fr", "fr"), ("it", "it")] {
         assert_eq!(model.formulas_reading_back_otherwise_in(locale, language).unwrap(), Vec::<(u32, i32, i32)>::new(), "{language}");
+    }
+}
+
+/// Veredas fork change 37: a sheet named in another case is that sheet, as Excel reads one and the
+/// model looks one up, and is spelled as the workbook names it.
+#[test]
+fn a_sheet_named_in_another_case_is_that_sheet_spelled_as_it_is() {
+    use crate::DefinedNameEntry;
+    let mut model = new_empty_model();
+    model.rename_sheet("Sheet1", "Dados").unwrap();
+    model.add_sheet("Área").unwrap();
+    model.set_user_input(0, 1, 1, "3".to_string()).unwrap();
+    model.set_user_input(1, 1, 1, "5".to_string()).unwrap();
+    model.new_defined_name(DefinedNameEntry::new("Base", "dados!$A$1")).unwrap();
+    for (row, typed) in [(2, "=dados!A1*2"), (3, "=SUM(DADOS!A1:A2)"), (4, "=área!A1"), (5, "='ÁREA'!A1"), (6, "=Base"), (7, "=dados!Base+1")] {
+        model.set_user_input(0, row, 1, typed.to_string()).unwrap();
+    }
+    model.evaluate();
+    for (row, value, spelled) in [
+        (2, "6", "=Dados!A1*2"),
+        (3, "9", "=SUM(Dados!A1:A2)"),
+        (4, "5", "=Área!A1"),
+        (5, "5", "=Área!A1"),
+        (6, "3", "=Base"),
+        (7, "4", "=Dados!Base+1"),
+    ] {
+        assert_eq!(model.get_formatted_cell_value(0, row, 1).unwrap(), value, "row {row}");
+        assert_eq!(model.get_cell_formula(0, row, 1).unwrap().unwrap(), spelled, "row {row}");
+    }
+    let base = model.get_defined_name_list().into_iter().find(|e| e.name == "Base").unwrap();
+    assert_eq!(base.formula, "Dados!$A$1");
+    assert_eq!(model.formulas_reading_back_otherwise(), Vec::<(u32, i32, i32)>::new());
+}
+
+/// Veredas fork change 38: a defined name holds the characters MS-XLSX's grammar takes (`?` and `\`
+/// after its first, any character beyond ASCII anywhere), defined, read in a formula and spelled
+/// back.
+#[test]
+fn a_name_holds_the_characters_the_file_format_takes() {
+    use crate::DefinedNameEntry;
+    let mut model = new_empty_model();
+    model.set_user_input(0, 1, 1, "3".to_string()).unwrap();
+    for name in ["Ativo?", "A\\B", "\\x\\y", "Temp°C", "€Custo"] {
+        model.new_defined_name(DefinedNameEntry::new(name, "Sheet1!$A$1")).unwrap();
+    }
+    for (row, typed) in [(2, "=Ativo?*2"), (3, "=A\\B*2"), (4, "=\\x\\y+1"), (5, "=Temp°C"), (6, "=€Custo-1")] {
+        model.set_user_input(0, row, 1, typed.to_string()).unwrap();
+    }
+    model.evaluate();
+    for (row, value) in [(2, "6"), (3, "6"), (4, "4"), (5, "3"), (6, "2")] {
+        assert_eq!(model.get_formatted_cell_value(0, row, 1).unwrap(), value, "row {row}");
+    }
+    assert_eq!(model.get_cell_formula(0, 3, 1).unwrap().unwrap(), "=A\\B*2");
+    assert_eq!(model.formulas_reading_back_otherwise(), Vec::<(u32, i32, i32)>::new());
+    // a digit, a dot, a sign, a space or `?` first is still no name
+    for name in ["1x", ".x", "-x", " x", "?x"] {
+        assert!(!crate::expressions::utils::is_valid_identifier(name), "{name}");
     }
 }

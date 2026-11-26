@@ -2887,3 +2887,109 @@ fn of_two_names_that_fold_to_one_a_move_moves_both_in_the_file_and_the_first_in_
     let book = part(&dst, "xl/workbook.xml");
     assert!(book.contains("<definedName name=\"\u{212A}x\">S!$A$3</definedName>") && book.contains("<definedName name=\"kx\">S!$A$2</definedName>"), "{book}");
 }
+
+// ---- refute round 17 --------------------------------------------------------------------------
+
+#[test]
+fn a_sheet_named_in_another_case_is_that_sheet_written_as_the_file_names_it() {
+    // Excel reads `dados!A1` as `Dados!A1` and writes it so; the engine looked a sheet up in its own
+    // case alone and cached `#REF!` (fork change 37)
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("dados.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>3</v></c><c r="B1"><f>Dados!A1*2</f><v>6</v></c><c r="C1"><f>B1+1</f><v>7</v></c></row>"#;
+    let area = r#"<row r="1"><c r="A1"><v>5</v></c><c r="B1"><f>Área!A1</f><v>5</v></c></row>"#;
+    plain_book(&src, &[("Dados", worksheet(data, "")), ("Área", worksheet(area, ""))], "", &[]);
+    let formula = |sheet: &str, cell: &str, f: &str| Edit::Formula { sheet: sheet.into(), cell: cell.into(), formula: f.into(), expect: None };
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        // Excel's own formula in another case: already there, the file byte for byte
+        for (sheet, f) in [("Dados", "=dados!A1*2"), ("Dados", "=DADOS!A1*2"), ("Área", "=área!A1"), ("Área", "='ÁREA'!A1")] {
+            let dst = dir.path().join("same.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            let report = patch(&src, &dst, &[formula(sheet, "B1", f)], &options).unwrap();
+            assert_eq!(report.outcomes[0].status, Status::AlreadyThere, "{f}: {:?}", report.outcomes);
+            assert_eq!(parts(&dst), parts(&src), "{f}");
+        }
+        // a new formula in another case: written as the file names the sheet, and its dependent moved
+        let dst = dir.path().join("new.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[formula("Dados", "B1", "=dados!A1*3")], &options).unwrap();
+        let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+        assert_eq!(element(&sheet, "B1"), Some(r#"<c r="B1"><f>Dados!A1*3</f><v>9</v></c>"#), "{sheet}");
+        assert_eq!(element(&sheet, "C1"), Some(r#"<c r="C1"><f>B1+1</f><v>10</v></c>"#), "{sheet}");
+        // a name set to a sheet in another case, written as the file names the sheet
+        let dst = dir.path().join("name.xlsx");
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[Edit::SetName { name: "Base".into(), formula: "=dados!$A$1".into(), scope: None }], &options).unwrap();
+        let book = part(&dst, "xl/workbook.xml");
+        assert!(book.contains("<definedName name=\"Base\">Dados!$A$1</definedName>"), "{book}");
+    }
+}
+
+#[test]
+fn an_error_of_the_engine_s_own_is_never_written_into_a_formula_or_a_name() {
+    // MS-XLSX's `error-constant` is `#REF!`, `#DIV/0!`, `#N/A`, `#NAME?`, `#NULL!`, `#NUM!`, `#VALUE!`
+    // and `#GETTING_DATA`; the engine's own read back since fork change 36, and Excel reads none
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("errors.xlsx");
+    plain_book(&src, &[("S", worksheet(r#"<row r="1"><c r="A1"><v>1</v></c></row>"#, ""))], "", &[]);
+    let formula = |f: &str| Edit::Formula { sheet: "S".into(), cell: "E1".into(), formula: f.into(), expect: None };
+    let name = |f: &str| Edit::SetName { name: "Bad".into(), formula: f.into(), scope: None };
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        for edit in [
+            formula("=IFERROR(#N/IMPL!,1)"),
+            formula("=ERROR.TYPE(#N/IMPL!)"),
+            formula("=IFERROR(#CIRC!,1)"),
+            formula("=IFERROR(#ERROR!,1)"),
+            formula("=ISERROR({#N/IMPL!,1})"),
+            formula("=IFERROR(#SPILL!,1)"),
+            formula("=IFERROR(#CALC!,1)"),
+            name("=#N/IMPL!"),
+            name("={1,#N/IMPL!}"),
+            name("=IFERROR(#CIRC!,0)"),
+        ] {
+            let dst = dir.path().join("out.xlsx");
+            let e = patch(&src, &dst, std::slice::from_ref(&edit), &options).unwrap_err();
+            assert!(matches!(e, PatchError::Unsupported(_)) && e.to_string().contains("an error of the engine's own"), "{edit:?}: {e}");
+            assert!(!dst.exists());
+        }
+        // a file's errors, and the engine's in a string, are written
+        for f in ["=IFERROR(#N/A,1)", "=IF(A1,\"#N/IMPL!\",1)", "=IFERROR(#DIV/0!,#NULL!)"] {
+            let dst = dir.path().join("fine.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            let report = patch(&src, &dst, &[formula(f)], &options).unwrap();
+            assert_eq!(report.outcomes[0].status, Status::Applied, "{f}");
+        }
+    }
+}
+
+#[test]
+fn a_name_of_the_file_format_s_characters_moves_is_set_and_reads() {
+    // MS-XLSX's `name` takes `?` and `\` after its first character and any character beyond ASCII
+    // anywhere (fork change 38): a move re-spells it, an edit sets it, a value edit refreshes what
+    // reads it
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["Ativo?", "Temp°C", "€Custo", "A\\B", "\\x\\y"] {
+        let src = dir.path().join("names.xlsx");
+        let data = format!(r#"<row r="1"><c r="A1"><v>3</v></c><c r="B1"><f>{name}*2</f><v>6</v></c></row>"#);
+        plain_book(&src, &[("S", worksheet(&data, ""))], &format!("<definedName name=\"{name}\">S!$A$1</definedName>"), &[]);
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let dst = dir.path().join("rows.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            patch(&src, &dst, &[rows("S", 1, 1)], &options).unwrap();
+            assert!(part(&dst, "xl/workbook.xml").contains(&format!("<definedName name=\"{name}\">S!$A$2</definedName>")), "{name}");
+            let want = format!(r#"<c r="B2"><f>{name}*2</f><v>6</v></c>"#);
+            assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B2"), Some(want.as_str()), "{name}");
+            let dst = dir.path().join("value.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            patch(&src, &dst, &[value("S", "A1", serde_json::json!(5))], &options).unwrap();
+            let want = format!(r#"<c r="B1"><f>{name}*2</f><v>10</v></c>"#);
+            assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B1"), Some(want.as_str()), "{name}");
+            let dst = dir.path().join("set.xlsx");
+            let _ = std::fs::remove_file(&dst);
+            let report = patch(&src, &dst, &[Edit::SetName { name: name.into(), formula: "=S!$A$1*10".into(), scope: None }], &options).unwrap();
+            assert_eq!(report.outcomes[0].status, Status::Applied, "{name}");
+            let want = format!(r#"<c r="B1"><f>{name}*2</f><v>60</v></c>"#);
+            assert_eq!(element(&part(&dst, "xl/worksheets/sheet1.xml"), "B1"), Some(want.as_str()), "{name}");
+        }
+    }
+}

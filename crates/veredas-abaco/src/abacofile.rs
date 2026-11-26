@@ -1131,7 +1131,7 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
         }
         if !crate::book::name_is_spelled_as_a_name(&d.name) {
             return Err(format!(
-                "{WORKBOOK}: `defined_names.{i}` `{}` is no name (a letter, `_` or `\\` first, then letters, digits, `_` and `.`)",
+                "{WORKBOOK}: `defined_names.{i}` `{}` is no name (a letter, `_`, `\\` or a character beyond ASCII first, then those, digits, `.` and `?`)",
                 d.name
             ));
         }

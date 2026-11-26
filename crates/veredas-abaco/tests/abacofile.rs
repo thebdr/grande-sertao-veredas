@@ -604,11 +604,11 @@ fn names_the_engine_refuses_are_refused_by_the_writer_and_the_reader() {
         (Box::new(|w| w.defined_names[0].name = "ﬁ1".into()), "workbook.toml", "name = \"Spam\"", "name = \"ﬁ1\"", "is no name (it reads as a cell)"),
         (Box::new(|w| w.defined_names[0].name = "ﬃ1".into()), "workbook.toml", "name = \"Spam\"", "name = \"ﬃ1\"", "is no name (it reads as a cell)"),
         // a name opening with an operator or holding one, which a formula reads as the cell
-        (Box::new(|w| w.defined_names[0].name = "@B1".into()), "workbook.toml", "name = \"Spam\"", "name = \"@B1\"", "is no name (a letter, `_` or `\\` first"),
-        (Box::new(|w| w.defined_names[0].name = "(B1)".into()), "workbook.toml", "name = \"Spam\"", "name = \"(B1)\"", "is no name (a letter, `_` or `\\` first"),
-        (Box::new(|w| w.defined_names[0].name = "+B1".into()), "workbook.toml", "name = \"Spam\"", "name = \"+B1\"", "is no name (a letter, `_` or `\\` first"),
-        (Box::new(|w| w.defined_names[0].name = "B1+0".into()), "workbook.toml", "name = \"Spam\"", "name = \"B1+0\"", "is no name (a letter, `_` or `\\` first"),
-        (Box::new(|w| w.defined_names[0].name = "true".into()), "workbook.toml", "name = \"Spam\"", "name = \"true\"", "is no name (a letter, `_` or `\\` first"),
+        (Box::new(|w| w.defined_names[0].name = "@B1".into()), "workbook.toml", "name = \"Spam\"", "name = \"@B1\"", "is no name (a letter, `_`, `\\` or a character beyond ASCII first"),
+        (Box::new(|w| w.defined_names[0].name = "(B1)".into()), "workbook.toml", "name = \"Spam\"", "name = \"(B1)\"", "is no name (a letter, `_`, `\\` or a character beyond ASCII first"),
+        (Box::new(|w| w.defined_names[0].name = "+B1".into()), "workbook.toml", "name = \"Spam\"", "name = \"+B1\"", "is no name (a letter, `_`, `\\` or a character beyond ASCII first"),
+        (Box::new(|w| w.defined_names[0].name = "B1+0".into()), "workbook.toml", "name = \"Spam\"", "name = \"B1+0\"", "is no name (a letter, `_`, `\\` or a character beyond ASCII first"),
+        (Box::new(|w| w.defined_names[0].name = "true".into()), "workbook.toml", "name = \"Spam\"", "name = \"true\"", "is no name (a letter, `_`, `\\` or a character beyond ASCII first"),
     ];
     for (in_model, part, from, to, want) in &cases {
         // the writer

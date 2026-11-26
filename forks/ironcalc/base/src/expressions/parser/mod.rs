@@ -469,13 +469,21 @@ impl<'a> Parser<'a> {
     }
 
     fn get_sheet_index_by_name(&self, name: &str) -> Option<u32> {
+        // a sheet named in any case, as Excel reads one and the model looks one up (its own
+        // spelling first; Veredas fork change 37)
         let worksheets = &self.worksheets;
-        for (i, sheet) in worksheets.iter().enumerate() {
-            if sheet == name {
-                return Some(i as u32);
-            }
-        }
-        None
+        let upper = name.to_uppercase();
+        worksheets
+            .iter()
+            .position(|sheet| sheet == name)
+            .or_else(|| worksheets.iter().position(|sheet| sheet.to_uppercase() == upper))
+            .map(|i| i as u32)
+    }
+
+    /// A sheet a reference names, as the workbook spells it once found in any case (`dados!A1`
+    /// is `Dados!A1`, as Excel writes it again; Veredas fork change 37); one not found as written.
+    fn own_sheet_name(&self, sheet: Option<String>, index: u32) -> Option<String> {
+        sheet.map(|s| self.worksheets.get(index as usize).cloned().unwrap_or(s))
     }
 
     // Returns:
@@ -850,7 +858,7 @@ impl<'a> Parser<'a> {
                 };
                 match sheet_index {
                     Some(index) => Node::ReferenceKind {
-                        sheet_name: sheet,
+                        sheet_name: self.own_sheet_name(sheet, index),
                         sheet_index: index,
                         row,
                         column,
@@ -910,7 +918,7 @@ impl<'a> Parser<'a> {
 
                 match sheet_index {
                     Some(index) => Node::RangeKind {
-                        sheet_name: sheet,
+                        sheet_name: self.own_sheet_name(sheet, index),
                         sheet_index: index,
                         row1,
                         column1,
@@ -1181,6 +1189,7 @@ impl<'a> Parser<'a> {
                 let (scope, formula) = self
                     .get_defined_name(&name, sheet_index)
                     .unwrap_or((Some(sheet_index), String::new()));
+                let sheet = self.worksheets.get(sheet_index as usize).cloned().unwrap_or(sheet);
                 Node::DefinedNameKind {
                     name,
                     scope,

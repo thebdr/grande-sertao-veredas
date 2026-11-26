@@ -67,7 +67,8 @@ Both ends hold the workbook to what the engine takes: sheet names of 1 to 31 cha
 of `\ / * ? : [ ]`, told apart in any case, each sheet's id its own; a row's `s` and a column's
 `style` one of the workbook's styles; each style's font, fill and border one of the workbook's; at
 least one sheet; a defined name spelled as Excel spells
-one (a letter of any script, `_` or `\` first, then letters, digits, `_` and `.`, so no `@B1`,
+one (MS-XLSX's: a letter, `_`, `\` or any character beyond ASCII first, then those, digits, `.` and
+`?`, so no `@B1`,
 `(B1)` or `B1+0`, and neither `TRUE` nor `FALSE`) that does not read as a cell (`B1`, `$B$1`,
 `R1C1`, `R[1]C[-1]`, in any case, Unicode's capitals among them, `ß1` being SS1, `Sheet1!B1`, a
 range such as `A:A`, one with white space),

@@ -209,7 +209,8 @@ fn test_names() {
     assert!(!is_valid_identifier("c"));
     assert!(!is_valid_identifier("1true"));
 
-    assert!(!is_valid_identifier("test€"));
+    // MS-XLSX's grammar takes any character beyond ASCII in a name (Veredas fork change 38)
+    assert!(is_valid_identifier("test€"));
     assert!(!is_valid_identifier("tr&ue"));
 
     assert!(!is_valid_identifier("LOG10"));

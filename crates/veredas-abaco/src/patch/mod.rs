@@ -1042,6 +1042,30 @@ fn calls_unknown(wb: &Workbook, sheet: u32, a: Addr, formula: &str, scope: Optio
     unknown_call(&node, &mut Vec::new(), &names)
 }
 
+/// The first error a formula states that no file's formula may hold: MS-XLSX's `error-constant`
+/// is `#REF!`, `#DIV/0!`, `#N/A`, `#NAME?`, `#NULL!`, `#NUM!`, `#VALUE!` and `#GETTING_DATA`, and the
+/// engine's own (`#N/IMPL!`, `#ERROR!`, `#CIRC!`, `#SPILL!`, `#CALC!`), which it reads and spells
+/// back, Excel would not read (refute round 17). Read outside strings and quoted sheet names.
+fn engine_only_error(formula: &str) -> Option<String> {
+    const ENGINE_ONLY: [&str; 5] = ["#N/IMPL!", "#ERROR!", "#CIRC!", "#SPILL!", "#CALC!"];
+    let mut quote: Option<char> = None;
+    for (i, c) in formula.char_indices() {
+        match quote {
+            // a doubled quote inside is the quote itself, read as closing and opening again
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == '#' => {
+                if let Some(error) = ENGINE_ONLY.iter().find(|e| formula[i..].starts_with(**e)) {
+                    return Some(error.to_string());
+                }
+            }
+            None => {}
+        }
+    }
+    None
+}
+
 /// Whether an earlier edit of the list wrote the cell now at `a` of `sheet` (through the moves so
 /// far): the file will hold it as the patcher writes its text.
 fn written_by_an_edit(shifts: &[(String, Shift)], writes: &[PendingWrite], sheet: &str, a: Addr) -> bool {
@@ -1441,6 +1465,11 @@ pub fn patch(
                     )));
                 }
                 let content = if is_formula {
+                    if let Some(error) = engine_only_error(&target) {
+                        return Err(PatchError::Unsupported(format!(
+                            "{canonical}!{a}: {error} is an error of the engine's own, which no file's formula holds (MS-XLSX's `error-constant`)"
+                        )));
+                    }
                     if let Some(name) = calls_unknown(&wb, s, a, &target, Some(&canonical)) {
                         return Err(PatchError::Unsupported(format!(
                             "{canonical}!{a}: {name} is a function the engine does not compute (the patcher writes no formula it would cache as #NAME?)"
@@ -1570,6 +1599,11 @@ pub fn patch(
             } => {
                 let body = formula.trim().trim_start_matches('=');
                 let at = scope.as_deref().and_then(|sc| wb.sheet_index(sc).ok()).unwrap_or(0);
+                if let Some(error) = engine_only_error(body) {
+                    return Err(PatchError::Unsupported(format!(
+                        "name {name}: {error} is an error of the engine's own, which no file's formula holds (MS-XLSX's `error-constant`)"
+                    )));
+                }
                 if let Some(called) = calls_unknown(&wb, at, Addr::new(1, 1), body, scope.as_deref()) {
                     return Err(PatchError::Unsupported(format!(
                         "name {name}: {called} is a function the engine does not compute (the patcher writes no formula it cannot read)"
