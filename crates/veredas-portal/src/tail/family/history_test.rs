@@ -1571,3 +1571,40 @@ fn a_held_in_turn_look_a_new_file_at_the_held_name_and_an_empty_fixed_path_keep_
     assert_eq!(lines, (20..55).collect::<Vec<u32>>(), "found back at the fixed path");
     DURING_WALK.lock().unwrap().retain(|(at, _)| *at != d);
 }
+
+/// C-098's sixth refute round. The family listed again once the held file opened where it stood is
+/// checked after that listing: a burst of two rotations between the open and the listing (a hook)
+/// leaves the held file gone from the active's path, so the generations listed are generations, not
+/// members born beside it, and the live loop reads them in order (20 to 65, each line once).
+#[cfg(unix)]
+#[test]
+fn a_burst_between_the_held_open_and_the_listing_again_loses_no_generation() {
+    use super::AFTER_HELD_OPEN;
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path().join("burst");
+    std::fs::create_dir_all(&d).unwrap();
+    write(&d.join("done_1.log"), 0..10);
+    write(&d.join("current.log"), 10..20);
+    mode(&d.join("current.log"), 0o200);
+    let spec = FamilySpec::new(&d, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let (current, mut done) = (d.join("current.log"), false);
+    AFTER_HELD_OPEN.lock().unwrap().push((
+        d.join("current.log"),
+        Box::new(move || {
+            if !done {
+                done = true;
+                std::fs::rename(&current, current.with_file_name("done_2.log")).unwrap();
+                write(&current, 50..60);
+                std::fs::rename(&current, current.with_file_name("done_3.log")).unwrap();
+                write(&current, 60..65);
+            }
+        }),
+    ));
+    let p = d.join("current.log");
+    let (lines, _) = at_end(spec, 45, move || {
+        append(&p, 20..50);
+        mode(&p, 0o644);
+    });
+    assert_eq!(lines, (20..65).collect::<Vec<u32>>(), "a burst between the held open and the listing again");
+    AFTER_HELD_OPEN.lock().unwrap().retain(|(at, _)| *at != d.join("current.log"));
+}

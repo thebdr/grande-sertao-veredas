@@ -370,6 +370,23 @@ pub(crate) fn during_walk(dir: &Path) {
 #[cfg(test)]
 pub(crate) static DURING_LOOK: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
 
+/// A test's hooks, each run after a held active's open found the held file where it stood and
+/// before the family is listed again, keyed by the active's path: a burst of rotations landing in
+/// that window (C-098's sixth refute round).
+#[cfg(test)]
+pub(crate) static AFTER_HELD_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn after_held_open(path: &Path) {
+    if let Ok(mut hooks) = AFTER_HELD_OPEN.lock() {
+        for (at, hook) in hooks.iter_mut() {
+            if at == path {
+                hook();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn during_look(path: &Path) {
     if let Ok(mut hooks) = DURING_LOOK.lock() {
@@ -1204,10 +1221,18 @@ fn run_family(
                             // those listed since the round's listing too (made between it and this
                             // open), read before its first line.
                             if held_at_active && let Some(h) = held.as_ref() {
+                                #[cfg(test)]
+                                after_held_open(&active.path);
                                 let Some(again) = retry_resolve(&spec, &stop) else {
                                     return Ok(());
                                 };
-                                for f in &again {
+                                // Listed, then checked: only with the held file still at the
+                                // active's path after that listing was every member in it born
+                                // while it stood there; a rotation between the open and the
+                                // listing makes them generations, the live loop's to read (as
+                                // its rescans take a listing only with the path the same after).
+                                let still = crate::tail::cursor::identity_at(&active.path).is_some_and(|i| h.identity.as_ref() == Some(&i));
+                                for f in again.iter().filter(|_| still) {
                                     if !f.is_active
                                         && !look.contains(&f.file_name)
                                         && !read_new.contains(&f.file_name)
