@@ -320,7 +320,8 @@ function subpaths(d: string): Sub[] | null {
   };
   const end = (closed: boolean) => { if (drawn.length > 1) out.push({ pts: cur, drawn, corner, closed }); cur = []; drawn = []; corner = []; };
   while (i < toks.length) {
-    if (/[A-Za-z]/.test(toks[i])) cmd = toks[i++];
+    // A command is a letter alone: a number's exponent holds one too (`2.5e-4`).
+    if (/^[A-Za-z]$/.test(toks[i])) cmd = toks[i++];
     else if (!cmd) return null;
     const rel = cmd === cmd.toLowerCase();
     const ox = rel ? x : 0, oy = rel ? y : 0;

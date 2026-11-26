@@ -64,8 +64,9 @@ pub struct Placed {
     pub around: Vec<String>,
     /// The nearest element around it that is not one of `AROUND` (the drawing's own root aside).
     pub apart: Option<String>,
-    /// The first element inside it that is not one of `HOLDS` (a `use`, a link, a nested viewport).
-    pub holds: Option<String>,
+    /// The first element inside it the page does not paint as the object (`held_apart`): its name,
+    /// and the element it stands in where only its place refuses it (a shape inside a text).
+    pub holds: Option<(String, Option<String>)>,
     /// Whether a `style` attribute on it or inside it marks a declaration `!important`.
     pub important: bool,
     /// The nearest element, itself or around it, that hides it (`display: none`, as an attribute or in
@@ -238,6 +239,12 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
         if let Some(property) = styled_geometry {
             return Err(format!("{} holds `{property}` in a `style` (on <{name}>), a shape's geometry written as CSS, which the page reads by its attributes: Inkscape writes a shape's geometry as attributes", path.display()));
         }
+        // A path's data the page reads by its numbers: data the browser stops drawing at, or reads
+        // otherwise (an arc's flags run together), refused where it stops.
+        if let Some(rest) = node.attribute("d").filter(|_| name == "path").and_then(path_data_stop) {
+            let at = if rest.is_empty() { "at its end".to_string() } else { format!("from `{}`", rest.chars().take(24).collect::<String>()) };
+            return Err(format!("{} holds path data (on <path>) the page cannot read as the browser draws it, {at}: Inkscape writes a path's data by the SVG grammar, a move first, each command with its numbers and each flag of an arc standing alone", path.display()));
+        }
         let widths = node.attribute("stroke-width").map(|w| w.trim().to_ascii_lowercase()).into_iter().chain(node.attribute("style").map(|st| style_values(st, "stroke-width")).unwrap_or_default());
         if let Some(width) = widths.into_iter().find(|w| w.contains('%') || w.contains("calc(") || w.contains("var(")) {
             return Err(format!("{} holds the stroke width `{width}` (on <{name}>), a percentage, a `calc()` or a `var()`, which the page reads as no width: write it as a number or a length, as Inkscape does", path.display()));
@@ -271,7 +278,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Layout, String> {
                 Placed {
                     around: up.iter().filter_map(|a| a.attribute("id").map(String::from)).collect(),
                     apart: up.iter().map(|a| a.tag_name().name()).find(|n| !AROUND.contains(n)).map(String::from),
-                    holds: node.descendants().skip(1).filter(|d| d.is_element()).map(|d| d.tag_name().name()).find(|n| !HOLDS.contains(n)).map(String::from),
+                    holds: node.descendants().skip(1).filter(|d| d.is_element()).find_map(|d| held_apart(&d)),
                     important: node.descendants().filter(|d| d.is_element()).any(|d| important(&d)),
                     hidden: node.ancestors().filter(|a| a.is_element()).find(|a| a.attribute("display").is_some_and(|v| style_values(&format!("display:{v}"), "display").iter().any(|x| x == "none")) || a.attribute("style").is_some_and(|s| style_values(s, "display").iter().any(|v| v == "none"))).map(|a| match a.attribute("id") {
                         Some(id) => format!("<{}> `{id}`", a.tag_name().name()),
@@ -531,6 +538,143 @@ pub fn the_pages_attribute(name: &str) -> bool {
 /// What may stand inside an object's element: the elements the page draws on, a text's spans, and a
 /// title or a description (which draw nothing).
 pub const HOLDS: [&str; 12] = ["g", "rect", "circle", "ellipse", "path", "polygon", "polyline", "line", "text", "tspan", "title", "desc"];
+
+/// What may stand inside a text or a span: its spans, and a title or a description (Inkscape writes
+/// an object's title and description inside it, a text's too). Inside a title or a description
+/// nothing may stand, and a span stands inside a text alone (the browser draws a shape or a span
+/// standing elsewhere as nothing, while the page would read it as drawn).
+pub const IN_TEXT: [&str; 3] = ["tspan", "title", "desc"];
+
+/// What an element inside an object's element stands as that the page does not paint as the object:
+/// one not of `HOLDS` (its name), or one of them in a place it may not stand (its name and the
+/// element it stands in): inside a text or a span anything but `IN_TEXT`, inside a title or a
+/// description anything, a span outside a text.
+fn held_apart(d: &roxmltree::Node) -> Option<(String, Option<String>)> {
+    let name = d.tag_name().name();
+    if !HOLDS.contains(&name) {
+        return Some((name.to_string(), None));
+    }
+    let parent = d.parent_element().map(|p| p.tag_name().name()).unwrap_or("");
+    let fits = match parent {
+        "text" | "tspan" => IN_TEXT.contains(&name),
+        "title" | "desc" => false,
+        _ => name != "tspan",
+    };
+    (!fits).then(|| (name.to_string(), Some(parent.to_string())))
+}
+
+/// The commands of a path's data, each by its capital, and how many numbers each takes (an arc's
+/// two flags among its seven), as the SVG grammar reads them.
+pub const PATH_COMMANDS: [(char, usize); 10] = [('M', 2), ('L', 2), ('H', 1), ('V', 1), ('C', 6), ('S', 4), ('Q', 4), ('T', 2), ('A', 7), ('Z', 0)];
+
+/// The largest power of ten a number of a path's data may be written with, either way: the browser
+/// reads its data as single-precision floats and stops at a larger exponent or a number past their
+/// range.
+pub const PATH_EXPONENT: u32 = 38;
+
+/// Where a path's data stops being what the page reads as the browser draws it, `None` if nowhere:
+/// the SVG grammar's path data, a move first, each command followed by its numbers (again and again,
+/// a move's again as lines), white space (a space, a tab, a line feed, a carriage return) anywhere
+/// between and one comma at most between two numbers; each number a sign, digits, a `.` with a digit
+/// after it, an exponent with its digits up to `PATH_EXPONENT`, within a float's range; each flag of
+/// an arc a `0` or a `1` with white space or a comma after it (the browser reads `0 1140 0` as the
+/// flags 1 and 1 and the point 40 0; the page by its numbers, as Inkscape writes them, each flag
+/// apart). The browser stops drawing where its grammar stops while the page's reading of the
+/// numbers would go on past it; the rest of the data from there is returned.
+pub fn path_data_stop(d: &str) -> Option<&str> {
+    let b = d.as_bytes();
+    let n = b.len();
+    let ws = |c: u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r');
+    let skip_ws = |i: &mut usize| {
+        while *i < n && ws(b[*i]) {
+            *i += 1;
+        }
+    };
+    let digits = |i: &mut usize| {
+        let s = *i;
+        while *i < n && b[*i].is_ascii_digit() {
+            *i += 1;
+        }
+        *i - s
+    };
+    let number = |i: &mut usize| -> bool {
+        let s = *i;
+        if *i < n && matches!(b[*i], b'+' | b'-') {
+            *i += 1;
+        }
+        let whole = digits(i);
+        if *i < n && b[*i] == b'.' {
+            *i += 1;
+            if digits(i) == 0 {
+                return false;
+            }
+        } else if whole == 0 {
+            return false;
+        }
+        if *i < n && matches!(b[*i], b'e' | b'E') {
+            *i += 1;
+            if *i < n && matches!(b[*i], b'+' | b'-') {
+                *i += 1;
+            }
+            let at = *i;
+            if digits(i) == 0 || d[at..*i].parse::<u32>().map_or(true, |e| e > PATH_EXPONENT) {
+                return false;
+            }
+        }
+        d[s..*i].parse::<f64>().is_ok_and(|v| v.abs() <= f32::MAX as f64)
+    };
+    let starts_number = |i: usize| i < n && (b[i].is_ascii_digit() || matches!(b[i], b'.' | b'+' | b'-'));
+    let mut i = 0;
+    skip_ws(&mut i);
+    let mut first = true;
+    while i < n {
+        let c = b[i].to_ascii_uppercase();
+        let Some(&(_, args)) = PATH_COMMANDS.iter().find(|(l, _)| b[i].is_ascii_alphabetic() && *l as u8 == c) else { return Some(&d[i..]) };
+        if first && c != b'M' {
+            return Some(&d[i..]);
+        }
+        first = false;
+        i += 1;
+        skip_ws(&mut i);
+        if args > 0 {
+            loop {
+                for k in 0..args {
+                    if k > 0 {
+                        skip_ws(&mut i);
+                        if i < n && b[i] == b',' {
+                            i += 1;
+                            skip_ws(&mut i);
+                        }
+                    }
+                    let at = i;
+                    if c == b'A' && (k == 3 || k == 4) {
+                        if !(i < n && matches!(b[i], b'0' | b'1')) || (i + 1 < n && !ws(b[i + 1]) && b[i + 1] != b',') {
+                            return Some(&d[at..]);
+                        }
+                        i += 1;
+                    } else if !number(&mut i) {
+                        return Some(&d[at..]);
+                    }
+                }
+                // The command again: its numbers after white space or one comma.
+                let at = i;
+                skip_ws(&mut i);
+                if i < n && b[i] == b',' {
+                    i += 1;
+                    skip_ws(&mut i);
+                    if !starts_number(i) {
+                        return Some(&d[at..]);
+                    }
+                }
+                if !starts_number(i) {
+                    break;
+                }
+            }
+        }
+        skip_ws(&mut i);
+    }
+    None
+}
 
 /// The XLink namespace, in which Inkscape writes an image's `href`.
 pub const XLINK_NS: &str = "http://www.w3.org/1999/xlink";

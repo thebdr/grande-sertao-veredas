@@ -841,8 +841,9 @@ pub fn load(text: &str, base: &Path, universe: &Universe, project_name: &str) ->
             if let Some(h) = &p.hidden {
                 return Err(format!("object `{}`: its element stands hidden ({h} says `display: none`, as a hidden layer does): show it in Inkscape, or move the element out of it", o.id));
             }
-            if let Some(inner) = &p.holds {
-                return Err(format!("object `{}`: its element holds a <{inner}>{}, which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)", o.id, svg::inkscape_hint(inner)));
+            if let Some((inner, within)) = &p.holds {
+                let place = within.as_ref().map(|w| format!(" inside a <{w}>")).unwrap_or_default();
+                return Err(format!("object `{}`: its element holds a <{inner}>{place}{}, which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)", o.id, svg::inkscape_hint(inner)));
             }
             if p.important {
                 return Err(format!("object `{}`: a `style` attribute on its element or inside it says `!important`, which would outrank the state's paint", o.id));

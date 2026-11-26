@@ -1362,7 +1362,9 @@ A path is relative to the binding file's folder.
   `text`), inside no other object's element, with nothing but groups (`g`) between it and the
   drawing's root, holding nothing but groups, shapes, texts and their spans, a title or a
   description (`g`, `rect`, `circle`, `ellipse`, `path`, `polygon`, `polyline`, `line`, `text`, `tspan`,
-  `title`, `desc`) (Q25). The state's paint outranks whatever paint the drawing
+  `title`, `desc`) (Q25), a text or a span holding nothing but its spans, a title or a description
+  (`tspan`, `title`, `desc`), a title or a description nothing, and a span standing inside a text
+  alone. The state's paint outranks whatever paint the drawing
   writes on it and on a group's shapes and inner groups, as attributes or in `style` (never
   `!important` there, however CSS spells it); a group's text keeps the paint it writes.
 - `label` (`id`): the object's name on the screen.
@@ -1542,7 +1544,12 @@ writes (the properties `all`, `transform`, `translate`, `rotate`, `scale`, `tran
 `perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, each by
 its name and every longhand of it (the name, a hyphen and more), in a `style`, under any vendor's
 prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a comment inside it declaring nothing; the attributes
-`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a shape's geometry written as CSS (the properties `d`, `x`, `y`, `width`, `height`, `rx`, `ry`, `cx`, `cy` and `r` in a `style`: the page reads a shape by its attributes, as Inkscape writes it), a stroke width written as a percentage, a `calc()` or a `var()` (as an attribute or in a `style`: the page reads a line's width as a length), on the root the attributes
+`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a shape's geometry written as CSS (the properties `d`, `x`, `y`, `width`, `height`, `rx`, `ry`, `cx`, `cy` and `r` in a `style`: the page reads a shape by its attributes, as Inkscape writes it), a stroke width written as a percentage, a `calc()` or a `var()` (as an attribute or in a `style`: the page reads a line's width as a length), a path's data the page
+cannot read as the browser draws it (anything past the SVG grammar's path data, where the browser
+stops drawing: a move first, then the commands `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A` and `Z`, in either case, each
+with its numbers, white space between and a comma at most between two numbers; a number with a `.`
+and no digit after it, an exponent past 38 either way or a number past a float's range; and an
+arc's flag not standing alone, `0 1140 0` for `0 1 1 40 0`: Inkscape writes each flag apart), on the root the attributes
 `preserveAspectRatio` and `overflow` (the second in its `style` too, and every longhand of it), with
 which the drawing would cut what the page writes at its edge or reach past its frame, and on its root
 nothing but `width`, `height`, `viewBox`, `version` and `id` and Inkscape's own attributes (in the two namespaces it writes there,
@@ -1561,7 +1568,8 @@ reference in an entity's value to markup; Inkscape writes none; an entity of tex
 reads, is read); an
 object's element of another kind than the page draws on (a clone or an image told what to do in
 Inkscape), inside another object's element or anything but groups, hidden (`display: none` on it
-or on a group around it, as a hidden layer is), holding anything but groups, shapes, texts and their spans, or saying `!important` in a `style` on it or inside it, and a
+or on a group around it, as a hidden layer is), holding anything but groups, shapes, texts and their spans (a shape inside a text, anything inside a
+title or a description, a span outside a text), or saying `!important` in a `style` on it or inside it, and a
 marker's path inside anything but groups or hidden:
 each is refused when the file loads, with its place named, before any session starts.
 "###;
@@ -1659,7 +1667,7 @@ fn hint(kind: &str) -> &'static str {
 /// object's element, inside it and beside it). Every list is held to the reference's own sentence.
 #[test]
 fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
-    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DIRECTED, DRAWN, GEOMETRY, HOLDS, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, ROOT_ATTRIBUTES, ROOT_FRAMED, VENDOR_PREFIXES, declared, moves_the_page, says_important};
+    use veredas_supervisao::svg::{ANIMATIONS, AROUND, DIRECTED, DRAWN, GEOMETRY, HOLDS, IN_TEXT, MOVING, MOVING_ATTRIBUTES, MOVING_FAMILIES, PATH_COMMANDS, PATH_EXPONENT, ROOT_ATTRIBUTES, ROOT_FRAMED, VENDOR_PREFIXES, declared, moves_the_page, says_important};
     // The lists are the reference's, each member named in its own sentence: the kinds an object is
     // shown on, what may stand around them and inside them, the animations, the properties and
     // attributes that move, time or unpin what the page writes.
@@ -1671,6 +1679,7 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
     assert_eq!(named("shows the object: a group, a shape or a text (", ")"), DRAWN);
     assert_eq!(named("with nothing but groups (", ")"), AROUND);
     assert_eq!(named("holding nothing but groups, shapes, texts and their spans, a title or a description (", ")"), HOLDS);
+    assert_eq!(named("a text or a span holding nothing but its spans, a title or a description (", ")"), IN_TEXT);
     assert_eq!(named("an animation (", ")"), ANIMATIONS);
     assert_eq!(named("CSS that moves, times or unpins what the page writes (the properties ", " and every"), MOVING);
     assert_eq!(named("`pointer-events` and every ", " property, each by"), MOVING_FAMILIES);
@@ -1772,6 +1781,105 @@ fn the_reader_refuses_a_drawing_the_page_does_not_draw_by_its_own_lists() {
         for other in ["use", "a", "switch", "svg", "image", "foo", "pattern", "clipPath"] {
             assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<g id=\"infeed\">{open}<{other}/>{close}</g>"))), format!("object `infeed`: its element holds a <{other}>{}, which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)", hint(other)), "{other} {open}");
         }
+    }
+    // What stands inside a text, a span, a title or a description (Inkscape writes an object's title
+    // and description inside it, a text's too): inside a text or a span, the object's element itself a
+    // text or one inside its group at every depth, each of `IN_TEXT` loads and every other of `HOLDS`
+    // is refused with its place; inside a title or a description every one of `HOLDS` is refused; a
+    // span outside a text is refused. The browser draws none of them, while the page would read a
+    // shape there as drawn (a level's copy pairing its shapes with the wrong originals).
+    let held = |inner: &str, within: &str| format!("object `infeed`: its element holds a <{inner}> inside a <{within}>, which the page does not paint as the object (it holds groups, shapes, texts and their spans alone)");
+    for inner in HOLDS {
+        let el = format!("<{inner}/>");
+        let mut cases: Vec<(&str, Example)> = vec![
+            ("text", with_svg(INFEED, &format!("<text id=\"infeed\" x=\"20\" y=\"96\">{el}</text>"))),
+            ("tspan", with_svg(INFEED, &format!("<text id=\"infeed\" x=\"20\" y=\"96\"><tspan>{el}</tspan></text>"))),
+        ];
+        for (open, close) in depths {
+            for (within, around, after) in [("text", "<text>", "</text>"), ("tspan", "<text><tspan>", "</tspan></text>"), ("title", "<title>", "</title>"), ("desc", "<desc>", "</desc>")] {
+                cases.push((within, with_svg(INFEED, &format!("<g id=\"infeed\">{open}{around}{el}{after}{close}</g>"))));
+            }
+        }
+        for (within, ex) in cases {
+            if matches!(within, "text" | "tspan") && IN_TEXT.contains(&inner) {
+                assert!(outcome(&ex).is_ok(), "a <{inner}> inside a <{within}>");
+            } else {
+                assert_eq!(binding_refusal(&ex), held(inner, within), "a <{inner}> inside a <{within}>");
+            }
+        }
+    }
+    for (open, close) in depths {
+        assert_eq!(binding_refusal(&with_svg(INFEED, &format!("<g id=\"infeed\">{open}<tspan>x</tspan>{close}</g>"))), held("tspan", "g"), "{open}");
+    }
+    // A path's data, read by the SVG grammar as the browser reads it, on the object's own path, on a
+    // path inside an object's group and on one beside every object: every command of
+    // `PATH_COMMANDS`, in either case, loads with its numbers once and again; each with a number
+    // short, each first but a move, a number after a close, refused where the grammar stops; every
+    // form of a number the grammar writes loads, every other (and one past the browser's float)
+    // refused; white space and commas as the grammar places them; an arc's flags standing alone
+    // loading, run together, joined to a number or other than `0` and `1` refused. The browser stops
+    // drawing where its grammar stops, and reads `0 1140 0` as two flags and a point, while the page
+    // reads the numbers.
+    let path_places = |d: &str| -> Vec<(&'static str, Example)> {
+        vec![
+            ("the object's path", with_svg(LOOP, &LOOP.replacen("d=\"M 80 40 H 320 A 70 70 0 0 1 320 180 H 80 A 70 70 0 0 1 80 40 Z\"", &format!("d=\"{d}\""), 1))),
+            ("a path inside an object's group", with_svg(INFEED, &format!("<g id=\"infeed\"><path d=\"{d}\"/></g>"))),
+            ("a path beside every object", with_svg(INFEED, &format!("{INFEED}<path d=\"{d}\"/>"))),
+        ]
+    };
+    let reads = |d: &str| {
+        for (place, ex) in path_places(d) {
+            assert!(outcome(&ex).is_ok(), "{d}, {place}: {:?}", outcome(&ex).err());
+        }
+    };
+    let stops = |d: &str, at: &str| {
+        for (place, ex) in path_places(d) {
+            let got = binding_refusal(&ex);
+            assert!(got.ends_with(&format!("layout.svg holds path data (on <path>) the page cannot read as the browser draws it, {at}: Inkscape writes a path's data by the SVG grammar, a move first, each command with its numbers and each flag of an arc standing alone")), "{d}, {place}: {got}");
+        }
+    };
+    let stop_at = |rest: &str| format!("from `{}`", rest.chars().take(24).collect::<String>());
+    assert_eq!(named("then the commands ", ", in either case"), PATH_COMMANDS.map(|(l, _)| l.to_string()));
+    assert!(flat.contains(&format!("an exponent past {PATH_EXPONENT} either way")));
+    for (letter, args) in PATH_COMMANDS {
+        let set = if letter == 'A' { "20 20 0 1 1 40 0".to_string() } else { (1..=args).map(|k| (3 * k).to_string()).collect::<Vec<_>>().join(" ") };
+        for x in [letter, letter.to_ascii_lowercase()] {
+            reads(&format!("M 10 10 {x} {set}"));
+            if letter != 'M' {
+                stops(&format!("{x} {set}"), &stop_at(&format!("{x} {set}")));
+            }
+            if args == 0 {
+                reads(&format!("M 10 10 L 20 20 {x} M 5 5 L 9 9 {x}{x}"));
+                stops(&format!("M 10 10 L 20 20 {x} 5 5"), &stop_at("5 5"));
+                continue;
+            }
+            reads(&format!("M 10 10 {x} {set} {set}"));
+            reads(&format!("M 10 10 {x}{set},{set}"));
+            let short = set.rsplit_once(' ').map_or("", |(s, _)| s);
+            stops(&format!("M 10 10 {x} {short}"), "at its end");
+            stops(&format!("M 10 10 {x} {short} L 5 5"), &stop_at("L 5 5"));
+            if !short.is_empty() {
+                stops(&format!("M 10 10 {x} {set} {short}"), "at its end");
+            }
+        }
+    }
+    for n in ["1", "-1", "+1", ".5", "-.5", "1.5", "01", "1e2", "1E+2", "1.5e-3", "-.5e1", "1e38", "1e-38", "1e0038", "3.4e38"] {
+        reads(&format!("M {n} 10 L 20 20"));
+    }
+    for n in ["1.", "1.e2", ".", "-", "+", "1e", "1e+", "1e39", "1e-39", "1e0039", "4e38", "--1", "- 1", ".e1"] {
+        stops(&format!("M {n} 10 L 20 20"), &stop_at(&format!("{n} 10 L 20 20")));
+    }
+    for d in ["M 10,10 L 20,20", "M10 10L20 20", "M 10-10 L-20-20", "M 10 10,20 20", "M .5.5 L 1 1", "M 10&#9;10&#10;L&#13;20 20", "  M 10 10 L 20 20  ", "", "   "] {
+        reads(d);
+    }
+    for (d, rest) in [("M 10,,10 L 20 20", ",10 L 20 20"), ("M ,10 10", ",10 10"), ("M 10 10, L 5 5", ", L 5 5"), ("M 10 10 L 5 5,", ","), ("M 10 10 B 5 5", "B 5 5"), ("M 10 10 L 5 5 é", "é"), ("none", "none"), ("M 10 10 H 50 V 50 H 10 Z ; M 100 100 H 140", "; M 100 100 H 140")] {
+        stops(d, &stop_at(rest));
+    }
+    for d in ["M 10 10 a 20,20,0,1,1,40,0", "M 10 10 a 20 20 0 0 0 40 0", "M 10 10 A 20 20 0 1 1 40 0 20 20 0 0 1 80 0"] {
+        reads(d);
+    }
+    for (d, rest) in [("M 10 50 a20 20 0 1140 0", "1140 0"), ("M 10 50 a 20 20 0 11 40 0", "11 40 0"), ("M 10 50 a 20 20 0 1 140 0", "140 0"), ("M 10 50 a 20 20 0 1 1-40 0", "1-40 0"), ("M 10 50 a 20 20 0 2 1 40 0", "2 1 40 0"), ("M 10 50 a 20 20 0 1.0 1 40 0", "1.0 1 40 0")] {
+        stops(d, &stop_at(rest));
     }
     // A `class` anywhere, at every place: with no sheet of its own a drawing's class meets only the
     // page's rules.

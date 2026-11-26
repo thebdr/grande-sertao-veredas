@@ -306,7 +306,9 @@ A path is relative to the binding file's folder.
   `text`), inside no other object's element, with nothing but groups (`g`) between it and the
   drawing's root, holding nothing but groups, shapes, texts and their spans, a title or a
   description (`g`, `rect`, `circle`, `ellipse`, `path`, `polygon`, `polyline`, `line`, `text`, `tspan`,
-  `title`, `desc`) (Q25). The state's paint outranks whatever paint the drawing
+  `title`, `desc`) (Q25), a text or a span holding nothing but its spans, a title or a description
+  (`tspan`, `title`, `desc`), a title or a description nothing, and a span standing inside a text
+  alone. The state's paint outranks whatever paint the drawing
   writes on it and on a group's shapes and inner groups, as attributes or in `style` (never
   `!important` there, however CSS spells it); a group's text keeps the paint it writes.
 - `label` (`id`): the object's name on the screen.
@@ -486,7 +488,12 @@ writes (the properties `all`, `transform`, `translate`, `rotate`, `scale`, `tran
 `perspective` and `pointer-events` and every `transition`, `animation` and `offset` property, each by
 its name and every longhand of it (the name, a hyphen and more), in a `style`, under any vendor's
 prefix (`-webkit-`, `-moz-`, `-ms-`, `-o-`), a name with white space or a comment inside it declaring nothing; the attributes
-`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a shape's geometry written as CSS (the properties `d`, `x`, `y`, `width`, `height`, `rx`, `ry`, `cx`, `cy` and `r` in a `style`: the page reads a shape by its attributes, as Inkscape writes it), a stroke width written as a percentage, a `calc()` or a `var()` (as an attribute or in a `style`: the page reads a line's width as a length), on the root the attributes
+`transform-origin` and `pointer-events`, an element's own `transform` attribute kept but the root's), a shape's geometry written as CSS (the properties `d`, `x`, `y`, `width`, `height`, `rx`, `ry`, `cx`, `cy` and `r` in a `style`: the page reads a shape by its attributes, as Inkscape writes it), a stroke width written as a percentage, a `calc()` or a `var()` (as an attribute or in a `style`: the page reads a line's width as a length), a path's data the page
+cannot read as the browser draws it (anything past the SVG grammar's path data, where the browser
+stops drawing: a move first, then the commands `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A` and `Z`, in either case, each
+with its numbers, white space between and a comma at most between two numbers; a number with a `.`
+and no digit after it, an exponent past 38 either way or a number past a float's range; and an
+arc's flag not standing alone, `0 1140 0` for `0 1 1 40 0`: Inkscape writes each flag apart), on the root the attributes
 `preserveAspectRatio` and `overflow` (the second in its `style` too, and every longhand of it), with
 which the drawing would cut what the page writes at its edge or reach past its frame, and on its root
 nothing but `width`, `height`, `viewBox`, `version` and `id` and Inkscape's own attributes (in the two namespaces it writes there,
@@ -505,6 +512,7 @@ reference in an entity's value to markup; Inkscape writes none; an entity of tex
 reads, is read); an
 object's element of another kind than the page draws on (a clone or an image told what to do in
 Inkscape), inside another object's element or anything but groups, hidden (`display: none` on it
-or on a group around it, as a hidden layer is), holding anything but groups, shapes, texts and their spans, or saying `!important` in a `style` on it or inside it, and a
+or on a group around it, as a hidden layer is), holding anything but groups, shapes, texts and their spans (a shape inside a text, anything inside a
+title or a description, a span outside a text), or saying `!important` in a `style` on it or inside it, and a
 marker's path inside anything but groups or hidden:
 each is refused when the file loads, with its place named, before any session starts.

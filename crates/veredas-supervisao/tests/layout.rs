@@ -489,7 +489,8 @@ const PROBES: &str = r##"
   // along it carries the state); a group's line painted as a plain line; each state told apart on
   // every line but a level's track, on a level's line and on its body; and selected, in every
   // state alike, the accent on the line, unfilled, at its width and never thinner than the
-  // selection's 2.5, a level's track wider than the level along it by 2.
+  // selection's 2.5, a level's track 2 wider than the level along it is in alarm (its widest: wider
+  // still beside a thinner level in another state).
   const ref = document.createElementNS(svgNS, "rect");
   plant.append(ref);
   const resolve = (v) => { ref.style.stroke = v; return getComputedStyle(ref).stroke; };
@@ -1661,6 +1662,7 @@ const NO_AREA_SVG: &str = r##"  <line id="nv-vt-o" x1="0" y1="0" x2="0" y2="20" 
   <rect id="nv-edge" x="370" y="372" width="24" height="28"/>
   <g id="nv-gpipe"><path d="M 120,336 H 150" style="fill:none;stroke:#3a3a40;stroke-width:6"/><path d="M 0,0 H 15" transform="translate(150 336) scale(2 1)" style="fill:none;stroke:#3a3a40;stroke-width:6"/></g>
   <path id="nv-walls" d="m 20,268 h 50 m -50,12 h 50" style="fill:none;stroke:#3a3a40;stroke-width:4"/>
+  <path id="nv-num" d="M 2e1,3.88e2 h 8E+1 m -.8e2 8 h 80" style="fill:none;stroke:#3a3a40;stroke-width:2"/>
   <path id="na-over" d="M 320 250 C 310 245 350 265 340 260" style="fill:#cccccc;stroke:#3a3a40;stroke-width:2"/>
   <path id="na-mirror" d="M 365 250 C 367 251 357 246 369 252 S 371 253 373 254" style="fill:#cccccc;stroke:#3a3a40;stroke-width:2"/>
   <path id="nv-ell" d="M 100,268 H 140 M 140,268 V 284" style="fill:none;stroke:#3a3a40;stroke-width:4"/>
@@ -1708,11 +1710,14 @@ const NO_AREA_GROUPS: [(&str, &str); 6] = [("nv-gline", "path"), ("nv-gvline", "
 
 /// Elements with no area whose runs lie on more than one line, each with points of its own
 /// coordinates on its strokes (the fill over them at a full level) and off them (between two walls,
-/// inside an L's corner: no fill there): two walls Inkscape's Combine made one path, an L of two
+/// inside an L's corner: no fill there): two walls Inkscape's Combine made one path (and two written
+/// with every form of number the grammar has), an L of two
 /// subpaths, a group of an L of two paths, a slanted curve whose handles reach past its ends, and a
 /// smooth one carried past its last node by its mirrored handle.
-const RUNS: [(&str, &[(f64, f64)], &[(f64, f64)]); 5] = [
+const RUNS: [(&str, &[(f64, f64)], &[(f64, f64)]); 6] = [
     ("nv-walls", &[(45.0, 268.0), (45.0, 280.0)], &[(45.0, 274.0)]),
+    // Two walls whose data writes its numbers with exponents, a leading `.` and a capital `E`.
+    ("nv-num", &[(60.0, 388.0), (60.0, 396.0)], &[(60.0, 392.0)]),
     ("nv-ell", &[(120.0, 268.0), (140.0, 276.0)], &[(120.0, 278.0)]),
     ("nv-gell", &[(200.0, 268.0), (220.0, 276.0)], &[(200.0, 278.0)]),
     // A slanted curve with no area whose handles reach past its nodes along its line: filled over
@@ -2092,6 +2097,9 @@ const LINES_SVG: &str = r##"  <line id="ln-normal" x1="15" y1="240" x2="15" y2="
   <rect id="la-rr0" x="620" y="350" width="60" height="40" rx="0" ry="8" transform="rotate(45 650 370)" fill="none" stroke="#3a3a40" stroke-width="8"/>
   <rect id="la-rrx0" x="620" y="450" width="60" height="40" rx="8" ry="0" transform="rotate(45 650 470)" fill="none" stroke="#3a3a40" stroke-width="8"/>
   <g transform="translate(480 600)"><path id="la-leaf3" d="m 53.7,49.4 l 25.3,18.4 -22.6,0.8 -2.7,-19.2 z" fill="none" stroke="#3a3a40" stroke-width="6"/></g>
+  <path id="la-num1" d="M 6.1e2 560 l 2.5e-4 40 h 3e1" fill="none" stroke="#3a3a40" stroke-width="8"/>
+  <path id="la-num2" d="M6.6E+2,5.6e2l3e1-0 .0 4e1" fill="none" stroke="#3a3a40" stroke-width="8"/>
+  <path id="la-num3" d="m 610,650 30,0 .0,3e1 -3E1-.0e0 z" fill="none" stroke="#3a3a40" stroke-width="8"/>
 </svg>"##;
 
 /// Each shape drawn as a line and bound to show its state: its id, its state, the width it was drawn
@@ -2128,7 +2136,7 @@ const BODY_CASES: [(&str, (f64, f64)); 3] = [("nf-zero", (205.0, 320.0)), ("nf-b
 /// on its lines below its level, on them above it, and inside what they close (off every line), in
 /// its own coordinates.
 #[allow(clippy::type_complexity)]
-const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 50] = [
+const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64, f64)]); 53] = [
     ("la-ring", 0.35, "normal", 6.0, &[(40.0, 386.0)], &[(40.0, 354.0), (24.0, 370.0)], &[(40.0, 370.0), (40.0, 380.0)]),
     ("la-bent", 0.35, "normal", 8.0, &[(100.0, 390.0), (80.0, 385.0), (122.5, 390.0)], &[(80.0, 360.0)], &[(95.0, 380.0)]),
     ("la-hollow", 1.0, "normal", 4.0, &[(160.0, 350.0), (140.0, 370.0), (180.0, 370.0), (160.0, 390.0)], &[], &[(160.0, 370.0)]),
@@ -2189,6 +2197,12 @@ const ALONG_CASES: [(&str, f64, &str, f64, &[(f64, f64)], &[(f64, f64)], &[(f64,
     ("la-rry", 1.0, "normal", 8.0, &[], &[], &[]),
     ("la-rr0", 1.0, "normal", 8.0, &[], &[], &[]),
     ("la-rrx0", 1.0, "normal", 8.0, &[], &[], &[]),
+    // Path data written with every form of number the grammar has (the page's reading of a path's
+    // numbers, `subpaths`): an exponent, one in capitals with a sign, a leading `.`, a sign standing
+    // as the separator, commas, a command again without its letter (a move's again as lines).
+    ("la-num1", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-num2", 1.0, "normal", 8.0, &[], &[], &[]),
+    ("la-num3", 1.0, "normal", 8.0, &[], &[], &[]),
 ];
 
 /// The state's colours on a line, read from the page's own tokens as the browser computes a stroke:
@@ -2361,7 +2375,8 @@ const KINDS_PAINT: &str = r##"((kinds, inside) => {
 
 /// The selection on a shape drawn as a line, after a click of the pointer on its line: every line of
 /// it in the accent, unfilled, at the width it was drawn with and never thinner than the selection's
-/// 2.5; a level's track wider than its level by 2 (its level's lines as unselected); a group's body
+/// 2.5; a level's track 2 wider than its level is in alarm, in every state alike (its level's lines
+/// as unselected); a group's body
 /// keeping its fill.
 const LINE_SELECTED: &str = r##"((id, drawn) => {
   /*COLOURS*/
