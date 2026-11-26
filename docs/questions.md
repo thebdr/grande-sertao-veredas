@@ -1634,6 +1634,10 @@ proposal before it can be put: running unattended beyond what is ruled (memory e
 an old controller and a new Oficina, replacing the hardware, and how each rule is proven by
 injecting faults on the bench.
 
+**Ruled further** 2026-11-26, by the architect: the four areas this entry left unopened were
+proposed by controlador as Q234 to Q237 and ruled there (Q235 in part). With them every area of the
+round has been opened.
+
 ## Q43 - The security round: the positions going in, and its list
 
 **Raised** 2026-11-16, by the architect: "dedicated round to decide cyber security level
@@ -3266,6 +3270,12 @@ every set of releases the whole file let through.
 
 **Reversible?** Yes: the check narrows without changing the manifest's format.
 
+**Decided** 2026-11-26, by the architect: asked "The workspace's root `Cargo.toml` is one of them,
+and members edit it often. Does any edit of it bump every component? Taken meanwhile: yes, the whole
+file.", "Only what cargo reads for it (Recommended)", (b): the resolver, the profiles, `[patch]` and
+`[replace]`, and the workspace entries the component and the members it uses inherit; the member
+list, comments and other members' entries left out.
+
 ---
 
 ## Q443 - Does a release ship an executable its component's default features do not build?
@@ -3292,6 +3302,13 @@ Options:
 nothing shipped is taken back.
 
 **Reversible?** Yes: the manifest's `bins` say what each release ships.
+
+**Decided** 2026-11-26, by the architect: asked "Does a release ship an executable that its
+component's default features do not build? It arose because Oficina's window sat behind a feature;
+you have since ruled the window built by default (Q370), so today the rule would bind no component.
+Taken meanwhile: a release ships what the default features build.", "With the features its
+executables need", (c), against the recommendation (a): the builder turns on, per component, the
+features its executables need, whatever its defaults are.
 
 ---
 
@@ -3323,6 +3340,12 @@ way.
 
 **Reversible?** Yes: the builder's script.
 
+**Decided** 2026-11-26, by the architect: asked "Is a release's component built alone, as its
+version names it, or together with the others, as the suite tests it? Built together, cargo unifies
+features, so another member's manifest reaches the executable (the shipped portal carried a feature
+the bench turns on). Taken meanwhile: built alone.", "Alone, and tested alone (Recommended)", (c):
+the cut builds each component alone and also runs each component's own tests built alone.
+
 ---
 
 ## Q445 - Does a test-only change in a component's folder bump its version?
@@ -3343,6 +3366,11 @@ Options:
 **Taken meanwhile** (most reversible): (a), the stricter reading.
 
 **Reversible?** Yes: the check narrows without changing the manifest's format.
+
+**Decided** 2026-11-26, by the architect: asked "Does a test-only change in a component's folder
+(its `tests/`, `benches/`, `examples/`) bump its version, though nothing of it goes into an
+executable? Refute rounds edit tests daily. Taken meanwhile: yes, the folder whole.", "Tests left
+out (Recommended)", (b).
 
 ## Q446 - Does a bundle that holds Oficina's window carry Qt 6.12's libraries, or does the tester machine provide them?
 
@@ -3377,6 +3405,12 @@ nothing shipped before a ruling: no cut is due until alpha.2.
 **Reversible?** Yes: where the libraries live is the bundle's layout and the provisioning, never a
 component's code.
 
+**Decided** 2026-11-26, by the architect: asked "Once Oficina's window is built by default a release
+ships it, and it loads Qt 6.12 and KDDockWidgets, which Debian 13 (the tester machine) does not
+offer. Where do those libraries come from? Taken meanwhile: no window shipped until the switch
+lands.", "The bundle carries them (Recommended)", (a): in `lib/` beside `bin/`, with Qt's and
+KDDockWidgets' licence texts and where their sources are.
+
 ## Q447 - Which reporting channel does the security file name?
 
 **Raised** 2026-11-26, by the release member, from Q31 entry 38, ruled "(b) Security file,
@@ -3399,6 +3433,11 @@ Options:
 until the first public release (Q436, "Nowhere yet").
 
 **Reversible?** Yes: a file of a few lines.
+
+**Decided** 2026-11-26, by the architect: asked "Which channel does `SECURITY.md` name for reporting
+a vulnerability? An address in it is published.", "GitHub's private reporting (Recommended)", (a).
+No address is published; turning private reporting on in the repository's settings is the
+architect's act.
 
 ## Q448 - Does the cut hold every file a build opens to what its version names, or what rustc reads?
 
@@ -3494,6 +3533,13 @@ The assistant recommends (a) now, and (c) when the language's rules are next rev
 
 **Reversible?** Yes: loosening to (b) breaks no program.
 
+**Decided** 2026-11-26, by the architect: asked "ORCL's interpreter sizes a program's stack at load,
+by the deepest path of calls, so nothing is allocated during a scan. A function that calls itself
+(directly or through others) has no deepest path. What happens to such a program? Taken meanwhile:
+refused at load.", "Runs on a fixed stack", (b), against the recommendation (a): it runs on a stack
+of a size the target's settings give, laid out at load, and a call past it is the fault 502
+`program(at)`. What was taken meanwhile (refusing such a program at load) gives way.
+
 ---
 
 ## Q231 - Where an interpreted program's first state and safe outputs come from
@@ -3536,6 +3582,13 @@ first" throws away the machine's position at the failure, which the fault record
 **Reversible?** Yes: the host's hand-over is one constructor; (b) or (c) adds entries the adapter
 calls, and a format version to the file.
 
+**Decided** 2026-11-26, by the architect: asked "Where do an interpreted ORCL program's first state
+and its safe outputs come from? Natively the program computes both (`Default`, `safe_outputs`).
+Taken meanwhile: the host hands both at load.", "Computed at build, in the file (Recommended)", (a):
+the front end computes both when it lowers the program and writes them into the program file, and a
+program whose `safe_outputs` reads its state is refused; against lowering them as entries the
+machine runs.
+
 ---
 
 ## Q232 - An instruction budget per scan for an interpreted program
@@ -3562,6 +3615,12 @@ is what makes a stuck interpreted scan recoverable without killing the thread.
 **Taken meanwhile**: (a). `orcl_runtime::Interpreted` calls its entry to its return (C-155 says so).
 
 **Reversible?** Yes: a budget is a field of the adapter, read by one loop.
+
+**Decided** 2026-11-26, by the architect: asked "An interpreted scan runs one instruction at a time,
+so the engine could stop a scan that never ends by itself, where a native one waits for the
+watchdog. Does a scan get an instruction budget? Taken meanwhile: none.", "No budget", (a), against
+the recommendation ((b) now, (c) later): the entry runs to its return, and a scan that never returns
+waits for the host's watchdog, as a native one does. What was taken stands.
 
 ---
 
@@ -3591,6 +3650,13 @@ short form is the download's own question then.
 PENDING); the adapter's reason is kept for the host (`Controller::load_error`).
 
 **Reversible?** Yes: one constant and the text the state carries.
+
+**Decided** 2026-11-26, by the architect: asked "A stored program that fails its check is the FAULT
+506 `load(download)` (ruled). Downloads are not built yet, and a program handed in by its host that
+cannot be made also ends in FAULT 506. Which download does the fault name then? Taken meanwhile:
+0.", "STOP no_program instead", (b), against the recommendation (a): until downloads exist, a
+controller whose handed-in program cannot be made comes up in STOP 104 `no_program`. What was taken
+meanwhile (`download=0`) gives way.
 
 ---
 
@@ -3622,6 +3688,11 @@ into an unplanned stop and (b) restarts parts of a running plant on a calendar.
 
 **Reversible?** Yes until built: each is a reading of the controller's own counters.
 
+**Decided** 2026-11-26, by the architect: asked "Running unattended for years: beyond the cycle-time
+rule, the watchdog chain and ECC memory (ruled), what does a controller do about memory errors and
+slow leaks (memory, open files, threads growing a little a day)?", "Count and say so (Recommended)",
+(a), against restarting the non-real-time parts on a schedule and the watchdog alone.
+
 ---
 
 ## Q235 - An old controller and a new Oficina: versions, migration, a rescue path
@@ -3651,6 +3722,20 @@ frozen before the first release.
 **Reversible?** (a) and (b) yes; (c) only before the first release, since the frozen interface is
 what later releases keep.
 
+**Decided** 2026-11-26, by the architect, in two answers:
+
+- Asked "An old controller and a new Oficina: a controller stays as the engineer left it for years
+  while Oficina moves on. Which options hold? (Controlador's pick: (a) with (c).)", chosen: "(a)
+  Oficina speaks old versions" and "(b) Controller updated first"; not chosen: "(c) A rescue path,
+  frozen".
+
+- Asked "You chose both \"(a) Oficina speaks old versions\" and \"(b) Controller updated first\".
+  They pull apart on one case: a program download to a controller older than Oficina's release. What
+  holds there?", "Update first to download": Oficina refuses to download to an older controller and
+  offers its update first, and speaks the old versions for everything short of that (connecting,
+  reading the state and records, watching, forcing). No interface is frozen from release 1 as a
+  rescue path.
+
 ---
 
 ## Q236 - Replacing the hardware: backup, restore, what a stranger needs
@@ -3679,6 +3764,11 @@ target.
 
 **Reversible?** Yes: the backup's format is a `veredas-*` format with a version (law L7).
 
+**Decided** 2026-11-26, by the architect: asked "Replacing the hardware: the board fails after ten
+years and someone who never met the engineer has the cabinet and a new board. What is a backup?",
+"One file with a rebuild sheet (Recommended)", (b), against the file without the sheet and the
+project folder as the backup.
+
 ---
 
 ## Q237 - How each rule is proven by injecting faults on the bench
@@ -3705,6 +3795,11 @@ while real hardware alone is too slow to repeat.
 **Taken meanwhile**: nothing; the area is not built.
 
 **Reversible?** Yes: a catalogue grows entry by entry.
+
+**Decided** 2026-11-26, by the architect: asked "Proving the robustness rules: each holds only when
+a test shows the controller keeping it under the fault it guards against, the bench playing the
+plant on virtual time. How are they proven?", "Catalogue, soak, some real cuts (Recommended)", (b)
+with a few of (c)'s power cuts on real boards before a release.
 
 ---
 
@@ -3933,6 +4028,16 @@ headless, and leaving a switch as found changes nothing for anyone else.
 **Reversible?** Yes: the fingerprint is one function (`run::writes_fingerprint`) and one option
 (`--arm`); a prompt or another form of confirmation would call the same `RunOptions::confirming`.
 
+**Decided** 2026-11-26, by the architect, in two answers:
+
+- How the person confirms. Asked "With no screen yet, how does the person confirm? Taken meanwhile:
+  a fingerprint of the list.", "A fingerprint of the list (Recommended)", 1 (a), against an
+  interactive prompt and a flag with no list.
+
+- A switch found armed. Asked "When a comissionador run finds portal's write switch already armed by
+  another user of the same session, what does it do at its end? Taken meanwhile: leaves it as
+  found.", "Left as found (Recommended)", 2 (a). What was taken stands in both.
+
 ---
 
 ## Q281 - How does a Windows laptop send and hear raw frames?
@@ -3962,6 +4067,14 @@ built until it is ruled, and a target serves a Windows laptop already.
 
 **Reversible?** Yes: a Windows wire is one more implementation of the wire seam (C-139); nothing
 above it changes, whichever of (a) or (b) comes.
+
+**Decided** 2026-11-26, by the architect: asked "How does a Windows laptop send and hear raw frames
+for aranha (identify, name and address from the laptop)? Windows has no raw socket; Npcap's free
+licence allows the engineer to install it (up to five machines) and forbids bundling it. Taken
+meanwhile: no raw frames on Windows.", "The engineer installs Npcap", (a), against the
+recommendation (c): the engineer installs the free Npcap from its publisher, and aranha neither
+ships nor starts its installer and says so where it needs it. So the laptop's own path of G2 runs on
+Windows too, once its wire is built.
 
 ---
 
@@ -3996,6 +4109,12 @@ upgrade, and costs nothing a project does on purpose; (c) is right in the long r
 **Reversible?** Yes: the refusal is one function (`config::engine_reads_otherwise`); reading the
 forms as the engine does again would put round 24's `as_the_engine_reads` back in its place.
 
+**Decided** 2026-11-26, by the architect: asked "The host refuses two sessions that would open one
+database file, so it must know which file the engine opens for a path; DuckDB rewrites some paths
+(`~`, `file:`, `s3://`, a type before a colon), which no project writes on purpose. What does
+supervisão do with such a path? Taken meanwhile: refuses it.", "Refuse it by name (Recommended)",
+(b), against reading it as the engine does and handing it to portal. What was taken stands.
+
 ---
 
 ## Q321 - What a run's confirmation covers when the switch it arms lets the session's replies through
@@ -4024,3 +4143,9 @@ the plant, and the tests that rely on replies still run.
 
 **Reversible?** Yes: the replies are handed to the plant beside the arming (`LivePlant::with_arming`)
 and read by one method (`Plant::also_armed`); refusing instead is one branch of the binding.
+
+**Decided** 2026-11-26, by the architect: asked "Portal's write switch is the whole session's, so a
+run that arms it for its confirmed writes also lets the project's automatic replies reach the plant
+(a critic's run confirmed for 3 sends let 74 messages through). What does the confirmation cover?
+Taken meanwhile: both.", "Writes and replies (Recommended)", (a), against never arming a session
+that has replies and a narrower gate in portal. What was taken stands.
