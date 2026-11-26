@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(grammar)"
   ],
   "exitCode": 0,
-  "outputSha": "bfd6804ccf7b2432d042bc9b17b1e886511f44db71b086d9e56ecb1a926d89b3",
-  "outputTail": "        PASS [   0.011s] (41/53) veredas-comissionador::grammar the_reference_is_the_text_this_test_holds\n        PASS [   0.110s] (42/53) veredas-comissionador::grammar the_operator_limit_holds_in_patterns_ranges_parentheses_and_strings\n        PASS [   0.134s] (43/53) veredas-comissionador::grammar a_duration_is_read_exactly\n        PASS [   0.141s] (44/53) veredas-comissionador::grammar nesting_past_its_limits_is_named_not_a_crash\n        PASS [   0.261s] (45/53) veredas-comissionador::grammar the_inputs_a_call_leaves_out_are_one_problem_named_by_the_first_five\n        PASS [   0.357s] (46/53) veredas-comissionador::grammar a_duration_s_exponent_is_read_without_a_loop_over_it\n        PASS [   0.820s] (47/53) veredas-comissionador::grammar a_way_back_of_five_and_six_is_counted_right\n        PASS [   1.399s] (48/53) veredas-comissionador::grammar problems_sharing_one_line_are_placed_at_once\n        PASS [   1.539s] (49/53) veredas-comissionador::grammar a_test_using_a_large_function_file_is_checked_at_once\n        PASS [   2.193s] (50/53) veredas-comissionador::grammar a_long_call_chain_and_a_long_cycle_are_checked_at_once\n        PASS [   2.763s] (51/53) veredas-comissionador::grammar a_function_s_inputs_reads_and_calls_are_looked_up_at_once\n        PASS [   2.923s] (52/53) veredas-comissionador::grammar places_on_a_line_past_ascii_are_counted_in_any_order\n        PASS [   5.338s] (53/53) veredas-comissionador::grammar many_used_files_and_many_blocks_are_checked_in_linear_time\n────────────\n     Summary [   5.355s] 53 tests run: 53 passed, 0 skipped",
-  "ranAt": "2026-11-26T08:11:41.558Z",
-  "headCommit": "3ff1646e727a47a10a85ac3812d0cedb5a96c26f",
+  "outputSha": "7bc08f9991bb0003fdf1e942d3e86003a830b5210badfdab6d9c456e62b0b317",
+  "outputTail": "        PASS [   0.057s] (42/54) veredas-comissionador::grammar a_dotted_key_split_around_the_stamp_is_blanked_as_its_own_key\n        PASS [   0.171s] (43/54) veredas-comissionador::grammar nesting_past_its_limits_is_named_not_a_crash\n        PASS [   0.194s] (44/54) veredas-comissionador::grammar a_duration_is_read_exactly\n        PASS [   0.178s] (45/54) veredas-comissionador::grammar the_operator_limit_holds_in_patterns_ranges_parentheses_and_strings\n        PASS [   0.253s] (46/54) veredas-comissionador::grammar the_inputs_a_call_leaves_out_are_one_problem_named_by_the_first_five\n        PASS [   0.573s] (47/54) veredas-comissionador::grammar a_duration_s_exponent_is_read_without_a_loop_over_it\n        PASS [   0.940s] (48/54) veredas-comissionador::grammar a_way_back_of_five_and_six_is_counted_right\n        PASS [   2.218s] (49/54) veredas-comissionador::grammar problems_sharing_one_line_are_placed_at_once\n        PASS [   2.526s] (50/54) veredas-comissionador::grammar a_function_s_inputs_reads_and_calls_are_looked_up_at_once\n        PASS [   2.816s] (51/54) veredas-comissionador::grammar a_long_call_chain_and_a_long_cycle_are_checked_at_once\n        PASS [   3.103s] (52/54) veredas-comissionador::grammar a_test_using_a_large_function_file_is_checked_at_once\n        PASS [   5.854s] (53/54) veredas-comissionador::grammar places_on_a_line_past_ascii_are_counted_in_any_order\n        PASS [   6.794s] (54/54) veredas-comissionador::grammar many_used_files_and_many_blocks_are_checked_in_linear_time\n────────────\n     Summary [   6.814s] 54 tests run: 54 passed, 0 skipped",
+  "ranAt": "2026-11-26T22:25:49.330Z",
+  "headCommit": "ba0d20912897f7752d0ab7a899df9f54c6c3f70e",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/grammar.rs",
       "file": "crates/veredas-comissionador/tests/grammar.rs",
-      "fileSha": "5f33f6e33d2ad40ec7fd8758a076704acab81227902f117bad1bcb9ea43f6a4e"
+      "fileSha": "e59d795d2965772b84d98951ccd6ad88a54053074b86c2af6979dbf52a2b7d70"
     }
   ]
 }
