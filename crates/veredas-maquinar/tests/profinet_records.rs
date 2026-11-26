@@ -1307,3 +1307,208 @@ mod round_4 {
     }
 
 }
+
+/// C-116's fifth refute round: the critic's probes (`~/.cache/veredas/critic-c116-r5/probes`), kept
+/// as pins: the object and the interface version not judged; another subtype of visible bytes as its
+/// text; the tilde kept; an id of 255 characters whole; the configuration's edges of visible; the
+/// answer's frame to the asker's MAC; a mute leaving ARP and the read; an address of 0.0.0.0
+/// answering nothing; the neighbour's MAC its last frame's; no other I&M record.
+mod round_5 {
+    use std::net::Ipv4Addr;
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::dcp::{self, IpSuite};
+    use veredas_aranha::profinet::ether;
+    use veredas_aranha::profinet::lldp::{ChassisId, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::profinet::record::INDEX_IM0;
+    use veredas_aranha::profinet::rpc::{self, ByteOrder, PNIO_PORT, PnioStatus, ReadRequest, Uuid};
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::*;
+
+    use super::round_2::{DEVICE, config, heard, host_address, lldp_link, peer, port_data, read_req, send_pdu, socket, wait};
+
+    #[test]
+    fn neither_the_object_nor_the_interface_version_is_judged() {
+        netns::isolated("round_5::neither_the_object_nor_the_interface_version_is_judged", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            let mut got = Vec::new();
+            for (n, object) in [Uuid::NIL, Uuid::pnio_object(0, 9, 7), Uuid::pnio_object(1, 1, 1), Uuid([0x5A; 16])].into_iter().enumerate() {
+                let seq = n as u16 + 1;
+                let pdu = rpc::read_implicit(ByteOrder::Little, object, Uuid([seq as u8; 16]), u32::from(seq), &ReadRequest::implicit(seq, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+                got.push((format!("object {object}"), send_pdu(&s, &pdu).map(|(_, a)| a.status)));
+            }
+            let mut pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([9; 16]), 9, &ReadRequest::implicit(9, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+            pdu.interface_version = 2;
+            got.push(("interface version 2".into(), send_pdu(&s, &pdu).map(|(_, a)| a.status)));
+            assert!(got.iter().all(|(_, r)| *r == Some(PnioStatus::OK)), "{got:?}");
+            assert_eq!(got.len(), 5);
+        });
+    }
+
+    #[test]
+    fn another_subtype_of_visible_bytes_reads_as_its_text() {
+        netns::isolated("round_5::another_subtype_of_visible_bytes_reads_as_its_text", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            heard(&raw, &dev, raw.mac(), ChassisId::Other { subtype: 8, data: b"rack-7".to_vec() }, PortId::Other { subtype: 6, data: b"circuit-1".to_vec() }, 120);
+            assert_eq!(peer(&s, 1), ("rack-7".into(), "circuit-1".into()));
+        });
+    }
+
+    #[test]
+    fn a_tilde_and_a_space_are_visible_and_kept() {
+        netns::isolated("round_5::a_tilde_and_a_space_are_visible_and_kept", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            heard(&raw, &dev, raw.mac(), ChassisId::Local { id: "sw~1 a".into() }, PortId::IfName { name: "~Gi1".into() }, 120);
+            assert_eq!(peer(&s, 1), ("sw~1 a".into(), "~Gi1".into()));
+        });
+    }
+
+    #[test]
+    fn an_id_of_255_characters_is_kept_whole() {
+        netns::isolated("round_5::an_id_of_255_characters_is_kept_whole", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            heard(&raw, &dev, raw.mac(), ChassisId::Local { id: "a".repeat(255) }, PortId::IfName { name: "p".repeat(255) }, 120);
+            assert_eq!(peer(&s, 1), ("a".repeat(255), "p".repeat(255)));
+        });
+    }
+
+    #[test]
+    fn a_del_or_a_control_byte_is_refused_in_the_order_id_and_the_serial_number() {
+        let refused = |key: &str, value: &str| {
+            let mut cfg = ProfinetConfig::new("b0");
+            match key {
+                "order_id" => cfg.order_id = value.into(),
+                _ => cfg.serial_number = value.into(),
+            }
+            validate(&cfg).err().map(|e| e.to_string())
+        };
+        for v in ["a\u{7f}b", "a\tb", "a\u{0}b"] {
+            assert_eq!(refused("order_id", v), Some(format!("profinet.order_id `{v}`: 1 to 20 visible characters")));
+        }
+        for v in ["s\u{7f}", "s\u{0}"] {
+            assert_eq!(refused("serial_number", v), Some(format!("profinet.serial_number `{v}`: up to 16 visible characters")));
+        }
+        assert_eq!((refused("order_id", "~ ~"), refused("serial_number", "~ ~")), (None, None));
+    }
+
+    #[test]
+    fn the_answer_s_frame_goes_to_the_asker_s_mac_from_the_device_s() {
+        netns::isolated("round_5::the_answer_s_frame_goes_to_the_asker_s_mac_from_the_device_s", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = RawLink::open_with("a0", Options { ethertype: Some(0x0800), promiscuous: false, outgoing: false }).unwrap();
+            let s = socket();
+            assert!(read_req(&s, &ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160, Uuid([1; 16])).is_some());
+            let mut seen = Vec::new();
+            while let Ok(Some(r)) = raw.recv(Duration::from_millis(200)) {
+                if r.bytes.len() > 42 && r.bytes[23] == 17 {
+                    seen.push((Mac(r.bytes[0..6].try_into().unwrap()), Mac(r.bytes[6..12].try_into().unwrap())));
+                }
+            }
+            assert_eq!(seen, vec![(raw.mac(), dev.mac)], "(to, from) of each UDP frame the device sent");
+        });
+    }
+
+    #[test]
+    fn a_mute_leaves_arp_and_the_read() {
+        netns::isolated("round_5::a_mute_leaves_arp_and_the_read", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            dev.set_muted(true);
+            let raw = RawLink::open_with("a0", Options { ethertype: Some(0x0806), promiscuous: false, outgoing: false }).unwrap();
+            let me = raw.mac();
+            let mut ask = vec![0xFF; 6];
+            ask.extend_from_slice(&me.0);
+            ask.extend_from_slice(&[0x08, 0x06, 0, 1, 0x08, 0, 6, 4, 0, 1]);
+            ask.extend_from_slice(&me.0);
+            ask.extend_from_slice(&[192, 168, 0, 1]);
+            ask.extend_from_slice(&[0; 6]);
+            ask.extend_from_slice(&[192, 168, 0, 10]);
+            ask.resize(60, 0);
+            raw.send(&ask).unwrap();
+            let mut replies = 0;
+            let until = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < until {
+                if let Ok(Some(r)) = raw.recv(Duration::from_millis(50))
+                    && r.bytes.len() >= 42
+                    && r.bytes[20..22] == [0, 2]
+                {
+                    replies += 1;
+                }
+            }
+            assert_eq!((replies, dev.status().arp_answered), (1, 1), "muted: ARP answered and counted once");
+            let s = socket();
+            let mut answered = 0;
+            for seq in 1..=20u16 {
+                dev.set_muted(true);
+                dev.set_muted(false);
+                let pdu = rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([seq as u8; 16]), u32::from(seq), &ReadRequest::implicit(seq, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap();
+                s.send_to(&pdu.encode().unwrap(), ("192.168.0.10", PNIO_PORT)).unwrap();
+                dev.set_muted(true);
+                dev.set_muted(false);
+                let mut buf = [0u8; 4096];
+                if s.recv_from(&mut buf).is_ok() {
+                    answered += 1;
+                }
+            }
+            assert_eq!((answered, dev.status().reads), (20, 20), "reads across mutes set and lifted at once");
+        });
+    }
+
+    #[test]
+    fn an_address_set_to_0_0_0_0_by_dcp_answers_no_read() {
+        netns::isolated("round_5::an_address_set_to_0_0_0_0_by_dcp_answers_no_read", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            assert!(read_req(&s, &ReadRequest::implicit(1, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160, Uuid([1; 16])).is_some());
+            let dcp_link = RawLink::open_with("a0", Options { ethertype: Some(ether::ETHERTYPE_PROFINET), promiscuous: false, outgoing: false }).unwrap();
+            let none = IpSuite { ip: Ipv4Addr::UNSPECIFIED, mask: Ipv4Addr::UNSPECIFIED, gateway: Ipv4Addr::UNSPECIFIED };
+            dcp_link.send(&dcp::set_ip_request(dev.mac, dcp_link.mac(), 4, &none, false).unwrap()).unwrap();
+            assert!(wait(Duration::from_secs(2), || dev.identity().ip.map(|s| s.ip) == Some(Ipv4Addr::UNSPECIFIED)));
+            // The kernel's ARP entry still holds the device's MAC: the datagram reaches it.
+            assert!(read_req(&s, &ReadRequest::implicit(2, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160, Uuid([2; 16])).is_none());
+            assert_eq!(dev.status().reads, 1);
+        });
+    }
+
+    #[test]
+    fn the_neighbour_s_mac_is_its_last_frame_s() {
+        netns::isolated("round_5::the_neighbour_s_mac_is_its_last_frame_s", &[("a0", "b0")], || {
+            host_address();
+            let dev = start(&config(DEVICE)).unwrap();
+            let (raw, s) = (lldp_link(), socket());
+            heard(&raw, &dev, raw.mac(), ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 120);
+            assert_eq!(port_data(&s, 1).1.unwrap().peers[0].mac, raw.mac());
+            let other = Mac([0x02, 0xBB, 0, 0, 0, 0x01]);
+            heard(&raw, &dev, other, ChassisId::Local { id: "switch-1".into() }, PortId::Local { id: "port-003".into() }, 120);
+            assert_eq!(port_data(&s, 2).1.unwrap().peers[0].mac, other);
+        });
+    }
+
+    #[test]
+    fn no_other_i_m_record_is_read() {
+        netns::isolated("round_5::no_other_i_m_record_is_read", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = socket();
+            let mut got = Vec::new();
+            for (n, index) in [0xAFF1u16, 0xAFF2, 0xAFF3, 0xAFF4].into_iter().enumerate() {
+                let seq = n as u16 + 1;
+                let (_, a) = read_req(&s, &ReadRequest::implicit(seq, 0, SUBSLOT_DAP, index, 4096), 4160, Uuid([seq as u8; 16])).unwrap();
+                got.push((index, a.status.to_bytes(), a.data.len()));
+            }
+            assert_eq!(got, [0xAFF1u16, 0xAFF2, 0xAFF3, 0xAFF4].map(|i| (i, [0xDE, 0x80, 0xB0, 0x00], 64)));
+        });
+    }
+}
