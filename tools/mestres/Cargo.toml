@@ -4,6 +4,9 @@ name = "mestres"
 version = "0.1.0"
 edition.workspace = true
 publish = false
+# The architect, 2026-11-25 (docs/questions.md Q35): every crate but Oficina states this expression
+# and carries the two texts beside its manifest, the copyright holder thebdr.
+license = "MIT OR Apache-2.0"
 description = "Core's fieldbus masters met against the bench's devices (docs/core-plan.md, \"The fieldbus masters\")"
 
 # Repository tooling, not a component, and test-only (docs/questions.md Q101, option taken; Q34):

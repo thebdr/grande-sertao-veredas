@@ -4,6 +4,9 @@ name = "veredas-core"
 version = "2.0.0-alpha.1"
 edition.workspace = true
 publish = false
+# The architect, 2026-11-25 (docs/questions.md Q35): every crate but Oficina states this expression
+# and carries the two texts beside its manifest, the copyright holder thebdr.
+license = "MIT OR Apache-2.0"
 description = "The foundation of Veredas 2: the shared types and content-agnostic protocol layers every component speaks"
 
 # A library, never an executable (docs/core-plan.md, tests/foundation.rs): no [[bin]], no
