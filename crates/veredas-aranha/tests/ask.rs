@@ -19,6 +19,7 @@ use veredas_aranha::profinet::dcp::{self, DeviceIdentity, Filter, IpSuite, Servi
 use veredas_aranha::profinet::ether::{self, ETHERTYPE_PROFINET};
 use veredas_aranha::profinet::mac::Mac;
 use veredas_aranha::wire::hub::{Hub, HubPort};
+use veredas_aranha::wire::pcap::Replay;
 use veredas_aranha::wire::{Frame, Wire, WireError};
 
 const DEV: Mac = Mac([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
@@ -274,6 +275,80 @@ impl Wire for Refusing {
 }
 
 /// A wire whose every send takes two seconds.
+/// A wire whose every send takes two seconds, counting the frames it is handed.
+struct CountingStall {
+    handed: Arc<std::sync::atomic::AtomicUsize>,
+}
+impl Wire for CountingStall {
+    fn name(&self) -> &str {
+        "stalling"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, _: &[u8]) -> Result<(), WireError> {
+        self.handed.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_secs(2));
+        Ok(())
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
+/// A wire that, handed its first frame, takes it until `panic_after` has passed and then panics,
+/// saying when it began.
+struct PanicsLate {
+    name: String,
+    began: Arc<std::sync::Mutex<Option<Instant>>>,
+    panic_after: Duration,
+}
+impl Wire for PanicsLate {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, _: &[u8]) -> Result<(), WireError> {
+        let start = Instant::now();
+        *self.began.lock().unwrap() = Some(start);
+        std::thread::sleep(self.panic_after);
+        panic!("the card fell out")
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        std::thread::sleep(timeout);
+        Ok(None)
+    }
+}
+
+/// A wire that answers the Identify it was last handed on every read, at once: a device flooding.
+struct Answering {
+    xid: Option<u32>,
+}
+impl Wire for Answering {
+    fn name(&self) -> &str {
+        "answering"
+    }
+    fn mac(&self) -> Option<Mac> {
+        Some(LAN0)
+    }
+    fn send(&mut self, frame: &[u8]) -> Result<(), WireError> {
+        self.xid = Some(dcp::decode(ether::parse(frame).unwrap().payload).unwrap().xid);
+        Ok(())
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Option<Frame>, WireError> {
+        match self.xid {
+            Some(xid) => Ok(Some(Frame::new(1, "answering", dcp::identify_response(LAN0, DEV, xid, &identity()).unwrap()))),
+            None => {
+                std::thread::sleep(timeout);
+                Ok(None)
+            }
+        }
+    }
+}
+
 struct Stalling;
 impl Wire for Stalling {
     fn name(&self) -> &str {
@@ -428,14 +503,16 @@ fn asking_is_refused_where_it_cannot_be_heard_sent_or_bounded() {
     let start = Instant::now();
     assert_eq!(msg(ask::identify(&slow, "stalling", &Identify::default())), "\"stalling\"'s wire was still taking the Identify past its turn, 1.05s: it may yet go, and no answer to it is this ask's");
     assert!(start.elapsed() >= Duration::from_millis(1050));
-    let behind = Listener::start(vec![Box::new(Stalling)], Options::default()).unwrap();
+    let handed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let behind = Listener::start(vec![Box::new(CountingStall { handed: Arc::clone(&handed) })], Options::default()).unwrap();
+    let begun = Instant::now();
     behind.send("stalling", frame.clone()).unwrap();
     assert!(behind.until(Duration::from_secs(5), |s| s.stats.interfaces["stalling"].queued == 0));
     assert_eq!(msg(ask::identify(&behind, "stalling", &Identify::default())), "\"stalling\" did not send the Identify within its turn, 1.05s: it is withdrawn and never sent");
-    assert!(behind.until(Duration::from_secs(5), |s| s.stats.interfaces["stalling"].sent == 1));
-    std::thread::sleep(Duration::from_millis(300));
+    // (Past the time a request left queued would have gone: two sends of two seconds each.)
+    std::thread::sleep(Duration::from_millis(4500).saturating_sub(begun.elapsed()));
     let i = behind.interface("stalling").unwrap();
-    assert_eq!((i.sent, i.queued, i.withdrawn), (1, 0, 1));
+    assert_eq!((i.sent, i.queued, i.withdrawn, handed.load(Ordering::SeqCst)), (1, 0, 1, 1));
     // A worker that panics as it hands the request to its wire: said ended, with the panic, at once.
     let panicking = Listener::start(vec![Box::new(PanicsOnSend)], Options::default()).unwrap();
     let start = Instant::now();
@@ -558,6 +635,7 @@ fn the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_se
             // (Read against what the test asked and what the bench file states, not through the
             // codecs the bench and the listener share.)
             let p = "pn_dcp";
+            let mut latest: Option<u32> = None;
             for (k, d) in frames.iter().zip(&dissected) {
                 assert_eq!(d.complaints(), Vec::<String>::new());
                 if !d.has("pn_dcp") {
@@ -570,12 +648,31 @@ fn the_bench_s_devices_answer_an_identify_asked_through_the_listener_on_their_se
                     requests += 1;
                     assert_eq!((d.one("eth", "eth.src"), d.one("eth", "eth.dst")), (here.to_string(), "01:0e:cf:00:00:00".to_string()));
                     assert_eq!((d.one(p, "pn_dcp.xid"), d.one(p, "pn_dcp.response_delay")), (xid.to_string(), "1".to_string()));
+                    // An Identify under its request's frame id, its one filter block as asked.
+                    assert_eq!((d.one("pn_rt", "pn_rt.frame_id"), d.one(p, "pn_dcp.service_id")), ("65278".to_string(), "5".to_string()));
                     match filter {
-                        Filter::All => assert_eq!(d.one(p, "pn_dcp.option"), "255"),
-                        Filter::Name(n) => assert_eq!(&d.one(p, "pn_dcp.suboption_device_nameofstation"), n),
-                        Filter::Alias(a) => assert_eq!(&d.one(p, "pn_dcp.suboption_device_aliasname"), a),
+                        Filter::All => assert_eq!(d.values(p, "pn_dcp.option"), ["255"]),
+                        Filter::Name(n) => {
+                            assert_eq!(&d.one(p, "pn_dcp.suboption_device_nameofstation"), n);
+                            assert_eq!(d.values(p, "pn_dcp.option"), ["2"]);
+                        }
+                        Filter::Alias(a) => {
+                            assert_eq!(&d.one(p, "pn_dcp.suboption_device_aliasname"), a);
+                            assert_eq!(d.values(p, "pn_dcp.option"), ["2"]);
+                        }
                     }
+                    latest = Some(*xid);
                 } else {
+                    // A Hello under the Hello's frame id; an answer under the answer's, to this
+                    // machine's MAC under the latest request's id.
+                    match d.one(p, "pn_dcp.service_id").as_str() {
+                        "6" => assert_eq!(d.one("pn_rt", "pn_rt.frame_id"), "65276"),
+                        "5" => {
+                            assert_eq!((d.one("pn_rt", "pn_rt.frame_id"), d.one("eth", "eth.dst")), ("65279".to_string(), here.to_string()));
+                            assert_eq!(Some(d.one(p, "pn_dcp.xid")), latest.map(|x| x.to_string()));
+                        }
+                        other => panic!("DCP service {other} from the bench"),
+                    }
                     // Each answer as the bench file states it.
                     let src = d.one("eth", "eth.src");
                     let ip = if src == announced.to_string() { "192.168.0.10" } else { assert_eq!(src, silent.to_string()); "192.168.0.11" };
@@ -651,4 +748,58 @@ fn an_answer_a_capture_cut_is_not_counted() {
     let asked = ask::identify(&l, "cut", &quick(Filter::All)).unwrap();
     assert_eq!((asked.answers.len(), asked.others), (0, 0));
     assert!(l.frame(asked.request + 1).unwrap().frame.is_cut());
+}
+
+#[test]
+fn a_request_whose_worker_ends_as_its_turn_runs_out_is_never_said_still_being_taken() {
+    // A filler of 200 000 kept frames, so a reader of every kept frame holds the listener a while;
+    // six wires that panic 2 ms before an asker's turn runs out, a frame of their own in hand.
+    let filler: Vec<Frame> = (0..200_000u64).map(|i| Frame::new(i, "filler", vec![0; 60])).collect();
+    let begun: Vec<_> = (0..6).map(|_| Arc::new(std::sync::Mutex::new(None))).collect();
+    let mut wires: Vec<Box<dyn Wire>> = vec![Box::new(Replay::new("filler", filler))];
+    for (k, b) in begun.iter().enumerate() {
+        wires.push(Box::new(PanicsLate { name: format!("race{k}"), began: Arc::clone(b), panic_after: Duration::from_millis(1048) }));
+    }
+    let l = Arc::new(Listener::start(wires, Options { max_frames: 300_000, ..Options::default() }).unwrap());
+    assert!(l.until(Duration::from_secs(60), |s| s.stats.interfaces["filler"].ended.is_some()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let reader = {
+        let (l, stop) = (Arc::clone(&l), Arc::clone(&stop));
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                let _ = l.frames();
+            }
+        })
+    };
+    let frame = dcp::identify_request(LAN0, 1, 1, &Filter::All).unwrap();
+    for (k, b) in begun.iter().enumerate() {
+        let iface = format!("race{k}");
+        l.send(&iface, frame.clone()).unwrap();
+        let wait = Instant::now();
+        while b.lock().unwrap().is_none() {
+            assert!(wait.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Withdrawn (never sent) or ended (never sent): never said still being taken by its wire.
+        match ask::identify(&l, &iface, &Identify::default()) {
+            Err(AskError::Ended { reason, .. }) => assert_eq!(reason, "its worker panicked: the card fell out"),
+            Err(AskError::NotSent { .. }) => {}
+            other => panic!("{iface}: {other:?}"),
+        }
+        let i = l.interface(&iface).unwrap();
+        assert_eq!(i.sent, 0, "{iface}");
+    }
+    stop.store(true, Ordering::SeqCst);
+    reader.join().unwrap();
+}
+
+#[test]
+fn frames_let_go_while_a_wire_floods_without_a_pause_are_counted_at_the_moment_they_are_read() {
+    let l = Listener::start(vec![Box::new(Answering { xid: None })], Options { max_frames: 64, ..Options::default() }).unwrap();
+    for _ in 0..20 {
+        let asked = ask::identify(&l, "answering", &Identify { filter: Filter::All, response_delay: 1, wait: Duration::from_millis(20) }).unwrap();
+        let first = asked.answers.first().expect("answers kept");
+        assert_eq!(first.frame, asked.request + 1 + asked.lost, "{} lost", asked.lost);
+        assert!(asked.lost > 0);
+    }
 }

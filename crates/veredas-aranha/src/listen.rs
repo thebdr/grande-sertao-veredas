@@ -398,10 +398,11 @@ fn work(wire: Box<dyn Wire>, s: Arc<Shared>) {
         i.unsent += left.len() as u64 + u64::from(in_flight.is_some());
         i.queued = 0;
     }
-    drop(st);
+    // Told before the lock goes, as a send's outcome is.
     for tx in left.into_iter().filter_map(|(_, _, tell)| tell).chain(in_flight.flatten()) {
         let _ = tx.send(Outcome::Unsent(why.clone()));
     }
+    drop(st);
 }
 
 /// Hear and send until stopped (`None`) or the wire ends (why).
@@ -449,12 +450,12 @@ fn run(mut wire: Box<dyn Wire>, s: &Shared, iface: &str) -> Option<String> {
                         Outcome::Refused(e.to_string())
                     }
                 };
-                let tell = st.in_flight.remove(&iface).flatten();
-                drop(st);
-                if let Some(tx) = tell {
-                    // An asker that stopped waiting is no fault of the frame's.
+                // Told before the lock goes, so whoever finds the frame gone from the queue finds
+                // what became of it too. An asker that stopped waiting is no fault of the frame's.
+                if let Some(tx) = st.in_flight.remove(&iface).flatten() {
                     let _ = tx.send(outcome);
                 }
+                drop(st);
             }
         }
         // Hear, waiting no longer than the poll, nor past the next send's turn when one is queued.

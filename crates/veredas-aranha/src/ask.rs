@@ -121,12 +121,18 @@ pub fn identify(listener: &Listener, iface: &str, ask: &Identify) -> Result<Aske
     // and a second more; past it, taken back if it still waits.
     let gap = Duration::from_secs(1) / listener.options().rate;
     let waited = gap.saturating_mul(u32::try_from(tracked.ahead + 1).unwrap_or(u32::MAX)).saturating_add(Duration::from_secs(1));
-    let (index, sent_ns) = match tracked.told.recv_timeout(waited) {
-        Ok(Outcome::Sent { index, at_ns }) => (index, at_ns),
-        Ok(Outcome::Refused(reason)) => return Err(AskError::Refused { iface: iface.to_string(), reason }),
-        Ok(Outcome::Unsent(reason)) => return Err(AskError::Ended { iface: iface.to_string(), reason }),
+    let told = match tracked.told.recv_timeout(waited) {
+        Ok(outcome) => Some(outcome),
         Err(_) if listener.withdraw(iface, tracked.id) => return Err(AskError::NotSent { iface: iface.to_string(), waited }),
-        Err(_) => return Err(AskError::Stalled { iface: iface.to_string(), waited }),
+        // Past its turn and no longer waiting: its worker took it, and may have told what became
+        // of it between the wait and the withdrawal (sent, refused, or never sent as it ended).
+        Err(_) => tracked.told.try_recv().ok(),
+    };
+    let (index, sent_ns) = match told {
+        Some(Outcome::Sent { index, at_ns }) => (index, at_ns),
+        Some(Outcome::Refused(reason)) => return Err(AskError::Refused { iface: iface.to_string(), reason }),
+        Some(Outcome::Unsent(reason)) => return Err(AskError::Ended { iface: iface.to_string(), reason }),
+        None => return Err(AskError::Stalled { iface: iface.to_string(), waited }),
     };
 
     // The devices' spread, and the wait past it.
