@@ -10,15 +10,15 @@
     "features"
   ],
   "exitCode": 0,
-  "outputSha": "e726747a991a0a2c757c7641eac91985a5388b99e5145e0e241e828e543ecbf3",
-  "outputTail": "test every_feature_gate_is_where_it_belongs ... ok\ntest a_consumer_without_the_default_features_reads_stamps_states_and_draws ... ok\ntest without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone ... ok\ntest the_library_compiles_without_its_default_features_and_with_the_masters_alone ... ok\ntest each_form_holds_the_layers_it_promises ... ok\ntest the_compiler_sees_each_layer_where_its_feature_puts_it has been running for over 60 seconds\ntest the_slim_layer_behaves_the_same_in_every_form has been running for over 60 seconds\ntest the_slim_layer_behaves_the_same_in_every_form ... ok\ntest the_compiler_sees_each_layer_where_its_feature_puts_it ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 174.80s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s\n     Running tests/features.rs (target/debug/build/veredas-core/78e1d104e4f97014/out/features-78e1d104e4f97014)",
-  "ranAt": "2026-11-25T09:04:53.716Z",
-  "headCommit": "3b483731e2236073201fce2d25292a95b8e10182",
+  "outputSha": "32b002af39205ecd8f9872c7667f1130ed8499fba0305b4302e7c1fdbced8d5b",
+  "outputTail": "   Compiling spki v0.7.3\n   Compiling tokio-modbus v0.17.0\n   Compiling pkcs8 v0.10.2\n   Compiling x509-cert v0.2.5\n   Compiling pkcs1 v0.7.5\n   Compiling rsa v0.9.10\n   Compiling async-opcua-nodes v0.19.0\n   Compiling async-opcua-crypto v0.19.0\n   Compiling async-opcua-core-namespace v0.19.0\n   Compiling async-opcua-core v0.19.0\n   Compiling async-opcua-client v0.19.0\n   Compiling async-opcua-server v0.19.0\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 50.37s\n     Running tests/features.rs (target/debug/build/veredas-core/78e1d104e4f97014/out/features-78e1d104e4f97014)",
+  "ranAt": "2026-11-26T06:57:07.032Z",
+  "headCommit": "2c317e4ccbf8cec328ec32fe9327831105e10af1",
   "tests": [
     {
       "name": "crates/veredas-core/tests/features.rs",
       "file": "crates/veredas-core/tests/features.rs",
-      "fileSha": "499aa13e2cc1648185200606950eff97f8cfca93439e66a60765103a2a0ed269"
+      "fileSha": "dfc3940c660a0cc82af8dabdc8f9a866245fce00f2c611baa1894669f54f142b"
     }
   ]
 }
