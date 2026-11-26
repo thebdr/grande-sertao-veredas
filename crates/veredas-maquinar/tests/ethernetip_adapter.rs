@@ -2389,3 +2389,419 @@ mod round_6 {
         });
     }
 }
+
+
+/// C-111's seventh refute round: the critic's probes (`~/.cache/veredas/critic-c111-r7/probes`),
+/// kept as pins (on the machine's lock: most count a connection's timeout or its RPI): a multiplier
+/// of 0's timeout bounded from above and one past 7 taken as 7; idle frames and repeated counts
+/// keeping a connection open, another host's and another size's not; the consumed count the frames
+/// taken alone; a failed send opened first leaving the other connection's frames; two bools in one
+/// byte; every point type little-endian on the wire; a Logix-order path's configuration data.
+mod round_7 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream, UdpSocket};
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::ethernetip::*;
+
+    fn config(text: &str) -> EnipConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn wait(within: Duration, mut what: impl FnMut() -> bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            if what() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        what()
+    }
+
+    fn device(host: u8) -> String {
+        format!(
+            "bind = \"127.0.0.{host}\"\nport = 0\nio_port = 0\n\
+             identity = {{ vendor_id = 9, device_type = 7, product_code = 3, revision = \"2.5\", serial = 305419896, product_name = \"bench io\" }}\n\
+             assemblies = [ {{ instance = 100, size = 8 }}, {{ instance = 150, size = 4 }}, {{ instance = 151, size = 2 }} ]\n\
+             connections = [ {{ config = 151, output = 150, input = 100 }} ]\n"
+        )
+    }
+
+    fn frame(command: u16, session: u32, body: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&command.to_le_bytes());
+        f.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        f.extend_from_slice(&session.to_le_bytes());
+        f.extend_from_slice(&0u32.to_le_bytes());
+        f.extend_from_slice(b"round-7!");
+        f.extend_from_slice(&0u32.to_le_bytes());
+        f.extend_from_slice(body);
+        f
+    }
+
+    fn read_frame(s: &mut TcpStream) -> Vec<u8> {
+        let mut h = [0u8; 24];
+        s.read_exact(&mut h).unwrap();
+        let len = u16::from_le_bytes([h[2], h[3]]) as usize;
+        let mut b = vec![0u8; len];
+        s.read_exact(&mut b).unwrap();
+        [h.to_vec(), b].concat()
+    }
+
+    fn rr_body(request: &[u8], extra: &[(u16, Vec<u8>)]) -> Vec<u8> {
+        let mut b = vec![0, 0, 0, 0, 5, 0];
+        b.extend_from_slice(&(2 + extra.len() as u16).to_le_bytes());
+        b.extend_from_slice(&[0, 0, 0, 0]);
+        b.extend_from_slice(&0x00B2u16.to_le_bytes());
+        b.extend_from_slice(&(request.len() as u16).to_le_bytes());
+        b.extend_from_slice(request);
+        for (kind, data) in extra {
+            b.extend_from_slice(&kind.to_le_bytes());
+            b.extend_from_slice(&(data.len() as u16).to_le_bytes());
+            b.extend_from_slice(data);
+        }
+        b
+    }
+
+    fn items(reply: &[u8]) -> Vec<(u16, Vec<u8>)> {
+        let b = &reply[24 + 6..];
+        let n = u16::from_le_bytes([b[0], b[1]]) as usize;
+        let mut at = 2;
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let kind = u16::from_le_bytes([b[at], b[at + 1]]);
+            let len = u16::from_le_bytes([b[at + 2], b[at + 3]]) as usize;
+            out.push((kind, b[at + 4..at + 4 + len].to_vec()));
+            at += 4 + len;
+        }
+        out
+    }
+
+    struct Conn {
+        s: TcpStream,
+        session: u32,
+    }
+
+    impl Conn {
+        fn open(addr: SocketAddr) -> Conn {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.set_nodelay(true).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            s.write_all(&frame(0x65, 0, &[1, 0, 0, 0])).unwrap();
+            let r = read_frame(&mut s);
+            assert_eq!(&r[8..12], &[0, 0, 0, 0]);
+            let session = u32::from_le_bytes(r[4..8].try_into().unwrap());
+            Conn { s, session }
+        }
+        fn cip_with(&mut self, request: &[u8], extra: &[(u16, Vec<u8>)]) -> (Vec<u8>, Vec<(u16, Vec<u8>)>) {
+            self.s.write_all(&frame(0x6F, self.session, &rr_body(request, extra))).unwrap();
+            let r = read_frame(&mut self.s);
+            assert_eq!(&r[8..12], &[0, 0, 0, 0], "SendRRData status {r:02X?}");
+            let it = items(&r);
+            (it.iter().find(|i| i.0 == 0x00B2).unwrap().1.clone(), it)
+        }
+        fn cip(&mut self, request: &[u8]) -> Vec<u8> {
+            self.cip_with(request, &[]).0
+        }
+    }
+
+    fn sockaddr_item(udp: &UdpSocket) -> (u16, Vec<u8>) {
+        let SocketAddr::V4(me) = udp.local_addr().unwrap() else { panic!() };
+        let mut d = 2u16.to_be_bytes().to_vec();
+        d.extend_from_slice(&me.port().to_be_bytes());
+        d.extend_from_slice(&me.ip().octets());
+        d.extend_from_slice(&[0; 8]);
+        (0x8001, d)
+    }
+
+    fn o_to_t_addr(items: &[(u16, Vec<u8>)]) -> SocketAddr {
+        let d = &items.iter().find(|i| i.0 == 0x8000).expect("an O->T item").1;
+        SocketAddr::from(([d[4], d[5], d[6], d[7]], u16::from_be_bytes([d[2], d[3]])))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fo_raw(serial: u16, vendor: u16, originator: u32, rpi: u32, multiplier: u8, o_size: u16, t_size: u16, path: &[u8]) -> Vec<u8> {
+        let mut b = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&(0x8000_0000u32 | u32::from(serial)).to_le_bytes());
+        b.extend_from_slice(&serial.to_le_bytes());
+        b.extend_from_slice(&vendor.to_le_bytes());
+        b.extend_from_slice(&originator.to_le_bytes());
+        b.extend_from_slice(&[multiplier, 0, 0, 0]);
+        b.extend_from_slice(&rpi.to_le_bytes());
+        b.extend_from_slice(&((2u16 << 13) | o_size).to_le_bytes());
+        b.extend_from_slice(&rpi.to_le_bytes());
+        b.extend_from_slice(&((2u16 << 13) | t_size).to_le_bytes());
+        b.push(0x01);
+        b.push((path.len() / 2) as u8);
+        b.extend_from_slice(path);
+        b
+    }
+
+    fn class1(connection: u32, sequence: u32, count: u16, run: Option<bool>, data: &[u8]) -> Vec<u8> {
+        let mut payload = count.to_le_bytes().to_vec();
+        if let Some(r) = run {
+            payload.extend_from_slice(&(r as u32).to_le_bytes());
+        }
+        payload.extend_from_slice(data);
+        let mut f = 2u16.to_le_bytes().to_vec();
+        f.extend_from_slice(&0x8002u16.to_le_bytes());
+        f.extend_from_slice(&8u16.to_le_bytes());
+        f.extend_from_slice(&connection.to_le_bytes());
+        f.extend_from_slice(&sequence.to_le_bytes());
+        f.extend_from_slice(&0x00B1u16.to_le_bytes());
+        f.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+        f.extend_from_slice(&payload);
+        f
+    }
+
+    const PATH: [u8; 8] = [0x20, 0x04, 0x24, 151, 0x2C, 150, 0x2C, 100];
+
+    /// An open connection of `device(host)` at `rpi` and `multiplier`: the session, the originator's
+    /// socket, the adapter's O->T id and where it consumes.
+    fn opened(adapter: &EnipHandle, rpi: u32, multiplier: u8) -> (Conn, UdpSocket, u32, SocketAddr) {
+        let mut c = Conn::open(adapter.addr);
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (r, it) = c.cip_with(&fo_raw(0x0101, 0x00FE, 1, rpi, multiplier, 4 + 6, 8 + 2, &PATH), &[sockaddr_item(&udp)]);
+        assert_eq!(r[2], 0, "{r:02X?}");
+        (c, udp, u32::from_le_bytes(r[4..8].try_into().unwrap()), o_to_t_addr(&it))
+    }
+
+    /// The multiplier 0 (x4, core's scanner's default and the commonest setting): a 50 ms connection
+    /// whose originator falls silent is closed 200 ms after its last frame, not 400 (x8).
+    #[test]
+    fn a_multiplier_of_0_closes_four_rpis_after_the_last_frame() {
+        let adapter = start(&config(&device(231))).unwrap();
+        let (_c, udp, id, to) = opened(&adapter, 50_000, 0);
+        let mut last = Instant::now();
+        for i in 1..=5u32 {
+            udp.send_to(&class1(id, i, i as u16, Some(true), &[0; 4]), to).unwrap();
+            last = Instant::now();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(wait(Duration::from_secs(3), || adapter.status().timed_out == 1));
+        let after = last.elapsed();
+        assert!(after >= Duration::from_millis(200) && after < Duration::from_millis(350), "{after:?}");
+    }
+
+    /// Idle frames are an originator's own frames: a connection fed idle frames at its RPI is not
+    /// "silent" and stays open.
+    #[test]
+    fn idle_frames_keep_the_connection_open() {
+        let adapter = start(&config(&device(232))).unwrap();
+        let (_c, udp, id, to) = opened(&adapter, 20_000, 0);
+        udp.send_to(&class1(id, 1, 1, Some(true), &[1, 0, 0, 0]), to).unwrap();
+        let t = Instant::now();
+        let mut i = 2u32;
+        while t.elapsed() < Duration::from_millis(600) {
+            std::thread::sleep(Duration::from_millis(20));
+            udp.send_to(&class1(id, i, i as u16, Some(false), &[0; 4]), to).unwrap();
+            i += 1;
+        }
+        let s = adapter.status();
+        assert_eq!((s.timed_out, s.connections.len()), (0, 1));
+    }
+
+    /// Frames whose 16-bit count repeats (no new data, a newer 32-bit sequence) come from a live
+    /// originator: the connection stays open.
+    #[test]
+    fn repeated_counts_keep_the_connection_open() {
+        let adapter = start(&config(&device(233))).unwrap();
+        let (_c, udp, id, to) = opened(&adapter, 20_000, 0);
+        let t = Instant::now();
+        let mut i = 1u32;
+        while t.elapsed() < Duration::from_millis(600) {
+            udp.send_to(&class1(id, i, 7, Some(true), &[1, 0, 0, 0]), to).unwrap();
+            i += 1;
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let s = adapter.status();
+        assert_eq!((s.timed_out, s.connections.len()), (0, 1));
+    }
+
+    /// A frame from another host is stray: it does not keep the originator's connection alive.
+    #[test]
+    fn another_host_s_frames_do_not_keep_it_open() {
+        let adapter = start(&config(&device(234))).unwrap();
+        let (_c, udp, id, to) = opened(&adapter, 20_000, 0);
+        udp.send_to(&class1(id, 1, 1, Some(true), &[1, 0, 0, 0]), to).unwrap();
+        let other = UdpSocket::bind("127.0.0.2:0").unwrap();
+        let t = Instant::now();
+        let mut i = 2u32;
+        while t.elapsed() < Duration::from_millis(600) {
+            std::thread::sleep(Duration::from_millis(20));
+            other.send_to(&class1(id, i, i as u16, Some(true), &[0; 4]), to).unwrap();
+            i += 1;
+        }
+        let s = adapter.status();
+        assert_eq!((s.timed_out, s.connections.len()), (1, 0));
+    }
+
+    /// A frame of another size is stray: it does not keep the connection alive.
+    #[test]
+    fn frames_of_another_size_do_not_keep_it_open() {
+        let adapter = start(&config(&device(235))).unwrap();
+        let (_c, udp, id, to) = opened(&adapter, 20_000, 0);
+        udp.send_to(&class1(id, 1, 1, Some(true), &[1, 0, 0, 0]), to).unwrap();
+        let t = Instant::now();
+        let mut i = 2u32;
+        while t.elapsed() < Duration::from_millis(600) {
+            std::thread::sleep(Duration::from_millis(20));
+            udp.send_to(&class1(id, i, i as u16, Some(true), &[0; 5]), to).unwrap();
+            i += 1;
+        }
+        let s = adapter.status();
+        assert_eq!((s.timed_out, s.connections.len()), (1, 0));
+    }
+
+    /// The consumed count is the frames taken: not a stale one, not a stray one.
+    #[test]
+    fn the_consumed_count_is_the_frames_taken_alone() {
+        let adapter = start(&config(&device(236))).unwrap();
+        let (_c, udp, id, to) = opened(&adapter, 100_000, 2);
+        udp.send_to(&class1(id, 10, 1, Some(true), &[1, 0, 0, 0]), to).unwrap();
+        assert!(wait(Duration::from_secs(2), || adapter.status().connections[0].consumed == 1));
+        udp.send_to(&class1(id, 9, 2, Some(true), &[1, 0, 0, 0]), to).unwrap();
+        udp.send_to(&class1(id, 10, 3, Some(true), &[1, 0, 0, 0]), to).unwrap();
+        udp.send_to(&class1(id, 11, 4, Some(true), &[1, 0, 0, 0, 0]), to).unwrap();
+        UdpSocket::bind("127.0.0.2:0").unwrap().send_to(&class1(id, 12, 5, Some(true), &[1, 0, 0, 0]), to).unwrap();
+        assert!(wait(Duration::from_secs(2), || { let s = adapter.status(); s.stale_frames == 2 && s.stray_frames == 2 }));
+        std::thread::sleep(Duration::from_millis(50));
+        let s = adapter.status();
+        assert_eq!((s.connections[0].consumed, s.stale_frames, s.stray_frames), (1, 2, 2));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn drain(udp: &UdpSocket) -> usize {
+        let mut buf = [0u8; 1500];
+        udp.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+        let mut n = 0;
+        while udp.recv_from(&mut buf).is_ok() {
+            n += 1;
+        }
+        n
+    }
+
+    #[cfg(target_os = "linux")]
+    fn drop_port_47001() {
+        for rule in [&["add", "table", "inet", "t"][..], &["add", "chain", "inet", "t", "out", "{ type filter hook output priority 0; }"], &["add", "rule", "inet", "t", "out", "udp", "dport", "47001", "drop"]] {
+            let out = std::process::Command::new("nft").args(rule).output().expect("nft");
+            assert!(out.status.success(), "nft {rule:?}: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+
+    /// Round 6's pin, the failing connection opened first: a failed send is its own connection's
+    /// alone, so the other's frames still go out and its count is what it received.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_failed_send_first_leaves_the_other_connection_s_frames() {
+        veredas_aranha::netns::isolated("round_7::a_failed_send_first_leaves_the_other_connection_s_frames", &[], || {
+            drop_port_47001();
+            let text = device(1)
+                .replace("{ instance = 151, size = 2 } ]", "{ instance = 151, size = 2 }, { instance = 152, size = 4 }, { instance = 101, size = 8 } ]")
+                .replace("connections = [ { config = 151, output = 150, input = 100 } ]", "connections = [ { config = 151, output = 150, input = 100 }, { config = 151, output = 152, input = 101 } ]");
+            let adapter = start(&config(&text)).unwrap();
+            let (mut a, mut b) = (Conn::open(adapter.addr), Conn::open(adapter.addr));
+            let (ua, ub) = (UdpSocket::bind("127.0.0.1:47002").unwrap(), UdpSocket::bind("127.0.0.1:47001").unwrap());
+            let path_b = [0x20, 0x04, 0x24, 151, 0x2C, 152, 0x2C, 101];
+            // B, whose sends fail, first; then A.
+            let (rb, _) = b.cip_with(&fo_raw(0x0101, 0x0001, 7, 20_000, 2, 4 + 6, 8 + 2, &path_b), &[sockaddr_item(&ub)]);
+            let (ra, _) = a.cip_with(&fo_raw(0x0202, 0x00FE, 0x0BAD_CAFE, 20_000, 2, 4 + 6, 8 + 2, &PATH), &[sockaddr_item(&ua)]);
+            assert_eq!((ra[2], rb[2]), (0, 0));
+            let mut buf = [0u8; 1500];
+            ua.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+            let (mut got, t) = (0u64, Instant::now());
+            while t.elapsed() < Duration::from_millis(1000) {
+                if ua.recv_from(&mut buf).is_ok() {
+                    got += 1;
+                }
+            }
+            adapter.set_producing(false);
+            got += drain(&ua) as u64;
+            let s = adapter.status();
+            let by_vendor = |v: u16| s.connections.iter().find(|c| c.vendor == v).unwrap().produced;
+            assert!(got > 30, "A received {got} frames in a second at 20 ms");
+            assert_eq!((by_vendor(0x00FE), by_vendor(0x0001)), (got, 0));
+        });
+    }
+
+    /// Two bools on one byte (the reference allows them on different bits): setting one leaves the
+    /// other, on the plant side and on the wire; reading one reads its bit alone.
+    #[test]
+    fn bools_sharing_a_byte_are_their_own_bits() {
+        let text = device(238).replace(
+            "connections = [ { config = 151, output = 150, input = 100 } ]\n",
+            "connections = [ { config = 151, output = 150, input = 100 } ]\npoints = [ { name = \"a\", assembly = 100, byte = 0, bit = 3 }, { name = \"b\", assembly = 100, byte = 0, bit = 4 }, { name = \"c\", assembly = 150, byte = 0, bit = 0 }, { name = \"d\", assembly = 150, byte = 0, bit = 1 } ]\n",
+        );
+        let adapter = start(&config(&text)).unwrap();
+        adapter.set("a", "true").unwrap();
+        adapter.set("b", "true").unwrap();
+        adapter.set("a", "false").unwrap();
+        let mut c = Conn::open(adapter.addr);
+        let r = c.cip(&[0x0E, 0x03, 0x20, 0x04, 0x24, 100, 0x30, 0x03]);
+        let w = c.cip(&[0x10, 0x03, 0x20, 0x04, 0x24, 150, 0x30, 0x03, 0x02, 0, 0, 0]);
+        let seen = (r[4], adapter.get("a").unwrap(), adapter.get("b").unwrap(), w[2], adapter.get("c").unwrap(), adapter.get("d").unwrap());
+        assert_eq!(seen, (0x10, Value::Bool(false), Value::Bool(true), 0, Value::Bool(false), Value::Bool(true)));
+    }
+
+    /// Every point type is little-endian in the assembly's bytes, as CIP carries it: the plant side's
+    /// values read over the wire, and the wire's bytes read by point.
+    #[test]
+    fn every_type_is_little_endian_on_the_wire() {
+        let text = device(239)
+            .replace("{ instance = 100, size = 8 }", "{ instance = 100, size = 12 }")
+            .replace("{ instance = 150, size = 4 }", "{ instance = 150, size = 12 }")
+            .replace(
+                "connections = [ { config = 151, output = 150, input = 100 } ]\n",
+                "connections = [ { config = 151, output = 150, input = 100 } ]\npoints = [\n\
+                 { name = \"u8\", assembly = 100, byte = 0, type = \"u8\", value = \"171\" },\n\
+                 { name = \"i8\", assembly = 100, byte = 1, type = \"i8\", value = \"-2\" },\n\
+                 { name = \"i16\", assembly = 100, byte = 2, type = \"i16\", value = \"-2\" },\n\
+                 { name = \"u32\", assembly = 100, byte = 4, type = \"u32\", value = \"16909060\" },\n\
+                 { name = \"i32\", assembly = 100, byte = 8, type = \"i32\", value = \"-3\" },\n\
+                 { name = \"ou8\", assembly = 150, byte = 0, type = \"u8\" },\n\
+                 { name = \"oi8\", assembly = 150, byte = 1, type = \"i8\" },\n\
+                 { name = \"oi16\", assembly = 150, byte = 2, type = \"i16\" },\n\
+                 { name = \"ou32\", assembly = 150, byte = 4, type = \"u32\" },\n\
+                 { name = \"oi32\", assembly = 150, byte = 8, type = \"i32\" },\n]\n",
+            );
+        let adapter = start(&config(&text)).unwrap();
+        let mut c = Conn::open(adapter.addr);
+        let r = c.cip(&[0x0E, 0x03, 0x20, 0x04, 0x24, 100, 0x30, 0x03]);
+        let want_in = [0xAB, 0xFE, 0xFE, 0xFF, 0x04, 0x03, 0x02, 0x01, 0xFD, 0xFF, 0xFF, 0xFF];
+        let mut set = vec![0x10, 0x03, 0x20, 0x04, 0x24, 150, 0x30, 0x03];
+        set.extend_from_slice(&[0x12, 0x80, 0x34, 0x92, 0x78, 0x56, 0x34, 0x12, 0x00, 0x00, 0x00, 0x80]);
+        let w = c.cip(&set);
+        assert_eq!(w[2], 0, "the write's status: {w:02X?}");
+        let got_out: Vec<Value> = ["ou8", "oi8", "oi16", "ou32", "oi32"].iter().map(|n| adapter.get(n).unwrap()).collect();
+        assert_eq!(&r[4..], &want_in);
+        assert_eq!(got_out, vec![Value::U8(0x12), Value::I8(-128), Value::I16(-28108), Value::U32(0x1234_5678), Value::I32(i32::MIN)]);
+    }
+
+    /// A multiplier past 7 (CIP reserves them) is taken as 7: at a 2 ms RPI, closed 2 ms x (4 << 7) =
+    /// 1024 ms after the last frame, not 2048 (round 7: the clamp was the code's, the clause's formula
+    /// unclamped).
+    #[test]
+    fn a_multiplier_past_7_is_taken_as_7() {
+        let adapter = start(&config(&device(240))).unwrap();
+        let (_c, udp, id, to) = opened(&adapter, 2_000, 8);
+        udp.send_to(&class1(id, 1, 1, Some(true), &[0; 4]), to).unwrap();
+        let last = Instant::now();
+        assert!(wait(Duration::from_secs(5), || adapter.status().timed_out == 1));
+        let after = last.elapsed();
+        assert!(after >= Duration::from_millis(1024) && after < Duration::from_millis(1400), "{after:?}");
+    }
+
+    /// A Logix-style connection path, its configuration data last (after the connection points), and
+    /// an electronic key first: taken, the data written into the configuration assembly.
+    #[test]
+    fn configuration_data_after_the_connection_points_is_written() {
+        let adapter = start(&config(&device(241))).unwrap();
+        let mut c = Conn::open(adapter.addr);
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let path = [0x34, 0x04, 9, 0, 7, 0, 3, 0, 0x82, 1, 0x20, 0x04, 0x24, 151, 0x2C, 150, 0x2C, 100, 0x80, 0x01, 7, 8];
+        let (r, _) = c.cip_with(&fo_raw(0x0B0B, 0x0001, 42, 20_000, 0, 4 + 6, 8 + 2, &path), &[sockaddr_item(&udp)]);
+        assert_eq!((r[2], adapter.assembly(151).unwrap()), (0, vec![7, 8]));
+    }
+}

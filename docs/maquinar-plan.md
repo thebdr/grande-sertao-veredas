@@ -514,9 +514,9 @@ Recorded as the port meets them.
   | test(round_6::a_sigterm_after_the_writer_is_far_behind_ends_the_run)
   | test(round_6::a_bench_whose_start_s_lines_pass_the_pipe_still_stops)
   | test(round_6::a_status_line_the_writer_is_far_behind_on_is_dropped)
-  | (binary(modbus_server) & test(round_9::))`
+  | (binary(modbus_server) & test(round_9::)) | (binary(ethernetip_adapter) & test(round_7::))`
   (the Modbus server's "gone at once" bounds, the first two added late: 2026-11-23; the adapter's
-  multiplier at 3 and its restart within a second; the PROFINET neighbour aged out by its TTL, and
+  multiplier at 3 and its restart within a second, and its timeouts, keep-alives and counts of round 7; the PROFINET neighbour aged out by its TTL, and
   kept to its last frame's when heard again, a shorter one and another's included; the Modbus server's read-ahead filled during a delay
   (its cap to the byte, a request straddling a touched delay) and its refusal at the limit within
   300 ms, and its silence met in the middle of a frame (round 9); the
