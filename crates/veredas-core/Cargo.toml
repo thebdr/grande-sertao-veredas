@@ -29,10 +29,14 @@ net = [
     "dep:socket2",
     "dep:tokio",
 ]
-# The in-process OPC UA demo plant (opc::demo): test-fixture plumbing, off by default so a component
-# that only polls carries the client half alone. Core's own tests switch it on through the self
-# dev-dependency below (dev-dependencies resolve apart from the library's own: not a cycle).
-demo-server = ["net", "dep:async-opcua-server"]
+# The OPC UA server (opc::server): a component serving its values (controlador's embedded portal,
+# the bench's plant server), off by default so a component that only polls carries the client half
+# alone (docs/core-plan.md, "The OPC UA server").
+opc-server = ["net", "dep:async-opcua-server"]
+# The in-process OPC UA demo plant (opc::demo): test-fixture plumbing, on the server's crates. Core's
+# own tests switch it on through the self dev-dependency below (dev-dependencies resolve apart from
+# the library's own: not a cycle).
+demo-server = ["opc-server"]
 # The Modbus/TCP client (fieldbus::modbus): a function that drives hardware, off by default so a
 # component that only polls carries no fieldbus code; the controller switches it on, and so do the
 # crates that test it (docs/core-plan.md, "The fieldbus masters").

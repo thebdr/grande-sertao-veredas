@@ -156,8 +156,10 @@ Core's layers come by cargo feature, so a component carries what it uses (C-073)
 - Without the default features (`default-features = false`): `schema`, `rng` and `state`, on
   serde, toml and thiserror alone, for a component that reads the suite's stamped files and never a
   plant (ábaco's `.abaco` workspace file, 2026-11-23).
-- `demo-server` (the OPC UA demo plant, with `net`), `modbus` and `enip` (the fieldbus masters,
-  each standing alone on its framing and a runtime), all off by default.
+- `opc-server` (the OPC UA server, with `net`, for a component serving its values: controlador's
+  embedded portal, the bench's plant server), `demo-server` (the OPC UA demo plant, on the
+  server), `modbus` and `enip` (the fieldbus masters, each standing alone on its framing and a
+  runtime), all off by default.
 
 A form is what a crate built alone gets (`cargo build -p <member>`). A build of the whole
 workspace unifies features across members, so there a member asking for core without its default
@@ -178,7 +180,8 @@ veredas_core
   schema      stamp, check, Stamp, HeaderError: the one header reader (C-045)
   rng         Pcg32
   telegram    Endian; schema, framing, channel, capture, compose, catalog
-  opc         spec, value, map, browse, worker, error; demo (feature "demo-server")
+  opc         spec, value, map, browse, worker, error; server (feature "opc-server"),
+              demo (feature "demo-server")
   fieldbus    modbus (feature "modbus": Client, Target, Timeouts, ModbusError);
               enip (feature "enip": Scanner, Spec, Header, LinkState, EnipError)
   state       ControllerState, State, the reasons, Conditions, MaintenanceRequest, Health;
@@ -286,7 +289,7 @@ a child, and the child needs its uid map). Outside the app (a plain terminal, CI
 AppArmor rule refuses it unless `kernel.apparmor_restrict_unprivileged_userns` is 0. A real
 network card needs `CAP_NET_RAW` on the controller's executable, an install step.
 
-## The OPC UA server (P-018): the cut from maquinar
+## The OPC UA server (P-018, C-074): the cut from maquinar
 Controlador's embedded portal serves OPC UA, so the server leaves the bench for core as
 `opc::server`, behind a feature of its own, `opc-server` (with `net` and async-opcua's server; the
 demo plant then stands on it). Maquinar agreed to the cut on 2026-11-22 with five corrections,
@@ -314,12 +317,19 @@ taken whole (`maquinar-answers-2026-11-22.md` on the shared notes folder). Into 
 
 Stays in maquinar, on core's server: `OpcConfig` and its reading from the bench file, the draws,
 ramps and reactions and their loop, `stall`, `TICK` and the timer guard, and the relay's start.
-Once core's module is on `main`, maquinar switches `opc.rs` onto it in one commit of its own.
+Core's module is C-074. Once it is on `main`, maquinar switches `opc.rs` onto it in one commit of
+its own.
 C-026's test file stays unchanged; its run is recorded again and refuted on the switch. Core's
 own clause tests the server against core's OPC UA client.
 
 ## Traps
 Recorded as the port meets them.
+
+- **async-opcua 0.19 checks read access for every attribute.** A write-only variable's DataType
+  read is refused with its Value, so core's browser lists it untyped (C-074's browse test). And a
+  write with no value never reaches a write callback: the stack answers `BadTypeMismatch` first.
+- **A server's read limit refuses a poll whole.** With `max_nodes_per_read` below a worker's tag
+  count, every poll fails and the worker drops its session; a test of the limit polls within it.
 
 - **`ethernetip-core` swaps the Sockaddr Info items.** Its `SOCKADDR_INFO_T_TO_O` is 0x8000 and
   carries the originator's own address in a Forward_Open's request; the standard, the bench's

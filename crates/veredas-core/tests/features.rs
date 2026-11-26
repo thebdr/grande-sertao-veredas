@@ -82,9 +82,10 @@ fn the_default_holds_the_plant_facing_layers_and_each_master_is_its_own() {
         ])
     );
     assert_eq!(
-        strings(&f["demo-server"]),
+        strings(&f["opc-server"]),
         set(&["net", "dep:async-opcua-server"])
     );
+    assert_eq!(strings(&f["demo-server"]), set(&["opc-server"]));
     assert_eq!(
         strings(&f["modbus"]),
         set(&["dep:tokio-modbus", "dep:tokio"])
@@ -185,8 +186,10 @@ fn without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone() 
     let mut want = set(&["serde", "thiserror", "toml"]);
     want.extend(layers.iter().map(|c| c.to_string()));
     assert_eq!(direct, want, "the default form's direct dependencies");
-    let (_, demo) = tree(&["--no-default-features", "--features", "demo-server"]);
+    let (_, server) = tree(&["--no-default-features", "--features", "opc-server"]);
     want.insert("async-opcua-server".to_string());
+    assert_eq!(server, want, "the OPC UA server's direct dependencies");
+    let (_, demo) = tree(&["--no-default-features", "--features", "demo-server"]);
     assert_eq!(demo, want, "the demo plant's direct dependencies");
     for c in [
         "async-opcua-client",
@@ -236,7 +239,8 @@ fn without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone() 
 }
 
 /// The library compiles in each form: the default alone, without its default features (the
-/// header reader, the PCG32, the state text), and with each fieldbus master alone and both. Built in a folder of the test's
+/// header reader, the PCG32, the state text), with the OPC UA server alone, and with each fieldbus
+/// master alone and both. Built in a folder of the test's
 /// own, so the run's build folder is not shared.
 #[test]
 fn the_library_compiles_without_its_default_features_and_with_the_masters_alone() {
@@ -248,6 +252,9 @@ fn the_library_compiles_without_its_default_features_and_with_the_masters_alone(
         // `net` standing on a crate `net` does not hold.
         &[][..],
         &["--no-default-features"][..],
+        // The OPC UA server without the demo plant: controlador's form, which no build of core in
+        // the suite makes alone either.
+        &["--no-default-features", "--features", "opc-server"][..],
         &["--no-default-features", "--features", "modbus"][..],
         &["--no-default-features", "--features", "enip"][..],
         &["--no-default-features", "--features", "modbus,enip"][..],
@@ -587,14 +594,15 @@ fn members_default_paths() -> BTreeSet<String> {
 
 /// Each form a member asks for holds the layers its form promises, named by a consumer crate of
 /// the test's own and checked by cargo: the default (every plant-facing layer), the default with
-/// the demo plant (maquinar's form), each master alone. Every build of core inside the suite merges
+/// the demo plant (maquinar's form), the OPC UA server without it (controlador's), each master
+/// alone. Every build of core inside the suite merges
 /// these forms (core's own tests and the workspace ask for all of them at once), so only a crate
 /// apart sees one form as a member that asks for it alone does.
 #[test]
 fn each_form_holds_the_layers_it_promises() {
     let core = Path::new(env!("CARGO_MANIFEST_DIR"));
     let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("form-consumers");
-    let forms: [(&str, &str, &str); 4] = [
+    let forms: [(&str, &str, &str); 5] = [
         (
             "default-form",
             "",
@@ -608,7 +616,14 @@ fn each_form_holds_the_layers_it_promises() {
         (
             "demo-form",
             ", features = [\"demo-server\"]",
-            "veredas_core::opc::demo::DemoPlant, veredas_core::opc::demo::Relay, veredas_core::opc::Browser",
+            "veredas_core::opc::demo::DemoPlant, veredas_core::opc::demo::Relay, veredas_core::opc::Browser, \
+             veredas_core::opc::server::Server",
+        ),
+        (
+            "server-form",
+            ", default-features = false, features = [\"opc-server\"]",
+            "veredas_core::opc::server::Server, veredas_core::opc::server::ServerSpec, \
+             veredas_core::opc::server::ClientWrite, veredas_core::opc::Browser, veredas_core::schema::Stamp",
         ),
         (
             "modbus-form",
@@ -680,7 +695,8 @@ fn each_form_holds_the_layers_it_promises() {
 }
 
 /// Every `cfg` in core's source is one of the expected list: `net` on the four plant-facing
-/// modules and the crate root's two re-exports, `demo-server` on the demo plant, each master on its
+/// modules and the crate root's two re-exports, `opc-server` on the OPC UA server, `demo-server` on
+/// the demo plant, each master on its
 /// own module, and `test` on the schema's own tests; no `cfg_attr`. So a form holds the same items
 /// in every build of it, whatever the profile or the platform. The sources are read as Rust
 /// tokens, so no spelling of a gate reads otherwise (split over lines, a comment inside it, a macro
@@ -767,6 +783,7 @@ fn every_feature_gate_is_where_it_belongs() {
         "lib.rs: #[cfg(feature=\"net\")] -> pub use source::",
         "lib.rs: #[cfg(feature=\"net\")] -> pub use types::",
         "opc/mod.rs: #[cfg(feature=\"demo-server\")] -> pub mod demo",
+        "opc/mod.rs: #[cfg(feature=\"opc-server\")] -> pub mod server",
         // The schema's own tests, compiled by `cargo test` alone, never in a form.
         "schema.rs: #[cfg(test)] -> mod tests",
     ]
@@ -1066,18 +1083,21 @@ impl Reading<'_> {
     }
 }
 
-/// The twenty forms core can be asked for: the plant-facing layer off, on, or on with the demo
-/// plant, each with `net` with the feature `default` or without it (a member that keeps the
-/// default features gets `default` too, and a gate may name it); each master off or on. The last
-/// is every feature, the form core's own tests run in.
+/// The twenty-eight forms core can be asked for: the plant-facing layer off, on, on with the OPC UA
+/// server, or on with the server and the demo plant (which asks for the server), each with `net`
+/// with the feature `default` or without it (a member that keeps the default features gets
+/// `default` too, and a gate may name it); each master off or on. The last is every feature, the
+/// form core's own tests run in.
 fn forms() -> Vec<Vec<&'static str>> {
     let mut forms = Vec::new();
     for net in [
         &[][..],
         &["net"][..],
         &["net", "default"][..],
-        &["net", "demo-server"][..],
-        &["net", "demo-server", "default"][..],
+        &["net", "opc-server"][..],
+        &["net", "opc-server", "default"][..],
+        &["net", "opc-server", "demo-server"][..],
+        &["net", "opc-server", "demo-server", "default"][..],
     ] {
         for modbus in [&[][..], &["modbus"][..]] {
             for enip in [&[][..], &["enip"][..]] {
@@ -1206,13 +1226,13 @@ fn capitalized_literals(source: &str) -> Vec<String> {
 }
 
 /// The slim layer behaves the same in every form: a probe crate asking for core in each of the
-/// twenty forms alone, built in the development and the release profile as the workspace sets them
+/// twenty-eight forms alone, built in the development and the release profile as the workspace sets them
 /// and run, calls every public function and reads every public table of `schema`, `rng` and
 /// `state` (bar the PCG32's seeding from entropy) on the inputs listed here and prints what each
 /// answers. That covers every stamp and check of a set of headers with the refusals' texts; every
 /// state line of core's own state-text tests read, written back and asked its state, reasons,
 /// health and conditions; every health and maintenance request; and PCG32 draws from fixed seeds
-/// with the edges of each range. All forty runs must print what the merged form's development
+/// with the edges of each range. All fifty-six runs must print what the merged form's development
 /// build prints, the form and build core's own tests run in, so it speaks for each. A gate that
 /// changes what an item does without changing what rustdoc renders of it (a constant's value, a
 /// derive's attribute, a function's body), in one profile or both, shows here as a run that prints
@@ -1384,7 +1404,7 @@ fn main() {{
     );
     let sources = core_sources();
     // The merged form's development build first, the one core's own tests run in: it speaks for
-    // the forty, each compared with it as soon as it has run.
+    // the fifty-six, each compared with it as soon as it has run.
     let forms = forms();
     let order = std::iter::once(forms.len() - 1).chain(0..forms.len() - 1);
     let mut merged: Option<String> = None;
@@ -1818,8 +1838,8 @@ fn public_paths(view: &BTreeMap<String, String>) -> BTreeSet<String> {
     paths
 }
 
-/// The compiler's own view of every form core can be asked for, built for each of the twenty
-/// forms ([`forms`]): rustdoc's pages of core with private items, from core's source, and the
+/// The compiler's own view of every form core can be asked for, built for each of the
+/// twenty-eight forms ([`forms`]): rustdoc's pages of core with private items, from core's source, and the
 /// pages of its public items as the build holds them, from a facade crate inlining core in that
 /// form (rendered from core's compiled metadata, where `cfg(doc)` was never set); and a consumer
 /// crate of the test's own naming every public path the facade shows, checked by cargo against
@@ -1827,7 +1847,8 @@ fn public_paths(view: &BTreeMap<String, String>) -> BTreeSet<String> {
 /// every key of the smaller form, rendered the same (an item's declaration, a header, a field's
 /// type, a row's visibility), and adds only where that feature's
 /// layer lies: `net` under its four modules and the crate root's re-exports of them and rows to
-/// them, the demo plant under `opc::demo` and its row, each master under its module and its line in
+/// them, the OPC UA server under `opc::server` and its row, the demo plant under `opc::demo` and its
+/// row, each master under its module and its line in
 /// `fieldbus`. However an item's gate is written (a comment inside it, a line break, a macro, an
 /// `include!`d file, a `#[path]` module, a cfg a build script sets), an item behind a feature
 /// other than its own's shows as a key on the wrong side of some step, or as a path a form's
@@ -1875,13 +1896,15 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
                 (["types/", "source/", "telegram/", "opc/"]
                     .iter()
                     .any(|d| path.starts_with(d))
-                    && !path.starts_with("opc/demo/"))
+                    && !path.starts_with("opc/demo/")
+                    && !path.starts_with("opc/server/"))
                     // The root's re-exports, inlined as pages of the root in the build's view.
                     || (!path.contains('/')
                         && NET_ROOT_NAMES.iter().any(|n| {
                             path.split('#').next().unwrap().split('.').nth(1) == Some(*n)
                         }))
             }
+            "opc-server" => path.starts_with("opc/server/"),
             "demo-server" => path.starts_with("opc/demo/"),
             "modbus" => path.starts_with("fieldbus/modbus/"),
             "enip" => path.starts_with("fieldbus/enip/"),
@@ -1964,8 +1987,9 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
             }
         }
         assert_eq!(
-            steps, 40,
-            "four steps of net, eight of default, eight of the demo plant, ten of each master"
+            steps, 60,
+            "four steps of net, twelve of default, eight of the server, eight of the demo plant, \
+             fourteen of each master"
         );
         // The members' default form: `net` with `default`, no demo plant, no master.
         let members = forms
@@ -1981,7 +2005,7 @@ fn the_compiler_sees_each_layer_where_its_feature_puts_it() {
             }
         };
         for (form, view) in forms.iter().zip(&views) {
-            for feature in ["net", "demo-server", "modbus", "enip"] {
+            for feature in ["net", "opc-server", "demo-server", "modbus", "enip"] {
                 if form.contains(&feature) {
                     continue;
                 }

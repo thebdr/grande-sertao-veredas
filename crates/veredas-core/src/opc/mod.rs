@@ -14,11 +14,15 @@
 //! - [`browse`]: the address-space browser.
 //! - [`worker`]: the poll worker, its reconnection and its gated writes.
 //! - [`error`]: why a call to a server produced nothing, and why a node id did not parse.
+//! - [`server`]: an OPC UA server for a component to serve its values with (feature
+//!   `opc-server`).
 //! - [`demo`]: an in-process OPC UA server shaped like a small plant, the fixture every test
 //!   drives (feature `demo-server`, test-fixture plumbing; core's own tests switch it on).
 
 #[cfg(feature = "demo-server")]
 pub mod demo;
+#[cfg(feature = "opc-server")]
+pub mod server;
 
 pub mod browse;
 pub mod error;
