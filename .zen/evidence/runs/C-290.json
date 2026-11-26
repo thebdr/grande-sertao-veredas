@@ -13,15 +13,15 @@
     "manifest"
   ],
   "exitCode": 0,
-  "outputSha": "03e36ea5306f8a86053de1c2064bba251260914242d673458246efd8c1ba588e",
-  "outputTail": "        PASS [   0.150s] (36/48) alforge::manifest round_twenty_three_a_replaced_or_patched_package_behind_a_git_crate_in_either_order_and_a_path_line_beside_a_registry_one\n        PASS [   0.029s] (37/48) alforge::manifest round_twenty_two_an_empty_required_features_a_blank_continued_line_and_a_lock_of_another_version\n        PASS [   1.709s] (38/48) alforge::manifest every_release_of_this_repository_checks_against_its_history\n        PASS [   0.006s] (39/48) alforge::manifest the_components_are_suite_crates_each_once_with_their_executables_once\n        PASS [   0.127s] (40/48) alforge::manifest settings_outside_the_history_change_nothing_that_is_read\n        PASS [   0.205s] (41/48) alforge::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.543s] (42/48) alforge::manifest round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_path\n        PASS [   0.004s] (43/48) alforge::manifest the_header_is_cores_and_refused_by_name\n        PASS [   0.221s] (44/48) alforge::manifest the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them\n        PASS [   0.006s] (45/48) alforge::manifest the_plans_example_reads_as_its_keys_say\n        PASS [   0.123s] (46/48) alforge::manifest the_folder_is_judged_whole_and_a_shallow_clone_refused\n        PASS [   0.110s] (47/48) alforge::manifest the_lock_file_is_read_as_cargo_writes_it\n        PASS [   4.376s] (48/48) alforge::manifest every_road_into_a_build_charges_the_components_it_reaches\n────────────\n     Summary [   5.764s] 48 tests run: 48 passed, 0 skipped",
-  "ranAt": "2026-11-26T21:50:14.847Z",
-  "headCommit": "e3db97de5af17a2b99ab0e88034d8b9e6f4ea106",
+  "outputSha": "1a303174cb50b009773597084f4a625316ded04ac12f31de8a97a3bcf4e0fba2",
+  "outputTail": "        PASS [   0.210s] (36/48) alforge::manifest round_twenty_three_a_replaced_or_patched_package_behind_a_git_crate_in_either_order_and_a_path_line_beside_a_registry_one\n        PASS [   0.040s] (37/48) alforge::manifest round_twenty_two_an_empty_required_features_a_blank_continued_line_and_a_lock_of_another_version\n        PASS [   0.174s] (38/48) alforge::manifest settings_outside_the_history_change_nothing_that_is_read\n        PASS [   0.008s] (39/48) alforge::manifest the_components_are_suite_crates_each_once_with_their_executables_once\n        PASS [   2.700s] (40/48) alforge::manifest every_release_of_this_repository_checks_against_its_history\n        PASS [   0.242s] (41/48) alforge::manifest the_executable_checks_a_repositorys_releases_and_says_why_one_is_refused\n        PASS [   0.722s] (42/48) alforge::manifest round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_path\n        PASS [   0.005s] (43/48) alforge::manifest the_header_is_cores_and_refused_by_name\n        PASS [   0.275s] (44/48) alforge::manifest the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_them\n        PASS [   0.005s] (45/48) alforge::manifest the_plans_example_reads_as_its_keys_say\n        PASS [   0.129s] (46/48) alforge::manifest the_folder_is_judged_whole_and_a_shallow_clone_refused\n        PASS [   0.118s] (47/48) alforge::manifest the_lock_file_is_read_as_cargo_writes_it\n        PASS [   6.023s] (48/48) alforge::manifest every_road_into_a_build_charges_the_components_it_reaches\n────────────\n     Summary [   8.214s] 48 tests run: 48 passed, 0 skipped",
+  "ranAt": "2026-11-26T22:12:54.992Z",
+  "headCommit": "8e04b37f9759f761ba89d7aff965e2e7825775dc",
   "tests": [
     {
       "name": "tools/alforge/tests/manifest.rs",
       "file": "tools/alforge/tests/manifest.rs",
-      "fileSha": "e8aa7be932b33629a96a2a81d3da0c2ff93ee95e11584c44b32a04b85e25d364"
+      "fileSha": "80ed15f1d91369e8044c6e8a695c6f9d7728355be1b083b7c5a93dac0ad2b24e"
     }
   ]
 }
