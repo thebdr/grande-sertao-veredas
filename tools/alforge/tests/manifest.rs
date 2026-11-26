@@ -1912,3 +1912,83 @@ fn round_twenty_two_an_empty_required_features_a_blank_continued_line_and_a_lock
     assert_eq!((held["veredas-a"].bins.iter().map(String::as_str).collect::<Vec<_>>(), held["veredas-a"].optional.len()), (vec!["sempre"], 0));
     assert_eq!(held["veredas-b"].inputs, Err("its Cargo.lock's foo 1.0.0 has no source and is no member a release builds from its folder".to_string()));
 }
+
+#[test]
+fn round_twenty_three_a_replaced_or_patched_package_behind_a_git_crate_in_either_order_and_a_path_line_beside_a_registry_one() {
+    let reg = "registry+https://github.com/rust-lang/crates.io-index";
+    let git = "git+https://example.invalid/mac";
+    let refused = |what: &str| format!("its Cargo.lock reaches a package by path through a crate of the registry or git ({what}): cargo's dep-info does not follow it there, so its build's reads would go unjudged");
+    // A git proc-macro using `unicode-ident`, which a `[replace]` (or a `[patch]`) puts a member's
+    // fork in place of; the component uses both. Cargo compiles the fork a second time for the
+    // macro, in no dep-info judged: refused, whichever way the names sort (the macro walked before
+    // the crate, or after it).
+    for (mac, how) in [("gmac", "replace"), ("zmac", "replace"), ("gmac", "patch"), ("zmac", "patch")] {
+        let r = Repo::new();
+        let rule = match how {
+            "replace" => "[replace]\n\"unicode-ident:1.0.24\" = { path = \"forks/unicode-ident\" }\n".to_string(),
+            _ => "[patch.crates-io]\nunicode-ident = { path = \"forks/unicode-ident\" }\n".to_string(),
+        };
+        r.write("Cargo.toml", &format!("[workspace]\nmembers = [\"crates/*\", \"forks/unicode-ident\"]\n\n{rule}"));
+        r.write(
+            "crates/veredas-a/Cargo.toml",
+            &format!("[package]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\n{mac} = {{ git = \"https://example.invalid/mac\" }}\nunicode-ident = \"=1.0.24\"\n"),
+        );
+        r.write("crates/veredas-a/src/lib.rs", "\n");
+        // A component reaching the fork only through the macro.
+        r.write("crates/veredas-c/Cargo.toml", &format!("[package]\nname = \"veredas-c\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\n{mac} = {{ git = \"https://example.invalid/mac\" }}\n"));
+        r.write("crates/veredas-c/src/lib.rs", "\n");
+        r.write("forks/unicode-ident/Cargo.toml", "[package]\nname = \"unicode-ident\"\nversion = \"1.0.24\"\nedition = \"2024\"\n");
+        r.write("forks/unicode-ident/src/lib.rs", "\n");
+        let (ui, entries) = match how {
+            // A replaced crate stays locked from its source, the fork beside it without one: cargo
+            // writes the source on the registry's, the two sharing a name and version.
+            "replace" => (
+                format!("unicode-ident 1.0.24 ({reg})"),
+                format!("[[package]]\nname = \"unicode-ident\"\nversion = \"1.0.24\"\n\n[[package]]\nname = \"unicode-ident\"\nversion = \"1.0.24\"\nsource = \"{reg}\"\nchecksum = \"4444\"\nreplace = \"unicode-ident 1.0.24\"\n\n"),
+            ),
+            _ => ("unicode-ident".to_string(), "[[package]]\nname = \"unicode-ident\"\nversion = \"1.0.24\"\n\n".to_string()),
+        };
+        let mut deps = [format!("\"{mac}\""), format!("\"{ui}\"")];
+        deps.sort();
+        r.write(
+            "Cargo.lock",
+            &format!(
+                "version = 4\n\n[[package]]\nname = \"{mac}\"\nversion = \"0.1.0\"\nsource = \"{git}#{c}\"\ndependencies = [\n \"{ui}\",\n]\n\n{entries}\
+                 [[package]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\ndependencies = [\n {},\n]\n\n[[package]]\nname = \"veredas-c\"\nversion = \"2.0.0\"\ndependencies = [\n \"{mac}\",\n]\n",
+                deps.join(",\n "),
+                c = "c".repeat(40)
+            ),
+        );
+        let commit = r.commit("a fork behind a git macro");
+        let mut refusals = Vec::new();
+        let held = manifest::components_at(r.path(), &commit, &mut refusals).unwrap();
+        assert_eq!(refusals, Vec::<String>::new(), "{mac} {how}");
+        let what = format!("unicode-ident 1.0.24 through {mac} 0.1.0");
+        assert_eq!(held["veredas-a"].inputs, Err(refused(&what)), "{mac} {how}: used directly and through the macro");
+        assert_eq!(held["veredas-c"].inputs, Err(refused(&what)), "{mac} {how}: through the macro alone");
+    }
+    // A fork by path at its upstream's version beside that upstream from the registry: cargo writes
+    // the line without a source for the fork, with one for the registry's. Each read, none refused.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"forks\"]\n");
+    r.write("crates/veredas-a/Cargo.toml", "[package]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nitoa = { path = \"../../forks/itoa\" }\nmemchr = \"2\"\n");
+    r.write("crates/veredas-a/src/lib.rs", "\n");
+    r.write("crates/veredas-b/Cargo.toml", "[package]\nname = \"veredas-b\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nitoa = \"=1.0.18\"\n");
+    r.write("crates/veredas-b/src/lib.rs", "\n");
+    r.write("forks/itoa/Cargo.toml", "[workspace]\n\n[package]\nname = \"itoa\"\nversion = \"1.0.18\"\nedition = \"2024\"\n");
+    r.write("forks/itoa/src/lib.rs", "\n");
+    r.write(
+        "Cargo.lock",
+        &format!(
+            "version = 4\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\nsource = \"{reg}\"\nchecksum = \"1818\"\n\n\
+             [[package]]\nname = \"memchr\"\nversion = \"2.7.4\"\nsource = \"{reg}\"\nchecksum = \"2747\"\n\n\
+             [[package]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\ndependencies = [\n \"itoa 1.0.18\",\n \"memchr\",\n]\n\n\
+             [[package]]\nname = \"veredas-b\"\nversion = \"2.0.0\"\ndependencies = [\n \"itoa 1.0.18 ({reg})\",\n]\n"
+        ),
+    );
+    let commit = r.commit("a fork at its upstream's version");
+    let held = manifest::components_at(r.path(), &commit, &mut Vec::new()).unwrap();
+    let keys = |n: &str| -> Vec<String> { held[n].inputs.as_ref().unwrap_or_else(|e| panic!("{n}: {e}")).0.keys().filter(|k| k.starts_with("Cargo.lock") || k.starts_with("forks")).cloned().collect() };
+    assert_eq!(keys("veredas-a"), ["Cargo.lock: memchr 2.7.4", "forks/itoa/", "forks/itoa/Cargo.toml"]);
+    assert_eq!(keys("veredas-b"), ["Cargo.lock: itoa 1.0.18"]);
+}

@@ -172,7 +172,9 @@ impl Workspace<'_> {
         // Each lock entry to read, with the crate of the registry or git it was reached through
         // (none for one a package by path names itself).
         let mut queue: Vec<(usize, Option<String>)> = Vec::new();
-        let mut taken: BTreeSet<usize> = BTreeSet::new();
+        // Each lock entry with a source read once as reached by a package by path and once as
+        // reached behind a crate of the registry or git: a `[replace]` takes how it was reached.
+        let mut taken: BTreeSet<(usize, bool)> = BTreeSet::new();
         // The packages by path reached only behind a crate of the registry or git, so far: their
         // folder, their name and version, and that crate.
         let mut behind: BTreeMap<&str, (String, String)> = BTreeMap::new();
@@ -222,7 +224,7 @@ impl Workspace<'_> {
             let Some((at, through)) = queue.pop() else { break };
             let lock = lock.as_ref().expect("a package was resolved in it");
             let l = &lock[at];
-            if l.source.is_some() && !taken.insert(at) {
+            if l.source.is_some() && !taken.insert((at, through.is_some())) {
                 continue;
             }
             if l.source.is_none() {
@@ -287,7 +289,7 @@ impl Workspace<'_> {
         }
         let mut packages = Packages { names: used.iter().map(|m| m.name.clone()).collect(), vendored: BTreeSet::new() };
         if let Some(lock) = &lock {
-            for &at in &taken {
+            for &(at, _) in &taken {
                 let l = &lock[at];
                 packages.names.insert(l.name.clone());
                 if l.source.is_some() {
@@ -362,9 +364,13 @@ fn resolve(lock: &[Locked], d: &str) -> Result<usize, String> {
         })
         .map(|(i, _)| i)
         .collect();
-    match found[..] {
-        [one] => Ok(one),
-        [] => Err(format!("its Cargo.lock names `{d}` and pins no such package")),
+    // One name and version locked twice: cargo writes the source of the one that has one, so a
+    // line without a source names the package by path.
+    let pathless: Vec<usize> = found.iter().copied().filter(|&i| lock[i].source.is_none()).collect();
+    match (&found[..], &pathless[..]) {
+        ([one], _) => Ok(*one),
+        ([], _) => Err(format!("its Cargo.lock names `{d}` and pins no such package")),
+        (_, [one]) if source.is_none() => Ok(*one),
         _ => Err(format!("its Cargo.lock names `{d}`, which more than one of its packages answers")),
     }
 }
