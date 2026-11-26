@@ -590,7 +590,9 @@ async fn list_identity_udp(udp: UdpSocket, shared: Arc<Shared>) {
         }
         let Ok(h) = <[u8; HEADER]>::try_from(&buf[..HEADER]) else { continue };
         let h = Header::parse(&h);
-        if h.command != command::LIST_IDENTITY || shared.silent.load(Ordering::SeqCst) {
+        // A request alone: one carries no data, an answer its identity item. Answering an answer
+        // set two adapters answering each other for ever, and one its own (round 8).
+        if h.command != command::LIST_IDENTITY || h.length != 0 || shared.silent.load(Ordering::SeqCst) {
             continue;
         }
         let Some(own) = own else { continue };

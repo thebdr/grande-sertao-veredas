@@ -2805,3 +2805,256 @@ mod round_7 {
         assert_eq!((r[2], adapter.assembly(151).unwrap()), (0, vec![7, 8]));
     }
 }
+
+
+/// C-111's eighth refute round: the critic's probes (`~/.cache/veredas/critic-c111-r8/probes`),
+/// kept as pins: a ListIdentity answer not answered on UDP; a refused Forward_Open writing no
+/// configuration; a u16 the plant side sets and an f32 the wire writes, little-endian.
+mod round_8 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream, UdpSocket};
+    use std::time::{Duration, Instant};
+
+    use veredas_maquinar::ethernetip::*;
+
+    fn config(text: &str) -> EnipConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn wait(within: Duration, mut what: impl FnMut() -> bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            if what() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        what()
+    }
+
+    fn device(host: u8) -> String {
+        format!(
+            "bind = \"127.0.0.{host}\"\nport = 0\nio_port = 0\n\
+             identity = {{ vendor_id = 9, device_type = 7, product_code = 3, revision = \"2.5\", serial = 305419896, product_name = \"bench io\" }}\n\
+             assemblies = [ {{ instance = 100, size = 8 }}, {{ instance = 150, size = 4 }}, {{ instance = 151, size = 2 }} ]\n\
+             connections = [ {{ config = 151, output = 150, input = 100 }} ]\n"
+        )
+    }
+
+    fn frame(command: u16, session: u32, body: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&command.to_le_bytes());
+        f.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        f.extend_from_slice(&session.to_le_bytes());
+        f.extend_from_slice(&0u32.to_le_bytes());
+        f.extend_from_slice(b"round-8!");
+        f.extend_from_slice(&0u32.to_le_bytes());
+        f.extend_from_slice(body);
+        f
+    }
+
+    fn read_frame(s: &mut TcpStream) -> Vec<u8> {
+        let mut h = [0u8; 24];
+        s.read_exact(&mut h).unwrap();
+        let len = u16::from_le_bytes([h[2], h[3]]) as usize;
+        let mut b = vec![0u8; len];
+        s.read_exact(&mut b).unwrap();
+        [h.to_vec(), b].concat()
+    }
+
+    fn rr_body(request: &[u8], extra: &[(u16, Vec<u8>)]) -> Vec<u8> {
+        let mut b = vec![0, 0, 0, 0, 5, 0];
+        b.extend_from_slice(&(2 + extra.len() as u16).to_le_bytes());
+        b.extend_from_slice(&[0, 0, 0, 0]);
+        b.extend_from_slice(&0x00B2u16.to_le_bytes());
+        b.extend_from_slice(&(request.len() as u16).to_le_bytes());
+        b.extend_from_slice(request);
+        for (kind, data) in extra {
+            b.extend_from_slice(&kind.to_le_bytes());
+            b.extend_from_slice(&(data.len() as u16).to_le_bytes());
+            b.extend_from_slice(data);
+        }
+        b
+    }
+
+    fn items(reply: &[u8]) -> Vec<(u16, Vec<u8>)> {
+        let b = &reply[24 + 6..];
+        let n = u16::from_le_bytes([b[0], b[1]]) as usize;
+        let mut at = 2;
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let kind = u16::from_le_bytes([b[at], b[at + 1]]);
+            let len = u16::from_le_bytes([b[at + 2], b[at + 3]]) as usize;
+            out.push((kind, b[at + 4..at + 4 + len].to_vec()));
+            at += 4 + len;
+        }
+        out
+    }
+
+    struct Conn {
+        s: TcpStream,
+        session: u32,
+    }
+
+    impl Conn {
+        fn open(addr: SocketAddr) -> Conn {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.set_nodelay(true).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            s.write_all(&frame(0x65, 0, &[1, 0, 0, 0])).unwrap();
+            let r = read_frame(&mut s);
+            assert_eq!(&r[8..12], &[0, 0, 0, 0]);
+            let session = u32::from_le_bytes(r[4..8].try_into().unwrap());
+            Conn { s, session }
+        }
+        fn cip_with(&mut self, request: &[u8], extra: &[(u16, Vec<u8>)]) -> (Vec<u8>, Vec<(u16, Vec<u8>)>) {
+            self.s.write_all(&frame(0x6F, self.session, &rr_body(request, extra))).unwrap();
+            let r = read_frame(&mut self.s);
+            assert_eq!(&r[8..12], &[0, 0, 0, 0], "SendRRData status {r:02X?}");
+            let it = items(&r);
+            (it.iter().find(|i| i.0 == 0x00B2).unwrap().1.clone(), it)
+        }
+        fn cip(&mut self, request: &[u8]) -> Vec<u8> {
+            self.cip_with(request, &[]).0
+        }
+    }
+
+    fn sockaddr_item(udp: &UdpSocket) -> (u16, Vec<u8>) {
+        let SocketAddr::V4(me) = udp.local_addr().unwrap() else { panic!() };
+        let mut d = 2u16.to_be_bytes().to_vec();
+        d.extend_from_slice(&me.port().to_be_bytes());
+        d.extend_from_slice(&me.ip().octets());
+        d.extend_from_slice(&[0; 8]);
+        (0x8001, d)
+    }
+
+    fn o_to_t_addr(items: &[(u16, Vec<u8>)]) -> SocketAddr {
+        let d = &items.iter().find(|i| i.0 == 0x8000).expect("an O->T item").1;
+        SocketAddr::from(([d[4], d[5], d[6], d[7]], u16::from_be_bytes([d[2], d[3]])))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fo_raw(serial: u16, vendor: u16, originator: u32, rpi: u32, multiplier: u8, o_size: u16, t_size: u16, path: &[u8]) -> Vec<u8> {
+        let mut b = vec![0x54, 0x02, 0x20, 0x06, 0x24, 0x01, 0x0A, 0x05];
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&(0x8000_0000u32 | u32::from(serial)).to_le_bytes());
+        b.extend_from_slice(&serial.to_le_bytes());
+        b.extend_from_slice(&vendor.to_le_bytes());
+        b.extend_from_slice(&originator.to_le_bytes());
+        b.extend_from_slice(&[multiplier, 0, 0, 0]);
+        b.extend_from_slice(&rpi.to_le_bytes());
+        b.extend_from_slice(&((2u16 << 13) | o_size).to_le_bytes());
+        b.extend_from_slice(&rpi.to_le_bytes());
+        b.extend_from_slice(&((2u16 << 13) | t_size).to_le_bytes());
+        b.push(0x01);
+        b.push((path.len() / 2) as u8);
+        b.extend_from_slice(path);
+        b
+    }
+
+    fn class1(connection: u32, sequence: u32, count: u16, run: Option<bool>, data: &[u8]) -> Vec<u8> {
+        let mut payload = count.to_le_bytes().to_vec();
+        if let Some(r) = run {
+            payload.extend_from_slice(&(r as u32).to_le_bytes());
+        }
+        payload.extend_from_slice(data);
+        let mut f = 2u16.to_le_bytes().to_vec();
+        f.extend_from_slice(&0x8002u16.to_le_bytes());
+        f.extend_from_slice(&8u16.to_le_bytes());
+        f.extend_from_slice(&connection.to_le_bytes());
+        f.extend_from_slice(&sequence.to_le_bytes());
+        f.extend_from_slice(&0x00B1u16.to_le_bytes());
+        f.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+        f.extend_from_slice(&payload);
+        f
+    }
+
+    fn status_of(reply: &[u8]) -> (u8, Vec<u16>) {
+        let n = reply[3] as usize;
+        (reply[2], (0..n).map(|i| u16::from_le_bytes([reply[4 + 2 * i], reply[5 + 2 * i]])).collect())
+    }
+
+    const PATH: [u8; 8] = [0x20, 0x04, 0x24, 151, 0x2C, 150, 0x2C, 100];
+
+    fn list_identity_request() -> Vec<u8> {
+        frame(0x63, 0, &[])
+    }
+
+    /// A ListIdentity answer (the adapter's own, as another adapter's would be) sent back to it from
+    /// an ordinary socket is not answered: it was, so two adapters answered each other for ever (one
+    /// datagram with a forged source started it, some 31 000 answers a second each).
+    #[test]
+    fn a_list_identity_answer_is_not_answered() {
+        let a = start(&config("bind = \"127.0.0.84\"\nport = 0\nio_port = 0\n")).unwrap();
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        udp.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+        udp.send_to(&list_identity_request(), a.addr).unwrap();
+        let mut buf = [0u8; 600];
+        let (n, _) = udp.recv_from(&mut buf).unwrap();
+        let answer = buf[..n].to_vec();
+        udp.send_to(&answer, a.addr).unwrap();
+        let again = udp.recv_from(&mut buf).map(|(n, _)| buf[..n].to_vec());
+        assert!(again.is_err(), "an answer was answered as a request");
+    }
+
+    /// A Forward_Open the adapter refuses changes nothing: its configuration data (a data segment
+    /// of the configuration assembly's own size) is not written when the open is refused for its O->T
+    /// size, its RPI, or an output another connection owns (a second scanner's open to an owned
+    /// device: its configuration must not land under the owner's connection).
+    #[test]
+    fn a_refused_forward_open_writes_no_configuration() {
+        let adapter = start(&config(&device(81))).unwrap();
+        let mut c = Conn::open(adapter.addr);
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let with_data = |d: [u8; 2]| [&[0x20, 0x04, 0x24, 151, 0x80, 0x01][..], &d[..], &[0x2C, 150, 0x2C, 100][..]].concat();
+        let (r1, _) = c.cip_with(&fo_raw(0x0101, 0x00FE, 1, 20_000, 0, 4, 8 + 2, &with_data([1, 2])), &[sockaddr_item(&udp)]);
+        let (r2, _) = c.cip_with(&fo_raw(0x0102, 0x00FE, 1, 500, 0, 4 + 6, 8 + 2, &with_data([3, 4])), &[sockaddr_item(&udp)]);
+        let after_two = adapter.assembly(151).unwrap();
+        let (r3, _) = c.cip_with(&fo_raw(0x0103, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, &PATH), &[sockaddr_item(&udp)]);
+        let (r4, _) = c.cip_with(&fo_raw(0x0104, 0x0001, 7, 20_000, 0, 4 + 6, 8 + 2, &with_data([5, 6])), &[sockaddr_item(&udp)]);
+        let after_owned = adapter.assembly(151).unwrap();
+        assert_eq!((status_of(&r1), status_of(&r2), status_of(&r3).0, status_of(&r4)), ((1, vec![0x0127, 10]), (1, vec![0x0111]), 0, (1, vec![0x0106])));
+        assert_eq!((after_two, after_owned), (vec![0, 0], vec![0, 0]), "a refused Forward_Open wrote its configuration");
+    }
+
+
+    /// A u16 the plant side sets (the reference's own example: "a speed the plant side sets", a
+    /// u16 of the input assembly) goes out little-endian, read explicitly and in the produced frames.
+    #[test]
+    fn a_u16_the_plant_side_sets_goes_out_little_endian() {
+        let text = format!("{}points = [ {{ name = \"speed\", assembly = 100, byte = 2, type = \"u16\" }} ]\n", device(82));
+        let adapter = start(&config(&text)).unwrap();
+        adapter.set("speed", "4660").unwrap();
+        let mut c = Conn::open(adapter.addr);
+        let r = c.cip(&[0x0E, 0x03, 0x20, 0x04, 0x24, 100, 0x30, 0x03]);
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        udp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let (o, _) = c.cip_with(&fo_raw(0x0101, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, &PATH), &[sockaddr_item(&udp)]);
+        assert_eq!(o[2], 0);
+        let mut buf = [0u8; 1500];
+        let (n, _) = udp.recv_from(&mut buf).unwrap();
+        let f = ethernetip_connections::decode_frame(&buf[..n], false).unwrap();
+        assert_eq!((&r[6..8], &f.data[2..4]), (&[0x34, 0x12][..], &[0x34, 0x12][..]));
+    }
+
+
+    /// An f32 the wire writes (explicitly or in a run frame) is read little-endian by the plant.
+    #[test]
+    fn an_f32_the_wire_writes_is_read_little_endian() {
+        let text = format!("{}points = [ {{ name = \"spf\", assembly = 150, byte = 0, type = \"f32\" }} ]\n", device(83));
+        let adapter = start(&config(&text)).unwrap();
+        let mut c = Conn::open(adapter.addr);
+        let mut set = vec![0x10, 0x03, 0x20, 0x04, 0x24, 150, 0x30, 0x03];
+        set.extend_from_slice(&12.5f32.to_le_bytes());
+        let w = c.cip(&set);
+        let explicit = adapter.get("spf").unwrap();
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (o, it) = c.cip_with(&fo_raw(0x0101, 0x00FE, 1, 20_000, 0, 4 + 6, 8 + 2, &PATH), &[sockaddr_item(&udp)]);
+        assert_eq!((w[2], o[2]), (0, 0));
+        let id = u32::from_le_bytes(o[4..8].try_into().unwrap());
+        udp.send_to(&class1(id, 1, 1, Some(true), &(-3.0f32).to_le_bytes()), o_to_t_addr(&it)).unwrap();
+        assert!(wait(Duration::from_secs(2), || adapter.assembly(150).unwrap() == (-3.0f32).to_le_bytes()), "the run frame landed");
+        let consumed = adapter.get("spf").unwrap();
+        assert_eq!((explicit, consumed), (Value::F32(12.5), Value::F32(-3.0)));
+    }
+}
