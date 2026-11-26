@@ -347,6 +347,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                     .filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| ["lib", "rlib", "dylib", "cdylib", "staticlib", "bin", "custom-build", "proc-macro"].contains(&k.as_str().unwrap_or_default()))))
                     .filter_map(|t| t["src_path"].as_str().map(|p| from_root(Path::new(p)).unwrap_or_else(|| p.to_string())))
                     .collect();
+                let build_script = pkg["targets"].as_array().into_iter().flatten().any(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "custom-build")));
                 out.push(inputs::Member {
                     name: pkg["name"].as_str().unwrap_or_default().to_string(),
                     version: pkg["version"].as_str().unwrap_or_default().to_string(),
@@ -354,6 +355,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                     workspace: workspace.to_string(),
                     deps,
                     sources,
+                    build_script,
                 });
             }
             out

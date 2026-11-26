@@ -169,6 +169,22 @@ pub fn assemble(
         let dump = vm::run("objdump", &["-p", &to.display().to_string()], None)?;
         refusals.extend(check_needs(b, &needs(&dump), r));
     }
+    // What a Qt program loads at run time (crate::builder::QT_STAGE), staged beside the
+    // executables (`qt/`, or `lib/qt/` of a bundle extracted again): carried in `lib/qt/`, every
+    // library of it held to the tester machine's libraries as the executables are.
+    let staged = built_bins.parent().map(|p| [p.join("qt"), p.join("lib/qt")]).into_iter().flatten().find(|q| q.is_dir());
+    if let Some(qt) = &staged {
+        std::fs::create_dir_all(dir.join("lib"))?;
+        vm::run("cp", &["-r", &qt.display().to_string(), &dir.join("lib/qt").display().to_string()], None)?;
+        let mut libraries = Vec::new();
+        collect_libraries(&dir.join("lib/qt"), &mut libraries)?;
+        libraries.sort();
+        for l in libraries {
+            let dump = vm::run("objdump", &["-p", &l.display().to_string()], None)?;
+            let shown = l.strip_prefix(&dir).unwrap_or(&l).display().to_string();
+            refusals.extend(check_needs(&shown, &needs(&dump), r));
+        }
+    }
     if !refusals.is_empty() {
         return Err(VmError::Failed { program: "the executables' check".into(), status: "refused".into(), stderr: refusals.join("\n") });
     }
@@ -192,6 +208,20 @@ pub fn assemble(
     let out = work.join(format!("{name}.tar.gz"));
     pack(work, name, epoch.trim(), &out)?;
     Ok(out)
+}
+
+/// Every shared library (`*.so`, `*.so.<n>`) under `dir`, at any depth.
+fn collect_libraries(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for e in std::fs::read_dir(dir)? {
+        let e = e?;
+        let p = e.path();
+        if e.file_type()?.is_dir() {
+            collect_libraries(&p, out)?;
+        } else if p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".so") || n.to_string_lossy().contains(".so.")) {
+            out.push(p);
+        }
+    }
+    Ok(())
 }
 
 /// Packs `work/<name>` into `out` so that the same files give the same bytes whatever made them:

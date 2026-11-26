@@ -86,6 +86,8 @@ pub const VENDOR: &str = "/build/vendor";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Build {
     pub package: String,
+    /// Its folder in the tree (`crates/veredas-oficina`), whose QML a Qt program imports.
+    pub dir: String,
     pub bins: Vec<String>,
     /// Its library target's name, built (`--lib`) when it ships no executable.
     pub lib: Option<String>,
@@ -107,7 +109,8 @@ pub fn feature_args(package: &str, features: &[String]) -> Vec<String> {
 }
 
 /// The script the builder machine runs on the commit's tree: the toolchain's and the C library's
-/// versions written down, each component of `builds` built alone with `cargo build --release
+/// versions written down, each component of `builds` built alone, traced ([`crate::trace::STRACE`],
+/// its log `/build/out/trace/<component>.trace`), with `cargo build --release
 /// --locked --offline -p <component> --bins`, each feature its executables need turned on
 /// (`--features`, docs/questions.md Q443; `--lib` for one that ships no executable), so cargo
 /// unifies features within its own inputs, never across components, as many jobs as the builder
@@ -126,7 +129,8 @@ pub fn script(r: &Recipe, builds: &[Build]) -> String {
                 (true, true) => "--lib".to_string(),
                 (true, false) => return None,
             };
-            Some(format!("cargo build --release --locked --offline --jobs {} -p {} {what}\n", r.builder.cpus, b.package))
+            // Traced (docs/questions.md Q448): the log is the component's, beside its executables.
+            Some(format!("{} /build/out/trace/{}.trace cargo build --release --locked --offline --jobs {} -p {} {what}\n", crate::trace::STRACE, b.package, r.builder.cpus, b.package))
         })
         .collect();
     let copies: String = builds
@@ -140,13 +144,59 @@ pub fn script(r: &Recipe, builds: &[Build]) -> String {
                 .collect::<Vec<_>>()
         })
         .collect();
+    let qt: String = builds.iter().flat_map(|b| b.bins.iter().map(move |bin| format!("stage_qt {} {}\n", quoted(bin), quoted(&b.dir)))).collect();
     format!(
         "set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
-         cd {SRC}\nmkdir -p /build/out/bin /build/out/deps\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
-         {cargo}{CONTROL_CHECK}\nmissing=\n{copies}\
-         [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n"
+         cd {SRC}\nmkdir -p /build/out/bin /build/out/deps /build/out/trace\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
+         {QT_ENV}\n{QT_STAGE}\n{cargo}{CONTROL_CHECK}\nmissing=\n{copies}\
+         [ -z \"$missing\" ]\n{qt}echo ALFORGE-BUILD-OK\n"
     )
 }
+
+/// The builder script's line naming Qt and KDDockWidgets for Oficina's window, when their disks are
+/// mounted ([`qt_disks`]): `QMAKE` and `OFICINA_DEPS`, which its build script and cxx-qt's read.
+pub const QT_ENV: &str = "if [ -x /opt/qt/qt/bin/qmake ]; then export QMAKE=/opt/qt/qt/bin/qmake OFICINA_DEPS=/opt/qt/deps; fi";
+
+/// The builder script's function run, once every executable is copied out, on each (`stage_qt <bin>
+/// <its component's folder>`) and doing its work for one that loads Qt (its `ldd` naming
+/// `/opt/qt`): what it loads at run time staged in `/build/out/qt/` as Qt lays itself
+/// out (`lib/`, `plugins/`, `qml/`), so the bundle's `lib/qt/` holds it (docs/questions.md Q446):
+/// the X and offscreen platform plugins and X's OpenGL integrations; the QML modules its
+/// component's folder imports, as Qt's own `qmlimportscanner` reads them, each module's own files and its
+/// folders that are no module; every library of Qt and KDDockWidgets it, those plugins and those
+/// modules load, under the name each is loaded by (KDDockWidgets' looking beside itself). The
+/// libraries they take from the system are listed (`/build/out/qt-system-needs`), and the
+/// executable's `RUNPATH` becomes `$ORIGIN/../lib/qt/lib`, so it loads the bundle's Qt and no
+/// other; Qt finds its plugins and modules from where its own library lies. Then the executable is
+/// started from that layout, offscreen, for ten seconds: what it says and how it ended are logged
+/// (`ALFORGE-QT-SAYS`, `ALFORGE-QT-RUN <name> <code>`), for [`outcome`] to judge.
+pub const QT_STAGE: &str = r#"stage_qt() {
+exe=/build/out/bin/$1
+[ -d /opt/qt/qt/lib ] || return 0
+ldd "$exe" 2>/dev/null | grep -q '=> /opt/qt/' || return 0
+q=/build/out/qt
+name=$1
+mkdir -p "$q/lib" "$q/plugins/platforms" "$q/plugins/xcbglintegrations" "$q/qml"
+cp /opt/qt/qt/plugins/platforms/libqxcb.so /opt/qt/qt/plugins/platforms/libqoffscreen.so "$q/plugins/platforms/"
+cp /opt/qt/qt/plugins/xcbglintegrations/*.so "$q/plugins/xcbglintegrations/"
+/opt/qt/qt/libexec/qmlimportscanner -rootPath "/build/src/$2" -importPath /opt/qt/qt/qml > /build/out/qt-imports.json
+for m in $(grep -o '"path": *"/opt/qt/qt/qml/[^"]*"' /build/out/qt-imports.json | sed 's/^"path": *"//; s/"$//' | sort -u); do
+rel=${m#/opt/qt/qt/qml/}
+mkdir -p "$q/qml/$rel"
+find "$m" -maxdepth 1 -type f -exec cp {} "$q/qml/$rel/" \;
+for d in "$m"/*/; do if [ -d "$d" ] && [ ! -f "$d/qmldir" ]; then cp -r "$d" "$q/qml/$rel/"; fi; done
+done
+loaded=$(cd "$q" && find plugins qml -name '*.so' | sed 's#^#/opt/qt/qt/#')
+for f in "$exe" $loaded; do ldd "$f" | awk '$2 == "=>" && $3 ~ /^\/opt\/qt\// {print $1, $3}'; done | sort -u > /build/out/qt-libs
+while read -r so path; do cp -L "$path" "$q/lib/$so"; case "$path" in /opt/qt/deps/*) patchelf --set-rpath '$ORIGIN' "$q/lib/$so";; esac; done < /build/out/qt-libs
+for f in "$exe" $loaded; do ldd "$f" | awk '$2 == "=>" && $3 !~ /^\/opt\/qt\// {print $1}'; done | sort -u > /build/out/qt-system-needs
+patchelf --set-rpath '$ORIGIN/../lib/qt/lib' "$exe"
+rm -rf /build/try && mkdir -p /build/try/bin /build/try/lib && cp "$exe" /build/try/bin/ && cp -r "$q" /build/try/lib/qt
+rc=0
+QT_QPA_PLATFORM=offscreen timeout 10 /build/try/bin/"$name" > /build/out/qt-run.log 2>&1 || rc=$?
+sed 's/^/ALFORGE-QT-SAYS /' /build/out/qt-run.log
+echo "ALFORGE-QT-RUN $name $rc"
+}"#;
 
 /// The builder script's line run after the builds: a name under `/build` that cargo's reading of
 /// rustc's dep-info misreads fails it. That is a control character, C1's included (a newline,
@@ -168,6 +218,26 @@ pub fn outcome(log: &str, console: &str, unpacked: bool, log_path: &Path) -> Res
             stderr: "a name under /build holds a control character, a backslash or a whitespace other than a space, or ends in a space, after the build: cargo's dep-info would misread it and hide reads after it".into(),
         });
     }
+    // A window that did not stay up from the bundle's layout, or said a module or a library did
+    // not load (`timeout`'s 124 is a window still running at its end).
+    let said: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("ALFORGE-QT-SAYS ")).collect();
+    let faults: Vec<&&str> = said
+        .iter()
+        .filter(|l| {
+            let l = l.to_lowercase();
+            ["is not installed", "cannot load library", "could not be loaded", "failed to load", "no such file", "cannot open shared object"].iter().any(|w| l.contains(w))
+        })
+        .collect();
+    for run in log.lines().filter_map(|l| l.strip_prefix("ALFORGE-QT-RUN ")) {
+        let (name, code) = run.rsplit_once(' ').unwrap_or((run, ""));
+        if code != "124" || !faults.is_empty() {
+            return Err(VmError::Failed {
+                program: "the window's run in the builder machine".into(),
+                status: format!("`{name}` ended with {code} within ten seconds, offscreen, from the bundle's layout"),
+                stderr: said.join("\n"),
+            });
+        }
+    }
     let missing: Vec<&str> = log.lines().filter_map(|l| l.strip_prefix("ALFORGE-MISSING ")).collect();
     if !missing.is_empty() {
         return Err(VmError::Failed {
@@ -184,6 +254,54 @@ pub fn outcome(log: &str, console: &str, unpacked: bool, log_path: &Path) -> Res
         });
     }
     Ok(())
+}
+
+/// Bumped when the Qt disks' making changes, so a cached disk of the old kind is not used.
+const QT_DISKS: u32 = 1;
+
+/// Where the development machine holds Qt and KDDockWidgets: the folder of the qmake cargo's
+/// configuration names (`QMAKE`, its `bin/` parent) and `OFICINA_DEPS`, else their defaults
+/// (`~/.local/opt/Qt/<version>/gcc_64`, `~/.local/opt/oficina-deps`), each held to the recipe's
+/// version: Qt's by its qmake, KDDockWidgets' by its CMake package.
+pub fn qt_folders(q: &crate::machine::Qt) -> Result<(PathBuf, PathBuf), VmError> {
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let qt = std::env::var_os("QMAKE").map(PathBuf::from).and_then(|m| m.parent().and_then(Path::parent).map(Path::to_path_buf)).unwrap_or_else(|| home.join(format!(".local/opt/Qt/{}/gcc_64", q.version)));
+    let deps = std::env::var_os("OFICINA_DEPS").map(PathBuf::from).unwrap_or_else(|| home.join(".local/opt/oficina-deps"));
+    let found = vm::run(&qt.join("bin/qmake").display().to_string(), &["-query", "QT_VERSION"], None)?;
+    if found.trim() != q.version {
+        return Err(VmError::Failed { program: "the builder's Qt".into(), status: "another version".into(), stderr: format!("{} is Qt {}, the recipe names {}", qt.display(), found.trim(), q.version) });
+    }
+    let cmake = deps.join("lib/cmake/KDDockWidgets-qt6/KDDockWidgets-qt6ConfigVersion.cmake");
+    let text = std::fs::read_to_string(&cmake)?;
+    let kdd = text.lines().find_map(|l| l.trim().strip_prefix("set(PACKAGE_VERSION \"").and_then(|r| r.strip_suffix("\")"))).unwrap_or_default();
+    if kdd != q.kddockwidgets {
+        return Err(VmError::Failed { program: "the builder's KDDockWidgets".into(), status: "another version".into(), stderr: format!("{} is KDDockWidgets {kdd}, the recipe names {}", deps.display(), q.kddockwidgets) });
+    }
+    Ok((qt, deps))
+}
+
+/// The builder's disks of Qt and KDDockWidgets, when the recipe names them: each folder made into a
+/// read-only ext4 disk (`mke2fs -d`, no privilege), once per version, kept in the cache; the
+/// builder mounts them at `/opt/qt/qt` and `/opt/qt/deps`. None when the recipe names no Qt.
+pub fn qt_disks(r: &Recipe) -> Result<Vec<DataDisk>, VmError> {
+    let Some(q) = &r.builder.qt else { return Ok(Vec::new()) };
+    let (qt, deps) = qt_folders(q)?;
+    let mut disks = Vec::new();
+    for (what, dir, serial) in [("qt", &qt, "alforge-qt"), ("kddockwidgets", &deps, "alforge-qtdeps")] {
+        let key = cache::sha256_text(&format!("{QT_DISKS}\n{what}\n{}\n{}\n", q.version, q.kddockwidgets));
+        let path = cache::dir()?.join(format!("{what}-{}-{}.ext4", if what == "qt" { &q.version } else { &q.kddockwidgets }, &key[..16]));
+        if !path.exists() {
+            eprintln!("alforge: making the builder's {what} disk from {} (once)", dir.display());
+            let used = vm::run("du", &["-sk", &dir.display().to_string()], None)?;
+            let kib: u64 = used.split_whitespace().next().and_then(|k| k.parse().ok()).unwrap_or(0);
+            let part = path.with_extension("part");
+            let _ = std::fs::remove_file(&part);
+            vm::run("mke2fs", &["-q", "-t", "ext4", "-m", "0", "-E", "root_owner=0:0", "-d", &dir.display().to_string(), &part.display().to_string(), &format!("{}k", kib + kib / 4 + 131_072)], None)?;
+            std::fs::rename(&part, &path)?;
+        }
+        disks.push(DataDisk { file: path, serial: serial.into(), writable: false });
+    }
+    Ok(disks)
 }
 
 /// What a build handed back.
@@ -242,7 +360,9 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, builds: &[B
     // The build logs to a file, which goes back on the output disk whatever the outcome, and its
     // tail is echoed to the console afterwards: agetty hangs up ttyS0 when it starts, so a
     // descriptor opened on it before then writes nothing (docs/alforge-plan.md, "Traps").
-    let user_data = "#cloud-config\nruncmd:\n  - [ sh, -c, 'mkdir -p /build/out && tar -xf /dev/disk/by-id/virtio-alforge-in -C /build && sh /build/build.sh > /build/out/build.log 2>&1; rc=$?; tail -n 40 /build/out/build.log > /dev/ttyS0; tar -cf /dev/disk/by-id/virtio-alforge-out -C /build/out . && sync; echo \"ALFORGE-BUILD-EXIT $rc\" > /dev/ttyS0' ]\npower_state:\n  mode: poweroff\n  delay: now\n  timeout: 120\n";
+    // Qt's disks, when the recipe names Qt, mounted read-only where the script looks for them.
+    let qt = qt_disks(r)?;
+    let user_data = "#cloud-config\nruncmd:\n  - [ sh, -c, 'mkdir -p /build/out && if [ -e /dev/disk/by-id/virtio-alforge-qt ]; then mkdir -p /opt/qt/qt /opt/qt/deps && mount -o ro /dev/disk/by-id/virtio-alforge-qt /opt/qt/qt && mount -o ro /dev/disk/by-id/virtio-alforge-qtdeps /opt/qt/deps; fi; tar -xf /dev/disk/by-id/virtio-alforge-in -C /build && sh /build/build.sh > /build/out/build.log 2>&1; rc=$?; tail -n 40 /build/out/build.log > /dev/ttyS0; tar -cf /dev/disk/by-id/virtio-alforge-out -C /build/out . && sync; echo \"ALFORGE-BUILD-EXIT $rc\" > /dev/ttyS0' ]\npower_state:\n  mode: poweroff\n  delay: now\n  timeout: 120\n";
     let nonce = cache::sha256_text(&format!("{commit}{:?}", std::time::SystemTime::now()));
     let seed = work.join("build-seed.iso");
     vm::seed(&work.join("build-seed"), &seed, user_data, &format!("alforge-build-{}", &nonce[..16]))?;
@@ -256,10 +376,7 @@ pub fn build(r: &Recipe, root: &Path, commit: &str, toolchain: &str, builds: &[B
         cpus: r.builder.cpus,
         memory_mb: r.builder.memory_mb,
         seed: Some(seed),
-        data: vec![
-            DataDisk { file: in_tar.clone(), serial: "alforge-in".into(), writable: false },
-            DataDisk { file: out_raw.clone(), serial: "alforge-out".into(), writable: true },
-        ],
+        data: [DataDisk { file: in_tar.clone(), serial: "alforge-in".into(), writable: false }, DataDisk { file: out_raw.clone(), serial: "alforge-out".into(), writable: true }].into_iter().chain(qt).collect(),
         forwards: vec![],
         snapshot: false,
         mac: None,

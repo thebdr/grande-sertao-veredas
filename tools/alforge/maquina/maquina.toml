@@ -23,7 +23,20 @@ cxxabi = "1.3.15"
 cpus = 4
 memory_mb = 6144
 disk_gb = 40
-packages = ["build-essential", "pkg-config", "curl", "ca-certificates"]
+# `strace` traces each build (docs/questions.md Q448); `patchelf` points Oficina's window at the
+# bundle's own Qt (Q446); OpenGL's headers, and the libraries Qt's link to, build the window.
+packages = [
+  "build-essential", "pkg-config", "curl", "ca-certificates", "strace", "patchelf",
+  "libgl-dev", "libegl-dev", "libopengl0", "libfontconfig1", "libfreetype6", "libglib2.0-0t64",
+  "libx11-6", "libxkbcommon0", "libdbus-1-3",
+]
+
+# Qt and KDDockWidgets for Oficina's window, built with the `shell` feature its executable requires
+# (Q443) and carried in the bundle's `lib/qt/` (Q446): the development machine's own copies, the
+# folders cargo's configuration names (`QMAKE`'s Qt, `OFICINA_DEPS`), at these versions.
+[builder.qt]
+version = "6.12.0"
+kddockwidgets = "2.5.1"
 
 # The tester machine itself.
 [machine]

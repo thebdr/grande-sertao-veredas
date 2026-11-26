@@ -97,6 +97,8 @@ pub struct Member {
     /// The source files its library, executables and build script start from (cargo's
     /// `src_path`), from the root: one may lie outside its folder (`[lib] path = "../x.rs"`).
     pub sources: Vec<String>,
+    /// Whether it has a build script, which may read anything in its folder.
+    pub build_script: bool,
 }
 
 /// A normal or build dependency of a member.
@@ -527,10 +529,16 @@ fn prefix(dir: &str) -> String {
 /// The top folders of a package (`crates/x/tests/`) holding its tests, benches and examples alone,
 /// which its folder's identity leaves out: each that the commit holds, that no target that ships (a
 /// library, an executable, a build script) starts in, that holds no package a build uses (`dirs`),
-/// and that no module rustc reads can reach: none is left out when a shipped target's crate root,
-/// or a `mod.rs`, lies at the package's top (its `mod examples;` is `examples/mod.rs`), nor one
-/// beside a file named after it (`tests.rs`, whose modules are read from `tests/`).
+/// and that no module rustc reads can reach, in a package without a build script: none is left out
+/// when a shipped target's crate root, or a `mod.rs`, lies at the package's top (its `mod
+/// examples;` is `examples/mod.rs`), nor one beside a file named after it (`tests.rs`, whose
+/// modules are read from `tests/`).
 fn left_out(tree: &Path, m: &Member, dirs: &BTreeSet<&str>) -> Vec<String> {
+    // A build script may read anything in its package's folder (IronCalc's xlsx lists its
+    // `tests/` to write code), so none of it is what only the tests read.
+    if m.build_script {
+        return Vec::new();
+    }
     let top = prefix(&m.dir);
     let at_top = m.sources.iter().any(|s| normal(Path::new(s)).is_some_and(|p| Path::new(&p).parent() == Some(Path::new(&m.dir)))) || tree.join(format!("{top}mod.rs")).is_file();
     if at_top {
@@ -984,16 +992,25 @@ fn normal(p: &Path) -> Option<String> {
 /// compilation read, its build scripts' declared ones too) names that `inputs` does not: each file
 /// under `src` (the tree's root in the builder) outside them, and each file elsewhere but the
 /// build's own output (`src/target/`) and the vendored sources the lock file pins (`vendor`).
+/// Whether a folder of the build's output, `target/release/build/<first>/<second>`, is one a package
+/// of `packages` made: `<name>/<16 hexadecimal>` as cargo 1.100 writes it, `<name>-<16
+/// hexadecimal>` as cargo wrote it before. The package named whole (`foo` never owns `foo-bar`).
+pub(crate) fn built_by(packages: &Packages, first: &str, second: Option<&str>) -> bool {
+    let hash = |h: &str| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit());
+    (packages.names.contains(first) && second.is_some_and(hash)) || packages.names.iter().any(|p| first.strip_prefix(p.as_str()).and_then(|r| r.strip_prefix('-')).is_some_and(hash))
+}
+
+/// An absolute path with its `.` and `..` parts resolved as the kernel resolves them, from `/`.
+pub(crate) fn landed(path: &str) -> PathBuf {
+    PathBuf::from(format!("/{}", rooted(path)))
+}
+
 pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs, packages: &Packages) -> Vec<String> {
     // The builds share one output folder and one copy of the vendored sources: a build may read
     // there only what its own packages made or brought (a build script's `OUT_DIR` and a locked
-    // crate's vendored folder), never another's. The package named whole (`foo` never owns
-    // `foo-bar`), and a vendored crate at the version the build compiles.
-    let hash = |h: &str| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit());
-    let built_by = |first: &str, second: Option<&str>| {
-        (packages.names.contains(first) && second.is_some_and(hash))
-            || packages.names.iter().any(|p| first.strip_prefix(p.as_str()).and_then(|r| r.strip_prefix('-')).is_some_and(hash))
-    };
+    // crate's vendored folder), never another's; a vendored crate at the version the build
+    // compiles.
+    let built_by = |first: &str, second: Option<&str>| built_by(packages, first, second);
     let vendored = |dir: &str| packages.vendored.contains(dir);
     let mut out = BTreeSet::new();
     for path in dep_info_paths(dep_info) {
@@ -1007,7 +1024,7 @@ pub fn read_outside(dep_info: &str, src: &str, vendor: &str, inputs: &Inputs, pa
             out.insert(path);
             continue;
         }
-        let landed = PathBuf::from(format!("/{}", rooted(&path)));
+        let landed = landed(&path);
         let built = Path::new(src).join("target/release/build");
         if let Ok(rest) = landed.strip_prefix(&built) {
             let mut parts = rest.components().map(|c| c.as_os_str().to_string_lossy().into_owned());

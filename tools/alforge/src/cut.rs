@@ -19,6 +19,8 @@ use crate::vm::{self, VmError};
 
 pub const TOGETHER: &str = "the bundle's bench and supervisão on its plant";
 pub const SUITE: &str = "cargo nextest run --workspace";
+/// Each component's own tests, built alone as its executables are (docs/questions.md Q444).
+pub const ALONE: &str = "cargo nextest run -p <component> --features <what its executables need>, each component alone";
 /// What a trial cut states it did not run: a cut whose manifest is never committed.
 pub const NOT_RUN: &str = "not run: a trial cut";
 
@@ -218,6 +220,17 @@ pub fn after_build(
             }
         }
     }
+    // What every process of each build opened to read, but cargo's own (docs/questions.md Q448):
+    // a unit cargo compiled in an earlier component's build and reused is judged in that one's.
+    for h in held.values().filter(|h| !h.bins.is_empty() || h.lib.is_some()) {
+        let file = built.out.join("trace").join(format!("{}.trace", h.name));
+        let log = std::fs::read(&file).map_err(|e| refused(format!("the build left no trace for {} ({}: {e})", h.name, file.display())))?;
+        let inputs = h.inputs.as_ref().map_err(|why| refused(format!("{}'s build inputs do not read: {why}", h.name)))?;
+        let reads = crate::trace::reads(&String::from_utf8_lossy(&log), builder::SRC);
+        for p in crate::trace::outside(&reads, builder::SRC, builder::VENDOR, inputs, &h.packages) {
+            outside.push(format!("the build of {}: {p}, which its version does not name", h.name));
+        }
+    }
     if !outside.is_empty() {
         return Err(refused(outside.join("\n")));
     }
@@ -256,6 +269,35 @@ pub fn as_built(root: &Path, release: &semver::Version, text: &str) -> Result<Ma
         return Err(refused(format!("release {release} would not check as built:\n{}", against.join("\n"))));
     }
     Ok(manifest)
+}
+
+/// Each component's own tests at `commit` in `root`, built alone with the features its executables
+/// need (docs/questions.md Q444, ruled 2026-11-26 "Alone, and tested alone"): `cargo nextest run -p
+/// <component>`, built first and run behind the machine's lock (`lock`), in the suite's cleaned
+/// environment, a component with no test passing. Within one component cargo unifies features as
+/// its executables' build does, its tests' own dependencies added, so what ships is tested as it
+/// is built. A run that does not build or is not green refuses the cut, naming the component.
+pub fn tests_alone(root: &Path, tmp: &Path, commit: &str, held: &std::collections::BTreeMap<String, manifest::Held>, lock: &str) -> Result<(), CutError> {
+    for h in held.values() {
+        let features: Vec<String> = h.features.iter().cloned().collect();
+        let mut argv: Vec<String> = ["cargo", "nextest", "run", "-p", h.name.as_str(), "--profile", "default", "--no-tests=pass"].iter().map(|s| s.to_string()).collect();
+        argv.extend(builder::feature_args(&h.name, &features));
+        eprintln!("alforge: {}'s own tests, built alone", h.name);
+        let mut first = argv.clone();
+        first.push("--no-run".to_string());
+        let words: Vec<&str> = first.iter().map(String::as_str).collect();
+        let built = suite_command(root, tmp, &words, std::env::vars_os()).status().map_err(|source| VmError::Spawn { program: "cargo nextest --no-run".into(), source })?;
+        if !built.success() {
+            return Err(refused(format!("{}'s own tests do not build alone at {commit} ({built}): no release is cut from it", h.name)));
+        }
+        let mut locked: Vec<&str> = vec!["flock", lock];
+        locked.extend(argv.iter().map(String::as_str));
+        let status = suite_command(root, tmp, &locked, std::env::vars_os()).status().map_err(|source| VmError::Spawn { program: "flock cargo nextest".into(), source })?;
+        if !status.success() {
+            return Err(refused(format!("{}'s own tests, built alone, are not green at {commit} ({status}): no release is cut from it", h.name)));
+        }
+    }
+    Ok(())
 }
 
 pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
@@ -341,7 +383,8 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     let toolchain = rustc.split_whitespace().nth(1).ok_or_else(|| refused(format!("rustc printed `{rustc}`")))?.to_string();
     let target = "x86_64-unknown-linux-gnu";
     // Planned with every bin, each built with the features its executables need (Q443).
-    let tested = if o.run_suite { SUITE } else { NOT_RUN };
+    let real = format!("{SUITE}; then {ALONE}");
+    let tested = if o.run_suite { real.as_str() } else { NOT_RUN };
     let components: Vec<(String, String, Vec<String>)> = held.values().map(|h| (h.name.clone(), h.version.clone(), h.bins.iter().cloned().collect())).collect();
     let text = manifest_text(&o.release, &commit, target, &rustc, &components, tested);
     let manifest = manifest::load(&text).map_err(|e| refused(format!("the manifest to be written does not read back: {e}")))?;
@@ -383,11 +426,15 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
         if let Some(why) = differs_from(root, &commit).map_err(|e| refused(e.to_string()))? {
             return Err(refused(format!("while the suite ran, {why}")));
         }
+        tests_alone(root, &tmp, &commit, &held, "/tmp/veredas-suite.lock")?;
+        if let Some(why) = differs_from(root, &commit).map_err(|e| refused(e.to_string()))? {
+            return Err(refused(format!("while the components' tests ran alone, {why}")));
+        }
     }
     // Each component built alone, its executables named.
     let builds: Vec<builder::Build> = held
         .values()
-        .map(|h| builder::Build { package: h.name.clone(), bins: h.bins.iter().cloned().collect(), lib: h.lib.clone(), features: h.features.iter().cloned().collect() })
+        .map(|h| builder::Build { package: h.name.clone(), dir: h.dir.clone(), bins: h.bins.iter().cloned().collect(), lib: h.lib.clone(), features: h.features.iter().cloned().collect() })
         .collect();
     std::fs::create_dir_all(&o.work)?;
     let built = builder::build(&recipe, root, &commit, &toolchain, &builds, &o.work)?;

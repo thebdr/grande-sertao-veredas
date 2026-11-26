@@ -51,6 +51,18 @@ pub struct Builder {
     pub memory_mb: u32,
     pub disk_gb: u32,
     pub packages: Vec<String>,
+    /// Qt and KDDockWidgets for Oficina's window (docs/questions.md Q443, Q446), when stated.
+    #[serde(default)]
+    pub qt: Option<Qt>,
+}
+
+/// The Qt a release's window is built with and carries: the development machine's copies, at these
+/// versions.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Qt {
+    pub version: String,
+    pub kddockwidgets: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -81,7 +93,8 @@ impl Recipe {
         if r.base.sha512.len() != 128 || !r.base.sha512.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
             return Err(RecipeError::Invalid("`base.sha512` is not 128 lowercase hexadecimal characters".into()));
         }
-        for (key, v) in [("base.glibc", &r.base.glibc), ("base.glibcxx", &r.base.glibcxx), ("base.cxxabi", &r.base.cxxabi)] {
+        let qt = r.builder.qt.iter().flat_map(|q| [("builder.qt.version", &q.version), ("builder.qt.kddockwidgets", &q.kddockwidgets)]);
+        for (key, v) in [("base.glibc", &r.base.glibc), ("base.glibcxx", &r.base.glibcxx), ("base.cxxabi", &r.base.cxxabi)].into_iter().chain(qt) {
             if !v.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) {
                 return Err(RecipeError::Invalid(format!("`{key}` is `{v}`, not a version of dotted digits")));
             }

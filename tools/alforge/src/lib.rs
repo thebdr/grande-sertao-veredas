@@ -14,6 +14,7 @@ pub mod machine;
 pub mod manifest;
 pub mod maquina;
 pub mod together;
+pub mod trace;
 pub mod vm;
 
 use std::path::Path;

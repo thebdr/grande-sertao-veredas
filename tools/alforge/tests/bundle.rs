@@ -678,10 +678,25 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
     assert_eq!(log, [built.clone(), locked.clone(), ran.clone()]);
     assert!(!work.exists() && !manifest.exists());
 
+    // Each component's own tests, built alone after the suite (docs/questions.md Q444): built
+    // first, then run behind the machine's lock, in the suite's environment; a red one refuses.
+    let alone = "cargo nextest run -p veredas-core --profile default --no-tests=pass";
+    let alone_built = format!("{alone} --no-run{env}");
+    let alone_locked = format!("flock /tmp/veredas-suite.lock {alone}");
+    let alone_ran = format!("{alone}{env}");
+    let (out, log) = cut_with_suite(&r, cache.path(), 0, "case \" $* \" in *' -p '*) exit 1;; esac; exit 0", &[]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        stderr(&out),
+        format!("{}alforge: veredas-core's own tests, built alone\nveredas-core's own tests, built alone, are not green at {moved} (exit status: 1): no release is cut from it\n", start(&moved))
+    );
+    assert_eq!(log, [built.clone(), locked.clone(), ran.clone(), alone_built.clone(), alone_locked.clone(), alone_ran.clone()]);
+    assert!(!work.exists() && !manifest.exists());
+
     // A green suite, the tree untouched: the cut goes on to the builder (whose first download, from
     // an address nothing answers, fails here), still without a manifest.
     let (out, log) = cut_with_suite(&r, cache.path(), 0, "exit 0", &[]);
-    assert_eq!(log, [built, locked, ran]);
+    assert_eq!(log, [built, locked, ran, alone_built, alone_locked, alone_ran]);
     assert_eq!(out.status.code(), Some(2));
     let text = stderr(&out);
     assert!(text.starts_with(&start(&moved)), "{text}");
@@ -759,6 +774,16 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
             .unwrap();
         }
         std::fs::write(deps.join("libveredas_aranha.d"), format!("/build/src/target/release/libveredas_aranha.rlib: /build/src/crates/veredas-aranha/src/lib.rs{lib_extra}\n")).unwrap();
+        // Each build's trace (docs/questions.md Q448): rustc's reads of the sources.
+        let traces = built_dir.path().join("trace");
+        std::fs::create_dir_all(&traces).unwrap();
+        for (c, file) in [("veredas-core", "crates/veredas-core/src/main.rs"), ("veredas-aranha", "crates/veredas-aranha/src/lib.rs")] {
+            std::fs::write(
+                traces.join(format!("{c}.trace")),
+                format!("1 execve(\"/opt/cargo/bin/cargo\", [\"cargo\"], 0x1 /* 1 vars */) = 0\n1 vfork() = 2\n2 execve(\"/opt/cargo/bin/rustc\", [\"rustc\"], 0x1 /* 1 vars */) = 0\n2 openat(AT_FDCWD</build/src>, \"{file}\", O_RDONLY|O_CLOEXEC) = 3</build/src/{file}>\n"),
+            )
+            .unwrap();
+        }
     };
     let name = "veredas-9.9.9-x86_64-unknown-linux-gnu";
     let rustc = "rustc 1.100.0 (0ef1bc386 2026-11-09)";
@@ -795,6 +820,29 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
             other => panic!("not refused: {other:?}"),
         }
         assert!(!work.path().join(name).exists() && !packed.exists());
+    }
+    dep_info("", "");
+
+    // A build whose trace shows a process reading what its version does not name (a build script's
+    // undeclared read, docs/questions.md Q448), and a build that left no trace: refused, nothing
+    // assembled.
+    let traces = built_dir.path().join("trace");
+    let core_trace = std::fs::read_to_string(traces.join("veredas-core.trace")).unwrap();
+    std::fs::write(
+        traces.join("veredas-core.trace"),
+        format!("{core_trace}1 vfork() = 3\n3 execve(\"/build/src/target/release/build/veredas-core/0123456789abcdef/out/build_script_build\", [\"build_script_build\"], 0x1 /* 1 vars */) = 0\n3 openat(AT_FDCWD</build/src/crates/veredas-core>, \"../../docs/outro.txt\", O_RDONLY|O_CLOEXEC) = 3</build/src/docs/outro.txt>\n"),
+    )
+    .unwrap();
+    match cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &held, text, SBOM, work.path()) {
+        Err(CutError::Refused(e)) => assert_eq!(e, "the build of veredas-core: build_script_build read docs/outro.txt, which its version does not name"),
+        other => panic!("not refused: {other:?}"),
+    }
+    assert!(!work.path().join(name).exists() && !packed.exists());
+    dep_info("", "");
+    std::fs::remove_file(traces.join("veredas-aranha.trace")).unwrap();
+    match cut::after_build(&recipe(), c.path(), &commit, rustc, &built(rustc), name, &held, text, SBOM, work.path()) {
+        Err(CutError::Refused(e)) => assert!(e.starts_with(&format!("the build left no trace for veredas-aranha ({}: ", traces.join("veredas-aranha.trace").display())), "{e}"),
+        other => panic!("not refused: {other:?}"),
     }
     dep_info("", "");
 
@@ -865,7 +913,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
     assert_eq!(r.builder.cpus, 4);
     // Each component built alone, so cargo unifies features within its own inputs.
     // A component that ships no executable has its library built alone, for its dep-info.
-    let build = |p: &str, bins: &[&str], lib: &str| builder::Build { package: p.into(), bins: bins.iter().map(|b| b.to_string()).collect(), lib: Some(lib.into()), features: vec![] };
+    let build = |p: &str, bins: &[&str], lib: &str| builder::Build { package: p.into(), dir: format!("crates/{p}"), bins: bins.iter().map(|b| b.to_string()).collect(), lib: Some(lib.into()), features: vec![] };
     // Portal's `porteiro` requires features, which its build turns on whatever its defaults are
     // (docs/questions.md Q443), each quoted for the shell: a dependency's as cargo states it, its
     // own as `<package>/<feature>`, which a root package of the workspace cannot take for its own.
@@ -881,16 +929,19 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
     assert_eq!(
         script,
         format!("set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
-         cd /build/src\nmkdir -p /build/out/bin /build/out/deps\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
-         cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\n\
-         cargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\n\
-         cargo build --release --locked --offline --jobs 4 -p veredas-portal --bins --features 'dep/servir' --features 'veredas-portal/it'\\''s'\n\
+         cd /build/src\nmkdir -p /build/out/bin /build/out/deps /build/out/trace\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
+         {qt_env}\n{qt_stage}\n\
+         {st} /build/out/trace/veredas-aranha.trace cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\n\
+         {st} /build/out/trace/veredas-maquinar.trace cargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\n\
+         {st} /build/out/trace/veredas-portal.trace cargo build --release --locked --offline --jobs 4 -p veredas-portal --bins --features 'dep/servir' --features 'veredas-portal/it'\\''s'\n\
          {control}\nmissing=\n\
          cp target/release/libveredas_aranha.d /build/out/deps/\n\
          if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; cp target/release/veredas-bancada.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-bancada\"; missing=1; fi\n\
          if [ -f target/release/veredas-portal ]; then cp target/release/veredas-portal /build/out/bin/; cp target/release/veredas-portal.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-portal\"; missing=1; fi\n\
          if [ -f target/release/porteiro ]; then cp target/release/porteiro /build/out/bin/; cp target/release/porteiro.d /build/out/deps/; else echo \"ALFORGE-MISSING porteiro\"; missing=1; fi\n\
-         [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n")
+         [ -z \"$missing\" ]\n\
+         stage_qt 'veredas-bancada' 'crates/veredas-maquinar'\nstage_qt 'veredas-portal' 'crates/veredas-portal'\nstage_qt 'porteiro' 'crates/veredas-portal'\n\
+         echo ALFORGE-BUILD-OK\n", qt_env = builder::QT_ENV, qt_stage = builder::QT_STAGE, st = alforge::trace::STRACE)
     );
     // The script run here as the builder runs it (its `/build` a folder of the test's, stand-ins
     // for `cargo` and `rustc` first on its PATH), once with every bin built and once with one not.
@@ -905,14 +956,17 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         std::fs::create_dir_all(root.join("out")).unwrap();
         std::fs::create_dir_all(&stub).unwrap();
         let touch: String = built.iter().map(|b| format!(" target/release/{b} target/release/{b}.d")).collect::<String>() + " target/release/libveredas_aranha.d";
+        // A stand-in for the tracer too: its log made, the build run.
         for (name, text) in [
             ("cargo", format!("#!/bin/sh\necho \"cargo $*\" >> '{}'\nmkdir -p target/release\ntouch{touch}\n", d.path().join("calls").display())),
             ("rustc", "#!/bin/sh\necho 'rustc 1.100.0 (0ef1bc386 2026-11-09)'\n".to_string()),
+            ("strace", "#!/bin/sh\nwhile [ \"$1\" != -o ]; do shift; done\nshift; : > \"$1\"; shift\nexec \"$@\"\n".to_string()),
         ] {
             std::fs::write(stub.join(name), text).unwrap();
             std::fs::set_permissions(stub.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let here = script.replace("/build", &root.display().to_string()).replace("PATH=/opt/cargo/bin:", &format!("PATH={}:", stub.display()));
+        assert!(!std::path::Path::new("/opt/qt/qt/lib").exists(), "no Qt where the builder mounts it");
         let log_path = root.join("out/build.log");
         let status = Command::new("sh").arg("-c").arg(format!("sh -c \"$1\" > '{}' 2>&1", log_path.display())).arg("sh").arg(&here).status().unwrap();
         let log = std::fs::read_to_string(&log_path).unwrap();
@@ -996,8 +1050,12 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         let ran = Command::new("sh").arg("-c").arg(builder::CONTROL_CHECK.replace("/build", &root.display().to_string())).output().unwrap();
         assert_eq!((ran.status.success(), String::from_utf8_lossy(&ran.stdout).into_owned()), (!fails, if fails { "ALFORGE-CONTROL-NAME\n".to_string() } else { String::new() }), "{made:?}");
     }
-    assert!(script.lines().position(|l| l == builder::CONTROL_CHECK) > script.lines().position(|l| l.starts_with("cargo build") && l.ends_with("-p veredas-portal --bins")));
-    assert!(script.lines().position(|l| l == builder::CONTROL_CHECK) < script.lines().position(|l| l.starts_with("cp ")));
+    // After every build, before anything is copied out (the staging function's own lines are
+    // defined before the builds and run after the copies).
+    let at = |f: &dyn Fn(&str) -> bool| script.lines().position(f).unwrap();
+    assert!(at(&|l| l == builder::CONTROL_CHECK) > at(&|l| l.contains(" cargo build ") && l.contains("-p veredas-portal --bins")));
+    assert!(at(&|l| l == builder::CONTROL_CHECK) < at(&|l| l.starts_with("cp target/release/")));
+    assert!(at(&|l| l.starts_with("cp target/release/")) < at(&|l| l.starts_with("stage_qt ")));
     match builder::outcome("ALFORGE-CONTROL-NAME\n", "ALFORGE-BUILD-EXIT 1", true, Path::new("/build/out/build.log")) {
         Err(VmError::Failed { program, status, stderr }) => assert_eq!(
             (program.as_str(), status.as_str(), stderr.as_str()),
@@ -1469,9 +1527,9 @@ fn a_proc_macro_component_has_its_library_built_for_its_dep_info() {
     let c = r.commit("a proc-macro component");
     let held = alforge::manifest::components_at(r.dir.path(), &c, &mut Vec::new()).unwrap();
     assert_eq!(held["veredas-macro"].lib.as_deref(), Some("veredas_macro"));
-    let b = builder::Build { package: "veredas-macro".into(), bins: vec![], lib: held["veredas-macro"].lib.clone(), features: vec![] };
+    let b = builder::Build { package: "veredas-macro".into(), dir: "crates/veredas-macro".into(), bins: vec![], lib: held["veredas-macro"].lib.clone(), features: vec![] };
     let s = builder::script(&recipe(), &[b]);
-    assert!(s.lines().any(|l| l == "cargo build --release --locked --offline --jobs 4 -p veredas-macro --lib"), "{s}");
+    assert!(s.lines().any(|l| l == format!("{} /build/out/trace/veredas-macro.trace cargo build --release --locked --offline --jobs 4 -p veredas-macro --lib", alforge::trace::STRACE)), "{s}");
     assert!(s.lines().any(|l| l == "cp target/release/libveredas_macro.d /build/out/deps/"), "{s}");
 }
 
@@ -1792,4 +1850,36 @@ fn round_twenty_one_what_rustc_does_not_read_is_in_no_dep_info() {
     // What the build script read undeclared and what the proc-macro read are in no dep-info.
     assert!(!a.contains("tabela.txt") && !b.contains("objetos.txt"), "{a}\n{b}");
     assert_eq!(alforge::inputs::read_outside(&b, &src, &vendor, &inputs, &own(&["veredas-b", "veredas-m"])), Vec::<String>::new());
+}
+
+/// Each component's own tests built alone (docs/questions.md Q444): portal's test holds only when
+/// another member turns a feature of core's on, as the whole suite's build does, and fails built
+/// alone, as portal ships; the real cargo and nextest run it.
+#[test]
+fn a_components_tests_are_run_built_alone_and_a_feature_only_another_member_turns_on_is_missed() {
+    let r = Repo { dir: tempfile::tempdir().unwrap() };
+    r.git(&["init", "-q", "-b", "main"]);
+    r.write(".gitignore", "/target/\n");
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\nloud = []\n");
+    r.write("crates/veredas-core/src/lib.rs", "pub fn loud() -> bool { cfg!(feature = \"loud\") }\n");
+    r.write("crates/veredas-maquinar/Cargo.toml", "[package]\nname = \"veredas-maquinar\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nveredas-core = { path = \"../veredas-core\", features = [\"loud\"] }\n");
+    r.write("crates/veredas-maquinar/src/lib.rs", "\n");
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nveredas-core = { path = \"../veredas-core\" }\n");
+    r.write("crates/veredas-portal/src/main.rs", "fn main() {}\n#[test]\nfn loud() { assert!(veredas_core::loud()); }\n");
+    let commit = r.commit("a test that holds only with another member's feature");
+    let tmp = tempfile::tempdir().unwrap();
+    let lock = tmp.path().join("lock");
+    // The whole suite: green, the feature turned on by the bench.
+    let whole = cut::suite_command(r.dir.path(), tmp.path(), &["cargo", "nextest", "run", "--workspace", "--no-tests=pass"], std::env::vars_os()).output().unwrap();
+    assert!(whole.status.success(), "{}", String::from_utf8_lossy(&whole.stderr));
+    // Each alone: portal's red.
+    let held = alforge::manifest::components_at(r.dir.path(), &commit, &mut Vec::new()).unwrap();
+    match cut::tests_alone(r.dir.path(), tmp.path(), &commit, &held, &lock.display().to_string()) {
+        Err(CutError::Refused(e)) => assert_eq!(e, format!("veredas-portal's own tests, built alone, are not green at {commit} (exit status: 100): no release is cut from it")),
+        other => panic!("not refused: {other:?}"),
+    }
+    // Without portal, every other component's tests alone are green.
+    let rest: std::collections::BTreeMap<String, alforge::manifest::Held> = held.into_iter().filter(|(n, _)| n != "veredas-portal").collect();
+    cut::tests_alone(r.dir.path(), tmp.path(), &commit, &rest, &lock.display().to_string()).unwrap();
 }
