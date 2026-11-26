@@ -4,6 +4,9 @@ name = "veredas-comissionador"
 version = "2.0.0-alpha.1"
 edition.workspace = true
 publish = false
+# The architect, 2026-11-25 (docs/questions.md Q35): every crate but Oficina states this expression
+# and carries the two texts beside its manifest, the copyright holder thebdr.
+license = "MIT OR Apache-2.0"
 description = "The testing platform of Veredas 2 (Comissionador): a plant's acceptance tests, one plain-text file each, run through portal live or replayed, every run ending in its report"
 
 # A library first, one executable on top (docs/comissionador-plan.md, "Rules"; tests/component.rs
