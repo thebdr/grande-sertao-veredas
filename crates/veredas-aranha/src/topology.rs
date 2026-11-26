@@ -130,7 +130,7 @@ pub fn chassis_id(text: &str) -> String {
 }
 
 /// A port id as a port's short name: `port-001.station` is `port-001`.
-fn short(port: &str) -> String {
+pub(crate) fn short(port: &str) -> String {
     match port.split_once('.') {
         Some((p, _)) if p.starts_with("port-") => p.to_string(),
         _ => port.to_string(),

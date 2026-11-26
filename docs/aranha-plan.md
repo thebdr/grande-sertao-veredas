@@ -198,6 +198,8 @@ veredas_aranha
   topology      nodes, links with confidence, rings, components, notes
   scan          the scan file (`veredas-scan`); a baseline is a saved one
   diff          a scan against a baseline: by MAC, by value stated, by link ends
+  ip            IPv4 and UDP on the raw link: one datagram a frame, both checksums
+  read          the implicit read through the listener; the ports' neighbours
   main.rs       veredas-aranha listen | identify | diff
 ```
 
@@ -223,7 +225,9 @@ veredas_aranha
 6. **The topology, the scan file and the diff.** Heard links, MRP rings, the ambiguous chassis;
    `veredas-scan` with `docs/scan-schema.md`; a baseline saved and a rewired, renamed or vanished
    bench device found by the diff. Device-to-device links need a neighbour table (Traps), so
-   this phase reads the bench device's port data by the implicit read, the first of deep identity.
+   this phase reads the bench device's port data by the implicit read, the first of deep identity:
+   a record read with no connection through the listener (any record: I&M0 reads the same way,
+   its use left to deep identity).
 7. **The executable.**
 8. **Later**: the rest of deep identity, the IP-layer probes one at a time (each with its bench
    responder first), writes, Windows.
@@ -335,7 +339,18 @@ is pinned by a test when its phase lands.
 - **A Linux bridge keeps LLDP to itself.** A bridge in the private network (one segment of several
   bench devices, C-144) forwards DCP's group addresses but not `01:80:c2:00:00:0e`, as a switch
   does not: behind it a device is heard by its DCP, and a test that needs its LLDP cables it to the
-  listener directly (C-143).
+  listener directly (C-143). Told to (`group_fwd_mask 0x4000`, bit 14 for LLDP's group, which a
+  user namespace allows), it forwards it, as a switch that passes LLDP on: the segment of C-148,
+  where two devices hear each other and report each other in their port data.
+- **The ports a scanner hears are the ones facing it.** LLDP is link-local, so a device's port
+  that faces another device is never heard here, and its neighbour data is exactly what is
+  needed: the read walks the port subslots from 0x8001 until the device says one is not there,
+  never only the ports heard, and names each port as its record does (the bench keeps its one
+  port at 0x8001 whatever its name; `port-NNN` at 0x8000 + NNN is a habit, not a rule read here).
+- **The component test builds a copy of the crate's working tree.** The codecs' split
+  (`tests/component.rs`) copies `src/` and `tests/` as they are on disk: a draft file there while
+  the suite runs fails it (a test naming a module not yet declared). Drafts live outside the tree
+  until they are whole.
 - **A pace measured under the whole suite's load comes late.** The listener's and asking's timed
   tests bound the pace within a few milliseconds where the wire is handed each frame; they run
   with the machine to themselves (`.config/nextest.toml`), as maquinar's timed tests do.
