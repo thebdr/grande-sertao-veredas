@@ -387,6 +387,11 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     let rustc = suite_rustc(root, &tmp, std::env::vars_os())?;
     let toolchain = rustc.split_whitespace().nth(1).ok_or_else(|| refused(format!("rustc printed `{rustc}`")))?.to_string();
     let target = "x86_64-unknown-linux-gnu";
+    for h in held.values() {
+        for b in &h.unshipped {
+            eprintln!("alforge: {}'s `{b}` needs a feature only the toolchain its folder names builds: not shipped (docs/questions.md Q449)", h.name);
+        }
+    }
     // Planned with every bin, each built with the features its executables need (Q443).
     let real = format!("{SUITE}; then {ALONE}");
     let tested = if o.run_suite { real.as_str() } else { NOT_RUN };

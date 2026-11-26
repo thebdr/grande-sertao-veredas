@@ -88,7 +88,9 @@ Keys (each required unless a default is given):
   `bin` target cargo names for the component, each built with the features its executables need,
   whatever its default features are, or the cut refuses it: Q443, ruled (c). What they need is the
   union of its bins' `required-features`, as cargo states them, turned on in the component's one
-  build, so Oficina's window ships with `shell` on).
+  build, so Oficina's window ships with `shell` on). A bin whose features only the toolchain its
+  package's folder names builds (`rust-toolchain`) is not shipped, and the cut says so: ORCL's front
+  end's driver needs its pinned nightly and `rustc-dev` (Q449, raised 2026-11-27; taken meanwhile).
 - `[tested]`: `suite`, the commands whose green runs at the commit made the set tested (the whole
   suite, then each component's own tests built alone: Q444); `together`, what the cut ran from the
   bundle itself. Statements of what was run, written by the cut.

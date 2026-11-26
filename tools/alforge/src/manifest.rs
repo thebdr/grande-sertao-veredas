@@ -197,6 +197,10 @@ pub struct Held {
     /// bins' `required-features` as cargo states them (`shell`, `dep/feature`), turned on in its
     /// one build.
     pub features: BTreeSet<String>,
+    /// Its `bin` targets a release does not ship: each with required features in a package whose
+    /// folder names a toolchain of its own (`rust-toolchain`), which alone builds them, as ORCL's
+    /// front end's driver needs its pinned nightly (docs/questions.md Q449, taken meanwhile).
+    pub unshipped: BTreeSet<String>,
     /// Its library target's name (`veredas_core`), if it has one: what the cut builds of a
     /// component that ships no executable, to hold that build too to its inputs.
     pub lib: Option<String>,
@@ -421,12 +425,20 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
             let Some(dir) = manifest.parent().and_then(from_root).filter(|d| d.starts_with("crates/")) else { continue };
             let name = pkg["name"].as_str().unwrap_or_default().to_string();
             let version = pkg["version"].as_str().unwrap_or_default().to_string();
-            // Every bin ships, built with what its executables require (Q443).
-            let (mut bins, mut features) = (BTreeSet::new(), BTreeSet::new());
+            // Every bin ships, built with what its executables require (Q443), but one whose
+            // features only the toolchain its package's folder names builds (Q449).
+            // DECISION PENDING (Q449)
+            let own_toolchain = ["rust-toolchain", "rust-toolchain.toml"].iter().any(|f| tree.join(&dir).join(f).is_file());
+            let (mut bins, mut features, mut unshipped) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
             for t in pkg["targets"].as_array().into_iter().flatten().filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "bin"))) {
                 let Some(b) = t["name"].as_str() else { continue };
+                let required: Vec<String> = t["required-features"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
+                if own_toolchain && !required.is_empty() {
+                    unshipped.insert(b.to_string());
+                    continue;
+                }
                 bins.insert(b.to_string());
-                features.extend(t["required-features"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)));
+                features.extend(required);
             }
             let lib = pkg["targets"]
                 .as_array()
@@ -438,7 +450,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                 Ok((i, p)) => (Ok(i), p),
                 Err(e) => (Err(e), inputs::Packages::default()),
             };
-            held.insert(name.clone(), Held { dir, name, version, bins, features, lib, inputs, packages });
+            held.insert(name.clone(), Held { dir, name, version, bins, features, unshipped, lib, inputs, packages });
         }
         Ok(None)
     })();
@@ -517,7 +529,11 @@ pub fn check(root: &Path, m: &Manifest) -> Result<Vec<String>, CheckError> {
             refusals.push(format!("{} builds `{b}` at {c} and the manifest does not ship it", x.name));
         }
         for b in listed.difference(&h.bins) {
-            refusals.push(format!("{} builds no `{b}` at {c}", x.name));
+            if h.unshipped.contains(b) {
+                refusals.push(format!("{}'s `{b}` needs a feature only the toolchain its folder names builds at {c}: a release does not ship it (docs/questions.md Q449)", x.name));
+            } else {
+                refusals.push(format!("{} builds no `{b}` at {c}", x.name));
+            }
         }
     }
     Ok(refusals)

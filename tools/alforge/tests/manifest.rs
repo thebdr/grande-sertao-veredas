@@ -2443,3 +2443,52 @@ fn round_twenty_eight_a_nested_packages_test_folder_its_outer_package_reaches() 
         assert!(said[0].starts_with("veredas-portal 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (") && said[0].contains("forks/garfo/imp/"), "{what}: {said:?}");
     }
 }
+
+/// A bin whose required features only the toolchain its package's folder names builds (ORCL's front
+/// end's driver, which needs its pinned nightly and `rustc_private`) is not shipped, and its
+/// features are not turned on in the component's build (docs/questions.md Q449, taken meanwhile);
+/// a bin without required features beside it ships, and so does every bin of a package naming no
+/// toolchain of its own.
+#[test]
+fn a_bin_only_the_toolchain_its_folder_names_builds_is_not_shipped() {
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
+    r.write(
+        "crates/orcl-front/Cargo.toml",
+        "[package]\nname = \"orcl-front\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\ndriver = []\n\n\
+         [[bin]]\nname = \"orcl-front-driver\"\npath = \"src/driver.rs\"\nrequired-features = [\"driver\"]\n\n[[bin]]\nname = \"orcl-front-shell\"\npath = \"src/shell.rs\"\n",
+    );
+    r.write("crates/orcl-front/rust-toolchain", "nightly-2026-11-21\n");
+    r.write("crates/orcl-front/src/lib.rs", "\n");
+    r.write("crates/orcl-front/src/driver.rs", "fn main() {}\n");
+    r.write("crates/orcl-front/src/shell.rs", "fn main() {}\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\nx = []\n\n[[bin]]\nname = \"needs-x\"\npath = \"src/x.rs\"\nrequired-features = [\"x\"]\n");
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    r.write("crates/veredas-core/src/x.rs", "fn main() {}\n");
+    let c = r.commit("a driver of another toolchain");
+    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    let front = &held["orcl-front"];
+    let names = |s: &std::collections::BTreeSet<String>| s.iter().map(String::as_str).collect::<Vec<_>>().join(" ");
+    assert_eq!((names(&front.bins), names(&front.unshipped), front.features.len()), ("orcl-front-shell".to_string(), "orcl-front-driver".to_string(), 0));
+    assert_eq!((names(&held["veredas-core"].bins), held["veredas-core"].unshipped.len()), ("needs-x".to_string(), 0));
+    let text = |front: &str| {
+        format!(
+            "format = \"veredas-release\"\nversion = 1\nrelease = \"2.0.0\"\ncommit = \"{c}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
+             [[component]]\nname = \"orcl-front\"\nversion = \"2.0.0\"\nbins = [{front}]\n\n[[component]]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nbins = [\"needs-x\"]\n\n\
+             [tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+        )
+    };
+    let check = |t: &str| manifest::check(r.path(), &manifest::load(t).unwrap()).unwrap();
+    assert_eq!(check(&text("\"orcl-front-shell\"")), Vec::<String>::new());
+    assert_eq!(
+        check(&text("\"orcl-front-driver\", \"orcl-front-shell\"")),
+        [format!("orcl-front's `orcl-front-driver` needs a feature only the toolchain its folder names builds at {c}: a release does not ship it (docs/questions.md Q449)")]
+    );
+    // This repository's own: ORCL's front end ships its library alone.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let head = String::from_utf8(Command::new("git").arg("-C").arg(&root).args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap();
+    let ours = manifest::components_at(&root, head.trim(), &mut Vec::new()).unwrap();
+    if let Some(h) = ours.get("orcl-front") {
+        assert_eq!((h.bins.len(), names(&h.unshipped)), (0, "orcl-front-driver".to_string()));
+    }
+}
