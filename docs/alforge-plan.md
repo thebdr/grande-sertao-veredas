@@ -163,6 +163,60 @@ each member bumps its own version (alforge edits no component's crate), asked th
 orchestrator before a real cut. A bump an input forces is a PATCH by SemVer's own rule when the
 component's interface does not change.
 
+### What a release carries of its licences (Q35)
+Every crate but Oficina states `MIT OR Apache-2.0` and carries `LICENSE-MIT` and `LICENSE-APACHE`
+beside its manifest, the copyright holder thebdr; Oficina is `GPL-3.0-or-later` (Q35, ruled
+2026-11-25). A release ships that code and what it links (no legal advice):
+- **The cut refuses**, before building, a component whose manifest states no `license` (nor a
+  `license-file`), and a crate its build compiles whose manifest states neither. It holds once each
+  member has stated its licence, as Q35 asks; no cut is due before alpha.2.
+- **The bundle carries `licenses/`**:
+  - for each shipped component, its licence expression and the licence files of its folder
+    (`LICENSE*`, `COPYING*`, `NOTICE*`) as git stores them;
+  - `licenses/THIRD-PARTY.md`, listing every crate the components' builds compile (the lock entries
+    their versions name, with name, version, source and licence expression), together with the
+    licence files each one ships, taken from the vendored sources;
+  - with Oficina's window, Qt's and KDDockWidgets' texts and where their sources are (Q446).
+- **The tester machine carries the bundle whole:** `/opt/veredas/current/licenses/`, beside the docs
+  on the desktop. Its Debian system carries Debian's own (`/usr/share/doc/*/copyright`).
+- **Oficina's source:** a bundle holding Oficina that is handed out goes with its corresponding
+  source, namely the commit's tree and the vendored crates the builder built it from (the cut's
+  builder input). Nothing is published yet (Q436, "Nowhere yet"); this binds the first place named.
+
+### Oficina's window and Qt (Q370, Q446)
+Q370 is ruled "Built by default": once Oficina's switch lands, a release builds and ships the window.
+- **The builder builds it** with Qt 6.12 and KDDockWidgets from the development machine, the paths
+  `~/.cargo/config.toml` names (`~/.local/opt/Qt/6.12.0/gcc_64`, 2.4 GB, and
+  `~/.local/opt/oficina-deps`). They are copied once per Qt version into a builder disk of their own,
+  cached as the toolchain is, and the build's environment names `QMAKE` and `OFICINA_DEPS` there.
+- **Both run on Debian 13:** Qt is qt.io's build (glibc 2.34, GLIBCXX 3.4.29) and KDDockWidgets needs
+  glibc 2.38 and GLIBCXX 3.4.32, within the recipe's 2.41 and 3.4.33. The cut's ABI check holds the
+  window and what it loads to them.
+- **What the bundle carries** of them is Q446. Recommended: the libraries the window loads, in the
+  bundle's `lib/`, found by the executable's `RUNPATH`, about 120 MB extracted.
+- **The real cut's suite run** builds the workspace on the development machine, where cargo's
+  configuration names Qt.
+- **Until the switch lands,** the window is off by default and not shipped (Q443).
+
+### The component list (Q31 entry 38, "(b) Security file, component list")
+The cut writes, for each release, a CycloneDX 1.6 JSON document. It is `veredas-<release>.cdx.json`
+beside the manifest (in `releases/` for a real cut, committed with it), and `sbom.cdx.json` in the
+bundle. It holds:
+- the release itself: the suite, its release and the commit;
+- one entry per shipped component: name, version, licence expression, the commit as its source;
+- one per crate the components' builds compile, from the lock entries their versions name:
+  `pkg:cargo/<name>@<version>` (with the source and commit for a git crate), the lock's checksum as
+  its SHA-256, and its licence expression from its manifest;
+- with Oficina, Qt and KDDockWidgets at their versions;
+- the dependencies between them, as the lock states them.
+
+`alforge components <commit>` prints the same list from a commit alone (`cargo metadata` over its
+lock, no build), so CI produces it on every push, as the ruling asks. The cut's list and CI's list
+of one commit agree, and a test holds them to it. CycloneDX is the form vulnerability scanners read
+by purl; an SPDX document would carry the same facts. The security file's reporting channel is the
+architect's to name (Q447). Which intent the suite states under the Cyber Resilience Act is
+undecided (entry 38, ruled "Undecided, say so"), and is the suite plan's to say.
+
 ## Part two: the tester machine
 
 ### Who uses it, and for what
@@ -424,6 +478,10 @@ Measured on release 2.0.0-alpha.1 (2026-11-22):
 - **C-293**, the update command: a newer release's bundle checked and installed beside the old one
   (`tests/atualizar.rs`), and run inside the machine C-292 builds (`tests/maquina.rs`: it rides on
   that machine rather than building a second, so a change to that file re-stales both clauses).
+- **C-294**, a release's licences: the cut's refusal of a component or crate stating none, and the
+  bundle's `licenses/` (Q35). It lands once each member states its licence.
+- **C-295**, the component list: the cut's CycloneDX document and `alforge components <commit>`,
+  which agree on one commit (Q31 entry 38).
 
 ## What a component is asked for
 Through the orchestrator: before every real cut, a version bump of each component whose build

@@ -3224,6 +3224,62 @@ Options:
 
 **Reversible?** Yes: the check narrows without changing the manifest's format.
 
+## Q446 - Does a bundle that holds Oficina's window carry Qt 6.12's libraries, or does the tester machine provide them?
+
+**Raised** 2026-11-26, by the release member, from Q370's ruling ("Built by default").
+
+Once Oficina's window is built by default, a release ships it, and the executable loads Qt 6.12 and
+KDDockWidgets at run time. Debian 13, the tester machine's distribution (Q433), offers Qt 6.8, so the
+machine cannot take Qt 6.12 from its packages. Both libraries as the development machine holds them
+run on Debian 13: Qt is qt.io's build (gcc 11.5, GLIBCXX 3.4.29), and KDDockWidgets needs
+GLIBCXX 3.4.32, under Debian 13's 3.4.33. What Oficina loads is about 120 MB extracted, about 45 MB
+compressed: Qt's core libraries (52 MB), ICU (38 MB), the platform plugin and QML modules (about
+20 MB), and KDDockWidgets (7 MB). A release extracts to 160 MB today, and the machine's disk is
+16 GB. Either way the builder takes Qt from the development machine's `~/.local/opt/Qt/6.12.0`
+(2.4 GB, cached once per Qt version) to build the window; that part is the release member's.
+
+Options:
+- (a) The bundle carries what Oficina's window loads, in `lib/` beside `bin/` (the executable finds it
+  by its `RUNPATH`, `$ORIGIN/../lib`), with Qt's and KDDockWidgets' licence texts (both LGPLv3 here)
+  and where their sources are. Each release carries its own Qt; an update brings a new Qt with it.
+- (b) The tester machine provides it: the provisioning installs Qt 6.12 and KDDockWidgets under
+  `/opt/qt` from the development machine's copy. The bundle stays small, but a release built on
+  another Qt needs a new OVA.
+- (c) A release ships no Oficina window for now: the cut builds and judges it, and the manifest
+  says it is not shipped, as a bin with required features is today (Q443).
+
+**Recommended**: (a): a release stays whole in itself, an update keeps working across a Qt change,
+and the machine grows by about 120 MB per release kept.
+
+**Taken meanwhile** (most reversible): (c) until the switch lands, then (a) as the plan states it,
+nothing shipped before a ruling: no cut is due until alpha.2.
+
+**Reversible?** Yes: where the libraries live is the bundle's layout and the provisioning, never a
+component's code.
+
+## Q447 - Which reporting channel does the security file name?
+
+**Raised** 2026-11-26, by the release member, from Q31 entry 38, ruled "(b) Security file,
+component list".
+
+Before the first public release, the repository holds a security file (`SECURITY.md`) saying how to
+report a vulnerability, and each release carries a component list. The component list is the
+release member's (the cut produces it, `docs/alforge-plan.md`). The channel is a person's or an
+account's, so it is the architect's to name.
+
+Options:
+- (a) GitHub's private vulnerability reporting on the repository (a report stays private between the
+  reporter and the repository's owners; nothing is published by the report itself).
+- (b) An e-mail address the architect names, published in the file.
+- (c) Both: GitHub's private reporting first, an address beside it.
+
+**Recommended**: (a): it needs no published address and keeps reports beside the code.
+
+**Taken meanwhile** (most reversible): no security file yet; nothing is public that asks for one
+until the first public release (Q436, "Nowhere yet").
+
+**Reversible?** Yes: a file of a few lines.
+
 ---
 
 ## Q229 - A pulse that comes back with no new edge, and which preset a timer is judged against
