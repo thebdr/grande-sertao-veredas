@@ -1441,3 +1441,133 @@ fn a_held_newest_gone_or_a_cut_held_file_moved_reads_no_history() {
     assert_eq!(lines, (20..55).chain(60..65).collect::<Vec<u32>>(), "seen cut, then retired before its open");
     BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
 }
+
+/// C-098's fifth refute round. An active held in turn has its look bracketed as the first one is:
+/// a rotation between the round's listing and that open (a hook at the held file's read, the
+/// active renamed into a retiree and another file held at its path) makes it no look, the
+/// generation it made read first (20 to 70). In a newest-by-order family a new file made at the
+/// held newest's name, the held file moved aside and read (20 to 30, then 40 to 55) or deleted
+/// (40 to 55), is born after the look and read whole. With nothing at the fixed path, a held file
+/// outside the pattern is still looked for, and no generation after it is read before its lines (20
+/// to 65). And a held file the search finds back at the fixed path (a hook in the walk) is followed
+/// there as the active, from where it stood, never read twice (20 to 55).
+#[cfg(unix)]
+#[test]
+fn a_held_in_turn_look_a_new_file_at_the_held_name_and_an_empty_fixed_path_keep_the_order() {
+    use super::DURING_WALK;
+    let dir = tempfile::tempdir().unwrap();
+    let fixed = |d: &std::path::Path| FamilySpec::new(d, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let newest = |d: &std::path::Path| FamilySpec::new(d, r"plant_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let held_fixed = |name: &str| {
+        let d = dir.path().join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d.join("done_1.log"), 0..10);
+        write(&d.join("current.log"), 10..20);
+        mode(&d.join("current.log"), 0o200);
+        d
+    };
+    let held_newest = |name: &str| {
+        let d = dir.path().join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d.join("plant_1.log"), 0..10);
+        write(&d.join("plant_2.log"), 10..20);
+        mode(&d.join("plant_2.log"), 0o200);
+        d
+    };
+    let mut hooked: Vec<std::path::PathBuf> = Vec::new();
+
+    // A rotation inside an active held in turn's look.
+    let d = held_fixed("in-turn-window");
+    let (retired, current, mut done) = (d.join("done_2.log"), d.join("current.log"), false);
+    BEFORE_OPEN.lock().unwrap().push((
+        d.join("done_2.log"),
+        Box::new(move || {
+            if !done && std::fs::File::open(&retired).is_ok() {
+                done = true;
+                std::fs::rename(&current, current.with_file_name("done_3.log")).unwrap();
+                make_held(&current, 60..70);
+            }
+        }),
+    ));
+    hooked.push(d.join("done_2.log"));
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 50, move || {
+        append(&p, 20..50);
+        std::fs::rename(&p, dd.join("done_2.log")).unwrap();
+        make_held(&p, 50..60);
+        std::thread::sleep(Duration::from_millis(500));
+        mode(&dd.join("done_2.log"), 0o644);
+        std::thread::sleep(Duration::from_millis(1000));
+        mode(&dd.join("done_3.log"), 0o644);
+        std::thread::sleep(Duration::from_millis(1000));
+        mode(&p, 0o644);
+    });
+    assert_eq!(lines, (20..70).collect::<Vec<u32>>(), "a rotation inside the held-in-turn look");
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !hooked.contains(at));
+
+    // A new file at the held newest's name, the held file moved aside.
+    let d = held_newest("new-at-name-aside");
+    let dd = d.clone();
+    let (lines, _) = at_end(newest(&d), 25, move || {
+        append(&dd.join("plant_2.log"), 20..30);
+        std::fs::rename(dd.join("plant_2.log"), dd.join("plant_2.log.old")).unwrap();
+        mode(&dd.join("plant_2.log.old"), 0o644);
+        write(&dd.join("aside.tmp"), 40..50);
+        std::fs::rename(dd.join("aside.tmp"), dd.join("plant_2.log")).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        append(&dd.join("plant_2.log"), 50..55);
+    });
+    assert_eq!(lines, (20..30).chain(40..55).collect::<Vec<u32>>(), "a new file at the held name, the held file aside");
+
+    // A new file at the held newest's name, the held file deleted.
+    let d = held_newest("new-at-name-deleted");
+    let dd = d.clone();
+    let (lines, _) = at_end(newest(&d), 15, move || {
+        append(&dd.join("plant_2.log"), 20..30);
+        std::fs::remove_file(dd.join("plant_2.log")).unwrap();
+        write(&dd.join("aside.tmp"), 40..50);
+        std::fs::rename(dd.join("aside.tmp"), dd.join("plant_2.log")).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        append(&dd.join("plant_2.log"), 50..55);
+    });
+    assert_eq!(lines, (40..55).collect::<Vec<u32>>(), "a new file at the held name, the held file deleted");
+
+    // Nothing at the fixed path while the held file is outside the pattern.
+    let d = held_fixed("empty-fixed-path");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 45, move || {
+        append(&p, 20..50);
+        std::fs::rename(&p, dd.join("current.rotating")).unwrap();
+        write(&p, 50..60);
+        std::thread::sleep(Duration::from_millis(1000));
+        std::fs::rename(&p, dd.join("done_3.log")).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        std::fs::rename(dd.join("current.rotating"), dd.join("done_2.log")).unwrap();
+        mode(&dd.join("done_2.log"), 0o644);
+        write(&p, 60..65);
+    });
+    assert_eq!(lines, (20..65).collect::<Vec<u32>>(), "nothing at the fixed path, the held file outside the pattern");
+
+    // Found by the search back at the fixed path (a hook in the walk).
+    let d = held_fixed("found-at-the-fixed-path");
+    let (rotating, current, mut done) = (d.join("current.rotating"), d.join("current.log"), false);
+    DURING_WALK.lock().unwrap().push((
+        d.clone(),
+        Box::new(move || {
+            if !done && std::fs::File::open(&rotating).is_ok() {
+                done = true;
+                std::fs::rename(&rotating, &current).unwrap();
+            }
+        }),
+    ));
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 35, move || {
+        append(&p, 20..50);
+        std::fs::rename(&p, dd.join("current.rotating")).unwrap();
+        mode(&dd.join("current.rotating"), 0o644);
+        std::thread::sleep(Duration::from_millis(1000));
+        append(&p, 50..55);
+    });
+    assert_eq!(lines, (20..55).collect::<Vec<u32>>(), "found back at the fixed path");
+    DURING_WALK.lock().unwrap().retain(|(at, _)| *at != d);
+}

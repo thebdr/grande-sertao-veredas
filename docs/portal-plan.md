@@ -374,7 +374,9 @@ Recorded as the port meets them.
   born beside it waits for its open, wherever that happens (round 4): a held file seen cut may
   retire or leave the pattern before it opens, and its copy is still read before its own lines.
   A newest-by-order family whose held newest goes lists an older member, one of the history, as
-  the newest: followed from its end, never read.
+  the newest: followed from its end, never read; a new file at the held file's own name is new.
+  An active held in turn is a look of its own, bracketed like the first (round 5): one failed
+  open with no second listing let a rotation inside it hide a generation.
 - **A fixed active the sweep's open finds gone may have been renamed after the listing** (C-096,
   round 3): a rename is atomic, so a listing taken after that open shows it, and only then is
   the history read.
