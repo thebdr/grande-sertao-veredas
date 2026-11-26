@@ -1,0 +1,18 @@
+{
+  "clause": "C-293",
+  "verdict": "holds",
+  "ranAt": "2026-11-26T12:04:00.185Z",
+  "headCommit": "51188009bffd86d67fd8344bb1f78ca70a8aee50",
+  "tests": [
+    {
+      "name": "tools/alforge/tests/atualizar.rs",
+      "file": "tools/alforge/tests/atualizar.rs",
+      "symbolSha": "37c75558c0063196ce7a2be143ef73f074deca63d62287924545ade86a79ebf3"
+    },
+    {
+      "name": "tools/alforge/tests/maquina.rs",
+      "file": "tools/alforge/tests/maquina.rs",
+      "symbolSha": "2582b9af29a6f79b86c8385b4537b9ad8f484300fddae6ae76928062a9f036dc"
+    }
+  ]
+}
