@@ -1,13 +1,13 @@
 {
   "clause": "C-290",
   "verdict": "holds",
-  "ranAt": "2026-11-22T23:27:00.170Z",
-  "headCommit": "2fc06c707e72819d28f6ba7c2b10c05be999bd61",
+  "ranAt": "2026-11-26T10:43:35.764Z",
+  "headCommit": "3074a02ba2b78677165e051dd64ae5db4b4d4b5f",
   "tests": [
     {
-      "name": "tools/entrega/tests/manifest.rs",
-      "file": "tools/entrega/tests/manifest.rs",
-      "symbolSha": "cf402c1890dec87ce063ad96c4e052e63692dc7588f3ba6b89c3755540b8ef3f"
+      "name": "tools/alforge/tests/manifest.rs",
+      "file": "tools/alforge/tests/manifest.rs",
+      "symbolSha": "e708d044b0a35ed2aceaaf6d8d6049de178ad2e1cb5f7b4ec5b6e222c819e403"
     }
   ]
 }
