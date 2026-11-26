@@ -853,3 +853,171 @@ mod round_5 {
         assert!(finds(&c, &"01".repeat(127)));
     }
 }
+
+/// The sixth refute round's cases: a ring is one cycle (not a cycle and a chord, not a triangle
+/// and a second cable), a node names every domain its ports are in (a leaving port's among them),
+/// two rings over one set of devices, the notes in one order whatever the words' order, a device's
+/// link to itself, a cycle through a chassis node, an interface named twice with two MACs.
+mod round_6 {
+    use veredas_aranha::fusion::Fusion;
+    use veredas_aranha::observe::{Observation, Observed, Probe, Witness};
+    use veredas_aranha::profinet::lldp::{ChassisId, LldpPdu, MrpPortStatus, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::topology::{self, Interface, Neighbour};
+
+    fn mac(b: u8) -> Mac {
+        Mac([0x02, 0, 0, 0, 0, b])
+    }
+
+    /// A device's LLDP on `iface` from its port `port`, its MRP domain `[mrp; 16]` if any (a time to
+    /// live of 0: the port is leaving).
+    fn lldp(dev: Mac, name: &str, port: u8, iface: &str, at: u64, ttl: u16, mrp: Option<u8>) -> Observation {
+        let mut pdu = LldpPdu::new(ChassisId::Local { id: name.into() }, PortId::Local { id: format!("port-{port:03}.{name}") }, ttl);
+        pdu.pn.chassis_mac = Some(dev);
+        pdu.pn.mrp = mrp.map(|d| MrpPortStatus { domain_uuid: [d; 16], mrrt: 0 });
+        Observation { witness: Witness { probe: Probe::LldpHeard, iface: iface.into(), at_ns: at, frame: at }, observed: Observed::Lldp { src: Mac([0x02, 0, 0, 1, dev.0[5], port]), pdu } }
+    }
+
+    fn fused(obs: &[Observation]) -> Fusion {
+        let mut f = Fusion::new();
+        for o in obs {
+            f.apply(o);
+        }
+        f
+    }
+
+    fn said(device: Mac, port: u8, chassis: &str, peer_port: u8) -> Neighbour {
+        Neighbour { device, port: format!("port-{port:03}"), chassis: chassis.into(), peer_port: format!("port-{peer_port:03}"), peer_mac: None, witnesses: 1 }
+    }
+
+    /// `n` devices `d0`.. each heard by one port in domain `dom`.
+    fn members(n: u8, dom: u8) -> (Vec<Mac>, Fusion) {
+        let m: Vec<Mac> = (1..=n).map(|i| mac(0x10 + i)).collect();
+        let f = fused(&m.iter().enumerate().map(|(i, d)| lldp(*d, &format!("d{i}"), 1, &format!("eth{i}"), i as u64 + 1, 20, Some(dom))).collect::<Vec<_>>());
+        (m, f)
+    }
+
+    /// Words along these edges (by index), each from a port of its own, one side only.
+    fn along(m: &[Mac], edges: &[(usize, usize)]) -> Vec<Neighbour> {
+        edges.iter().enumerate().map(|(k, (u, v))| said(m[*u], 10 + k as u8, &format!("d{v}"), 30 + k as u8)).collect()
+    }
+
+    fn ring_state(f: &Fusion, w: &[Neighbour]) -> Vec<(usize, bool)> {
+        topology::build(f, &[], w).rings.iter().map(|r| (r.members.len(), r.closed)).collect()
+    }
+
+    #[test]
+    fn two_members_joined_by_two_cables_are_no_ring() {
+        let (m, f) = members(2, 7);
+        assert_eq!(ring_state(&f, &along(&m, &[(0, 1), (1, 0)])), [(2, false)]);
+    }
+
+    /// "one cycle through them all": a cycle of four closes; the same with a chord, or a triangle
+    /// with a second cable between two of its members, is no one cycle.
+    #[test]
+    fn a_cycle_with_a_chord_or_a_double_edge_is_not_one_cycle() {
+        let (m, f) = members(4, 7);
+        assert_eq!(ring_state(&f, &along(&m, &[(0, 1), (1, 2), (2, 3), (3, 0)])), [(4, true)]);
+        assert_eq!(ring_state(&f, &along(&m, &[(0, 1), (1, 2), (2, 3), (3, 0), (0, 2)])), [(4, false)], "chord");
+        let (m3, f3) = members(3, 7);
+        assert_eq!(ring_state(&f3, &along(&m3, &[(0, 1), (1, 2), (2, 0)])), [(3, true)]);
+        assert_eq!(ring_state(&f3, &along(&m3, &[(0, 1), (1, 2), (2, 0), (0, 1)])), [(3, false)], "double edge");
+    }
+
+    /// "the MRP domains its ports are in": a device with a port in each of two domains names both,
+    /// and is a member of both rings.
+    #[test]
+    fn a_device_in_two_domains_names_both() {
+        let a = mac(0x21);
+        let f = fused(&[lldp(a, "a", 1, "eth1", 1, 20, Some(7)), lldp(a, "a", 2, "eth2", 2, 20, Some(9))]);
+        let t = topology::build(&f, &[], &[]);
+        assert_eq!(t.nodes[0].rings, ["07".repeat(16), "09".repeat(16)]);
+        assert_eq!(t.rings.iter().map(|r| (r.domain.clone(), r.members.clone())).collect::<Vec<_>>(), [("07".repeat(16), vec![topology::device_id(a)]), ("09".repeat(16), vec![topology::device_id(a)])]);
+    }
+
+    /// A port that said it is leaving keeps the domain it stated last: still its ring's member, and
+    /// still among its node's domains.
+    #[test]
+    fn a_leaving_port_s_domain_is_still_its_node_s() {
+        let a = mac(0x22);
+        let f = fused(&[lldp(a, "a", 1, "eth1", 1, 20, Some(7)), lldp(a, "a", 1, "eth1", 2, 0, None)]);
+        let t = topology::build(&f, &[], &[]);
+        assert_eq!(t.rings.iter().map(|r| (r.members.len(), r.closed)).collect::<Vec<_>>(), [(1, false)]);
+        assert_eq!(t.nodes[0].rings, ["07".repeat(16)]);
+    }
+
+    /// Two domains over the same three devices, each a triangle on ports of its own: a ring's links
+    /// are the links among its member devices, whatever their ports (a port's domain is known only
+    /// where its LLDP is heard, and a ring's ports face each other, not this machine), so each ring
+    /// sees the other's cables too and neither is one cycle: both open.
+    #[test]
+    fn two_rings_over_one_set_of_devices_see_each_other_s_links() {
+        let m: Vec<Mac> = (1..=3).map(|i| mac(0x30 + i)).collect();
+        let mut obs = Vec::new();
+        for (i, d) in m.iter().enumerate() {
+            obs.push(lldp(*d, &format!("d{i}"), 1, &format!("eth{i}"), 10 + i as u64, 20, Some(7)));
+            obs.push(lldp(*d, &format!("d{i}"), 3, &format!("eth{}", i + 3), 20 + i as u64, 20, Some(9)));
+        }
+        let f = fused(&obs);
+        let mut w = Vec::new();
+        for (i, d) in m.iter().enumerate() {
+            let j = (i + 1) % 3;
+            w.push(said(*d, 2, &format!("d{j}"), 1));
+            w.push(said(*d, 4, &format!("d{j}"), 3));
+        }
+        assert_eq!(ring_state(&f, &w), [(3, false), (3, false)]);
+        // One triangle alone, ring 7's: the same cables among the same devices close both.
+        let seven: Vec<_> = w.iter().filter(|n| n.port == "port-002").cloned().collect();
+        assert_eq!(ring_state(&f, &seven), [(3, true), (3, true)]);
+    }
+
+    /// The same notes in the same order whatever the words' order, where the words differ only in
+    /// the reporting port, or only in the reporting device.
+    #[test]
+    fn notes_in_one_order_whatever_the_reporting_port_s_or_device_s_order() {
+        let a = mac(0x41);
+        let f = fused(&[lldp(a, "a", 1, "eth1", 1, 20, None)]);
+        let w = [said(a, 2, "", 1), said(a, 3, "", 1)];
+        let one = topology::build(&f, &[], &w);
+        assert_eq!(one.notes.len(), 2);
+        assert_eq!(one, topology::build(&f, &[], &[w[1].clone(), w[0].clone()]));
+        let (a, b) = (mac(0x61), mac(0x62));
+        let f = fused(&[lldp(a, "a", 1, "eth1", 1, 20, None), lldp(b, "b", 1, "eth2", 2, 20, None)]);
+        let w = [said(a, 2, "", 1), said(b, 2, "", 1)];
+        let one = topology::build(&f, &[], &w);
+        assert_eq!(one.notes.len(), 2);
+        assert_eq!(one, topology::build(&f, &[], &[w[1].clone(), w[0].clone()]));
+    }
+
+    /// A device whose only word is a link to itself is a component alone.
+    #[test]
+    fn a_device_whose_only_link_is_to_itself_is_a_component_alone() {
+        let (a, b) = (mac(0x51), mac(0x52));
+        let f = fused(&[lldp(a, "a", 1, "eth1", 1, 20, None), lldp(b, "b", 1, "eth1", 2, 20, None)]);
+        let t = topology::build(&f, &[], &[said(a, 2, "a", 3)]);
+        assert!(t.components.contains(&vec![topology::device_id(a)]), "{:?}", t.components);
+    }
+
+    /// A cycle closed only through a chassis node closes no ring.
+    #[test]
+    fn a_cycle_through_a_chassis_node_closes_no_ring() {
+        let (m, f) = members(3, 7);
+        let mut w = along(&m, &[(0, 1), (1, 2)]);
+        w.push(said(m[2], 20, "nobody", 1));
+        w.push(said(m[0], 21, "nobody", 2));
+        assert_eq!(ring_state(&f, &w), [(3, false)]);
+    }
+
+    /// An interface named twice with two MACs keeps the first it is given, in either order of the
+    /// two.
+    #[test]
+    fn an_interface_named_twice_keeps_the_first_mac_it_is_given() {
+        let f = Fusion::new();
+        let (x, y) = (mac(0x71), mac(0x72));
+        for (first, second) in [(x, y), (y, x)] {
+            let t = topology::build(&f, &[Interface { name: "eth1".into(), mac: Some(first) }, Interface { name: "eth1".into(), mac: Some(second) }], &[]);
+            let nodes: Vec<_> = t.nodes.iter().map(|n| (n.id.clone(), n.mac)).collect();
+            assert_eq!(nodes, [(topology::interface_id("eth1"), Some(first))]);
+        }
+    }
+}

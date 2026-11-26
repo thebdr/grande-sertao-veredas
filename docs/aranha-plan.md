@@ -415,3 +415,8 @@ is pinned by a test when its phase lands.
   reads its last part as given. Renaming onto a mount point fails (busy): the one way a test makes
   the scan's rename fail after the capture's without a race, a file bound over the scan's place in
   a mount namespace of the run's own (C-149's third refute round).
+- **A ring's cables are its member devices' cables.** A port's MRP domain is known only where its
+  LLDP is heard, and a ring's ports face each other, not this machine: a ring is closed by the
+  links among its member devices, whatever their ports, so two rings over one set of devices see
+  each other's cables and read open. Telling them apart waits on reading each port's MRP data
+  (the port's own record of its domain, by the implicit read) (C-145's sixth refute round).
