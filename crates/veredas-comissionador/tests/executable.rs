@@ -118,7 +118,7 @@ fn run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict() {
     // With the switch off: refused, the gated writes listed with their fingerprint; confirmed by
     // it, the run arms the switch for itself, passes, and leaves it off (Q314 (b)).
     // The project's own reply goes through the switch as well: listed under the writes and
-    // confirmed with them (Q321, taken meanwhile).
+    // confirmed with them (Q321).
     let c = veredas_comissionador::load_test(&dir.path().join("chk-012.test")).unwrap();
     let writes = veredas_comissionador::run::gated_writes(&c);
     let (code, stdout, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off.toml"]));
@@ -239,7 +239,7 @@ fn a_replay_waits_until_the_store_holds_what_the_start_reads() {
     let o = exe_env(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &from, "--to", &to, "--runs", "refused"], &[("VEREDAS_COMISSIONADOR_READ_IN", "1")]);
     let (code, stdout, stderr) = out(&o);
     assert_eq!((code, stdout.len(), dir.path().join("refused").exists()), (4, 0, false), "{stderr:?}");
-    assert!(stderr[0].starts_with("the store was still being read in after 1 s (") && stderr[0].ends_with(" lines): the replay is refused"), "{stderr:?}");
+    assert!(stderr[0].starts_with("the history of `plant` was not in the store after 1 s (") && stderr[0].ends_with(" lines read): the replay is refused"), "{stderr:?}");
 }
 
 #[test]
@@ -361,6 +361,59 @@ fn a_log_with_no_stamps_written_live_does_not_hold_a_replay() {
     assert_eq!(code, 0, "{stdout:?} {stderr:?}");
     assert_eq!(stdout[0], "w #1 pass: readings.temp >= 25.0 held after 5500ms");
     assert!(took < std::time::Duration::from_secs(60), "{took:?}");
+}
+
+// ---- portal says a log's history is read (Q319 (a), C-096) --------------------------------
+
+#[test]
+fn a_replay_waits_for_portal_to_say_each_history_is_read() {
+    let base = veredas_portal::serve::store_now_ms() - 3_600_000;
+    let window: String = (0..10).map(|i| stamped(base + i * 1000, &format!("{}.0", 20 + i))).collect();
+    let family = "dir = \"fam\"\npattern = \"plant(?P<idx>\\\\d+)\\\\.log\"";
+    let replay = |dir: &Path| {
+        let (t0, t9) = window_test(dir, base);
+        out(&exe_env(dir, &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9], &[("VEREDAS_COMISSIONADOR_READ_IN", "120")]))
+    };
+    // A family whose six empty members lie between its history and the window's lines: seconds of
+    // portal's pauses with no line read, which lines holding still across two refreshes took for
+    // the read-in's end (the replay then aborted at the window's end, its rows not stored yet).
+    let dir = tempfile::tempdir().unwrap();
+    let fam = dir.path().join("fam");
+    std::fs::create_dir(&fam).unwrap();
+    std::fs::write(fam.join("plant1.log"), (0..3).map(|i| stamped(base - 60_000 + i * 1000, "10.0")).collect::<String>()).unwrap();
+    for k in 2..=7 {
+        std::fs::write(fam.join(format!("plant{k}.log")), "").unwrap();
+    }
+    std::fs::write(fam.join("plant8.log"), &window).unwrap();
+    std::fs::write(dir.path().join("project.toml"), log_project(family)).unwrap();
+    let (code, stdout, stderr) = replay(dir.path());
+    assert_eq!((code, stdout.first().map(String::as_str)), (0, Some("w #1 pass: readings.temp >= 25.0 held after 5500ms")), "{stdout:?} {stderr:?}");
+    assert_eq!(record::read(&dir.path().join("runs/t/0001")).unwrap().evidence[0].rows, 6);
+    // A family whose oldest member holds a line stamped an hour ahead (a clock ahead), the window's
+    // lines in the newest: a line past the session's start was taken for the present.
+    let dir = tempfile::tempdir().unwrap();
+    let fam = dir.path().join("fam");
+    std::fs::create_dir(&fam).unwrap();
+    let mut ahead: String = (0..3).map(|i| stamped(base - 60_000 + i * 1000, "10.0")).collect();
+    ahead.push_str(&stamped(veredas_portal::serve::store_now_ms() + 3_600_000, "10.0"));
+    std::fs::write(fam.join("plant1.log"), ahead).unwrap();
+    std::fs::write(fam.join("plant2.log"), &window).unwrap();
+    std::fs::write(dir.path().join("project.toml"), log_project(family)).unwrap();
+    let (code, stdout, stderr) = replay(dir.path());
+    assert_eq!((code, stdout.first().map(String::as_str)), (0, Some("w #1 pass: readings.temp >= 25.0 held after 5500ms")), "{stdout:?} {stderr:?}");
+    assert_eq!(record::read(&dir.path().join("runs/t/0001")).unwrap().evidence[0].rows, 6);
+    // A log nobody may read, from a start in the past: its history never in the store, the replay
+    // refused at its bound with the log named, nothing run and nothing kept (an empty store was
+    // replayed, aborted at the window's end).
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("plant.log");
+    std::fs::write(&file, &window).unwrap();
+    std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
+    std::fs::write(dir.path().join("project.toml"), log_project("file = \"plant.log\"")).unwrap();
+    let (t0, t9) = window_test(dir.path(), base);
+    let (code, stdout, stderr) = out(&exe_env(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9], &[("VEREDAS_COMISSIONADOR_READ_IN", "3")]));
+    assert_eq!((code, stdout.len(), dir.path().join("runs").exists()), (4, 0, false), "{stderr:?}");
+    assert_eq!(stderr, ["the history of `plant` was not in the store after 3 s (0 lines read): the replay is refused"]);
 }
 
 #[test]

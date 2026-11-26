@@ -8,17 +8,17 @@
 //!   verdict, keep the run under `<folder>/<id>/<nnnn>/` (`runs` beside the test by default).
 //! - `replay <test> --project <project.toml> --from <moment> --to <moment> [--runs <folder>]`: the
 //!   same over the window of the session's store between the two moments (`YYYY-MM-DD HH:MM[:SS[.mmm]]`
-//!   on the plant's clock), once the store holds what the project's start reads into it.
+//!   on the plant's clock), once portal says the store holds every log's history (C-096).
 //!
 //! Each option is given once, followed by its value, never an empty one. Exit codes: 0 the file is
 //! sound or the run passed; 1 the file has problems or the run failed; 2 the command line is wrong;
 //! 3 the run was aborted; 4 the run was refused before it started (its folder cannot be made, the
-//! project or its session cannot start, the store is still being read in, the engine refuses it),
+//! project or its session cannot start, a log's history is not in the store, the engine refuses it),
 //! nothing run, nothing kept and the folders made for it removed; 5 the run ran, its verdict
 //! printed, but could not be kept.
 //!
-//! `VEREDAS_COMISSIONADOR_READ_IN` sets, in seconds, how long a replay waits for the store to be
-//! read in (600 when unset), so a test can reach the refusal.
+//! `VEREDAS_COMISSIONADOR_READ_IN` sets, in seconds, how long a replay waits for every log's history
+//! to be in the store (600 when unset), so a test can reach the refusal.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -51,12 +51,11 @@ const USAGE: &str = "usage: veredas-comissionador check <file.test | file.fn>
        veredas-comissionador replay <file.test> --project <project.toml> --from <moment> --to <moment> [--runs <folder>]";
 
 /// How long a live run waits for the session's OPC UA sources and channels to read live before it
-/// starts anyway (its waits and its binding say what is missing); how long a replay waits for
-/// every log to read its first line (an empty log has none).
+/// starts anyway (its waits and its binding say what is missing).
 const READY: Duration = Duration::from_secs(30);
 
-/// How long a replay waits for the project's start to finish reading into the store before it is
-/// refused, unless `VEREDAS_COMISSIONADOR_READ_IN` says otherwise.
+/// How long a replay waits for every log's start to have read its history into the store before
+/// it is refused, unless `VEREDAS_COMISSIONADOR_READ_IN` says otherwise.
 const READ_IN: Duration = Duration::from_secs(600);
 
 fn read_in() -> Duration {
@@ -280,59 +279,40 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
     let health = |id: &str, ok: &dyn Fn(&HealthState) -> bool| live.health.read().map(|h| h.get(id).is_some_and(|h| ok(&h.state))).unwrap_or(false);
     let started = Instant::now();
     if let RunMode::Replay { to_ms, .. } = &mode.mode {
-        // A replay reads the store: every log has read its first line, or READY has passed (an
-        // empty log reads none). A log that has read a line stamped at or after the session's
-        // start has read its history up to the present (its files read whole, the newest last); a
-        // log with no stamps indexes its lines on their arrival, none of them in a window that
-        // ended before the session started; the lines of the others hold still across two of
-        // portal's refreshes, each known by a new count of the pump's passes.
-        let logs: Vec<&str> = live.sources.iter().filter(|s| s.kind == "log").map(|s| s.id.as_str()).collect();
-        let unstamped: std::collections::BTreeSet<&str> = live.sources.iter().filter(|s| s.kind == "log" && !s.has_timestamp).map(|s| s.id.as_str()).collect();
-        while started.elapsed() < READY && !logs.iter().all(|id| health(id, &|s| *s != HealthState::Waiting)) {
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        // A replay reads the store once every log's start has read its history into it, as portal
+        // says in the log's health (`history_read`, C-096, Q319 (a)): every line of every file as
+        // it stood when the start opened it, stored. A log with no stamps indexes its lines on
+        // their arrival, none of them in a window that ended before the session started, so it
+        // is not waited for then. A history that cannot be whole is never said read: the replay
+        // is refused at its bound.
         let begun_ms = begun_at.and_utc().timestamp_millis();
-        // The logs read up to the present, once and for all (portal shows the last stamp read,
-        // which a late line can set back).
-        let mut past: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        let (mut last, mut still) = (None::<(u64, u64)>, 0);
+        let mut left: Vec<&str> = live
+            .sources
+            .iter()
+            .filter(|s| s.kind == "log" && (s.has_timestamp || *to_ms >= begun_ms))
+            .map(|s| s.id.as_str())
+            .collect();
         let begun = Instant::now();
         let limit = read_in();
         loop {
-            // The lines of the logs not yet past the window, and whether any is left.
-            let (mut lines, mut left) = (0, false);
+            // The logs read in, once and for all; the lines the others have read so far.
+            let mut lines = 0;
             if let Ok(h) = live.health.read() {
-                for id in &logs {
-                    let Some(s) = h.get(*id) else { continue };
-                    let present = s.last_ts.is_some_and(|t| t.and_utc().timestamp_millis() >= begun_ms);
-                    if past.contains(id) || present || (unstamped.contains(id) && *to_ms < begun_ms) {
-                        past.insert(id);
-                    } else {
+                left.retain(|id| match h.get(*id) {
+                    Some(s) if s.history_read => false,
+                    Some(s) => {
                         lines += s.count;
-                        left = true;
+                        true
                     }
-                }
+                    None => true,
+                });
             }
-            if !left {
-                break;
-            }
-            // DECISION PENDING (Q319): lines holding still are taken for the read-in's end; a start
-            // that reads files with no line for a second or more in a row (a family's empty members)
-            // can pass for it.
-            let passes = live.counters.read().map(|c| c.passes).unwrap_or(0);
-            match last {
-                Some((l, p)) if p != passes => {
-                    still = if l == lines { still + 1 } else { 0 };
-                    last = Some((lines, passes));
-                }
-                None => last = Some((lines, passes)),
-                _ => {}
-            }
-            if still >= 2 {
+            if left.is_empty() {
                 break;
             }
             if begun.elapsed() >= limit {
-                tell!("the store was still being read in after {} s ({lines} lines): the replay is refused", limit.as_secs());
+                let names: Vec<String> = left.iter().map(|id| format!("`{id}`")).collect();
+                tell!("the history of {} was not in the store after {} s ({lines} lines read): the replay is refused", names.join(", "), limit.as_secs());
                 return 4;
             }
             std::thread::sleep(Duration::from_millis(100));

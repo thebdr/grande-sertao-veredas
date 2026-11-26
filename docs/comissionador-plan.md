@@ -229,8 +229,8 @@ on 2026-11-26:
   alike objects need them.
 - **Q318** where a replay's clock stands after a write: portal stores each write with the moment
   it was answered ((a), waiting on portal; the limit stands meanwhile).
-- **Q319** how a replay knows a session start's read-in is done: portal says so ((a), waiting on
-  portal; the stillness and its limit stand meanwhile).
+- **Q319** how a replay knows a session start's read-in is done: portal says so ((a); built,
+  portal's `SourceHealth::history_read` of C-096, which the replay waits on).
 - **Q320** how a person confirms a run's gated writes with no screen, and what a run does with a
   switch it finds armed: by the list's fingerprint (`--arm`), and leaves it as found.
 - **Q321** what the confirmation covers, the switch being the whole session's: the test's gated
@@ -243,13 +243,13 @@ function block shows before it collapses (the design's open point, Oficina's to 
 ## Traps
 Recorded as the build meets them.
 
-- **A replay cannot see a session start's read-in end** (C-205, Q319). Portal shows a log's line
-  count and last stamp only. A log that has read a line stamped at or after the session's start
-  has read its history (files read whole, the newest last, lines stored before health is shown);
-  a stamp past the window is not enough, a rotated member's late line being one. A log with no
-  stamps holds nothing of a past window. For the rest, lines holding still across two refreshes
-  are a guess that a family's empty members beat: portal waits for each member to hold still
-  before the next.
+- **A replay could not see a session start's read-in end** (C-205, Q319). Portal showed a log's
+  line count and last stamp only: lines holding still across two refreshes were a guess that a
+  family's empty members beat (portal waits for each member to hold still before the next), and
+  a stamp past the session's start one that a clock ahead beat. Portal now says it per log
+  (`SourceHealth::history_read`, C-096). A history that cannot be whole is never said read, so the
+  replay keeps a bound of its own; a log with no stamps holds nothing of a past window and is not
+  waited for then.
 
 - **A word the language reads by its place is no reserved word** (C-201). `max` was reserved for
   `retry <step> max <n>` and is also a built-in call, so `max(a, b)` could not be written. The
