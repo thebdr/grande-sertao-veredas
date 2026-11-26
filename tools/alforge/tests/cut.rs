@@ -68,6 +68,17 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     }
     assert!(c.manifest.toolchain.starts_with("rustc "), "{}", c.manifest.toolchain);
 
+    // Each component's build traced (docs/questions.md Q448): its log beside its executables, rustc
+    // among what it ran, and nothing its version does not name read by any process but cargo.
+    for h in held.values() {
+        let log = std::fs::read_to_string(work.join("out/trace").join(format!("{}.trace", h.name))).unwrap();
+        let reads = alforge::trace::reads(&log, "/build/src");
+        assert_eq!(alforge::trace::outside(&reads, "/build/src", "/build/vendor", h.inputs.as_ref().unwrap(), &h.packages), Vec::<String>::new(), "{}", h.name);
+    }
+    let all: Vec<alforge::trace::Read> = held.keys().flat_map(|n| alforge::trace::reads(&std::fs::read_to_string(work.join("out/trace").join(format!("{n}.trace"))).unwrap(), "/build/src")).collect();
+    assert!(all.iter().any(|r| r.program.ends_with("/rustc") && r.path.starts_with("/build/src/crates/")), "rustc's reads of the tree are traced");
+    assert!(all.iter().any(|r| r.program.ends_with("build_script_build")), "a build script's reads are traced");
+
     // The bundle: its name, its files, the manifest inside byte for byte, its sums.
     let name = "veredas-0.0.0-trial.291-x86_64-unknown-linux-gnu";
     assert_eq!(c.bundle, work.join(format!("{name}.tar.gz")));
@@ -98,6 +109,25 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
         assert!(files.iter().any(|x| x == f), "the bundle holds no {f}: {files:?}");
     }
     assert!(!files.iter().any(|f| f.starts_with("tools/") || f.starts_with("crates/") || f.ends_with(".rs")), "{files:?}");
+    // Oficina's window with the Qt it loads, laid out as Qt lays itself out (Q446): its RUNPATH the
+    // bundle's own, its libraries, its platform plugins and QML modules there, no WebEngine.
+    for f in ["lib/qt/lib/libQt6Core.so.6", "lib/qt/lib/libQt6Quick.so.6", "lib/qt/lib/libkddockwidgets-qt6.so.4", "lib/qt/plugins/platforms/libqxcb.so", "lib/qt/plugins/platforms/libqoffscreen.so", "lib/qt/qml/QtQuick/Controls/qmldir"] {
+        assert!(files.iter().any(|x| x == f), "the bundle holds no {f}");
+    }
+    assert!(!files.iter().any(|f| f.contains("WebEngine")), "only what the window imports");
+    let dynamic = std::process::Command::new("readelf").arg("-d").arg(c.extracted.join("bin/veredas-oficina")).output().unwrap();
+    assert!(String::from_utf8_lossy(&dynamic.stdout).contains("Library runpath: [$ORIGIN/../lib/qt/lib]"), "{}", String::from_utf8_lossy(&dynamic.stdout));
+    let kdd = std::process::Command::new("readelf").arg("-d").arg(c.extracted.join("lib/qt/lib/libkddockwidgets-qt6.so.4")).output().unwrap();
+    assert!(String::from_utf8_lossy(&kdd.stdout).contains("Library runpath: [$ORIGIN]"), "{}", String::from_utf8_lossy(&kdd.stdout));
+    // Its licences (C-294): a row in THIRD-PARTY.md for every entry of the component list, the
+    // components' own files, Qt's and KDDockWidgets' texts.
+    let third = std::fs::read_to_string(c.extracted.join("licenses/THIRD-PARTY.md")).unwrap();
+    let list: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(c.extracted.join("sbom.cdx.json")).unwrap()).unwrap();
+    assert_eq!(third.lines().filter(|l| l.starts_with("| ") && !l.starts_with("| Package")).count(), list["components"].as_array().unwrap().len());
+    for f in ["licenses/components/veredas-core/LICENSE-MIT", "licenses/components/veredas-oficina/COPYING", "licenses/qt/LGPL-3", "licenses/kddockwidgets/LICENSE.txt"] {
+        assert!(files.iter().any(|x| x == f), "the bundle holds no {f}");
+    }
+    assert!(files.iter().any(|f| f.starts_with("licenses/crates/serde-") && f.contains("LICENSE")), "a crate's own licence files");
     let manifest_text = std::fs::read_to_string(&c.manifest_path).unwrap();
     assert_eq!(std::fs::read_to_string(c.extracted.join("release.toml")).unwrap(), manifest_text);
     // The component list in the bundle and beside it: `alforge components`'s for the commit and
