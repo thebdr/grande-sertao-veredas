@@ -11,15 +11,15 @@
     "fisica"
   ],
   "exitCode": 0,
-  "outputSha": "df1fe1723e64d19a88096ae12bc95e787e99b5e3b0b74f4195720f8d2aa55a81",
-  "outputTail": "        PASS [   0.854s] (51/63) veredas-maquinar::fisica round_3::an_added_body_against_a_belt_side_is_not_carried\n        PASS [   0.877s] (52/63) veredas-maquinar::fisica round_3::the_depth_a_body_rests_grows_with_gravity\n        PASS [   0.931s] (53/63) veredas-maquinar::fisica round_4::far_from_the_origin_a_fall_keeps_to_gravity_and_a_body_rests_as_deep\n        PASS [   4.543s] (54/63) veredas-maquinar::fisica round_3::an_added_body_on_a_slow_belt_is_carried\n        PASS [  24.472s] (55/63) veredas-maquinar::fisica round_4::a_belt_far_from_the_origin_carries_what_lies_on_it_as_one_near_it\n        PASS [   2.220s] (56/63) veredas-maquinar::fisica round_4::the_runner_keeps_its_scene_s_own_step\n        PASS [   0.013s] (57/63) veredas-maquinar::fisica sensors_see_bodies_and_movers_in_order_and_a_body_taken_away_leaves_them\n        PASS [   0.390s] (58/63) veredas-maquinar::fisica round_5::a_body_a_thousand_times_the_mass_under_it_sinks_through_to_the_floor\n        PASS [   0.737s] (59/63) veredas-maquinar::fisica round_5::a_body_alone_rests_deeper_the_flatter_it_is\n        PASS [   0.985s] (60/63) veredas-maquinar::fisica round_5::a_stack_s_contacts_sink_with_the_load_above_them\n        PASS [   1.944s] (61/63) veredas-maquinar::fisica the_documented_scene_loads_with_its_numbers_and_runs_as_the_reference_says\n        PASS [   1.484s] (62/63) veredas-maquinar::fisica the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene\n        PASS [   5.650s] (63/63) veredas-maquinar::fisica the_same_scene_and_inputs_give_the_same_run_bit_for_bit\n────────────\n     Summary [  58.284s] 63 tests run: 63 passed, 0 skipped",
-  "ranAt": "2026-11-26T06:11:45.448Z",
-  "headCommit": "883b92dc2f47628036ed9c58d565369f5ceea1a4",
+  "outputSha": "bc78d3b0c2d3fb07b0ca16c2fb3afb5911abc2f4493c75afa250f788f6df8974",
+  "outputTail": "        PASS [   0.918s] (59/71) veredas-maquinar::fisica round_5::a_body_alone_rests_deeper_the_flatter_it_is\n        PASS [   3.110s] (60/71) veredas-maquinar::fisica round_6::a_2_s_stall_is_caught_up_and_never_skipped\n        PASS [   1.205s] (61/71) veredas-maquinar::fisica round_6::a_column_of_ten_cartons_stands_at_every_step\n        PASS [   4.528s] (62/71) veredas-maquinar::fisica round_6::a_column_built_one_carton_at_a_time_stands_at_long_steps\n        PASS [  12.647s] (63/71) veredas-maquinar::fisica round_6::a_body_alone_rests_within_0_12_mm_at_every_step\n        PASS [   4.107s] (64/71) veredas-maquinar::fisica round_6::a_hook_s_stall_counts_the_step_after_it_not_its_own\n        PASS [   0.005s] (65/71) veredas-maquinar::fisica round_6::the_header_s_refusals_read_by_their_text\n        PASS [   0.005s] (66/71) veredas-maquinar::fisica sensors_see_bodies_and_movers_in_order_and_a_body_taken_away_leaves_them\n        PASS [   1.468s] (67/71) veredas-maquinar::fisica the_documented_scene_loads_with_its_numbers_and_runs_as_the_reference_says\n        PASS [   3.225s] (68/71) veredas-maquinar::fisica round_6::two_boxes_stack_alike_at_every_step\n        PASS [  49.170s] (69/71) veredas-maquinar::fisica round_6::drops_onto_a_mover_or_a_body_rest_on_it\n        PASS [   1.481s] (70/71) veredas-maquinar::fisica the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene\n        PASS [   2.665s] (71/71) veredas-maquinar::fisica the_same_scene_and_inputs_give_the_same_run_bit_for_bit\n────────────\n     Summary [ 107.881s] 71 tests run: 71 passed, 0 skipped",
+  "ranAt": "2026-11-26T13:13:46.887Z",
+  "headCommit": "9e9e33cbb94d020e0ec1122c9f4b1842aba7f769",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/fisica.rs",
       "file": "crates/veredas-maquinar/tests/fisica.rs",
-      "fileSha": "e191b11c012b639dbfe93ed1590b0521f758ee2ac8502fbdaa1f4caacf6909fd"
+      "fileSha": "cf8d9cd742f8168121805b30e0c0535c6f0f246f52a4673b2a425710ed268abf"
     }
   ]
 }
