@@ -24,14 +24,20 @@ users, the PLC programmer, the commissioning technician and the software enginee
 ### Foundations
 - **Shell in Qt Quick (QML), logic in Rust** through the cxx-qt bridge, kept behind one seam so
   the bridge can be replaced (The Qt Company's own Rust bridge was a technology preview when this
-  was decided). C++ wherever Qt needs it, with no limit.
+  was decided). C++ wherever Qt needs it, with no limit. The bridge is looked at again when Qt's
+  own leaves preview, in 2027 (minor 51, Q31, ruled 2026-11-26).
 - **QML may hold view logic** (formatting, animation, selection), never project or plant logic.
 - **Windows 11 and Linux**, Linux through X11 compatibility first. No Windows 10 and no ARM build:
-  an ARM device runs components only. Oficina follows Qt's releases, one every six months.
+  an ARM device runs components only. Each Oficina release pins one Qt version (minor 51), Qt
+  6.12.0 today.
 - **Hosts without a GPU are virtual machines only** (Hyper-V, VMware, VirtualBox, Linux guests).
-  There everything except 3D works: Oficina detects software drawing, switches effects off, starts
-  the embedded browser in software mode, opens 3D only in a reduced mode behind a warning, and
-  says so.
+  There everything except 3D works: Oficina detects software drawing before its first window, runs
+  with Qt Quick's software backend, switches effects off, starts the embedded browser in software
+  mode and says so; the 3D view is unavailable (minor 52, Q31, ruled 2026-11-26, against the
+  review's wording, which kept the normal pipeline over a software rasteriser). The spike measured
+  both: the normal pipeline over llvmpipe and WARP, and the software backend on `offscreen`, where
+  points 1, 2, 3, 5 and 7 passed (point 6, below). The software backend on a display is for the
+  drawing probe's clause to run.
 - **An embedded Chromium** shows supervisão's pages and the warehouse system's, and hosts the code
   editor (Monaco). Where Chromium cannot draw: a plain native text editor, and web pages open in
   the system browser.
@@ -40,13 +46,20 @@ users, the PLC programmer, the commissioning technician and the software enginee
   its Qt Quick side. Docking across monitors is not declared outside the suite (entry 29's third
   option was not chosen, Q31): it is proven where a display is, not headless.
 - **3D in Qt Quick 3D**, view-only first, its behaviours chosen from ready-made ones only (entry
-  31, Q31).
+  31, Q31); on a host with a GPU only (minor 52).
 - **Translatable from day one**, the interface alone: a component's state text and its logs stay
   English.
+- **The components' names stay Portuguese on screen** (law L2): where a screen presents a
+  component, its role shows as a subtitle, and the command palette matches unaccented spellings and
+  English aliases (minor 54, Q31, ruled 2026-11-26).
 - **The accent is lavanda `#B9A9E8`** (soft `#2B2838`, outline `#494360`, text on the accent
   `#12101C`; the hover and data-series tint `#CFC3F2` is the assistant's proposal). Green
   `#30D158` means a good state and is never the accent (`docs/questions.md` Q22, reversed on
-  2026-11-15).
+  2026-11-15). Every state has a mark and a word, so it reads without colour (the design's rule,
+  `docs/design/README.md`; entry 43, Q31, ruled 2026-11-26): good, warning and fault are one khaki
+  under the most common colour blindness. The outline keeps its tone (the review's `#7A7399` not
+  chosen). A light theme joins the list (entry 43), its tones set with the first code that draws
+  it.
 - **Licence GPLv3.** Every crate Oficina links carries a permissive licence that GPLv3 accepts, and
   a check of dependency licences runs in CI (the architect, 2026-11-15). The suite's permissive
   crates state `MIT OR Apache-2.0` and Oficina `GPL-3.0-or-later`, the GPL version 3 text beside
@@ -63,6 +76,16 @@ users, the PLC programmer, the commissioning technician and the software enginee
   no boundary (entry 33, Q31, ruled 2026-11-25): portal and supervisão require on every request a
   random token per session, handed over SSH, and check `Host` and `Origin`; controlador's
   engineering channel is a Unix socket (a named pipe on Windows) under the system's permissions.
+- **Pairing is one step** (entry 42, Q31, ruled 2026-11-26): Oficina creates the key and installs
+  it on the target. Not chosen: opening the project from the target, and one connection view.
+- **A controller may run without a credential**, permitted and discouraged (Q43, ruled
+  2026-11-26): Oficina warns at each connection to a controller without a credential; the
+  controller itself raises nothing.
+- **An older controller** (Q235, ruled 2026-11-26): Oficina speaks its versions for everything
+  short of a download (connecting, reading the state and the records, watching, forcing), writing
+  only what that controller reads. A program download to a controller older than Oficina's release
+  is refused, the controller's update offered first. No interface is frozen as a rescue path. How
+  far back Oficina speaks is Q371.
 - **Portal to portal.** Oficina embeds a portal, and that portal talks to the portal embedded in
   controlador (the architect, 2026-11-15) over portal's own HTTP interface, "http (https, later)"
   (2026-11-16): the event stream, the windowed reads, the gated write surface. The interface
@@ -79,8 +102,12 @@ users, the PLC programmer, the commissioning technician and the software enginee
   may run". Ruled of Q37 on 2026-11-25: each altering request carries a SHA-256 of its content
   (HTTP's `Content-Digest`, RFC 9530) that the controller checks before acting; a change is
   applied whole, at one point of the scan; and a request whose answer is lost is shown as
-  "unknown", its outcome asked of the controller by the request's number, never assumed. The rest
-  is Q36 and Q37's remainder.
+  "unknown", its outcome asked of the controller by the request's number, never assumed. What
+  Oficina shows as done is read back from the controller (the value now in memory, the new state
+  text, the whole breakpoint list), never an echo of what was asked, and a write's answer says how
+  far it got, applied and then saved. A command passes portal's write switch and then the
+  commissioning switch (Q37). A signature over a download's manifest and a keyed check on each
+  altering request wait for the security study (Q43, 2026-11-26).
 - **Only Oficina and the target change a controller's state** (2026-11-15): a person does it in
   Oficina or at the target, and the program may stop itself. Supervisão, SCADA, MES and other
   controllers read the state and never change it.
@@ -136,15 +163,28 @@ first, the rest in point releases.
   writes for the person to confirm, then arms portal's write switch at its start and disarms it at
   its end (Q314, ruled 2026-11-25): that confirming step is a screen of Oficina's.
 - **Controlador:**
-  - the ORCL editor with a language server, and a quick switch between ORCL and a ladder view of
-    the same source (ladder read-only at first); one language-server client and one debugger
+  - the ORCL editor with a language server and context help, and a quick switch between ORCL and
+    a ladder view of the same source, ladder read-only in release 1 and editable from release 2
+    (entries 40 and 45, Q31, ruled 2026-11-26); one language-server client and one debugger
     client on Oficina's side, shared by ORCL and ábaco's Python (entry 28, Q31);
+  - a library of blocks shared across projects is a crate named by path or by Git revision,
+    pinned in the project file, with no build scripts (entry 44, Q31; entry 32's rule);
   - inline live values; cross-reference and call tree; the subset checker's messages; static
     analysis and naming rules;
-  - watch tables; forcing, with its three modes for variables;
+  - the IO list, the alarm list and the cross-reference exported to CSV and PDF (entry 45), and
+    an example project per network shipped with Oficina (entry 45);
+  - watch tables; forcing, with its three modes for variables, each mode shown in words in a
+    table, never by the [!] mark alone (minor 49); a structure expands member by member in watch
+    tables, forcing and the IO mapping (entry 44). "Force once now" on a variable is the online
+    change of a value, TIA's Modify (minor 48);
   - breakpoints, stepping, single cycle, pause on command;
-  - the shadow test: what would differ (outputs and a watch list), swap, accept, and the fallback
-    flag in the download popup;
+  - the shadow test: what would differ (outputs and a watch list), swap, accept, and in the
+    download popup the fallback flag and its time limit, the engineer's, ten minutes by default
+    (Q32, ruled 2026-11-26). The popup offers the fallback only where the live-takeover
+    specification allows it (`docs/controlador/live-takeover.md`, its S list), and Oficina says
+    when the right to take over ends. Where the doubled scan does not fit, the way is stop and
+    download, the popup saying so (minor 48). A download to a controller older than Oficina's
+    release offers the controller's update first (Q235);
   - hardware configuration: the device tree and its parameters; scan, compare and merge; topology;
     the IO mapping with live values, forcing and the per-output halt setting. Vendor description
     files (GSDML, ESI, EDS) are inputs, read and never written, parsed with document type
@@ -153,20 +193,36 @@ first, the rest in point releases.
     free to accept it (Q45);
   - simulator controls: virtual time, snapshots;
   - project data editors: multilingual text lists, alarms and events, recipes, units and limits;
-  - the download history (the last 10) and rollback;
+  - the download history (the last 10) and rollback; a shadow test accepted when its time limit
+    ran out is recorded there as "accepted by timeout", and as an event (minor 47);
   - the controller's state as a strip; a click opens a detail view with the state's history and
-    the fault records, which are also shown in a loud popup. A fault record's snapshot of all data
-    is read through Oficina only, peers getting the cause, the number and the time (entry 35, Q31);
+    the fault records, which are also shown in a loud popup. A maintenance request carries a
+    "seen" mark, so clearing one whose cause persists does not look like a dead button, and the
+    detail view decodes the shadow term (`shadow(drives=13, watches=12)`) (minor 50). A fault
+    record's snapshot of all data is read through Oficina only, peers getting the cause, the
+    number and the time (entry 35, Q31);
+  - a backup is one file with a rebuild sheet (Q236, ruled 2026-11-26): its manifest lists the
+    program and its source, the hardware configuration, the IO mapping, the target's settings and
+    the retained data at that moment, each with its SHA-256, and the sheet says in plain text, for
+    someone who never met Veredas, the board and drive needed, the system image and where to get
+    it, the network names and addresses, what to install and in what order. Oficina makes it from
+    the controller and restores it to any target that meets the hardware requirements, checked by
+    its manifest, asking whether the retained data is restored or the program starts cold;
   - the intervention log the target keeps (entry 37, Q31): each line with the time and who, the
     SSH user, the peer's address and a name typed once per Oficina installation;
   - the retained variables' saves: where the drive reports its wear, Oficina shows the years it
-    has left at the save's period and its shortest life at the shortest gap (Q40).
+    has left at the save's period and its shortest life at the shortest gap (Q40);
+  - what a Rust engineer gets (entry 46, Q31, ruled 2026-11-26): an ORCL project is a cargo crate
+    whose logic `cargo test` runs, the subset checker works outside Oficina and in CI, and the
+    allowed subset of Rust is published as one page (ORCL's, `docs/orcl/README.md`). Oficina is
+    one way into such a project, never the only one.
 - **Commissioning:** IO check without a program; identify, name and address a device, from the
   laptop when it is on the segment and through a target's embedded aranha when it is not (Q45's G2,
   ruled 2026-11-25). Later: drive parameters, a control panel, tuning, a drive scope.
 - **The 3D plant simulator** as an authoring environment in Qt Quick 3D: place equipment from a
   library, set behaviours, collisions and physics; view-only first, behaviours chosen from
-  ready-made ones only (entry 31, Q31). The physics and the devices' replies are
+  ready-made ones only (entry 31, Q31); unavailable on a host without a GPU (minor 52). The
+  physics and the devices' replies are
   computed in maquinar, headless, at a fixed step; Oficina's view draws the positions it is sent
   (`docs/maquinar-plan.md`).
 - **The HMI creator** edits the screens of a separate panel HMI, a component still to be planned
@@ -250,6 +306,12 @@ the C++ libraries, and the tests' driver stays a feature of its own.
   the formats' table, the window's docking and the test driver. The TOML document, the code editor
   and its language-server client, the table, the embedded pages and the drawing probe come over
   with their clauses; the spike's folder stays as its record.
+- **What a release ships** (Q443 and Q446, ruled 2026-11-26): the release builder turns on the
+  features the executable needs, `shell` and never `driver`, whatever the defaults; the bundle
+  carries Qt 6.12's libraries and KDDockWidgets in `lib/` beside `bin/`, with their licence texts
+  and where their sources are, the executable finding them by its `RUNPATH`, `$ORIGIN/../lib`.
+  The build script writes only this machine's folders into the `RUNPATH` today: `$ORIGIN/../lib`
+  joins them when the release member's bundle first carries the window.
 
 ## The own-shell spike
 The spike answers one question before `crates/veredas-oficina` exists: does Qt Quick, with its
@@ -505,16 +567,18 @@ kept, rust-analyzer is held to running nothing of the folder, and the embedded b
   with the crate (Before the code).
 
 ## Open
-- **Q31, the review's majors and minors**: entries 15 to 41 ruled on 2026-11-25, those that touch
-  Oficina written above where each applies (22, 23, 24, 28 to 35, 37). Still open for Oficina: 42
-  (opening the project from the target; pairing in one step), 43 (the outline's contrast; no light
-  theme), 45 (exports, examples, help), and the minors 51, 52 and 54.
+- **Q31, the review's majors and minors**: ruled on 2026-11-25 and 2026-11-26, those that touch
+  Oficina written above where each applies (22, 23, 24, 28 to 35, 37, 40, 42 to 46, and the minors
+  47 to 52 and 54). Left: minor 53, bookkeeping (what waits on undecided work, marked so: the HMI
+  creator waits for the panel HMI's plan).
+- **Q371**, Oficina's: how far back it speaks to an older controller (Q235's floor).
 - **Q370**, Oficina's, ruled 2026-11-25: the window is built by default. The switch waits until
   every member's build on this machine finds Qt and the C++ libraries (the orchestrator's order:
   the machine's cargo configuration first, the switch after); meanwhile it stays behind `shell`.
-- **Q36, Q37** the download's integrity and the robust link.
-  **Q43** the security round's remainder. **Q45**'s remaining readings (its points on Windows, G2,
-  C5 and a Modbus module's own timeout are ruled and written above).
+- **Q36, Q37 and Q43**: ruled but for what waits on the security study (Q43, 2026-11-26): a
+  signature over a download's manifest, a keyed check on each altering request, and the end date
+  of certificates issued after 2038. **Q45**'s remaining readings (its points on Windows, G2, C5
+  and a Modbus module's own timeout are ruled and written above).
 - The research behind these decisions (five PLC suites' manuals; three toolkits, Qt 6.12, Avalonia
   12.1 and Slint 1.18; studies of Qt without a GPU, of cxx-qt and KDDockWidgets, of Qt Creator as
   a platform, of softPLC debug and online-change mechanisms and of fieldbus master stacks) was

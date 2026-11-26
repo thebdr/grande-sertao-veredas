@@ -4032,6 +4032,33 @@ build on the development machine finds them.
 
 ---
 
+## Q371 - How far back does Oficina speak to an older controller?
+
+**Raised** 2026-11-26, by the oficina session, from Q235's ruling: "(a) Oficina speaks old
+versions", whose option read "back to a floor it states (a number of releases or of years)", the
+floor itself not ruled.
+
+Oficina reads a controller's versions when it connects (its release, the ORCL language versions
+it runs, the program file's format, each TOML file's `format` and `version`) and writes only what
+that controller reads, for everything short of a download (Q235). Each version it speaks is code
+kept and a test kept.
+- (a) No floor yet: every release from the first, a floor stated when a version is first dropped,
+  with the release that drops it.
+- (b) A number of releases: the last N releases of controlador.
+- (c) A number of years: every controller release of the last N years, so a machine left as
+  delivered stays reachable for that long (Q236's case is a board that fails after ten years).
+
+**Recommended**: (a): nothing is dropped before release 1 is out, and the choice is easier with a
+first real version to drop.
+
+**Taken meanwhile** (most reversible): (a), nothing built: the area lands with the target's
+clauses.
+
+**Reversible?** Yes until a release drops a version; a dropped version's machines then need the
+controller's update to be reached.
+
+---
+
 ## Q320 - How a person confirms a run's gated writes, and a switch a run finds armed
 
 **Raised** 2026-11-25, by the comissionador session, from the architect's ruling on Q314 (b): the
