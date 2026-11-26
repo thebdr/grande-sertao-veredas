@@ -189,7 +189,7 @@ fn a_neighbour_is_found_by_its_mac_or_announced_chassis_never_by_a_name() {
     // The MAC against a chassis another single device announces: the MAC is taken, and said.
     let t = topology::build(&f, &[], &[said(B, 2, "dev-a", 1, Some(port_mac(C, 1)))]);
     assert!(links(&t).contains(&(end(B, 2), end(C, 1), Confidence::Reported, 1)));
-    assert!(t.notes.iter().any(|n| n.contains("names chassis \"dev-a\", which another device announces") && n.contains("the MAC is taken")), "{:?}", t.notes);
+    assert!(t.notes.iter().any(|n| n.contains(&format!("names chassis \"dev-a\", which {} announces", topology::device_id(A))) && n.contains("the MAC is taken")), "{:?}", t.notes);
 }
 
 #[test]
@@ -295,7 +295,7 @@ fn the_mac_taken_over_a_chassis_others_announce_is_said_whatever_the_neighbours_
     let t = topology::build(&f, &[], &[said(A, 2, "dev-x", 1, Some(port_mac(d, 1)))]);
     assert!(links(&t).contains(&link(end(A, 2), end(d, 1), Confidence::Reported, 1)));
     assert_eq!(t.notes.len(), 1, "{:?}", t.notes);
-    assert!(t.notes[0].contains("names chassis \"dev-x\", which another device announces") && t.notes[0].contains("the MAC is taken"), "{:?}", t.notes);
+    assert!(t.notes[0].contains(&format!("names chassis \"dev-x\", which {}, {} announce", topology::device_id(B), topology::device_id(C))) && t.notes[0].contains("the MAC is taken"), "{:?}", t.notes);
     // Two such words: the same topology, notes and all, from either order.
     let words = [said(B, 2, "dev-a", 1, Some(port_mac(C, 1))), said(C, 2, "dev-a", 1, Some(port_mac(B, 1)))];
     let one = topology::build(&f, &[], &words);
@@ -442,14 +442,18 @@ mod round_2 {
     fn the_mac_taken_is_said_on_every_path_and_nothing_where_nothing_is_taken() {
         let d = Mac([0x02, 0, 0, 0, 0, 0x0D]);
         let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None), lldp(B, "dev-x", 1, "eth2", 2, 1, 20, None), lldp(C, "dev-x", 1, "eth3", 3, 2, 20, None), lldp(d, "dev-d", 1, "eth4", 4, 3, 20, None)]);
-        let taken = |port: u8, chassis: &str, m: Mac| format!("{} port-{port:03} names chassis {chassis:?}, which another device announces, from the port MAC of {}: the MAC is taken", topology::device_id(A), topology::device_id(m));
+        let taken = |port: u8, chassis: &str, m: Mac, others: &[Mac]| {
+            let verb = if others.len() == 1 { "announces" } else { "announce" };
+            let named: Vec<String> = others.iter().map(|o| topology::device_id(*o)).collect();
+            format!("{} port-{port:03} names chassis {chassis:?}, which {} {verb}, from the port MAC of {}: the MAC is taken", topology::device_id(A), named.join(", "), topology::device_id(m))
+        };
         // A port MAC of one of two devices announcing the chassis: the other announces it too.
         let t = topology::build(&f, &[], &[said(A, 4, "dev-x", 1, Some(port_mac(C, 1)))]);
-        assert_eq!(t.notes, [taken(4, "dev-x", C)]);
+        assert_eq!(t.notes, [taken(4, "dev-x", C, &[B])]);
         // A device's own MAC against a chassis another device announces.
         let t = topology::build(&f, &[], &[said(A, 5, "dev-d", 1, Some(B))]);
         assert!(links(&t).contains(&link(end(A, 5), end(B, 1), Confidence::Reported, 1)));
-        assert_eq!(t.notes, [taken(5, "dev-d", B)]);
+        assert_eq!(t.notes, [taken(5, "dev-d", B, &[d])]);
         // A MAC with a chassis no one announces, or the one its own device announces: nothing.
         let t = topology::build(&f, &[], &[said(A, 6, "whatever", 1, Some(d)), said(A, 7, "dev-d", 1, Some(port_mac(d, 1)))]);
         assert_eq!(t.notes, Vec::<String>::new());
@@ -460,7 +464,7 @@ mod round_2 {
         for order in [[2, 1, 0], [1, 0, 2], [0, 2, 1]] {
             assert_eq!(topology::build(&f, &[], &order.map(|i| words[i].clone())), one, "{order:?}");
         }
-        assert_eq!(one.notes, [taken(2, "dev-a", d), taken(2, "dev-d", B), taken(2, "dev-x", d)]);
+        assert_eq!(one.notes, [taken(2, "dev-a", d, &[A]), taken(2, "dev-d", B, &[d]), taken(2, "dev-x", d, &[B, C])]);
     }
 
     #[test]
@@ -623,6 +627,116 @@ mod round_3 {
         let t = topology::build(&f, &[], &[said(A, 2, "", 1, Some(nobody))]);
         assert_eq!(links(&t).iter().filter(|l| l.2 != Confidence::Heard).count(), 0);
         assert!(t.nodes.iter().all(|n| n.kind != NodeKind::Chassis));
-        assert_eq!(t.notes, [format!("{} port-002 reports a neighbour with no chassis and a MAC no device holds ({nobody}): not drawn", topology::device_id(A))]);
+        assert_eq!(t.notes, [format!("{} port-002 reports a neighbour with no chassis and a MAC that is no single device's ({nobody}): not drawn", topology::device_id(A))]);
+    }
+}
+
+/// The fourth refute round's cases.
+mod round_4 {
+    use super::*;
+
+    fn announcing(dev: Mac, chassis: ChassisId, frame: u64) -> Observation {
+        let mut pdu = LldpPdu::new(chassis, PortId::Local { id: "port-001".into() }, 20);
+        pdu.pn.chassis_mac = Some(dev);
+        Observation { witness: Witness { probe: Probe::LldpHeard, iface: format!("eth{frame}"), at_ns: frame, frame }, observed: Observed::Lldp { src: port_mac(dev, 1), pdu } }
+    }
+
+    /// What a word on a neighbour finds among these announcements: the remote end of A's port 2,
+    /// the chassis nodes, the notes.
+    fn found(announced: &[(Mac, ChassisId)], word: &str) -> (Vec<String>, Vec<(String, String)>, Vec<String>) {
+        let mut obs = vec![lldp(A, "dev-a", 1, "eth9", 0, 0, 20, None)];
+        obs.extend(announced.iter().enumerate().map(|(i, (m, c))| announcing(*m, c.clone(), i as u64 + 1)));
+        let t = topology::build(&fused(&obs), &[], &[said(A, 2, word, 1, None)]);
+        let ends = links(&t).into_iter().filter(|l| l.2 != Confidence::Heard).map(|l| if l.0 == end(A, 2) { l.1.node } else { l.0.node }).collect();
+        let nodes = t.nodes.iter().filter(|n| n.kind == NodeKind::Chassis).map(|n| (n.id.clone(), n.label.clone())).collect();
+        (ends, nodes, t.notes)
+    }
+
+    #[test]
+    fn a_name_written_like_a_mac_is_found_as_itself_and_a_mac_by_its_address() {
+        let b = topology::device_id(B);
+        // A station name may be written like a MAC: found as itself.
+        for name in ["0200.0000.5b0b", "02-00-00-00-5b-0b", "02:00:00:00:5B:0B"] {
+            assert_eq!(found(&[(B, ChassisId::Local { id: name.into() })], name).0, std::slice::from_ref(&b), "{name}");
+        }
+        // Not by another spelling of the MAC it looks like: a name is itself.
+        let (ends, nodes, _) = found(&[(B, ChassisId::Local { id: "02:00:00:00:5b:0b".into() })], "0200.0000.5b0b");
+        assert_eq!((ends, nodes), (vec!["chassis:02:00:00:00:5b:0b".to_string()], vec![("chassis:02:00:00:00:5b:0b".to_string(), "02:00:00:00:5b:0b (not yet identified)".to_string())]));
+        // A name and a MAC claiming one word: two devices, so neither, said with both.
+        let mac_c = Mac([0x02, 0, 0, 0, 0x5C, 0x0C]);
+        let (ends, nodes, notes) = found(&[(B, ChassisId::Local { id: "0200.0000.5c0c".into() }), (C, ChassisId::Mac { mac: mac_c })], "0200.0000.5c0c");
+        assert_eq!(ends, ["chassis:02:00:00:00:5c:0c"]);
+        assert_eq!(nodes, [("chassis:02:00:00:00:5c:0c".to_string(), "02:00:00:00:5c:0c (ambiguous: 2 devices)".to_string())]);
+        assert_eq!(notes, [format!("a neighbour names chassis \"02:00:00:00:5c:0c\", which 2 devices announce ({}, {}): its links go to that chassis, not to a guess", b, topology::device_id(C))]);
+        // Two words for one chassis node (a MAC in two spellings), one ambiguous between two names,
+        // one naming nothing: the node is ambiguous, whichever word comes first.
+        let named = |m: Mac| announcing(m, ChassisId::Local { id: "0200.0000.5d0d".into() }, u64::from(m.0[5]));
+        let f = fused(&[lldp(A, "dev-a", 1, "eth9", 0, 0, 20, None), named(B), named(C)]);
+        for words in [["0200.0000.5d0d", "02-00-00-00-5d-0d"], ["02-00-00-00-5d-0d", "0200.0000.5d0d"]] {
+            let t = topology::build(&f, &[], &[said(A, 2, words[0], 1, None), said(A, 3, words[1], 1, None)]);
+            let nodes: Vec<(String, String)> = t.nodes.iter().filter(|n| n.kind == NodeKind::Chassis).map(|n| (n.id.clone(), n.label.clone())).collect();
+            assert_eq!(nodes, [("chassis:02:00:00:00:5d:0d".to_string(), "02:00:00:00:5d:0d (ambiguous: 2 devices)".to_string())], "{words:?}");
+        }
+        // A word with white space around a MAC is no MAC: a chassis of its own; a name differing in
+        // case is another name.
+        assert_eq!(found(&[(B, ChassisId::Mac { mac: Mac([0x02, 0, 0, 0, 0x5B, 0x0B]) })], " 02:00:00:00:5b:0b").0, ["chassis: 02:00:00:00:5b:0b"]);
+        assert_eq!(found(&[(B, ChassisId::Local { id: "dev-b".into() })], "Dev-B").0, ["chassis:Dev-B"]);
+    }
+
+    #[test]
+    fn a_chassis_is_rendered_as_the_bench_s_port_data_writes_it_byte_for_byte() {
+        let b = vec![topology::device_id(B)];
+        let at = |c: ChassisId, word: &str| found(&[(B, c)], word).0;
+        // A backslash and every byte that is not visible ASCII as \xHH, whatever the subtype.
+        assert_eq!(at(ChassisId::Local { id: "plc\\1".into() }, "plc\\x5c1"), b);
+        assert_eq!(at(ChassisId::Local { id: "gerät-1".into() }, "ger\\xc3\\xa4t-1"), b);
+        assert_eq!(at(ChassisId::IfName { name: "a\tb".into() }, "a\\x09b"), b);
+        assert_eq!(at(ChassisId::Other { subtype: 1, data: vec![0x73, 0xE9] }, "s\\xe9"), b);
+        assert_eq!(at(ChassisId::Other { subtype: 7, data: vec![0x73, 0xFF] }, "s\\xff"), b);
+        assert_eq!(at(ChassisId::Other { subtype: 9, data: b"a\\b".to_vec() }, "a\\x5cb"), b);
+        // Another subtype: its text when every byte is visible (a space is), else its hex.
+        assert_eq!(at(ChassisId::Other { subtype: 9, data: b"a b".to_vec() }, "a b"), b);
+        assert_eq!(at(ChassisId::Other { subtype: 9, data: vec![0x61, 0x7F] }, "617f"), b);
+        assert_eq!(at(ChassisId::Other { subtype: 9, data: vec![0x61, 0x01] }, "6101"), b);
+        // A network address of IPv4 with bytes past it, or of another family: hex.
+        assert_eq!(at(ChassisId::Network { data: vec![1, 10, 0, 0, 1, 9] }, "010a00000109"), b);
+        assert_eq!(at(ChassisId::Network { data: vec![6, 1, 2] }, "060102"), b);
+        // Cut where a port data's text ends: 255 visible characters.
+        assert_eq!(at(ChassisId::Local { id: "a".repeat(300) }, &"a".repeat(255)), b);
+    }
+
+    #[test]
+    fn a_member_with_a_port_in_the_domain_that_has_not_left_is_there() {
+        let ring = Some([7; 16]);
+        let triangle = [said(A, 2, "dev-b", 3, Some(port_mac(B, 3))), said(B, 2, "dev-c", 3, Some(port_mac(C, 3))), said(C, 2, "dev-a", 3, Some(port_mac(A, 3)))];
+        let base = [lldp(A, "dev-a", 1, "eth1", 1, 0, 20, ring), lldp(B, "dev-b", 1, "eth2", 2, 1, 20, ring)];
+        // C with two ports in the domain, one leaving: still there, the ring closed.
+        let mut one_left = base.to_vec();
+        one_left.extend([lldp(C, "dev-c", 1, "eth3", 3, 2, 20, ring), lldp(C, "dev-c", 4, "eth4", 4, 3, 20, ring), lldp(C, "dev-c", 4, "eth4", 5, 4, 0, ring)]);
+        assert!(topology::build(&fused(&one_left), &[], &triangle).rings[0].closed);
+        // C's only port in the domain leaving, another active in no domain: gone, the ring open.
+        let mut gone = base.to_vec();
+        gone.extend([lldp(C, "dev-c", 1, "eth3", 3, 2, 20, ring), lldp(C, "dev-c", 1, "eth3", 4, 3, 0, ring), lldp(C, "dev-c", 4, "eth4", 5, 4, 20, None)]);
+        let t = topology::build(&fused(&gone), &[], &triangle);
+        assert_eq!((t.rings[0].members.len(), t.rings[0].closed), (3, false));
+    }
+
+    #[test]
+    fn an_empty_chassis_says_which_mac_it_could_not_take() {
+        let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None)]);
+        // An all-zero MAC is none.
+        let t = topology::build(&f, &[], &[said(A, 2, "", 1, Some(Mac([0; 6])))]);
+        assert_eq!(t.notes, [format!("{} port-002 reports a neighbour with no chassis and no MAC: not drawn", topology::device_id(A))]);
+        // A port MAC two devices' ports share is no single device's.
+        let shared = Mac([0x02, 0, 0, 0, 0x77, 0x01]);
+        let share = |dev: Mac, frame: u64| {
+            let mut pdu = LldpPdu::new(ChassisId::Local { id: format!("d{frame}") }, PortId::Local { id: "port-001".into() }, 20);
+            pdu.pn.chassis_mac = Some(dev);
+            Observation { witness: Witness { probe: Probe::LldpHeard, iface: "eth5".into(), at_ns: frame, frame }, observed: Observed::Lldp { src: shared, pdu } }
+        };
+        let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None), share(B, 2), share(C, 3)]);
+        assert_eq!(f.port_owner(shared), None);
+        let t = topology::build(&f, &[], &[said(A, 2, "", 1, Some(shared))]);
+        assert!(t.notes.contains(&format!("{} port-002 reports a neighbour with no chassis and a MAC that is no single device's ({shared}): not drawn", topology::device_id(A))), "{:?}", t.notes);
     }
 }

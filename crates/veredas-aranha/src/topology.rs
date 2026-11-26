@@ -220,18 +220,34 @@ pub fn build(fusion: &Fusion, interfaces: &[Interface], neighbours: &[Neighbour]
     }
 
     // Reported and confirmed, from the devices' own words on their neighbours.
-    // A chassis by its text, whatever subtype its LLDP gives it: a port data's peer chassis is a
-    // bare text. An empty one is no chassis.
-    let mut claims: BTreeMap<String, BTreeSet<Mac>> = BTreeMap::new();
+    // A chassis by its text, whatever subtype its LLDP gives it, as a port data writes it (a port
+    // data's peer chassis is a bare text), and a chassis announced as a MAC by that MAC too, so a
+    // word that is a MAC in another spelling finds it. An empty one is no chassis.
+    let mut by_text: BTreeMap<String, BTreeSet<Mac>> = BTreeMap::new();
+    let mut by_mac: BTreeMap<Mac, BTreeSet<Mac>> = BTreeMap::new();
     for d in fusion.devices.values() {
         for c in &d.chassis.candidates {
             let text = chassis_text(&c.value);
             if !text.is_empty() {
-                claims.entry(text).or_default().insert(d.mac);
+                by_text.entry(text).or_default().insert(d.mac);
+            }
+            if let Some(m) = c.value.strip_prefix("mac:").and_then(|m| m.parse::<Mac>().ok()) {
+                by_mac.entry(m).or_default().insert(d.mac);
             }
         }
     }
-    let mut chassis_nodes: BTreeMap<String, String> = BTreeMap::new();
+    // The devices a word names: those announcing it as itself, and, when it is a MAC in any of its
+    // spellings, those announcing that MAC; two of them resolve to neither.
+    let claimants = |word: &str| -> BTreeSet<Mac> {
+        let mut out = by_text.get(word).cloned().unwrap_or_default();
+        if let Ok(m) = word.parse::<Mac>() {
+            out.extend(by_mac.get(&m).into_iter().flatten().copied());
+        }
+        out
+    };
+    // A chassis node by the word, a MAC by its address (one chassis, however it is spelled).
+    let node_text = |word: &str| word.parse::<Mac>().map_or_else(|_| word.to_string(), |m| m.to_string());
+    let mut chassis_nodes: BTreeMap<String, BTreeSet<Mac>> = BTreeMap::new();
     let mut said: BTreeMap<(End, End), (u64, u64)> = BTreeMap::new();
     let mut ordered: Vec<&Neighbour> = neighbours.iter().collect();
     ordered.sort_by(|x, y| (x.device, &x.port, &x.chassis, &x.peer_port, x.peer_mac).cmp(&(y.device, &y.port, &y.chassis, &y.peer_port, y.peer_mac)));
@@ -245,37 +261,32 @@ pub fn build(fusion: &Fusion, interfaces: &[Interface], neighbours: &[Neighbour]
             continue;
         }
         let local = End { node: device_id(n.device), port: short(&n.port) };
-        let by_mac = n.peer_mac.filter(|m| m.0 != [0; 6]).and_then(|m| if fusion.devices.contains_key(&m) { Some(m) } else { fusion.port_owner(m) });
-        let matched = word_text(&n.chassis);
-        let text = matched.as_str();
-        let claimed = claims.get(text);
-        let by_chassis = claimed.filter(|c| c.len() == 1).and_then(|c| c.iter().next().copied());
-        let remote = match (by_mac, by_chassis) {
+        let by_peer_mac = n.peer_mac.filter(|m| m.0 != [0; 6]).and_then(|m| if fusion.devices.contains_key(&m) { Some(m) } else { fusion.port_owner(m) });
+        let text = n.chassis.as_str();
+        let claimed = if text.is_empty() { BTreeSet::new() } else { claimants(text) };
+        let by_chassis = (claimed.len() == 1).then(|| claimed.iter().next().copied()).flatten();
+        let remote = match (by_peer_mac, by_chassis) {
             (Some(m), _) => {
-                if claimed.is_some_and(|c| c.iter().any(|d| *d != m)) {
-                    note(&mut t.notes, format!("{} {} names chassis {text:?}, which another device announces, from the port MAC of {}: the MAC is taken", device_id(n.device), local.port, device_id(m)));
+                let others: Vec<String> = claimed.iter().filter(|d| **d != m).map(|d| device_id(*d)).collect();
+                if !others.is_empty() {
+                    let verb = if others.len() == 1 { "announces" } else { "announce" };
+                    note(&mut t.notes, format!("{} {} names chassis {text:?}, which {} {verb}, from the port MAC of {}: the MAC is taken", device_id(n.device), local.port, others.join(", "), device_id(m)));
                 }
                 device_id(m)
             }
             (None, Some(c)) => device_id(c),
             (None, None) if text.is_empty() => {
                 let mac = match n.peer_mac.filter(|m| m.0 != [0; 6]) {
-                    Some(m) => format!("a MAC no device holds ({m})"),
+                    Some(m) => format!("a MAC that is no single device's ({m})"),
                     None => "no MAC".to_string(),
                 };
                 note(&mut t.notes, format!("{} {} reports a neighbour with no chassis and {mac}: not drawn", device_id(n.device), local.port));
                 continue;
             }
             (None, None) => {
-                let claimants = claimed.map_or(0, BTreeSet::len);
-                chassis_nodes.entry(text.to_string()).or_insert_with(|| {
-                    if claimants > 1 {
-                        format!("{text} (ambiguous: {claimants} devices)")
-                    } else {
-                        format!("{text} (not yet identified)")
-                    }
-                });
-                chassis_id(text)
+                let key = node_text(text);
+                chassis_nodes.entry(key.clone()).or_default().extend(claimed);
+                chassis_id(&key)
             }
         };
         let remote = End { node: remote, port: short(&n.peer_port) };
@@ -288,12 +299,15 @@ pub fn build(fusion: &Fusion, interfaces: &[Interface], neighbours: &[Neighbour]
             e.1 += n.witnesses;
         }
     }
-    for (text, label) in &chassis_nodes {
-        let announcers: Vec<String> = claims.get(text).map(|c| c.iter().map(|m| device_id(*m)).collect()).unwrap_or_default();
-        if announcers.len() > 1 {
+    for (text, announcing) in &chassis_nodes {
+        let announcers: Vec<String> = announcing.iter().map(|m| device_id(*m)).collect();
+        let label = if announcers.len() > 1 {
             note(&mut t.notes, format!("a neighbour names chassis {text:?}, which {} devices announce ({}): its links go to that chassis, not to a guess", announcers.len(), announcers.join(", ")));
-        }
-        t.nodes.push(Node { id: chassis_id(text), kind: NodeKind::Chassis, label: label.clone(), mac: None, ports: Vec::new(), rings: Vec::new() });
+            format!("{text} (ambiguous: {} devices)", announcers.len())
+        } else {
+            format!("{text} (not yet identified)")
+        };
+        t.nodes.push(Node { id: chassis_id(text), kind: NodeKind::Chassis, label, mac: None, ports: Vec::new(), rings: Vec::new() });
     }
     for ((a, b), (wa, wb)) in said {
         let confidence = if wa > 0 && wb > 0 { Confidence::Confirmed } else { Confidence::Reported };
@@ -347,10 +361,33 @@ fn note(notes: &mut Vec<String>, n: String) {
     }
 }
 
+/// The most a port data's text holds, in visible characters (the bench's device cuts there too).
+const MAX_ID: usize = 255;
+
+/// Bytes as a port data writes a name: visible ASCII as itself, a backslash and every other byte
+/// as `\xHH` (so an escape reads one way), cut at a whole character or escape to `MAX_ID`.
+fn rendered(data: &[u8]) -> String {
+    let mut out = String::new();
+    for &b in data {
+        let piece = if (0x20..=0x7E).contains(&b) && b != b'\\' { (b as char).to_string() } else { format!("\\x{b:02x}") };
+        if out.len() + piece.len() > MAX_ID {
+            break;
+        }
+        out.push_str(&piece);
+    }
+    out
+}
+
+/// Bytes as hex, cut at a whole byte to `MAX_ID`.
+fn hex_of(data: &[u8]) -> String {
+    data.iter().take(MAX_ID / 2).map(|b| format!("{b:02x}")).collect()
+}
+
 /// A chassis key's text, as a port data writes the chassis it names (its peer chassis is a bare
-/// text): a name (`local:`, `ifname:`) as itself; a MAC as its address; an IPv4 or IPv6 network
-/// address as its text; another subtype's bytes as their text when they are visible ASCII; anything
-/// else as the key's hex.
+/// text, as the bench's device writes it): a name (`local:`, `ifname:`, and the text subtypes 1, 2,
+/// 3, 6 and 7) as itself, rendered; a MAC as its address; an IPv4 or IPv6 network address as its
+/// text, another family as hex; another subtype's bytes as their text when they are visible ASCII,
+/// else as hex.
 fn chassis_text(key: &str) -> String {
     let Some((kind, rest)) = key.split_once(':') else { return key.to_string() };
     let bytes = || -> Option<Vec<u8>> {
@@ -360,23 +397,22 @@ fn chassis_text(key: &str) -> String {
         (0..rest.len()).step_by(2).map(|i| u8::from_str_radix(rest.get(i..i + 2)?, 16).ok()).collect()
     };
     match kind {
-        "local" | "ifname" | "mac" => rest.to_string(),
+        "local" | "ifname" => rendered(rest.as_bytes()),
+        "mac" => rest.to_string(),
         "net" => match bytes().as_deref() {
             Some([1, a, b, c, d]) => std::net::Ipv4Addr::new(*a, *b, *c, *d).to_string(),
             Some([2, r @ ..]) if r.len() == 16 => std::net::Ipv6Addr::from(<[u8; 16]>::try_from(r).unwrap_or([0; 16])).to_string(),
-            _ => rest.to_string(),
+            Some(b) => hex_of(b),
+            None => rest.to_string(),
         },
+        "other1" | "other2" | "other3" | "other6" | "other7" => bytes().map_or_else(|| rest.to_string(), |b| rendered(&b)),
         other if other.starts_with("other") => match bytes() {
-            Some(b) if !b.is_empty() && b.iter().all(|c| (0x20..=0x7E).contains(c)) => String::from_utf8(b).unwrap_or_else(|_| rest.to_string()),
-            _ => rest.to_string(),
+            Some(b) if !b.is_empty() && b.iter().all(|c| (0x20..=0x7E).contains(c)) => rendered(&b),
+            Some(b) => hex_of(&b),
+            None => rest.to_string(),
         },
         _ => key.to_string(),
     }
-}
-
-/// A neighbour's chassis text as it is matched: a MAC in any of its spellings as its address.
-fn word_text(text: &str) -> String {
-    text.parse::<Mac>().map_or_else(|_| text.to_string(), |m| m.to_string())
 }
 
 fn push(links: &mut Vec<Link>, a: End, b: End, confidence: Confidence, witnesses: u64) {
