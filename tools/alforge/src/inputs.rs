@@ -202,10 +202,16 @@ impl Workspace<'_> {
                 let Some(lock) = &lock else {
                     return Err(format!("{} depends on `{}` and the commit holds no Cargo.lock to pin it", m.name, wanted.iter().next().copied().unwrap_or_default()));
                 };
-                let own = lock
-                    .iter()
-                    .find(|l| l.name == m.name && l.version == m.version && l.source.is_none())
-                    .ok_or_else(|| format!("its Cargo.lock does not pin {} {}: the lock file is not this workspace's", m.name, m.version))?;
+                let Some(own) = lock.iter().find(|l| l.name == m.name && l.version == m.version && l.source.is_none()) else {
+                    // A package of another workspace (a fork kept in the tree) that the lock leaves
+                    // out is not compiled: an optional dependency nothing turns on. It uses nothing
+                    // of the lock (its folder stays charged, which fails safe). A member of the
+                    // workspace is always locked, so one missing names another workspace's lock.
+                    if !m.workspace.is_empty() {
+                        continue;
+                    }
+                    return Err(format!("its Cargo.lock does not pin {} {}: the lock file is not this workspace's", m.name, m.version));
+                };
                 for d in &own.dependencies {
                     let at = resolve(lock, d)?;
                     let l = &lock[at];

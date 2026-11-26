@@ -1992,3 +1992,52 @@ fn round_twenty_three_a_replaced_or_patched_package_behind_a_git_crate_in_either
     assert_eq!(keys("veredas-a"), ["Cargo.lock: memchr 2.7.4", "forks/itoa/", "forks/itoa/Cargo.toml"]);
     assert_eq!(keys("veredas-b"), ["Cargo.lock: itoa 1.0.18"]);
 }
+
+#[test]
+fn round_twenty_four_a_forks_optional_sibling_nothing_turns_on_is_not_compiled() {
+    let reg = "registry+https://github.com/rust-lang/crates.io-index";
+    // A fork kept in the tree in a workspace of its own (as the suite keeps IronCalc): its `fa` has
+    // an optional `fb`, which uses `itoa`. Nothing turning `extra` on, cargo locks neither `fb` nor
+    // `itoa` and builds `--locked`: the component's inputs read, `fb` using nothing of the lock.
+    // Turned on, `fb` is locked and compiled, and `itoa` charges the component.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-a\"]\nexclude = [\"forks/f\"]\n");
+    r.write("crates/veredas-a/src/lib.rs", "\n");
+    r.write("forks/f/Cargo.toml", "[workspace]\nmembers = [\"fa\", \"fb\"]\n");
+    r.write("forks/f/fa/Cargo.toml", "[package]\nname = \"fa\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nfb = { path = \"../fb\", optional = true }\n\n[features]\nextra = [\"dep:fb\"]\n");
+    r.write("forks/f/fa/src/lib.rs", "\n");
+    r.write("forks/f/fb/Cargo.toml", "[package]\nname = \"fb\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nitoa = \"1\"\n");
+    r.write("forks/f/fb/src/lib.rs", "\n");
+    for (on, lock, itoa) in [
+        (false, "version = 4\n\n[[package]]\nname = \"fa\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\ndependencies = [\n \"fa\",\n]\n".to_string(), false),
+        (
+            true,
+            format!(
+                "version = 4\n\n[[package]]\nname = \"fa\"\nversion = \"0.1.0\"\ndependencies = [\n \"fb\",\n]\n\n[[package]]\nname = \"fb\"\nversion = \"0.1.0\"\ndependencies = [\n \"itoa\",\n]\n\n\
+                 [[package]]\nname = \"itoa\"\nversion = \"1.0.15\"\nsource = \"{reg}\"\nchecksum = \"1515\"\n\n[[package]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\ndependencies = [\n \"fa\",\n]\n"
+            ),
+            true,
+        ),
+    ] {
+        let feature = if on { ", features = [\"extra\"]" } else { "" };
+        r.write("crates/veredas-a/Cargo.toml", &format!("[package]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nfa = {{ path = \"../../forks/f/fa\"{feature} }}\n"));
+        r.write("Cargo.lock", &lock);
+        let commit = r.commit(if on { "the fork's extra on" } else { "the fork's extra off" });
+        let mut refusals = Vec::new();
+        let held = manifest::components_at(r.path(), &commit, &mut refusals).unwrap();
+        assert_eq!(refusals, Vec::<String>::new(), "on: {on}");
+        let keys: Vec<String> = held["veredas-a"].inputs.as_ref().unwrap_or_else(|e| panic!("on: {on}: {e}")).0.keys().filter(|k| k.starts_with("Cargo.lock") || k.starts_with("forks")).cloned().collect();
+        let mut want = vec!["forks/f/Cargo.toml".to_string(), "forks/f/fa/".to_string(), "forks/f/fb/".to_string()];
+        if itoa {
+            want.insert(0, "Cargo.lock: itoa 1.0.15".to_string());
+        }
+        assert_eq!(keys, want, "on: {on}");
+    }
+    // A member of the workspace missing from its lock still names another workspace's lock.
+    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-a\", \"crates/veredas-b\"]\nexclude = [\"forks/f\"]\n");
+    r.write("crates/veredas-b/Cargo.toml", "[package]\nname = \"veredas-b\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nitoa = \"1\"\n");
+    r.write("crates/veredas-b/src/lib.rs", "\n");
+    let commit = r.commit("a member the lock leaves out");
+    let held = manifest::components_at(r.path(), &commit, &mut Vec::new()).unwrap();
+    assert_eq!(held["veredas-b"].inputs, Err("its Cargo.lock does not pin veredas-b 2.0.0: the lock file is not this workspace's".to_string()));
+}
