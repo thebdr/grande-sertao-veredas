@@ -90,16 +90,17 @@ fn the_reference_s_worked_example_reads_as_a_report() {
         ("outcome", "../outcome.csv", "evidence/outcome.csv"),
         ("outcome", "evidence/table-1.csv", "evidence/outcome.csv"),
         ("outcome", "evidence/table-0.csv", "evidence/outcome.csv"),
-        ("../../0001/evidence/outcome", "evidence/../../0001/evidence/outcome.csv", "evidence/table-1.csv"),
-        ("../../../../../../etc/passwd", "evidence/../../../../../../etc/passwd.csv", "evidence/table-1.csv"),
-        ("/abs", "evidence//abs.csv", "evidence/table-1.csv"),
-        ("a.b", "evidence/a.b.csv", "evidence/table-1.csv"),
-        ("a.b", "evidence/table-2.csv", "evidence/table-1.csv"),
-        ("a.b", "evidence/table-007.csv", "evidence/table-1.csv"),
+        ("../../0001/evidence/outcome", "evidence/../../0001/evidence/outcome.csv", "evidence/table.1.csv"),
+        ("../../../../../../etc/passwd", "evidence/../../../../../../etc/passwd.csv", "evidence/table.1.csv"),
+        ("/abs", "evidence//abs.csv", "evidence/table.1.csv"),
+        ("a.b", "evidence/a.b.csv", "evidence/table.1.csv"),
+        ("a.b", "evidence/table.2.csv", "evidence/table.1.csv"),
+        ("a.b", "evidence/table.007.csv", "evidence/table.1.csv"),
+        ("a.b", "evidence/table-1.csv", "evidence/table.1.csv"),
     ] {
         assert_eq!(evidence(table, file).unwrap_err(), format!("`evidence.file` is `{file}`: `{kept}`"), "{table}");
     }
-    assert!(evidence("a.b", "evidence/table-1.csv").is_ok());
+    assert!(evidence("a.b", "evidence/table.1.csv").is_ok());
     assert!(evidence("x-y_1", "evidence/x-y_1.csv").is_ok());
     assert_eq!(evidence("status", "evidence/status.csv").unwrap_err(), "`evidence.table` `status` is given twice");
     // Two entries at one file, or one table in two cases: refused.
@@ -108,10 +109,14 @@ fn the_reference_s_worked_example_reads_as_a_report() {
         assert!(block[0].contains(from));
         record::parse(&block[0].replacen(from, &format!("table = {:?}\nfile = {:?}\nrows = 31\n\n[[evidence]]\ntable = {:?}\nfile = {:?}", a.0, a.1, b.0, b.1), 1))
     };
-    assert_eq!(both(("a.b", "evidence/table-1.csv"), ("table-1", "evidence/table-1.csv")).unwrap_err(), "`evidence.file` `evidence/table-1.csv` is named twice");
-    assert_eq!(both(("table-2", "evidence/table-2.csv"), ("a.b", "evidence/table-2.csv")).unwrap_err(), "`evidence.file` `evidence/table-2.csv` is named twice");
+    // A place is `table.<n>`, which no plain name can be: a plain `table-1` beside a table placed
+    // first are two files; two tables whose names differ past ASCII are two tables, as the store
+    // keeps them.
+    assert!(both(("a.b", "evidence/table.1.csv"), ("table-1", "evidence/table-1.csv")).is_ok());
+    assert!(both(("table-2", "evidence/table-2.csv"), ("a.b", "evidence/table.2.csv")).is_ok());
+    assert!(both(("Ärger", "evidence/table.1.csv"), ("ärger", "evidence/table.2.csv")).is_ok());
     assert_eq!(both(("outcome", "evidence/outcome.csv"), ("Outcome", "evidence/Outcome.csv")).unwrap_err(), "`evidence.table` `Outcome` is given twice");
-    assert!(both(("outcome", "evidence/outcome.csv"), ("a.b", "evidence/table-2.csv")).is_ok());
+    assert!(both(("outcome", "evidence/outcome.csv"), ("a.b", "evidence/table.2.csv")).is_ok());
     // A moment in any form but the reference's, to the byte: refused; a leap second too.
     for from in [
         "2026-11-22\t14:02:11.120",
@@ -545,7 +550,8 @@ is the plant's clock on the store's axis, `YYYY-MM-DD HH:MM:SS.mmm`.
 **The evidence** (`[[evidence]]`): one table per table the test reads.
 - `table` (required): the portal table.
 - `file` (required): its CSV in the run's folder, `evidence/<table>.csv` for a plain name (ASCII
-  letters, digits, `_` and `-`), else `evidence/table-<n>.csv`, `n` its place among the evidence from 1: a header of `time`, `arrival`, `source`, `key`, `seq` and the
+  letters, digits, `_` and `-`), else `evidence/table.<n>.csv`, `n` its place among the evidence from 1,
+  which no plain name can take: a header of `time`, `arrival`, `source`, `key`, `seq` and the
   table's columns, then every row stamped in the run's window, oldest first, each cell as the
   suite shows its value and a hole empty. `time` is the row's stamp and `arrival` when it reached
   portal, both moments on the store's axis.
@@ -562,7 +568,7 @@ A report with another stamp, a key the format does not know, a key missing or of
 value outside the ones its key names (a mode, a verdict, an outcome, a role), a moment not in its
 form, an attempt or a run's number below 1, a file named otherwise than the run's folder keeps it
 (`test.test`, `functions/<n>.fn` in the order of the uses, the evidence's names), a table's
-evidence or a file given twice, in any case. A run past the last number a run can take
+evidence given twice, in any ASCII case (the store's names fold it). A run past the last number a run can take
 (4294967295), or with a moment a report cannot hold (a year past 9999). A test's folder, or a
 run's, that cannot be read, which `list` names rather than pass over. A note on a report
 signed by anyone, and a signature once the report is `signed`: a signed report is frozen, a
@@ -628,4 +634,74 @@ fn the_roles_a_test_names_sign_its_report_each_once_and_it_awaits_them() {
         two.push_str(&format!("\n[[signature]]\nrole = \"tester\"\nname = \"{name}\"\nat = \"2026-11-22 14:10:42.000\"\n"));
     }
     assert_eq!(refused(&two), "two signatures on a report whose test names no role to sign: the first froze it");
+}
+
+// ---- refute round 4 ------------------------------------------------------------------------
+
+/// A plant of the tables a test names, with no row: what `keep` asks of it, and nothing else.
+struct Tables(Vec<veredas_comissionador::plant::Table>);
+
+impl Plant for Tables {
+    fn name(&self) -> String {
+        "the press hall".to_string()
+    }
+    fn now_ms(&self) -> i64 {
+        veredas_portal::serve::store_now_ms()
+    }
+    fn tables(&self) -> Result<Vec<veredas_comissionador::plant::Table>, veredas_comissionador::plant::PlantError> {
+        Ok(self.0.clone())
+    }
+    fn rows(&self, _: &veredas_comissionador::plant::Table, _: i64, _: i64) -> Result<Vec<veredas_comissionador::eval::Row>, veredas_comissionador::plant::PlantError> {
+        Ok(Vec::new())
+    }
+    fn latest(&self, _: &veredas_comissionador::plant::Table, _: &str, _: i64) -> Result<Option<(i64, veredas_comissionador::eval::Value)>, veredas_comissionador::plant::PlantError> {
+        Ok(None)
+    }
+    fn armed(&self) -> bool {
+        false
+    }
+    fn writable(&self, _: &str, _: &str) -> bool {
+        false
+    }
+    fn sendable(&self, _: &str, _: &str) -> bool {
+        false
+    }
+    fn write(&self, _: &str, _: &str, _: &veredas_comissionador::eval::Value) -> Result<String, veredas_comissionador::plant::PlantError> {
+        unreachable!("keep writes nothing")
+    }
+    fn send(&self, _: &str, _: &str, _: Vec<(String, String)>) -> Result<(), veredas_comissionador::plant::PlantError> {
+        unreachable!("keep sends nothing")
+    }
+}
+
+#[test]
+fn every_table_s_evidence_is_kept_in_a_file_of_its_own_and_reads_back() {
+    // Tables whose names a store holds side by side (`a.b` and a plain `table-1`; `Ärger` and
+    // `ärger`, which the store tells apart past ASCII) and one gone from the session: each kept in
+    // a file of its own, its own header in it, the report read back.
+    use veredas_comissionador::plant::{CellType, Column, Table};
+    let table = |name: &str, col: &str| Table { name: name.to_string(), columns: vec![Column { name: col.to_string(), ty: CellType::Int }] };
+    let plant = Tables(vec![table("a.b", "dest"), table("table-1", "running"), table("Ärger", "x"), table("ärger", "y")]);
+    let c = checked(&test_of("  step a stop pass\n"));
+    let now = veredas_portal::serve::store_now_ms();
+    let r = veredas_comissionador::run::RunResult {
+        verdict: RunVerdict::Passed,
+        decided_at: Some("a".to_string()),
+        reason: "`a` passed the run".to_string(),
+        start_ms: now - 1000,
+        end_ms: now - 500,
+        steps: Vec::new(),
+        criteria: Vec::new(),
+        reported: Vec::new(),
+        writes: Vec::new(),
+        tables: ["_gone", "a.b", "table-1", "Ärger", "ärger"].iter().map(|t| t.to_string()).collect::<BTreeSet<_>>(),
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let folder = record::keep(dir.path(), &c, &r, &RunOptions::replay(now - 1000, now - 500).mode, &plant).unwrap();
+    let report = record::read(&folder).unwrap();
+    let files: Vec<(&str, &str)> = report.evidence.iter().map(|e| (e.table.as_str(), e.file.as_str())).collect();
+    assert_eq!(files, [("a.b", "evidence/table.1.csv"), ("table-1", "evidence/table-1.csv"), ("Ärger", "evidence/table.3.csv"), ("ärger", "evidence/table.4.csv")]);
+    for (e, col) in report.evidence.iter().zip(["dest", "running", "x", "y"]) {
+        assert_eq!(std::fs::read_to_string(folder.join(&e.file)).unwrap(), format!("time,arrival,source,key,seq,{col}\n"), "{}", e.table);
+    }
 }

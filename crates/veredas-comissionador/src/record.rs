@@ -219,12 +219,13 @@ pub fn csv_cell(text: &str) -> String {
     if text.contains([',', '"', '\n', '\r']) { format!("\"{}\"", text.replace('"', "\"\"")) } else { text.to_string() }
 }
 
-/// A file name for a table's evidence: its name when it is plain, else its place.
+/// A file name for a table's evidence: its name when it is plain (ASCII letters, digits, `_`, `-`),
+/// else `table.<n>`, its place among the evidence from 1, which no plain name can take.
 fn evidence_name(i: usize, table: &str) -> String {
     if !table.is_empty() && table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
         format!("evidence/{table}.csv")
     } else {
-        format!("evidence/table-{}.csv", i + 1)
+        format!("evidence/table.{}.csv", i + 1)
     }
 }
 
@@ -272,33 +273,7 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
             return Err(RecordError::Moment(t));
         }
     }
-    std::fs::create_dir_all(&dir).map_err(io(&dir))?;
-    // The next free number: a folder created, never one another keeper made meanwhile.
-    let last = numbers(&dir)?.last().copied().unwrap_or(0);
-    let next = |n: u32| n.checked_add(1).ok_or_else(|| RecordError::NoNumber { path: dir.display().to_string(), last: n });
-    let mut number = next(last)?;
-    let folder = loop {
-        let f = dir.join(run_name(number));
-        match std::fs::create_dir(&f) {
-            Ok(()) => break f,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => number = next(number)?,
-            Err(e) => return Err(io(&f)(e)),
-        }
-    };
-    let write = |name: &str, text: &str| -> Result<(), RecordError> {
-        let p = folder.join(name);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).map_err(io(parent))?;
-        }
-        std::fs::write(&p, text).map_err(io(&p))
-    };
-    write(TEST_FILE, &c.text)?;
-    let mut functions = Vec::new();
-    for (i, u) in c.files.iter().enumerate() {
-        let file = format!("functions/{}.fn", i + 1);
-        write(&file, &u.text)?;
-        functions.push(FunctionPart { used_as: u.path.clone(), file });
-    }
+    let functions: Vec<FunctionPart> = c.files.iter().enumerate().map(|(i, u)| FunctionPart { used_as: u.path.clone(), file: format!("functions/{}.fn", i + 1) }).collect();
     // The evidence: every row of every table the run read, stamped in its window; a live run's
     // read once the window's end is far enough past for its last rows to be stored, as every read
     // of a live run is (C-202).
@@ -308,8 +283,11 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
         }
     }
     let tables: Vec<Table> = plant.tables().map_err(|e| RecordError::Evidence { table: String::new(), reason: e.to_string() })?;
+    // Each file named by the table when its name is plain, else by its place among the evidence
+    // written, so no two tables share one.
     let mut evidence = Vec::new();
-    for (i, name) in r.tables.iter().enumerate() {
+    let mut csvs = Vec::new();
+    for name in &r.tables {
         let Some(t) = tables.iter().find(|t| &t.name == name) else { continue };
         let rows = plant
             .rows(t, r.start_ms.saturating_sub(1), r.end_ms)
@@ -336,11 +314,11 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
             csv.push_str(&line.join(","));
             csv.push('\n');
         }
-        let file = evidence_name(i, name);
-        write(&file, &csv)?;
+        let file = evidence_name(evidence.len(), name);
         evidence.push(EvidencePart { table: name.clone(), file, rows: rows.len() as u64 });
+        csvs.push(csv);
     }
-    let report = Report {
+    let mut report = Report {
         format: REPORT_FORMAT.to_string(),
         version: REPORT_VERSION,
         note: String::new(),
@@ -352,7 +330,8 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
             sign: c.test.sign_roles(),
         },
         run: RunPart {
-            number,
+            // Its folder's, once made.
+            number: 1,
             mode: mode.mode().to_string(),
             session: plant.name(),
             from: time_text(r.start_ms),
@@ -387,6 +366,36 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
         evidence,
         signatures: Vec::new(),
     };
+    // Judged as `read` judges it before any folder is made: a report kept is one `read` reads back.
+    judge(&report).map_err(|reason| RecordError::NotAReport { path: dir.display().to_string(), reason })?;
+    std::fs::create_dir_all(&dir).map_err(io(&dir))?;
+    // The next free number: a folder created, never one another keeper made meanwhile.
+    let last = numbers(&dir)?.last().copied().unwrap_or(0);
+    let next = |n: u32| n.checked_add(1).ok_or_else(|| RecordError::NoNumber { path: dir.display().to_string(), last: n });
+    let mut number = next(last)?;
+    let folder = loop {
+        let f = dir.join(run_name(number));
+        match std::fs::create_dir(&f) {
+            Ok(()) => break f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => number = next(number)?,
+            Err(e) => return Err(io(&f)(e)),
+        }
+    };
+    report.run.number = number;
+    let write = |name: &str, text: &str| -> Result<(), RecordError> {
+        let p = folder.join(name);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).map_err(io(parent))?;
+        }
+        std::fs::write(&p, text).map_err(io(&p))
+    };
+    write(TEST_FILE, &c.text)?;
+    for (f, u) in report.test.functions.iter().zip(&c.files) {
+        write(&f.file, &u.text)?;
+    }
+    for (e, csv) in report.evidence.iter().zip(&csvs) {
+        write(&e.file, csv)?;
+    }
     write_report(&folder, &report)?;
     Ok(folder)
 }
@@ -473,20 +482,18 @@ fn judge(r: &Report) -> Result<(), String> {
     for w in &r.writes {
         from_one("write.attempt", w.attempt)?;
     }
-    // Each table once and each file once, whatever their case (the store's names and some file
-    // systems ignore it), its file where the run's folder keeps it: by its name when plain, by
-    // its place among the evidence otherwise.
-    let (mut tables, mut files) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+    // Each table once, whatever its ASCII case (the store's names fold it, as some file systems
+    // do), its file where the run's folder keeps it: by its name when plain, by its place among
+    // the evidence otherwise.
+    // A plain name holds no `.` and a place is `table.<n>`, so no two files can be one.
+    let mut tables = std::collections::BTreeSet::new();
     for (i, e) in r.evidence.iter().enumerate() {
-        if !tables.insert(e.table.to_lowercase()) {
+        if !tables.insert(e.table.to_ascii_lowercase()) {
             return Err(format!("`evidence.table` `{}` is given twice", e.table));
         }
         let kept = evidence_name(i, &e.table);
         if e.file != kept {
             return Err(format!("`evidence.file` is `{}`: `{kept}`", e.file));
-        }
-        if !files.insert(e.file.to_lowercase()) {
-            return Err(format!("`evidence.file` `{}` is named twice", e.file));
         }
     }
     // The roles the test names, each a role and once; a signature then of one of them, once each.
