@@ -24,10 +24,27 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use veredas_comissionador::plant::LivePlant;
+use veredas_comissionador::plant::{LivePlant, Plant};
 use veredas_comissionador::run::{Event, RunMode, RunOptions, RunVerdict, gated_writes, run};
 use veredas_comissionador::{Checked, Problem, load_functions, load_test, record};
 use veredas_portal::session::{HealthState, Session};
+
+/// A line on stdout: one nobody reads (a pipe closed) never ends the run, whose verdict is its
+/// exit code and which is kept all the same.
+macro_rules! say {
+    ($($t:tt)*) => {{
+        use std::io::Write;
+        let _ = writeln!(std::io::stdout(), $($t)*);
+    }};
+}
+
+/// A line on stderr, the same.
+macro_rules! tell {
+    ($($t:tt)*) => {{
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), $($t)*);
+    }};
+}
 
 const USAGE: &str = "usage: veredas-comissionador check <file.test | file.fn>
        veredas-comissionador run <file.test> --project <project.toml> [--runs <folder>] [--arm <fingerprint>]
@@ -51,19 +68,26 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("{USAGE}");
+    tell!("{USAGE}");
     ExitCode::from(2)
 }
 
 fn problems(ps: Vec<Problem>) -> ExitCode {
     for p in ps {
-        eprintln!("{p}");
+        tell!("{p}");
     }
     ExitCode::from(1)
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // An argument that is not UTF-8 is a command line this executable cannot read.
+    let args: Vec<String> = match std::env::args_os().skip(1).map(|a| a.into_string()).collect::<Result<Vec<_>, _>>() {
+        Ok(args) => args,
+        Err(bad) => {
+            tell!("an argument is not UTF-8: {}", bad.to_string_lossy());
+            return usage();
+        }
+    };
     match args.first().map(String::as_str) {
         Some("check") if args.len() == 2 => check(&args[1]),
         Some("run") | Some("replay") => go(&args),
@@ -91,7 +115,7 @@ fn check(file: &str) -> ExitCode {
     };
     match outcome {
         Ok(line) => {
-            println!("{line}");
+            say!("{line}");
             ExitCode::SUCCESS
         }
         Err(ps) => problems(ps),
@@ -144,7 +168,7 @@ fn go(args: &[String]) -> ExitCode {
         (true, Some(f), Some(t)) => match (moment(&f), moment(&t)) {
             (Some(f), Some(t)) => RunOptions::replay(f, t),
             _ => {
-                eprintln!("a moment is `YYYY-MM-DD HH:MM[:SS[.mmm]]` on the plant's clock");
+                tell!("a moment is `YYYY-MM-DD HH:MM[:SS[.mmm]]` on the plant's clock");
                 return ExitCode::from(2);
             }
         },
@@ -161,14 +185,14 @@ fn go(args: &[String]) -> ExitCode {
     let folder = match record::test_folder(&runs, &c) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("the run cannot be kept: {e}");
+            tell!("the run cannot be kept: {e}");
             return ExitCode::from(4);
         }
     };
     let (made, folder_made) = make_folders(&folder);
     let code = match folder_made {
         Err(e) => {
-            eprintln!("the run cannot be kept: {}: {e}", folder.display());
+            tell!("the run cannot be kept: {}: {e}", folder.display());
             4
         }
         Ok(()) => with_session(&project, &c, &runs, &mode),
@@ -190,6 +214,10 @@ fn make_folders(path: &Path) -> (Vec<PathBuf>, std::io::Result<()>) {
     let mut made = Vec::new();
     let chain: Vec<&Path> = path.ancestors().filter(|p| !p.as_os_str().is_empty()).collect();
     for p in chain.into_iter().rev() {
+        // A folder already there is not made again: a root a system will not let be made among them.
+        if p.is_dir() {
+            continue;
+        }
         match std::fs::create_dir(p) {
             Ok(()) => made.push(p.to_path_buf()),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && p.is_dir() => {}
@@ -215,16 +243,36 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
     let loaded = match veredas_portal::project::load_file(project) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("{}: {e}", project.display());
+            tell!("{}: {e}", project.display());
             return 4;
         }
     };
+    // The session's own replies, which the armed switch lets reach the plant as well: shown with
+    // the test's gated writes and confirmed with them (Q321).
+    let replies: Vec<String> = loaded
+        .channels
+        .iter()
+        .flat_map(|ch| {
+            ch.replies.iter().map(move |r| {
+                let fields: Vec<String> = r
+                    .fields
+                    .iter()
+                    .map(|f| match (&f.from, &f.value) {
+                        (Some(from), _) => format!("{}: from {from}", f.name),
+                        (_, Some(v)) => format!("{}: {}", f.name, v.text()),
+                        _ => f.name.clone(),
+                    })
+                    .collect();
+                format!("{}: on {} reply {}({})", ch.source_id, r.on, r.send, fields.join(", "))
+            })
+        })
+        .collect();
     // The session's start on the store's axis: a log stamped at or after it has read its history.
     let begun_at = chrono::Local::now().naive_local();
     let session = match Session::start(loaded.session_config(begun_at)) {
         Ok(s) => std::rc::Rc::new(s),
         Err(e) => {
-            eprintln!("{}: the session did not start: {e}", project.display());
+            tell!("{}: the session did not start: {e}", project.display());
             return 4;
         }
     };
@@ -284,7 +332,7 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
                 break;
             }
             if begun.elapsed() >= limit {
-                eprintln!("the store was still being read in after {} s ({lines} lines): the replay is refused", limit.as_secs());
+                tell!("the store was still being read in after {} s ({lines} lines): the replay is refused", limit.as_secs());
                 return 4;
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -303,32 +351,35 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
         let s = session.clone();
         Box::new(move |on| s.set_writes_armed(on))
     };
-    let plant = match LivePlant::with_arming(live, arming) {
+    let plant = match LivePlant::with_arming(live, arming, replies) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("{e}");
+            tell!("{e}");
             return 4;
         }
     };
     let result = run(c, &plant, mode, &mut |e| match e {
         Event::StepEnded(s) => {
             let outcome = s.outcome.map(|o| o.to_string()).unwrap_or_else(|| "cut short".to_string());
-            println!("{} #{} {outcome}: {}", s.step, s.attempt, s.detail);
+            say!("{} #{} {outcome}: {}", s.step, s.attempt, s.detail);
         }
         Event::Ended { verdict, decided_at, reason } => {
             let at = decided_at.as_deref().map(|s| format!(" at {s}")).unwrap_or_default();
-            println!("{verdict}{at}: {reason}");
+            say!("{verdict}{at}: {reason}");
         }
         _ => {}
     });
     let r = match result {
         Ok(r) => r,
         Err(refused) => {
-            eprintln!("{refused}");
+            tell!("{refused}");
             // The writes a confirmation is of, each on its line.
             if refused.0.iter().any(|p| p.starts_with("the test writes, and portal's write switch is off:")) {
                 for w in gated_writes(c) {
-                    eprintln!("  {w}");
+                    tell!("  {w}");
+                }
+                for r in plant.also_armed() {
+                    tell!("  {r}");
                 }
             }
             stop(session, plant);
@@ -338,9 +389,9 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
     let kept = record::keep(runs, c, &r, &mode.mode, &plant);
     stop(session, plant);
     match kept {
-        Ok(folder) => println!("kept: {}", folder.display()),
+        Ok(folder) => say!("kept: {}", folder.display()),
         Err(e) => {
-            eprintln!("the run was not kept: {e}");
+            tell!("the run was not kept: {e}");
             return 5;
         }
     }

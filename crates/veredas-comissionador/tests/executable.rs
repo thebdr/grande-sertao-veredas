@@ -93,6 +93,7 @@ fn run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict() {
     // Both projects written while the bench's machine still says where it listens.
     std::fs::write(dir.path().join("project.toml"), project_text(&bench, true, 4)).unwrap();
     std::fs::write(dir.path().join("off.toml"), project_text(&bench, false, 4)).unwrap();
+    std::fs::write(dir.path().join("off5.toml"), project_text(&bench, false, 4).replacen("value = 4 }", "value = 5 }", 1)).unwrap();
     let (code, stdout, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "project.toml"]));
     assert_eq!(code, 0, "{stdout:?} {stderr:?}");
     assert_eq!(stdout[0], "start #1 pass: sorter.command(code: 1): sent");
@@ -116,14 +117,21 @@ fn run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict() {
     assert!(dir.path().join("runs/t/0002/report.toml").exists(), "both runs of `T` kept");
     // With the switch off: refused, the gated writes listed with their fingerprint; confirmed by
     // it, the run arms the switch for itself, passes, and leaves it off (Q314 (b)).
+    // The project's own reply goes through the switch as well: listed under the writes and
+    // confirmed with them (Q321, taken meanwhile).
     let c = veredas_comissionador::load_test(&dir.path().join("chk-012.test")).unwrap();
     let writes = veredas_comissionador::run::gated_writes(&c);
-    let fp = veredas_comissionador::run::writes_fingerprint(&c);
     let (code, stdout, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off.toml"]));
     assert_eq!((code, stdout.len()), (4, 0));
-    let mut want = vec![format!("the run is refused: the test writes, and portal's write switch is off: its 3 gated writes, confirmed as `{fp}`, arm it for the run")];
+    let fp = stderr[0].split('`').nth(1).unwrap().to_string();
+    let mut want = vec![format!("the run is refused: the test writes, and portal's write switch is off: its 3 gated writes and the session's 1 reply, confirmed as `{fp}`, arm it for the run")];
     want.extend(writes.iter().map(|w| format!("  {w}")));
+    want.push("  sorter: on announce reply answer(item: from item, dest: 4, flag: 1)".to_string());
     assert_eq!(stderr, want);
+    assert_ne!(fp, veredas_comissionador::run::writes_fingerprint(&c, &[]), "the reply counted in the fingerprint");
+    // A reply edited in the project asks again.
+    let (code, _, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off5.toml", "--arm", &fp]));
+    assert_eq!((code, stderr[0].contains("confirms no list of this test's")), (4, true), "{stderr:?}");
     assert_eq!(writes, ["send sorter.command(code: 1)", "send sorter.command(code: 0)", "send sorter.command(code: 0)"]);
     assert!(!dir.path().join("runs/chk-012/0002").exists(), "a refused run is no run");
     let (code, _, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off.toml", "--arm", "0123456789abcdef"]));
@@ -371,4 +379,36 @@ fn the_folders_made_for_a_refused_run_are_removed_and_no_other() {
     assert_eq!(code, 4);
     assert!(dir.path().join("existing").is_dir(), "the folder already there kept");
     assert_eq!((dir.path().join("new").exists(), dir.path().join("existing/t").exists()), (false, false));
+}
+
+// ---- refute round 4 ------------------------------------------------------------------------
+
+#[test]
+fn a_stdout_nobody_reads_ends_no_run_and_an_argument_not_utf_8_is_a_wrong_command_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    example(dir.path());
+    std::fs::write(dir.path().join("plant.log"), "").unwrap();
+    std::fs::write(dir.path().join("project.toml"), project_text(&bench, true, 4)).unwrap();
+    // stdout a pipe whose reader is gone: the verdict is still the exit code, the run still kept.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_veredas-comissionador"))
+        .current_dir(dir.path())
+        .args(["run", "chk-012.test", "--project", "project.toml"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let o = child.wait_with_output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(dir.path().join("runs/chk-012/0001/report.toml").exists());
+    // An argument that is not UTF-8.
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let name = std::ffi::OsStr::from_bytes(b"caf\xe9.test");
+        let o = Command::new(env!("CARGO_BIN_EXE_veredas-comissionador")).current_dir(dir.path()).arg("check").arg(name).output().unwrap();
+        let (code, _, stderr) = out(&o);
+        assert_eq!((code, stderr[0].as_str()), (2, "an argument is not UTF-8: caf\u{fffd}.test"));
+    }
 }

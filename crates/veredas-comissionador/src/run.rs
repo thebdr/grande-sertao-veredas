@@ -184,10 +184,11 @@ pub fn gated_writes(c: &Checked) -> Vec<String> {
 }
 
 /// The fingerprint a person confirms a test's gated writes by: the first 128 bits of SHA-256, in
-/// 32 hex digits, over the list ([`gated_writes`]), the test's whole text and every function file
-/// it uses, each ended by a zero byte, so an edit that could change what a write writes asks again
-/// and no pair of tests made to share one can be found.
-pub fn writes_fingerprint(c: &Checked) -> String {
+/// 32 hex digits, over the list ([`gated_writes`]), what else the armed switch lets reach the plant
+/// (`also`: the session's replies, [`Plant::also_armed`]), the test's whole text and every function
+/// file it uses, each ended by a zero byte, so an edit that could change what reaches the plant
+/// asks again and no pair of tests made to share one can be found.
+pub fn writes_fingerprint(c: &Checked, also: &[String]) -> String {
     use sha2::Digest;
     let mut h = sha2::Sha256::new();
     let mut eat = |text: &str| {
@@ -196,6 +197,10 @@ pub fn writes_fingerprint(c: &Checked) -> String {
     };
     for w in gated_writes(c) {
         eat(&w);
+    }
+    eat("\u{1}also");
+    for a in also {
+        eat(a);
     }
     eat(&c.text);
     for f in &c.files {
@@ -526,8 +531,15 @@ pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode, confirmed: Option<&s
     // confirmed this test's gated writes and the embedder handed it the way (Q314 (b)).
     let mut arm = false;
     if mode == &RunMode::Live && writes > 0 && !plant.armed() {
-        let fp = writes_fingerprint(c);
-        let what = if writes == 1 { "its 1 gated write, confirmed".to_string() } else { format!("its {writes} gated writes, confirmed") };
+        let also = plant.also_armed();
+        let fp = writes_fingerprint(c, &also);
+        let mut what = if writes == 1 { "its 1 gated write".to_string() } else { format!("its {writes} gated writes") };
+        match also.len() {
+            0 => {}
+            1 => what.push_str(" and the session's 1 reply"),
+            n => what.push_str(&format!(" and the session's {n} replies")),
+        }
+        what.push_str(", confirmed");
         match confirmed {
             _ if !plant.can_arm() => problems.push("the test writes, and portal's write switch is off".to_string()),
             Some(given) if given == fp => arm = true,

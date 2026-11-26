@@ -82,6 +82,12 @@ pub trait Plant {
     /// Arm or disarm the switch by the way the embedder handed, for a run whose gated writes the
     /// person confirmed (Q314 (b)); nothing when none was handed.
     fn set_armed(&self, _armed: bool) {}
+    /// What else the armed switch lets reach the plant, which the person confirms with the test's
+    /// writes: the session's own automatic sends (a channel's replies), as the embedder rendered
+    /// them (Q321).
+    fn also_armed(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// Whether `table.column` is an OPC UA tag the session marks writable.
     fn writable(&self, table: &str, column: &str) -> bool;
     /// Whether `channel` is a channel of the session with `message` in its catalog.
@@ -98,6 +104,8 @@ pub struct LivePlant {
     runtime: tokio::runtime::Runtime,
     /// The embedder's way to arm and disarm the session's switch, when it handed one.
     arming: Option<Box<dyn Fn(bool)>>,
+    /// The session's automatic sends the armed switch lets through, as the embedder rendered them.
+    also: Vec<String>,
 }
 
 impl LivePlant {
@@ -106,14 +114,16 @@ impl LivePlant {
             .enable_all()
             .build()
             .map_err(|e| PlantError::Store(format!("no runtime for the writes: {e}")))?;
-        Ok(LivePlant { live, runtime, arming: None })
+        Ok(LivePlant { live, runtime, arming: None, also: Vec::new() })
     }
 
     /// The same, with the embedder's way to arm and disarm the session's switch (its session's
-    /// own), which a run whose gated writes the person confirmed uses for itself.
-    pub fn with_arming(live: Arc<Live>, arming: Box<dyn Fn(bool)>) -> Result<LivePlant, PlantError> {
+    /// own), which a run whose gated writes the person confirmed uses for itself, and the session's
+    /// automatic sends the armed switch lets through too, which the person confirms with them.
+    pub fn with_arming(live: Arc<Live>, arming: Box<dyn Fn(bool)>, also: Vec<String>) -> Result<LivePlant, PlantError> {
         let mut p = LivePlant::new(live)?;
         p.arming = Some(arming);
+        p.also = also;
         Ok(p)
     }
 
@@ -271,6 +281,10 @@ impl Plant for LivePlant {
         if let Some(arm) = &self.arming {
             arm(armed);
         }
+    }
+
+    fn also_armed(&self) -> Vec<String> {
+        self.also.clone()
     }
 
     fn writable(&self, table: &str, column: &str) -> bool {
