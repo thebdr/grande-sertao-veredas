@@ -819,3 +819,101 @@ fn safe_outputs_that_are_no_value_of_the_outputs_type_are_refused_beside_a_defau
     let refused = Interpreted::<In, WrongOut>::new(code(), FunctionId(0), REGIONS, &state, WrongOut(Out { sum: 13, ..SAFE }));
     assert_eq!(refused.map(|_| ()), Err(MakeError::Outputs));
 }
+
+// The third refute round's tests: a period below the microsecond, the scans that fault as the host's error or by
+// outputs read back as none asking nothing of the heap, an output image of more slots than its region, and the
+// regions after a program fault holding what the failing scan left.
+
+#[test]
+fn a_period_below_the_microsecond_reaches_the_scan_region() {
+    // a period with a part below the millisecond and the microsecond
+    let mut clock = VirtualClock::new();
+    let period = Duration::new(0, 250_123);
+    let mut task = Task::new(TaskConfig { name: "acc", period }, interpreted(0)).unwrap();
+    let mut feed = Feed(vec![In { x: 1, y: 1 }; 2]);
+    for k in 0..2u64 {
+        let r = task.step(&mut feed, &mut clock);
+        let (now, period) = (r.scan.now, r.scan.period);
+        let region = task.program().machine().region(orcl_runtime::interpreted::SCAN).unwrap();
+        assert_eq!(region, &scan_region_slots(now, period, k)[..], "scan {k}");
+    }
+}
+
+#[test]
+fn a_scan_faulting_by_its_outputs_or_as_the_host_s_error_asks_nothing_of_the_heap() {
+    // the scan that faults by `Outputs` or by `Host`, under the counting allocator
+    let state = [Scalar::Int(Int::U32, 0)];
+    let p = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(SAFE)).unwrap();
+    let mut task = Task::new(config(), p).unwrap();
+    let mut feed = Feed(vec![In { x: 13, y: 1 }, In { x: 1, y: 1 }]);
+    let mut clock = VirtualClock::new();
+    let (s, asked) = asked_by(|| {
+        task.step(&mut feed, &mut clock);
+        task.state()
+    });
+    assert_eq!((s, asked), (RunState::Faulted { at: Duration::ZERO, fault: Fault::Program { error: ScanError::Outputs } }, 0));
+
+    let p = Interpreted::<Wrong, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE).unwrap();
+    let mut task = Task::new(config(), p).unwrap();
+    let mut feed = Feed(vec![Wrong(In { x: 13, y: 1 }), Wrong(In { x: 1, y: 1 })]);
+    let mut clock = VirtualClock::new();
+    let (s, asked) = asked_by(|| {
+        task.step(&mut feed, &mut clock);
+        task.state()
+    });
+    let want = RunState::Faulted { at: Duration::ZERO, fault: Fault::Program { error: ScanError::Host(HostError::Slots) } };
+    assert_eq!((s, asked), (want, 0));
+}
+
+/// Outputs whose image writes a sixth slot when the sum is 13: more slots than the region holds.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+struct LongOut(Out);
+
+impl Image for LongOut {
+    fn write(&self, slots: &mut Vec<Scalar>) {
+        self.0.write(slots);
+        if self.0.sum == 13 {
+            slots.push(Scalar::Int(Int::U32, 0));
+        }
+    }
+    fn read(slots: &[Scalar]) -> Option<Self> {
+        Out::read(slots).map(LongOut)
+    }
+}
+
+#[test]
+fn an_output_image_of_more_slots_than_its_region_faults_the_task_as_the_host_s_error() {
+    // the outputs' image of six slots on the second scan
+    let state = [Scalar::Int(Int::U32, 0)];
+    let p = Interpreted::<In, LongOut>::new(code(), FunctionId(0), REGIONS, &state, LongOut(SAFE)).unwrap();
+    let mut task = Task::new(config(), p).unwrap();
+    let mut feed = Feed(vec![In { x: 13, y: 1 }, In { x: 1, y: 1 }]);
+    let mut clock = VirtualClock::new();
+    let r = task.step(&mut feed, &mut clock);
+    assert_eq!((r.state, r.outputs.0.sum), (RunState::Running, 13));
+    let r = task.step(&mut feed, &mut clock);
+    let want = RunState::Faulted { at: Duration::from_millis(10), fault: Fault::Program { error: ScanError::Host(HostError::Slots) } };
+    assert_eq!((r.state, *r.outputs), (want, LongOut(SAFE)));
+}
+
+#[test]
+fn after_a_program_fault_the_regions_hold_what_the_failing_scan_left() {
+    // the state and the outputs' sum as scan 6's two first statements left them, after three more
+    // faulted scans
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, &[6]);
+    let mut task = Task::new(config(), interpreted(0)).unwrap();
+    for _ in 0..10 {
+        task.step(&mut plant, &mut clock);
+    }
+    let x = |k: u64| u32::try_from(k.wrapping_mul(2_654_435_761) % 4_000_000_000).unwrap();
+    let (mut total, mut sum) = (0u32, 0u32);
+    for k in 0..=6 {
+        total = total.wrapping_add(x(k));
+        sum = sum.wrapping_add(total);
+    }
+    let m = task.program().machine();
+    assert_eq!(m.region(orcl_runtime::interpreted::STATE).unwrap(), &[Scalar::Int(Int::U32, total.into())][..]);
+    assert_eq!(m.region(orcl_runtime::interpreted::OUTPUTS).unwrap()[0], Scalar::Int(Int::U32, sum.into()));
+    assert_eq!((m.position(), m.steps()), (Some((FunctionId(0), BlockId(0), 4)), 4));
+}
