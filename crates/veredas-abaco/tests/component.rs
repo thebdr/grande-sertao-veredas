@@ -2473,67 +2473,6 @@ fn is_format_char(c: char) -> bool {
         | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
 }
 
-/// A line's text outside its code spans, as CommonMark reads them: a run of backticks opens a span
-/// the next run of as many closes, an unclosed run is text, and a backslash outside a span escapes
-/// the character after it (`\`` opens none).
-fn outside_code_spans(line: &str) -> String {
-    let chars: Vec<char> = line.chars().collect();
-    let mut out = String::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '\\' && i + 1 < chars.len() {
-            out.push(chars[i]);
-            out.push(chars[i + 1]);
-            i += 2;
-            continue;
-        }
-        if chars[i] == '`' {
-            let run = chars[i..].iter().take_while(|c| **c == '`').count();
-            let mut j = i + run;
-            let mut closed = None;
-            while j < chars.len() {
-                if chars[j] == '`' {
-                    let other = chars[j..].iter().take_while(|c| **c == '`').count();
-                    if other == run {
-                        closed = Some(j + other);
-                        break;
-                    }
-                    j += other;
-                } else {
-                    j += 1;
-                }
-            }
-            match closed {
-                Some(end) => i = end,
-                None => {
-                    out.extend(&chars[i..i + run]);
-                    i += run;
-                }
-            }
-            continue;
-        }
-        out.push(chars[i]);
-        i += 1;
-    }
-    out
-}
-
-/// Whether every link of a line, `](` and its target, closes its target on the line by `)` with no
-/// space, backtick, quote, bracket or `<` in it: GitHub reads a link's target before a code span,
-/// so a backtick in it pairs with no other, and a title may run to the next line.
-fn links_closed(line: &str) -> Result<(), &'static str> {
-    let mut rest = line;
-    while let Some(at) = rest.find("](") {
-        let target = &rest[at + 2..];
-        let end = target.find(|c: char| c.is_whitespace() || "`<>\"'()[]".contains(c));
-        match end {
-            Some(e) if target[e..].starts_with(')') => rest = &target[e + 1..],
-            _ => return Err("whose target does not close on its line by `)` with no space, backtick, quote, bracket or `<` in it"),
-        }
-    }
-    Ok(())
-}
-
 /// A line's text after the markers of every quote and list item that holds it, at any depth (a
 /// nested item's marker past the fourth column too), and the spaces before it.
 fn after_every_container(line: &str) -> &str {
@@ -2568,15 +2507,15 @@ const RECORD_DELIMITER: &str = "|---|---|---|---|";
 /// as GFM 0.29 reads any Markdown, and each found a corner the reading took otherwise):
 ///
 /// - the line `## Local changes`, the one heading that reads so ([`local_changes_heading`]);
-/// - after it, lines of prose at the margin, opening no block and holding no `|` or `<`, and blank
-///   lines;
+/// - after it, lines of prose at the margin, opening no block and holding no `|`, and blank lines;
 /// - after a blank line, the one table: its header and its delimiter as written above, and every
 ///   row a line of four cells opening and closing with a pipe;
 /// - the table running to the end of the record, but for blank lines.
 ///
-/// The record holds no carriage return, and no other line, nor two lines joined, reads `local
-/// changes` in any spelling (its ASCII letters, [`heading_words_with`]'s readings). Anything else
-/// fails the reading, naming its line.
+/// The record holds no carriage return and no `<` (so no HTML, which GitHub reads however it pairs
+/// a backtick), and no other line, nor two lines joined, reads `local changes` in any spelling (its
+/// ASCII letters, [`heading_words_with`]'s readings). Anything else fails the reading, naming its
+/// line.
 fn change_rows(record: &str) -> Result<Vec<String>, String> {
     if record.contains('\r') {
         return Err("the record holds a carriage return, which ends a line to GitHub".into());
@@ -2584,14 +2523,14 @@ fn change_rows(record: &str) -> Result<Vec<String>, String> {
     let lines: Vec<&str> = record.split('\n').collect();
     // the whole record, before the section too, in what GitHub reads one way only (the round at
     // 7a0bedec): no white space but the space (a no-break space or a tab GitHub's lexer and the
-    // reading's take apart: a fence closed to one and not the other, a setext paragraph split), no
-    // `<` but in a code span (raw HTML in a cell ends or adds a row); and (the round at d7cb0b35) no
-    // run of three backticks or tildes (a fence, in an item at any depth), every backtick a code
-    // span's own on its line (no span GitHub reads across a line break), every link's target closed
-    // on its line by `)` with no space, backtick, quote, bracket or `<` in it (a link GitHub reads
-    // before a code span, taking a backtick of it), and no line opening with `[` after its
-    // containers' markers at any depth (a link reference or a footnote's definition, its label over
-    // two lines too)
+    // reading's take apart: a fence closed to one and not the other, a setext paragraph split); no
+    // run of three backticks or tildes (a fence, in an item at any depth; the round at d7cb0b35);
+    // no `<` at all (the round at b6dc3602): raw HTML in a cell ends or adds a row and before the
+    // heading holds it, and which `<` GitHub reads as HTML turns on how it pairs a backtick, which
+    // an extended autolink, a link's target and an escaped `)` each take before a code span does,
+    // so the record names an XML element without its brackets (`externalReferences`); and no line
+    // opening with `[` after its containers' markers at any depth (a link reference or a footnote's
+    // definition, its label over two lines too)
     for (k, l) in lines.iter().enumerate() {
         if let Some(c) = l.chars().find(|c| c.is_whitespace() && *c != ' ') {
             return Err(format!("line {} of the record holds white space other than a space ({c:?})", k + 1));
@@ -2599,15 +2538,8 @@ fn change_rows(record: &str) -> Result<Vec<String>, String> {
         if l.contains("```") || l.contains("~~~") {
             return Err(format!("line {} of the record holds three backticks or tildes, which may open a fence", k + 1));
         }
-        let outside = outside_code_spans(l);
-        if outside.contains('<') {
-            return Err(format!("line {} of the record holds a `<` outside a code span", k + 1));
-        }
-        if outside.contains('`') {
-            return Err(format!("line {} of the record holds a backtick no code span of its line closes", k + 1));
-        }
-        if let Err(why) = links_closed(l) {
-            return Err(format!("line {} of the record holds a link {why}", k + 1));
+        if l.contains('<') {
+            return Err(format!("line {} of the record holds a `<`, which GitHub may read as HTML", k + 1));
         }
         if after_every_container(l).starts_with('[') {
             return Err(format!("line {} of the record opens with `[`, which may open a link reference or a footnote's definition", k + 1));
@@ -2619,15 +2551,11 @@ fn change_rows(record: &str) -> Result<Vec<String>, String> {
     if at != heading_end {
         return Err("the record's `Local changes` heading is not its line `## Local changes`".into());
     }
-    // nothing before the heading holds it: it follows a blank line, which ends every paragraph and
-    // HTML block of kind 6 or 7, and no line of the record opens an HTML block, in a container or
-    // not, which may run past a blank line (`<textarea>`) or start on a lazy line (the round at
-    // 0394f0ba)
+    // nothing before the heading holds it: it follows a blank line, which ends every paragraph (and
+    // the record holds no `<`, so no HTML block, which may run past a blank line, `<textarea>`, or
+    // start on a lazy line; the round at 0394f0ba)
     if heading == 0 || !lines[heading - 1].is_empty() {
         return Err(format!("line {} of the record, before `## Local changes`, is not blank", heading));
-    }
-    if let Some(k) = lines.iter().position(|l| without_containers(l).0.trim_start_matches([' ', '\t']).starts_with('<')) {
-        return Err(format!("line {} of the record opens an HTML block, which may hold what follows it", k + 1));
     }
     // no other line, nor two lines joined, reads `local changes`, its ASCII letters read
     let letters = |l: &str| -> Vec<String> {
@@ -2654,8 +2582,8 @@ fn change_rows(record: &str) -> Result<Vec<String>, String> {
         // underline or a pipeless table's delimiter to GFM (`:-`, `===\t`; the round at 0394f0ba)
         let underline = l.trim_matches(['=', '-', ' ', '\t']).is_empty();
         let words = l.chars().any(char::is_alphanumeric);
-        if !l.is_empty() && (column_of(l) > 0 || block_start(l).is_some() || l.contains(['|', '<']) || underline || !words) {
-            return Err(leaves(k, "prose stands at the margin, opens no block, holds a letter or a digit and no `|` or `<`"));
+        if !l.is_empty() && (column_of(l) > 0 || block_start(l).is_some() || l.contains('|') || underline || !words) {
+            return Err(leaves(k, "prose stands at the margin, opens no block, holds a letter or a digit and no `|`"));
         }
         k += 1;
     }
@@ -2675,11 +2603,6 @@ fn change_rows(record: &str) -> Result<Vec<String>, String> {
         let cells = gfm_cells(l);
         if !(l.starts_with("| ") && l.ends_with(" |") && cells.len() == 4) {
             return Err(leaves(k, "a row is a line of four cells opening and closing with a pipe"));
-        }
-        // GitHub splits a row into its cells before it reads a code span: each cell's spans its
-        // own, its escaped pipes read as pipes first (the round at d7cb0b35)
-        if cells.iter().any(|c| outside_code_spans(&c.replace("\\|", "|")).contains(['`', '<'])) {
-            return Err(leaves(k, "a cell's backticks are its own code spans' and its `<` stands in one"));
         }
         rows.push(cells[0].clone());
         k += 1;
@@ -3124,16 +3047,15 @@ fn the_record_is_read_in_its_one_form() {
         assert!(refused(&canon(&format!("{row}\n"))), "{row:?}");
     }
     assert!(refused(&format!("# Fork\n\n## Local changes\n[x]: #a \"Each was\nfirst made\"\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n")));
-    // and a `<` in a code span of a row is the cell's text
-    assert_eq!(change_rows(&canon("| 1 | `<v>9</v>` | `a <b>` | none |\n")), Ok(vec!["1".to_string()]));
-    assert_eq!(outside_code_spans("a `<b>` c ``d ` e`` \\`<x>\\` ```f"), "a  c  \\`<x>\\` ```f");
+    // and (the round at b6dc3602) a `<` in a code span too: which `<` GitHub reads as HTML turns on
+    // how it pairs backticks
+    assert!(refused(&canon("| 1 | `<v>9</v>` | `a <b>` | none |\n")));
     // the round at d7cb0b35: a backtick GitHub pairs otherwise (a row's span across its cells, a
     // backtick in a link's target, a span across a line break) letting raw HTML through, a
     // definition's label over two lines, a fence in a nested item
     for row in [
         "| 41 | a | `x.rs`, ` | none</td></tr><tr><td>41</td><td>an uncommitted change</td><td>base</td><td>none ` |",
         "| 41 | a | b | [none](#n`) </td></tr><tr><td>41</td><td>an uncommitted change</td><td>base</td><td>none `x` |",
-        "| 41 | a | b | c ` |",
     ] {
         assert!(refused(&canon(&format!("| 1 | a | b | c |\n{row}\n"))), "{row:?}");
     }
@@ -3141,22 +3063,41 @@ fn the_record_is_read_in_its_one_form() {
         "A note on the `x\ny` <details> `z` copy.",
         "A note on the [copy](#c`) <details> `x`.",
         "A note on the [copy](#c \"the\n`\") <details> ` copy.",
-        "A [copy](#c 'the') of it.",
         "[Each change\nlisted]: #a \"The rows below are\nnot every change\"",
         "[^a\nb]: x",
         "- A note:\n    - ```\n      Shown as code, not prose.",
         "- a\n    - [x]: #y",
-        "Escaped \\` backtick.",
     ] {
         let record = format!("# Fork\n\n{before_heading}\n\n## Local changes\nProse.\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n");
         assert!(refused(&record), "{before_heading:?}");
     }
     assert!(refused(&format!("# Fork\n\n## Local changes\n[Each change\nlisted]: #a\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n")));
-    // and a link closed on its line is read, as the real record's first lines hold one
-    assert_eq!(
-        change_rows(&format!("# Fork\n\nA copy of [IronCalc](https://example.org/a_b) and `<x>`.\n\n## Local changes\nProse.\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | `a \\| b` | c | none |\n")),
-        Ok(vec!["1".to_string()])
-    );
+    // the round at b6dc3602: an extended autolink, and a link's target past an escaped `)`, each
+    // taking a backtick GitHub's code spans then pair otherwise, raw HTML in a row or before the
+    // heading: a `<` anywhere is refused
+    for row in [
+        "| 41 | a | b | none www.a.com/`x </td></tr><tr><td>41</td><td>an uncommitted change</td><td>base</td><td>none</td></tr><tr><td>39</td><td>(cont.) `y` z |",
+        "| 41 | a | b | none ftp://a.example/`x </td></tr><tr><td>41</td><td>an uncommitted change</td><td>base</td><td>none</td></tr><tr><td>39</td><td>(cont.) `y` z |",
+        "| 41 | a | b | [none](#n\\)`) </td></tr><tr><td>41</td><td>an uncommitted change</td><td>base</td><td>none</td></tr><tr><td>39</td><td>(cont.) `x` and |",
+    ] {
+        assert!(refused(&canon(&format!("| 1 | a | b | c |\n{row}\n"))), "{row:?}");
+    }
+    for before_heading in [
+        "See http://a.example/`x <details> `y` and the copy.",
+        "(www.a.example/`x <details> `y`",
+        "A note](www.a.example/x)`y <details> `z`",
+        "A note on the [copy](#c\\)`) <details> `x` and its copy.",
+        "![the logo](#c\\)`) <details> `x`",
+    ] {
+        let record = format!("# Fork\n\n{before_heading}\n\n## Local changes\nProse.\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | a | b | c |\n");
+        assert!(refused(&record), "{before_heading:?}");
+    }
+    // and with no `<`, a backtick GitHub pairs otherwise, a link's title, an escaped backtick are
+    // only inline text to it: read, as the real record's first lines hold a link
+    for before_heading in ["A copy of [IronCalc](https://example.org/a_b).", "A [copy](#c 'the') of it.", "Escaped \\` backtick and www.a.com/`x `y`."] {
+        let record = format!("# Fork\n\n{before_heading}\n\n## Local changes\nProse.\n\n{RECORD_HEADER}\n{RECORD_DELIMITER}\n| 1 | `a \\| b` | c ` | none |\n");
+        assert_eq!(change_rows(&record), Ok(vec!["1".to_string()]), "{before_heading:?}");
+    }
     assert_eq!(after_every_container("- a"), "a");
     assert_eq!(after_every_container("    - > 1. [x]: y"), "[x]: y");
     // the table after the heading with no blank line, a delimiter of another spelling, no table
