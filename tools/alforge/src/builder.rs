@@ -188,6 +188,10 @@ pub struct Built {
     pub libc: String,
 }
 
+/// The vendoring of the lock file: one folder a crate at its version (`vendor/<name>-<version>/`),
+/// which the judgement of a build's reads matches exactly (`crate::inputs::Packages::vendored`).
+pub const VENDOR_ARGS: [&str; 4] = ["vendor", "--locked", "--versioned-dirs", "../vendor"];
+
 /// `cargo vendor`'s stanza (written from the tree's folder, `directory = "../vendor"`) as it reads
 /// from the folder above the tree, where the builder writes it: cargo takes a configuration's
 /// relative directory from the folder holding its `.cargo`.
@@ -204,7 +208,7 @@ pub fn prepare(root: &Path, commit: &str, input: &Path) -> Result<(), VmError> {
     std::fs::create_dir_all(input.join("src"))?;
     crate::git::export_tree(root, commit, &[], &input.join("src")).map_err(|e| VmError::Io(std::io::Error::other(e.to_string())))?;
     eprintln!("alforge: vendoring the dependencies Cargo.lock pins");
-    let config = vm::run("cargo", &["vendor", "--locked", "--versioned-dirs", "../vendor"], Some(&input.join("src")))?;
+    let config = vm::run("cargo", &VENDOR_ARGS, Some(&input.join("src")))?;
     std::fs::create_dir_all(input.join(".cargo"))?;
     std::fs::write(input.join(".cargo/config.toml"), vendor_config(&config))?;
     Ok(())
