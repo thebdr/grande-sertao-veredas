@@ -7,10 +7,10 @@
     "cargo test -p orcl-interp --test ops --test machine --test load --test core_ops --test blocks --test alloc --test root && cargo clippy -p orcl-interp --all-targets -- -D warnings"
   ],
   "exitCode": 0,
-  "outputSha": "5bef96651bfce697d8a3cc8748e1ea51f419e11ca0694e2393764c1fd5ace58d",
-  "outputTail": "test no_source_allows_back_what_the_root_denies_and_every_source_is_read ... ok\ntest no_source_reaches_std_prints_or_reads_a_clock ... ok\ntest the_interpreter_depends_on_nothing_but_for_its_tests ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running tests/alloc.rs (target/debug/build/orcl-interp/54c2726b8b400b83/out/alloc-54c2726b8b400b83)\n     Running tests/blocks.rs (target/debug/build/orcl-interp/336f86939313670b/out/blocks-336f86939313670b)\n     Running tests/core_ops.rs (target/debug/build/orcl-interp/a32ef259cdf8c8ed/out/core_ops-a32ef259cdf8c8ed)\n     Running tests/load.rs (target/debug/build/orcl-interp/06768c6afd5c0222/out/load-06768c6afd5c0222)\n     Running tests/machine.rs (target/debug/build/orcl-interp/b39edabbbab6ac4f/out/machine-b39edabbbab6ac4f)\n     Running tests/ops.rs (target/debug/build/orcl-interp/8d58a971ea52ffe1/out/ops-8d58a971ea52ffe1)\n     Running tests/root.rs (target/debug/build/orcl-interp/59358e83d1fe7718/out/root-59358e83d1fe7718)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s",
-  "ranAt": "2026-11-26T12:17:28.148Z",
-  "headCommit": "52696930a255a4a431e775c9b8d9d88382aa8e62",
+  "outputSha": "5c0159f4517c5685910434a65de896cea206806514947ac3b223dc2b057db0e3",
+  "outputTail": "test no_source_allows_back_what_the_root_denies_and_every_source_is_read ... ok\ntest no_source_reaches_std_prints_or_reads_a_clock ... ok\ntest the_interpreter_depends_on_nothing_but_for_its_tests ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running tests/alloc.rs (target/debug/build/orcl-interp/54c2726b8b400b83/out/alloc-54c2726b8b400b83)\n     Running tests/blocks.rs (target/debug/build/orcl-interp/336f86939313670b/out/blocks-336f86939313670b)\n     Running tests/core_ops.rs (target/debug/build/orcl-interp/a32ef259cdf8c8ed/out/core_ops-a32ef259cdf8c8ed)\n     Running tests/load.rs (target/debug/build/orcl-interp/06768c6afd5c0222/out/load-06768c6afd5c0222)\n     Running tests/machine.rs (target/debug/build/orcl-interp/b39edabbbab6ac4f/out/machine-b39edabbbab6ac4f)\n     Running tests/ops.rs (target/debug/build/orcl-interp/8d58a971ea52ffe1/out/ops-8d58a971ea52ffe1)\n     Running tests/root.rs (target/debug/build/orcl-interp/59358e83d1fe7718/out/root-59358e83d1fe7718)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s",
+  "ranAt": "2026-11-26T12:44:18.706Z",
+  "headCommit": "997f221cad5efc50c30d3f607adadc374eb91365",
   "tests": [
     {
       "name": "crates/orcl-interp/tests/ops.rs",
@@ -25,7 +25,7 @@
     {
       "name": "crates/orcl-interp/tests/load.rs",
       "file": "crates/orcl-interp/tests/load.rs",
-      "fileSha": "229d1d732a74dfa1aa0337836862ce18f89eb4d22112ed7e65c1b30a64bddcce"
+      "fileSha": "f67e64c4bec066e4bf3b15bd8de11c89ec3c5d0e2fccb72230b1c24ccd6af1d4"
     },
     {
       "name": "crates/orcl-interp/tests/core_ops.rs",
