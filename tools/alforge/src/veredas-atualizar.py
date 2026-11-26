@@ -409,12 +409,20 @@ def main(argv):
     # The release's folders as the archive's data filter makes its files: readable by the
     # services' user whatever umask the caller has.
     os.umask(0o022)
+    # An interruption is taken from the start: before the bundle is read it stops the run with
+    # nothing installed; what an earlier run or this one left, the next update removes.
+    for sig in STOPS:
+        signal.signal(sig, stopping)
+    early = "veredas-atualizar: not installed, stopped by {} before the bundle was read; what this run or an earlier one left in /opt/veredas the next update removes"
     try:
         # One update at a time, the lock taken before anything is read: the installed release
         # and `current` are the ones this update replaces. The release's folder itself is locked,
         # so nothing is left behind.
         lock = os.open(OPT, os.O_RDONLY)
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except Stopped as e:
+        print(early.format(e.name), file=sys.stderr)
+        return 2
     except BlockingIOError:
         print("veredas-atualizar: another update is running", file=sys.stderr)
         return 2
@@ -424,12 +432,17 @@ def main(argv):
     try:
         installed = manifest(os.path.join(CURRENT, "release.toml"))
         old_top = os.readlink(CURRENT) if os.path.islink(CURRENT) else ""
+        # The release `current` names, by its folder's name: a going back typed with a final `/`
+        # (tab completion adds one) names the same folder.
+        old_name = os.path.basename(os.path.normpath(old_top)) if old_top else ""
+        leftovers()
+        stage = tempfile.mkdtemp(prefix=".atualizar-", dir=OPT)
+    except Stopped as e:
+        print(early.format(e.name), file=sys.stderr)
+        return 2
     except Refused as e:
         print("veredas-atualizar: the installed release does not read:\n" + str(e), file=sys.stderr)
         return 2
-    leftovers()
-    try:
-        stage = tempfile.mkdtemp(prefix=".atualizar-", dir=OPT)
     except PermissionError:
         print(f"veredas-atualizar: {OPT} is not writable here: run it with sudo", file=sys.stderr)
         return 2
@@ -439,8 +452,6 @@ def main(argv):
     as_it_was = "not installed, the machine is as it was:"
     try:
         # An interruption from here on is a refusal: the staging folder removed, nothing installed.
-        for sig in STOPS:
-            signal.signal(sig, stopping)
         # The bundle read once, into the staging folder: its digest and its contents are of the
         # same bytes, whatever the file does meanwhile.
         copy = os.path.join(stage, "bundle.tar.gz")
@@ -490,7 +501,9 @@ def main(argv):
         # Whatever else a bundle makes go wrong before it is installed is a refusal too.
         stopped = (2, as_it_was, [f"{type(e).__name__}: {e}"])
     # The staging folder removed, and judged: what it leaves is said, and a refusal that leaves it
-    # is no longer "as it was". The next update removes it ([`leftovers`]).
+    # is no longer "as it was". The next update removes it ([`leftovers`]). An interruption is
+    # held from here through the verdict, so a refusal is said whole.
+    signal.pthread_sigmask(signal.SIG_BLOCK, STOPS)
     left = []
     shutil.rmtree(stage, onexc=lambda _f, p, x: left.append(f"{p} ({getattr(x, 'strerror', x)})"))
     if left:
@@ -510,9 +523,9 @@ def main(argv):
                 print(f"  {r}", file=sys.stderr)
         # The way back, when `current` does not name the release it named.
         if code == 4 and old_top and (not os.path.islink(CURRENT) or os.readlink(CURRENT) != old_top):
-            print(f"veredas-atualizar: to go back: sudo ln -sfn {os.path.basename(old_top)} /opt/veredas/current, and the links named above", file=sys.stderr)
+            print(f"veredas-atualizar: to go back: sudo ln -sfn {old_name} /opt/veredas/current, and the links named above", file=sys.stderr)
         return code
-    old = os.path.join(OPT, os.path.basename(old_top)) if old_top else "(none)"
+    old = os.path.join(OPT, old_name) if old_top else "(none)"
     print(f"veredas-atualizar: release {installed['release']} -> {m['release']} (commit {m.get('commit')})")
     print(f"veredas-atualizar: installed at {os.path.join(OPT, top)}; the old release kept at {old}")
     print("veredas-atualizar: the plant's files in the home folder left as they are; the release's own plant is in /opt/veredas/current/planta")
