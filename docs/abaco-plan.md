@@ -342,6 +342,8 @@ own to close in a fork change of its own:
 - Q345: core's header reader is compiled by path.
 - Q346: `_xlfn.PERCENTOF` stands, a reasoned spelling no Excel-saved file has shown (fork change
   25b).
+- Q35: Ábaco and its oracle are `MIT OR Apache-2.0`, the texts beside each manifest (thebdr); the
+  fork keeps upstream's licence and files.
 
 ## Traps
 - **Cargo makes a crate beneath a listed member's folder a member, whatever `exclude` says**: a

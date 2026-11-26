@@ -4,6 +4,9 @@ name = "veredas-abaco"
 version = "2.0.0-alpha.1"
 edition.workspace = true
 publish = false
+# The architect, 2026-11-25 (docs/questions.md Q35): every crate but Oficina states this expression
+# and carries the two texts beside its manifest, the copyright holder thebdr.
+license = "MIT OR Apache-2.0"
 description = "Ábaco, the engineering spreadsheet of Veredas 2: workbooks computed and edited with no Office on the machine"
 
 # A library; the executable arrives with the worker (docs/abaco-plan.md, "Phases"). It depends on
