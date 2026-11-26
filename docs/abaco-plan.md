@@ -71,9 +71,12 @@ not carried, and Veredas 1's "open and calculate in Excel" answer dropped).
 - **The engine's changes live in the fork**, one upstream-shaped commit each, listed in
   `forks/ironcalc/VEREDAS-FORK.md`; Ábaco's own crate adds policy, never engine
   behaviour, so each change can go upstream on its own.
-- **Opening runs nothing.** Opening a workbook or a workspace runs no Python. Veredas 1 loaded a
-  home's `functions` macro at open; here that waits for the security round's entry 32 (Q43): until
-  it is ruled, custom functions load on the person's command.
+- **Opening runs nothing.** Opening a workbook or a workspace runs no Python until its folder is
+  trusted (Q31's entry 32, the security round's, ruled 2026-11-25: "Python runs after a trust
+  prompt per folder"). The prompt, one per folder, is Oficina's; refusing to run before it is
+  Ábaco's: the worker runs no macro, custom function or home's `functions` macro of a folder not
+  trusted, whatever asks it. Veredas 1 loaded a home's `functions` macro at open; here that happens
+  only in a trusted folder.
 - **No customer, site or vendor named.** This repository is public and Veredas 1's is private:
   nothing carried names a plant, a customer or a company's file kinds, and no workbook of a real
   plant is committed. The real workbooks are measured from a path outside the repository and only
@@ -293,9 +296,11 @@ workspace/log.txt             the log, one escaped entry per line
 4. **Python.** CPython embedded (python-build-standalone, pinned, as Veredas 1 did: a release
    carries the runtime beside the executable); the `abaco` module; custom functions; the macro
    homes; the worker, one per workspace, and its command line; stop at the failing line with the
-   model inspectable. The interface Oficina's tab, editor and debugger speak to the worker is agreed
-   with Oficina's session (the review's entry 28, `docs/briefing/review.md`, puts one debugger
-   client on Oficina's side, shared with ORCL).
+   model inspectable. Ábaco writes no debugger interface of its own: one language-server client
+   and one debugger client, written once on Oficina's side, are shared by ORCL and Python (Q31's
+   entry 28, ruled 2026-11-25: "(a) One pair of clients, shared"), and the worker offers what that
+   shared client speaks. What the worker serves Oficina's tab, editor and debugger is agreed with
+   Oficina's session.
 5. **The extension point** and a small public example: an extension, a Python package inside the
    host, found and installed as a macro home is; `acerto` stays the private repository's and
    installs through it (Q343).
@@ -342,6 +347,10 @@ own to close in a fork change of its own:
 - Q345: core's header reader is compiled by path.
 - Q346: `_xlfn.PERCENTOF` stands, a reasoned spelling no Excel-saved file has shown (fork change
   25b).
+- Q31, the briefing review: entry 28, one language-server client and one debugger client on
+  Oficina's side, shared by ORCL and Python, so the worker offers what they speak and Ábaco writes
+  no debugger interface; entry 32, opening runs nothing, Python after a trust prompt per folder,
+  the prompt Oficina's and the refusal before it Ábaco's.
 - Q35: Ábaco and its oracle are `MIT OR Apache-2.0`, the texts beside each manifest (thebdr); the
   fork keeps upstream's licence and files.
 
