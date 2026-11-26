@@ -7,10 +7,10 @@
     "cargo test -p orcl-interp --test ops --test machine --test load --test core_ops --test blocks --test alloc --test root && cargo clippy -p orcl-interp --all-targets -- -D warnings"
   ],
   "exitCode": 0,
-  "outputSha": "743937094ee8a1272c95db75e2830bee5555c0df40d13b7d27f742d7c2116186",
-  "outputTail": "test no_source_allows_back_what_the_root_denies_and_every_source_is_read ... ok\ntest no_source_reaches_std_prints_or_reads_a_clock ... ok\ntest the_interpreter_depends_on_nothing_but_for_its_tests ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running tests/alloc.rs (target/debug/build/orcl-interp/54c2726b8b400b83/out/alloc-54c2726b8b400b83)\n     Running tests/blocks.rs (target/debug/build/orcl-interp/336f86939313670b/out/blocks-336f86939313670b)\n     Running tests/core_ops.rs (target/debug/build/orcl-interp/a32ef259cdf8c8ed/out/core_ops-a32ef259cdf8c8ed)\n     Running tests/load.rs (target/debug/build/orcl-interp/06768c6afd5c0222/out/load-06768c6afd5c0222)\n     Running tests/machine.rs (target/debug/build/orcl-interp/b39edabbbab6ac4f/out/machine-b39edabbbab6ac4f)\n     Running tests/ops.rs (target/debug/build/orcl-interp/8d58a971ea52ffe1/out/ops-8d58a971ea52ffe1)\n     Running tests/root.rs (target/debug/build/orcl-interp/59358e83d1fe7718/out/root-59358e83d1fe7718)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s",
-  "ranAt": "2026-11-26T10:55:33.110Z",
-  "headCommit": "3ac1417753ee4254a0ab67f6689b07c8321ff771",
+  "outputSha": "dba250930e98cd200b187ffe31cd4832aa322518cf1831888e8bd3cadef499c1",
+  "outputTail": "test no_source_allows_back_what_the_root_denies_and_every_source_is_read ... ok\ntest no_source_reaches_std_prints_or_reads_a_clock ... ok\ntest the_interpreter_depends_on_nothing_but_for_its_tests ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running tests/alloc.rs (target/debug/build/orcl-interp/54c2726b8b400b83/out/alloc-54c2726b8b400b83)\n     Running tests/blocks.rs (target/debug/build/orcl-interp/336f86939313670b/out/blocks-336f86939313670b)\n     Running tests/core_ops.rs (target/debug/build/orcl-interp/a32ef259cdf8c8ed/out/core_ops-a32ef259cdf8c8ed)\n     Running tests/load.rs (target/debug/build/orcl-interp/06768c6afd5c0222/out/load-06768c6afd5c0222)\n     Running tests/machine.rs (target/debug/build/orcl-interp/b39edabbbab6ac4f/out/machine-b39edabbbab6ac4f)\n     Running tests/ops.rs (target/debug/build/orcl-interp/8d58a971ea52ffe1/out/ops-8d58a971ea52ffe1)\n     Running tests/root.rs (target/debug/build/orcl-interp/59358e83d1fe7718/out/root-59358e83d1fe7718)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s",
+  "ranAt": "2026-11-26T11:24:47.826Z",
+  "headCommit": "0fdd0def7616acf9fadfefe320a9ef2c76f637ba",
   "tests": [
     {
       "name": "crates/orcl-interp/tests/ops.rs",
@@ -20,12 +20,12 @@
     {
       "name": "crates/orcl-interp/tests/machine.rs",
       "file": "crates/orcl-interp/tests/machine.rs",
-      "fileSha": "95ef5a766c484de8270ea7049d2e0c5cd1c5e3cb0d6e322eb705cbceb8abaa5c"
+      "fileSha": "953d62c4a5e85b318591343a254151bc28d044e8fbbe49f2a8c5c7a956c66227"
     },
     {
       "name": "crates/orcl-interp/tests/load.rs",
       "file": "crates/orcl-interp/tests/load.rs",
-      "fileSha": "a8e7338951a21ab7530d4e15350d05269ae12a427ba97b64b8fd798a7e1c615f"
+      "fileSha": "9e75ddb94fca5e5149d8c6d9dc6d60b67fad8e01604dd87d6deea6829fe8f2a5"
     },
     {
       "name": "crates/orcl-interp/tests/core_ops.rs",
@@ -40,7 +40,7 @@
     {
       "name": "crates/orcl-interp/tests/alloc.rs",
       "file": "crates/orcl-interp/tests/alloc.rs",
-      "fileSha": "03808a8a4b7ff40ed92d0d474346ffd0be4abbbfe39ec4b2c11df66286f11597"
+      "fileSha": "2847043075aba0d95e6da97f97d916a4146982a798896a59941d2d70aa533d36"
     },
     {
       "name": "crates/orcl-interp/tests/root.rs",
