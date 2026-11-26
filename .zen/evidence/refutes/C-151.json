@@ -1,28 +1,28 @@
 {
   "clause": "C-151",
   "verdict": "holds",
-  "ranAt": "2026-11-23T05:35:22.256Z",
-  "headCommit": "c5c1656d39f922f143f0fe8274d6ccedcf40dacc",
+  "ranAt": "2026-11-26T06:52:43.728Z",
+  "headCommit": "2c317e4ccbf8cec328ec32fe9327831105e10af1",
   "tests": [
     {
       "name": "crates/orcl-runtime/tests/model.rs",
       "file": "crates/orcl-runtime/tests/model.rs",
-      "symbolSha": "a4d00caa496d89bf4b0334fa5ceca3eb33175589265e115422003e86821d22da"
+      "symbolSha": "fb8eef7131d7793966b79c1206d023761ab348a0a14714ea81f5ec3427603f83"
     },
     {
       "name": "crates/orcl-runtime/tests/scan_cycle.rs",
       "file": "crates/orcl-runtime/tests/scan_cycle.rs",
-      "symbolSha": "5832bc30842b923d918c5ddfd3d214f8804251531377fd104fc921efad0e9a42"
+      "symbolSha": "3cedc0c692589df09c02f03c6a038ce3b987c6a759feda1539b497259963d4ca"
     },
     {
       "name": "crates/orcl-runtime/tests/conveyor.rs",
       "file": "crates/orcl-runtime/tests/conveyor.rs",
-      "symbolSha": "f24117a73317d78a779105b9ef43248f5cb3d13d827416e3e6b86f8e0f8feb75"
+      "symbolSha": "4db8d4d5e137bab9eab52b5d3377ceb35a00283cd03c66174936264315c814c4"
     },
     {
       "name": "crates/orcl-runtime/tests/mono_clock.rs",
       "file": "crates/orcl-runtime/tests/mono_clock.rs",
-      "symbolSha": "9de1929ad90d7b6297364a6ae7851ee6620cf781646e0a4daf7f7909daa713cd"
+      "symbolSha": "ea010406f9a1aa59a65def38d161670a9fec0bf589839be95b259e8246dcf310"
     }
   ]
 }
