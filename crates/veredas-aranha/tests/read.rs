@@ -877,3 +877,450 @@ mod round_1 {
         });
     }
 }
+
+/// The second refute round's cases (its critic's demonstrations, taken in): a walk cut after its
+/// first port by any refusal keeping that port, a malformed first answer refused naming its frame, a
+/// fragmented answer never taken whole, two reads at once each taking its own answer, sixteen ports
+/// one at a time at the pace under activities of their own and the most record one frame takes, an
+/// interface of two addresses, and frames let go after some were read.
+#[cfg(target_os = "linux")]
+mod round_2 {
+    use std::net::Ipv4Addr;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use super::bench;
+    use veredas_aranha::fusion::{Device, Fusion};
+    use veredas_aranha::ip::{self, Endpoint};
+    use veredas_aranha::listen::{Listener, Options};
+    use veredas_aranha::netns;
+    use veredas_aranha::observe::{Observation, Observed, Probe, Witness};
+    use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpSuite};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::profinet::record::{LinkState, Peer, PortDataReal};
+    use veredas_aranha::profinet::rpc::{self, PacketType, PnioStatus, ReadRequest, ReadResponse, RequestArgs, ResponseArgs, RpcPdu, flags1};
+    use veredas_aranha::read::{self, ReadError, Target};
+
+    const HERE: Mac = Mac([0x02, 0x00, 0x5E, 0xC0, 0x00, 0xA0]);
+    const DEV_A: Mac = Mac([0x02, 0x00, 0x5E, 0xC0, 0x00, 0x01]);
+    const DEV_B: Mac = Mac([0x02, 0x00, 0x5E, 0xC0, 0x00, 0x02]);
+    const PEER1: Mac = Mac([0x02, 0x00, 0x5E, 0xC0, 0x00, 0x09]);
+
+    fn a(last: u8) -> Ipv4Addr {
+        Ipv4Addr::new(192, 168, 0, last)
+    }
+
+    fn device_of(iface: &str, mac: Mac, address: Ipv4Addr) -> Device {
+        let identity = DeviceIdentity { name: Some("bomba-1".into()), ip: Some(IpSuite { ip: address, mask: Ipv4Addr::new(255, 255, 255, 0), gateway: Ipv4Addr::UNSPECIFIED }), ..Default::default() };
+        let o = Observation { witness: Witness { probe: Probe::DcpHeard, iface: iface.into(), at_ns: 1, frame: 0 }, observed: Observed::Dcp { mac, service: dcp::Service::Hello, service_type: dcp::ServiceType::Request, identity } };
+        let mut f = Fusion::new();
+        f.apply(&o);
+        f.devices.remove(&mac).unwrap()
+    }
+
+    /// One request a scripted device heard.
+    #[derive(Clone)]
+    struct Req {
+        from: Endpoint,
+        to: Endpoint,
+        pdu: RpcPdu,
+        args: RequestArgs,
+        read: ReadRequest,
+    }
+
+    /// What a scripted device sends back: from, to, the UDP payload.
+    type Out = Vec<(Endpoint, Endpoint, Vec<u8>)>;
+    type Handler = Box<dyn FnMut(&Req) -> Out + Send>;
+
+    struct Scripted {
+        stop: Arc<AtomicBool>,
+        icmp: Arc<AtomicUsize>,
+        seen: Arc<Mutex<Vec<Req>>>,
+        join: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for Scripted {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            if let Some(j) = self.join.take() {
+                let _ = j.join();
+            }
+        }
+    }
+
+    /// A device on `link`: every PNIO request to one of `addresses` (port 34964) given to `handler`,
+    /// what it returns sent; this machine's ICMP destination unreachable counted.
+    fn scripted(link: &str, addresses: Vec<Endpoint>, handler: Arc<Mutex<Handler>>) -> Scripted {
+        let stop = Arc::new(AtomicBool::new(false));
+        let icmp = Arc::new(AtomicUsize::new(0));
+        let seen: Arc<Mutex<Vec<Req>>> = Arc::new(Mutex::new(Vec::new()));
+        let link = link.to_string();
+        let join = {
+            let (stop, icmp, seen) = (stop.clone(), icmp.clone(), seen.clone());
+            std::thread::spawn(move || {
+                let mut b = bench::link(&link);
+                while !stop.load(Ordering::SeqCst) {
+                    let Ok(Some(f)) = b.recv(Duration::from_millis(5)) else { continue };
+                    let x = &f.bytes;
+                    if x.len() > 35 && x[12..14] == [0x08, 0x00] && x[23] == 1 && x[26..30] == [192, 168, 0, 1] && x[14 + usize::from(x[14] & 0x0F) * 4] == 3 {
+                        icmp.fetch_add(1, Ordering::SeqCst);
+                        continue;
+                    }
+                    let Some(d) = ip::datagram(x) else { continue };
+                    if !addresses.contains(&d.dst) {
+                        continue;
+                    }
+                    let Ok(pdu) = RpcPdu::decode(&d.payload) else { continue };
+                    let args = RequestArgs::decode(&pdu.body, pdu.byte_order()).unwrap();
+                    let read = ReadRequest::from_block(&rpc::read_blocks(&args.data).0[0]).unwrap();
+                    let req = Req { from: d.src, to: d.dst, pdu, args, read };
+                    seen.lock().unwrap().push(req.clone());
+                    let out = (handler.lock().unwrap())(&req);
+                    for (from, to, payload) in out {
+                        b.send(&ip::udp_frame(from, to, 1, &payload).unwrap()).unwrap();
+                    }
+                }
+            })
+        };
+        Scripted { stop, icmp, seen, join: Some(join) }
+    }
+
+    /// The answer to `r` carrying `record`, its header saying `declared` bytes, with `status`.
+    fn answer(r: &Req, record: &[u8], status: PnioStatus) -> RpcPdu {
+        let mut data = ReadResponse::answering(&r.read, record.len() as u32).block().encode().unwrap();
+        data.extend_from_slice(record);
+        RpcPdu::pnio_response(&r.pdu, 7, &ResponseArgs::new(status, r.args.args_maximum, data))
+    }
+
+    fn back(r: &Req, pdu: &RpcPdu) -> (Endpoint, Endpoint, Vec<u8>) {
+        (r.to, r.from, pdu.encode().unwrap())
+    }
+
+    fn port_data(subslot: u16, peer: Mac) -> Vec<u8> {
+        PortDataReal {
+            slot: 0,
+            subslot,
+            own_port_id: format!("port-{:03}", subslot.wrapping_sub(0x8000)),
+            peers: vec![Peer { port_id: "port-009.sw".into(), chassis_id: "sw".into(), line_delay: 0, mac: peer }],
+            mau_type: 0x10,
+            domain_boundary: 0,
+            multicast_boundary: 0,
+            link_state: LinkState { port: 0, link: 1 },
+            media_type: 1,
+            extra: Vec::new(),
+        }
+        .block()
+        .unwrap()
+        .encode()
+        .unwrap()
+    }
+
+    const NO_SUBSLOT: PnioStatus = PnioStatus { code: 0xDE, decode: 0x80, code1: 0xB2, code2: 0 };
+
+    /// The frames kept from the device from `from` on whose RPC is a response or reject or fault.
+    fn device_answers(l: &Listener, from: u64, mac: Mac) -> Vec<u64> {
+        l.frames_from(from).into_iter().filter(|(_, k)| !k.sent && ip::datagram(&k.frame.bytes).is_some_and(|d| d.src.mac == mac && RpcPdu::decode(&d.payload).is_ok_and(|p| matches!(p.packet_type, PacketType::Response | PacketType::Reject | PacketType::Fault)))).map(|(i, _)| i).collect()
+    }
+
+    fn frame_of(e: &ReadError) -> Option<u64> {
+        match e {
+            ReadError::Answer { frame, .. } | ReadError::Status { frame, .. } | ReadError::Rejected { frame, .. } => Some(*frame),
+            _ => None,
+        }
+    }
+
+    /// The ports walk cut at its second subslot, whatever cuts it: the cut names 0x8002, its error the
+    /// device's answer at 0x8002, and keeps the first port and its neighbour, no end.
+    #[test]
+    fn a_walk_cut_at_its_second_port_keeps_the_first_whatever_cuts_it() {
+        netns::isolated("round_2::a_walk_cut_at_its_second_port_keeps_the_first_whatever_cuts_it", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV_A)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            #[derive(Clone, Copy, Debug, PartialEq)]
+            enum Cutter {
+                OtherSubslot,
+                NoBlock,
+                NotPortData,
+                Status,
+                Reject,
+            }
+            let cutter = Arc::new(Mutex::new(Cutter::OtherSubslot));
+            let me = Endpoint { mac: DEV_A, ip: a(10), port: 34964 };
+            let handler: Handler = {
+                let cutter = cutter.clone();
+                Box::new(move |r: &Req| {
+                    if r.read.subslot == 0x8001 {
+                        return vec![back(r, &answer(r, &port_data(0x8001, PEER1), PnioStatus::OK))];
+                    }
+                    if r.read.subslot != 0x8002 {
+                        return vec![back(r, &answer(r, &[], NO_SUBSLOT))];
+                    }
+                    let pdu = match *cutter.lock().unwrap() {
+                        Cutter::OtherSubslot => answer(r, &port_data(0x8005, PEER1), PnioStatus::OK),
+                        Cutter::NoBlock => answer(r, &[], PnioStatus::OK),
+                        Cutter::NotPortData => answer(r, &rpc::Block::new(0x0020, vec![0; 10]).encode().unwrap(), PnioStatus::OK),
+                        Cutter::Status => answer(r, &[], PnioStatus { code: 0xDE, decode: 0x80, code1: 0xB0, code2: 0 }),
+                        Cutter::Reject => RpcPdu { packet_type: PacketType::Reject, ..answer(r, b"no", PnioStatus::OK) },
+                    };
+                    vec![back(r, &pdu)]
+                })
+            };
+            let _peer = scripted("b0", vec![me], Arc::new(Mutex::new(handler)));
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let device = device_of("a0", DEV_A, a(10));
+            let quick = read::Options { wait: Duration::from_millis(400) };
+            let mut bad = Vec::new();
+            for c in [Cutter::OtherSubslot, Cutter::NoBlock, Cutter::NotPortData, Cutter::Status, Cutter::Reject] {
+                *cutter.lock().unwrap() = c;
+                let from = l.kept().1;
+                match read::ports(&l, "a0", &device, &quick).map_err(|c| *c) {
+                    Err(cut) => {
+                        let answers = device_answers(&l, from, DEV_A);
+                        let kept: Vec<(u16, Option<Mac>)> = cut.read.read.iter().map(|p| p.data.subslot).zip(cut.read.neighbours.iter().map(|n| n.peer_mac)).collect();
+                        let got = (cut.subslot, kept, cut.read.end, frame_of(&cut.error), cut.error.to_string());
+                        let want_frame = answers.last().copied();
+                        if (got.0, got.1.clone(), got.2, got.3) != (0x8002, vec![(0x8001, Some(PEER1))], None, want_frame) {
+                            bad.push(format!("{c:?}: {got:?}, want (0x8002, [(0x8001, PEER1)], None, {want_frame:?})"));
+                        }
+                    }
+                    Ok(p) => bad.push(format!("{c:?}: the walk ended well: {:?} read, end {:?}", p.read.iter().map(|r| r.data.subslot).collect::<Vec<_>>(), p.end)),
+                }
+            }
+            assert!(bad.is_empty(), "{bad:#?}");
+        });
+    }
+
+    /// An answer whose body is short of its arguments, or whose data is short of the read's header,
+    /// or a record short of its header: refused, naming the device's frame, even with a good answer
+    /// after it (the answer is the first datagram).
+    #[test]
+    fn a_short_body_is_refused_naming_its_frame() {
+        netns::isolated("round_2::a_short_body_is_refused_naming_its_frame", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV_A)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            #[derive(Clone, Copy, Debug, PartialEq)]
+            enum Short {
+                BodyShortOfArgs,
+                DataShortOfHeader,
+                RecordShortOfHeader,
+            }
+            let way = Arc::new(Mutex::new(Short::BodyShortOfArgs));
+            let me = Endpoint { mac: DEV_A, ip: a(10), port: 34964 };
+            let handler: Handler = {
+                let way = way.clone();
+                Box::new(move |r: &Req| {
+                    let good = answer(r, b"mine", PnioStatus::OK);
+                    let first = match *way.lock().unwrap() {
+                        Short::BodyShortOfArgs => {
+                            let mut p = good.clone();
+                            p.body.truncate(p.body.len() - 2);
+                            p
+                        }
+                        Short::DataShortOfHeader => RpcPdu::pnio_response(&r.pdu, 7, &ResponseArgs::new(PnioStatus::OK, r.args.args_maximum, vec![0x80, 0x09, 0, 60, 1, 0])),
+                        Short::RecordShortOfHeader => {
+                            let mut data = ReadResponse::answering(&r.read, 9).block().encode().unwrap();
+                            data.extend_from_slice(b"mine");
+                            RpcPdu::pnio_response(&r.pdu, 7, &ResponseArgs::new(PnioStatus::OK, r.args.args_maximum, data))
+                        }
+                    };
+                    vec![back(r, &first), back(r, &good)]
+                })
+            };
+            let _peer = scripted("b0", vec![me], Arc::new(Mutex::new(handler)));
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let device = device_of("a0", DEV_A, a(10));
+            let im0 = Target { slot: 0, subslot: 1, index: 0xAFF0 };
+            let quick = read::Options { wait: Duration::from_millis(400) };
+            let mut bad = Vec::new();
+            for w in [Short::BodyShortOfArgs, Short::DataShortOfHeader, Short::RecordShortOfHeader] {
+                *way.lock().unwrap() = w;
+                let from = l.kept().1;
+                let r = read::read(&l, "a0", &device, im0, &quick);
+                std::thread::sleep(Duration::from_millis(100));
+                let answers = device_answers(&l, from, DEV_A);
+                match r {
+                    Err(ReadError::Answer { frame, .. }) if Some(frame) == answers.first().copied() => {}
+                    other => bad.push(format!("{w:?}: {other:?}, want an Answer refusal naming {:?}", answers.first())),
+                }
+            }
+            assert!(bad.is_empty(), "{bad:#?}");
+        });
+    }
+
+    /// A response in two fragments (as a device whose fragments are shorter than our datagram may
+    /// send): refused, never taken as the whole record.
+    #[test]
+    fn a_fragmented_answer_is_never_taken_whole() {
+        netns::isolated("round_2::a_fragmented_answer_is_never_taken_whole", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV_A)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            let reverse = Arc::new(AtomicBool::new(false));
+            let me = Endpoint { mac: DEV_A, ip: a(10), port: 34964 };
+            let handler: Handler = {
+                let reverse = reverse.clone();
+                Box::new(move |r: &Req| {
+                    let whole = answer(r, &[0x5A; 200], PnioStatus::OK);
+                    let cut = 60;
+                    let p0 = RpcPdu { flags1: flags1::FRAGMENT | flags1::NO_FACK, fragment: 0, body: whole.body[..cut].to_vec(), ..whole.clone() };
+                    let p1 = RpcPdu { flags1: flags1::FRAGMENT | flags1::LAST_FRAGMENT | flags1::NO_FACK, fragment: 1, body: whole.body[cut..].to_vec(), ..whole.clone() };
+                    if reverse.load(Ordering::SeqCst) { vec![back(r, &p1), back(r, &p0)] } else { vec![back(r, &p0), back(r, &p1)] }
+                })
+            };
+            let _peer = scripted("b0", vec![me], Arc::new(Mutex::new(handler)));
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let device = device_of("a0", DEV_A, a(10));
+            let im0 = Target { slot: 0, subslot: 1, index: 0xAFF0 };
+            let quick = read::Options { wait: Duration::from_millis(400) };
+            for rev in [false, true] {
+                reverse.store(rev, Ordering::SeqCst);
+                let r = read::read(&l, "a0", &device, im0, &quick);
+                assert!(matches!(r, Err(ReadError::Answer { .. })), "reversed {rev}: {r:?}");
+            }
+        });
+    }
+
+    /// Two reads at once on one interface, of two devices and of one device twice: each takes its own
+    /// answer though the answers come in the other order, from ports of their own, under activities
+    /// of their own, and this machine sends no ICMP.
+    #[test]
+    fn two_reads_at_once_each_take_their_own() {
+        netns::isolated("round_2::two_reads_at_once_each_take_their_own", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV_A)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            for (ip, mac) in [("192.168.0.10", DEV_A), ("192.168.0.11", DEV_B)] {
+                netns::ip(&["neigh", "add", ip, "lladdr", &mac.to_string(), "dev", "a0", "nud", "permanent"]);
+            }
+            let ea = Endpoint { mac: DEV_A, ip: a(10), port: 34964 };
+            let eb = Endpoint { mac: DEV_B, ip: a(11), port: 34964 };
+            // Holds every request until two have come, then answers them in the other order, each
+            // with its device's MAC and its subslot.
+            let handler: Handler = {
+                let mut held: Vec<Req> = Vec::new();
+                Box::new(move |r: &Req| {
+                    held.push(r.clone());
+                    if held.len() < 2 {
+                        return vec![];
+                    }
+                    let out = held.iter().rev().map(|q| back(q, &answer(q, format!("{}:{:x}", q.to.mac, q.read.subslot).as_bytes(), PnioStatus::OK))).collect();
+                    held.clear();
+                    out
+                })
+            };
+            // A raw link on b0 sends with any source MAC, so one thread plays both devices.
+            let peer = scripted("b0", vec![ea, eb], Arc::new(Mutex::new(handler)));
+            let l = Arc::new(Listener::start(vec![bench::link("a0")], Options::default()).unwrap());
+            let quick = read::Options { wait: Duration::from_millis(1500) };
+            let im0 = |sub: u16| Target { slot: 0, subslot: sub, index: 0xAFF0 };
+            let pairs = [((DEV_A, a(10), 1u16), (DEV_B, a(11), 1u16)), ((DEV_A, a(10), 1u16), (DEV_A, a(10), 2u16))];
+            for (x, y) in pairs {
+                let go = |(mac, ip, sub): (Mac, Ipv4Addr, u16)| {
+                    let l = l.clone();
+                    std::thread::spawn(move || read::read(&l, "a0", &device_of("a0", mac, ip), im0(sub), &quick))
+                };
+                let (hx, hy) = (go(x), go(y));
+                let (rx, ry) = (hx.join().unwrap(), hy.join().unwrap());
+                assert_eq!(rx.unwrap().data, format!("{}:{:x}", x.0, x.2).into_bytes());
+                assert_eq!(ry.unwrap().data, format!("{}:{:x}", y.0, y.2).into_bytes());
+            }
+            std::thread::sleep(Duration::from_millis(300));
+            let seen = peer.seen.lock().unwrap().clone();
+            let ports: std::collections::BTreeSet<u16> = seen.iter().map(|r| r.from.port).collect();
+            let acts: std::collections::BTreeSet<[u8; 16]> = seen.iter().map(|r| r.pdu.activity.0).collect();
+            assert_eq!((seen.len(), ports.len(), acts.len()), (4, 4, 4), "requests, their ports, their activities");
+            assert_eq!(peer.icmp.load(Ordering::SeqCst), 0);
+        });
+    }
+
+    /// Sixteen ports read one at a time at the listener's pace: each request after the answer before
+    /// it and at least a gap after the request before it; each under an activity of its own; the
+    /// request asks the most record one frame takes (1308 bytes, the arguments' maximum 1372), and a
+    /// record of 1308 bytes comes back in one frame, read whole.
+    #[test]
+    fn sixteen_ports_one_at_a_time_and_the_most_one_frame_takes() {
+        netns::isolated("round_2::sixteen_ports_one_at_a_time_and_the_most_one_frame_takes", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV_A)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            let me = Endpoint { mac: DEV_A, ip: a(10), port: 34964 };
+            let handler: Handler = Box::new(move |r: &Req| {
+                if r.read.index == 0xAFF0 {
+                    // As much record as the request takes, cut to what its arguments leave.
+                    let room = r.read.length.min(r.args.args_maximum.saturating_sub(64)) as usize;
+                    return vec![back(r, &answer(r, &vec![0xA5; room], PnioStatus::OK))];
+                }
+                vec![back(r, &answer(r, &port_data(r.read.subslot, PEER1), PnioStatus::OK))]
+            });
+            let peer = scripted("b0", vec![me], Arc::new(Mutex::new(handler)));
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let device = device_of("a0", DEV_A, a(10));
+            let quick = read::Options { wait: Duration::from_millis(400) };
+            let all = read::ports(&l, "a0", &device, &quick).unwrap();
+            assert_eq!(all.read.len(), 16);
+            let gap = Duration::from_secs(1) / l.options().rate;
+            for w in all.read.windows(2) {
+                let (p, q) = (&w[0].record, &w[1].record);
+                assert!(q.request > p.answer, "one at a time: request {} after answer {}", q.request, p.answer);
+                let d = Duration::from_nanos(q.sent_ns - p.sent_ns);
+                assert!(d + Duration::from_millis(2) >= gap, "paced: {d:?} between two requests, the gap {gap:?}");
+            }
+            let seen = peer.seen.lock().unwrap().clone();
+            let acts: std::collections::BTreeSet<[u8; 16]> = seen.iter().map(|r| r.pdu.activity.0).collect();
+            assert_eq!(acts.len(), 16, "an activity of its own for each request");
+            // The most record one frame takes.
+            let r = read::read(&l, "a0", &device, Target { slot: 0, subslot: 1, index: 0xAFF0 }, &quick).unwrap();
+            let last = peer.seen.lock().unwrap().last().cloned().unwrap();
+            assert_eq!((last.read.length, last.args.args_maximum), (1308, 1372), "the record asked and the arguments' maximum");
+            assert_eq!(r.data.len(), 1308);
+            assert_eq!(l.frame(r.answer).unwrap().frame.bytes.len(), 1514, "one whole frame");
+        });
+    }
+
+    /// An interface holding two IPv4 addresses: the read goes from one it holds (the first listed) and
+    /// is answered there.
+    #[test]
+    fn an_interface_of_two_addresses() {
+        netns::isolated("round_2::an_interface_of_two_addresses", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV_A)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            netns::ip(&["addr", "add", "10.9.9.1/24", "dev", "a0"]);
+            assert_eq!(read::address_of("a0"), Some(a(1)));
+            let me = Endpoint { mac: DEV_A, ip: a(10), port: 34964 };
+            let handler: Handler = Box::new(move |r: &Req| vec![back(r, &answer(r, b"mine", PnioStatus::OK))]);
+            let _peer = scripted("b0", vec![me], Arc::new(Mutex::new(handler)));
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let r = read::read(&l, "a0", &device_of("a0", DEV_A, a(10)), Target { slot: 0, subslot: 1, index: 0xAFF0 }, &read::Options { wait: Duration::from_millis(400) }).unwrap();
+            assert_eq!(r.data, b"mine");
+        });
+    }
+
+    /// Frames let go past the listener's bound after the read has read some of those kept after the
+    /// request: still refused as lost, its answer may be among them (a working packet read, then a
+    /// burst past the bound, then the answer).
+    #[test]
+    fn frames_let_go_after_some_were_read_are_lost() {
+        netns::isolated("round_2::frames_let_go_after_some_were_read_are_lost", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV_A)], &[("a0", "b0")]);
+            netns::ip(&["addr", "add", "192.168.0.1/24", "dev", "a0"]);
+            let me = Endpoint { mac: DEV_A, ip: a(10), port: 34964 };
+            let handler: Handler = Box::new(move |r: &Req| {
+                let working = RpcPdu { packet_type: PacketType::Working, ..answer(r, b"wait", PnioStatus::OK) };
+                let mut out = vec![back(r, &working)];
+                // (The pause is the peer's: its sends go after the handler returns, so it is done
+                // here by sending the working packet first, on a link of its own.)
+                let mut b = bench::link("b0");
+                b.send(&ip::udp_frame(out[0].0, out[0].1, 1, &out[0].2).unwrap()).unwrap();
+                std::thread::sleep(Duration::from_millis(200));
+                out.clear();
+                for i in 0..40u16 {
+                    out.push((me, Endpoint { port: 9, ..r.from }, format!("junk{i}").into_bytes()));
+                }
+                out.push(back(r, &answer(r, b"late", PnioStatus::OK)));
+                out
+            });
+            let _peer = scripted("b0", vec![me], Arc::new(Mutex::new(handler)));
+            let small = Listener::start(vec![bench::link("a0")], Options { max_frames: 8, ..Options::default() }).unwrap();
+            let r = read::read(&small, "a0", &device_of("a0", DEV_A, a(10)), Target { slot: 0, subslot: 1, index: 0xAFF0 }, &read::Options { wait: Duration::from_millis(800) });
+            assert!(matches!(r, Err(ReadError::Lost(n)) if n > 0), "{r:?}");
+        });
+    }
+}
