@@ -1640,6 +1640,53 @@ fn a_dotted_key_split_around_the_stamp_is_blanked_as_its_own_key() {
     assert!(parse_test(&deep(10_000), "t").is_err() && parse_test(&dotted(10_000), "t").is_err());
 }
 
+// ---- refute round 10 -----------------------------------------------------------------------
+
+#[test]
+fn every_start_of_a_key_is_its_own_and_the_first_names_it() {
+    let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    let one = |head: &str| {
+        let e = parse_test(&format!("{head}{body}"), "t").unwrap_err();
+        (e.line, e.column, e.message)
+    };
+    let core = |stamp: &str| veredas_core::schema::check(stamp, "a test file", "veredas-test", 1).unwrap_err().to_string();
+    // An array of tables of the stamp repeated around another key's: each `[[...]]` its own, so
+    // the stamp's fault is core's words for the stamp as written, the other's lines blanked.
+    for (head, blanked) in [
+        ("version = 1\n[[format]]\na = 1\n[[x]]\nb = 1e400\n[[format]]\na = 2\n", [4, 5]),
+        ("version = 1\n[[format.a]]\nr = 1\n[[x.y]]\nr = 1e400\n[[format.a]]\nr = 2\n", [4, 5]),
+        ("version = 1\n[[format]]\na = 1\n[[x]]\nb = 340282366920938463463374607431768211456\n[[format]]\na = 2\n", [4, 5]),
+    ] {
+        let alone: String = head.lines().enumerate().map(|(i, l)| if blanked.contains(&(i + 1)) { "\n".to_string() } else { format!("{l}\n") }).collect();
+        assert_eq!(one(head), (1, 1, core(&alone)), "{head:?}");
+    }
+    // Another key named at the first line that holds it, a table of it written before it.
+    let not = |k: &str| format!("the header holds `format` and `version` alone, not `{k}`");
+    let stamp = "format = \"veredas-test\"\nversion = 1\n";
+    assert_eq!(one(&format!("{stamp}[x.y]\na = 1\n[x]\nb = 2\n")), (3, 1, not("x")));
+    assert_eq!(one(&format!("{stamp}[[x.z]]\n[y]\n[x]\n")), (3, 1, not("x")));
+    assert_eq!(one(&format!("{stamp}[y]\n[x.z]\n[x]\n")), (3, 1, not("y")));
+    // Keys on one line, in an inline table or an array of them, beside a stamp at fault: their
+    // lines found by a search, the blanking linear in the file, 20 000 keys, then 160 000.
+    let fault = core("\nformat = 1\nversion = 1\n");
+    let inline = |n: usize| {
+        let keys: Vec<String> = (0..n).map(|i| format!("a{i} = 1")).collect();
+        let head = format!("x = {{ {} }}\nformat = 1\nversion = 1\n", keys.join(", "));
+        let mut got = (0, 0, String::new());
+        let took = on_cpu(|| got = one(&head));
+        assert_eq!(got, (1, 1, fault.clone()));
+        took
+    };
+    let tables = |n: usize| {
+        let head = format!("x = [{}]\nformat = 1\nversion = 1\n", vec!["{ a = 1 }"; n].join(", "));
+        let mut got = (0, 0, String::new());
+        let took = on_cpu(|| got = one(&head));
+        assert_eq!(got, (1, 1, fault.clone()));
+        took
+    };
+    linear(&[("keys of an inline table on one line", 20_000, &inline), ("inline tables in an array on one line", 20_000, &tables)]);
+}
+
 // ---- the architect's Q312 (e) ----------------------------------------------------------------
 
 #[test]

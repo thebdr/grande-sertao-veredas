@@ -77,28 +77,37 @@ fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Pro
             return Err(Problem::at(file, text, at, message));
         }
     };
-    let other = table
-        .get_ref()
-        .iter()
-        .filter(|(k, _)| k.get_ref() != "format" && k.get_ref() != "version")
-        .min_by_key(|(k, _)| k.span().start);
+    // Where each line begins, so a place's line is found by a search, never by a scan back.
+    let lines: Vec<usize> = std::iter::once(0).chain(head.match_indices('\n').map(|(i, _)| i + 1)).collect();
+    let line_of = |at: usize| lines[lines.partition_point(|&s| s <= at.min(head.len())) - 1];
+    // Every place a top-level key starts something, wherever it is written (its own key, a dotted
+    // key's every part, a table's header and keys, an inline table's keys, each element of an
+    // array, a repeated `[[...]]` header among them): the lines it starts on are its own, and the
+    // first of them is where it is named.
+    let mut keys: Vec<(usize, bool)> = Vec::new();
+    let mut other: Option<(usize, &str)> = None;
+    for (k, v) in table.get_ref() {
+        let name: &str = k.get_ref();
+        let of_stamp = name == "format" || name == "version";
+        let mut first = k.span().start;
+        let mut mark = |at: usize| {
+            first = first.min(at);
+            keys.push((line_of(at), of_stamp));
+        };
+        mark(k.span().start);
+        mark(v.span().start);
+        starts(v.get_ref(), &mut mark);
+        if !of_stamp && other.is_none_or(|(at, _)| first < at) {
+            other = Some((first, name));
+        }
+    }
+    keys.sort();
+    keys.dedup_by_key(|k| k.0);
     if let Err(e) = stamp {
         // The stamp alone, as written: the header with every other top-level key's lines blanked,
         // their line ends kept so what core's words place stays where it is. Sound, the failure
         // was another key's; not, its fault is the stamp's own, in core's words, as with no other
         // key.
-        // Each line a key starts on (a dotted key's every part, a table's and an inline table's
-        // keys, wherever they are written) belongs to the top-level key that holds it, so a dotted
-        // key split around the stamp gives each of its lines to its own key.
-        let line_of = |at: usize| head[..at.min(head.len())].rfind('\n').map(|i| i + 1).unwrap_or(0);
-        let mut keys: Vec<(usize, bool)> = Vec::new();
-        for (k, v) in table.get_ref() {
-            let of_stamp = k.get_ref() == "format" || k.get_ref() == "version";
-            keys.push((line_of(k.span().start), of_stamp));
-            key_lines(v.get_ref(), &mut |at| keys.push((line_of(at), of_stamp)));
-        }
-        keys.sort();
-        keys.dedup_by_key(|k| k.0);
         let mut alone = String::with_capacity(head.len());
         alone.push_str(&head[..keys.first().map_or(head.len(), |k| k.0)]);
         for (i, (from, of_stamp)) in keys.iter().enumerate() {
@@ -115,31 +124,33 @@ fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Pro
             _ => return Err(Problem::at(file, text, 0, e.to_string())),
         }
     }
-    if let Some((key, _)) = other {
-        let at = key.span().start.min(head.len());
-        let line_start = head[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    if let Some((at, key)) = other {
+        let line_start = line_of(at);
         let line = &head[line_start..];
         let lead = line.len() - line.trim_start_matches(['\u{feff}', ' ', '\t']).len();
         // A control character in a key is shown by its escape, every other character as it is.
-        let name: String = key.get_ref().chars().map(|c| if c.is_control() { c.escape_default().to_string() } else { c.to_string() }).collect();
+        let name: String = key.chars().map(|c| if c.is_control() { c.escape_default().to_string() } else { c.to_string() }).collect();
         return Err(Problem::at(file, text, line_start + lead, format!("the header holds `format` and `version` alone, not `{name}`")));
     }
     Ok(body)
 }
 
-/// Where every key inside a value starts, at any depth: a table's keys and those of the tables
-/// and arrays within it. Bounded by the depth TOML's own reader allows.
-fn key_lines(value: &toml::de::DeValue, at: &mut dyn FnMut(usize)) {
+/// Where every key, value and array element inside a value starts, at any depth (a table's
+/// header is where its value starts, an array of tables' element where its `[[...]]` is). Bounded
+/// by the depth TOML's own reader allows.
+fn starts(value: &toml::de::DeValue, at: &mut dyn FnMut(usize)) {
     match value {
         toml::de::DeValue::Table(t) => {
             for (k, v) in t {
                 at(k.span().start);
-                key_lines(v.get_ref(), at);
+                at(v.span().start);
+                starts(v.get_ref(), at);
             }
         }
         toml::de::DeValue::Array(a) => {
             for v in a {
-                key_lines(v.get_ref(), at);
+                at(v.span().start);
+                starts(v.get_ref(), at);
             }
         }
         _ => {}
