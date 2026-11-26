@@ -1052,6 +1052,29 @@ always be put back for the next start.
   with its time left". The term joins core's table of the state text. What stays open in this entry
   is the specification itself, controlador's to write.
 
+**Decided** 2026-11-26, by the architect, on the specification controlador wrote
+(`docs/controlador/live-takeover.md`), in four answers:
+
+- The document. Asked "The live-takeover specification (`docs/controlador/live-takeover.md`). Its
+  principle: the old version may take over only when everything the plant received since the swap is
+  what the old version itself computed from the same inputs. It lists S1 to S4 (the fallback cannot
+  be armed), D1 to D7 (the right ends while watching: an output differs, an outside write not taken
+  alike, a force, a halt, the watcher in trouble, a device event, the time limit) and T1 to T4 (the
+  takeover itself). Is this the specification?", "Yes, this is the specification".
+
+- S3. Asked "Controlador's own reading: the fallback cannot be armed when the edit changes what
+  peers see (the published variables, the Modbus addresses, the OPC UA nodes, or which variables are
+  writable from outside), since a takeover would change those under a peer. Does S3 belong in the
+  list?", "No, S3 out": an edit may change what peers see and still arm the fallback.
+
+- D3. Asked "How strict: a force applies to both versions alike, but a forced plant is not a plant
+  the watcher computed for. Which forces end the old version's right to take over?", "Any force (the
+  proposal)".
+
+- The time limit. Asked "The plan says the old version watches for a limited time, after which the
+  edit is accepted (recorded as accepted by timeout, ruled today). Whose is the limit, and what is
+  its default?", "Engineer's, default ten minutes": a setting of each download.
+
 ## Q33 - Where is controlador's execution model written, and what does it say?
 
 **Raised** 2026-11-15, by the review's entry 13; the architect chose the smaller first release
@@ -3471,6 +3494,13 @@ what (b) does without stubbing the workspace.
 built with the suite's own cargo.
 
 **Reversible?** Yes: (b) and (c) add to the cut's judgement and change no manifest.
+
+**Decided** 2026-11-26, by the architect: asked "A version names everything its build reads (ruled),
+and the release cut proves it from what the compiler reports. Three ordinary forms escape that
+report (a build script reading an undeclared file, a C header, a file a macro reads); no shipped
+component does this today. How far does the cut go? Taken meanwhile: a stated limit.", "Trace each
+build (Recommended)", (c): each build traced in the builder and every path opened under the tree
+judged against the version's inputs.
 
 ---
 
