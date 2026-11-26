@@ -678,3 +678,139 @@ fn a_fault_in_the_first_file_names_the_first_file() {
     let (c, _, _) = started(on(program), zero_at_1, 2);
     assert_eq!(text(&c), r#"FAULT program(id=502, at="lib.rs:2:5") sim() no_realtime()"#);
 }
+
+// The tenth refute round's tests: a start after a load fault makes the program afresh, the reason a crash's power-on
+// keeps, every check MIR asserts the program's 502, a zero period refused with any program, a power cycle's warm
+// start making its program afresh, and the last load's reason kept.
+
+/// A source whose makes go as scripted: the i-th make fails with `plan[i]` when it is `Some`, else makes the program.
+struct Scripted {
+    inner: Loaded<In, Out>,
+    plan: Vec<Option<MakeError>>,
+    makes: usize,
+}
+
+impl Source for Scripted {
+    type Program = Interpreted<In, Out>;
+    type Error = MakeError;
+    fn make(&mut self) -> Result<Interpreted<In, Out>, MakeError> {
+        let i = self.makes;
+        self.makes += 1;
+        match self.plan.get(i).cloned().flatten() {
+            Some(error) => Err(error),
+            None => self.inner.make(),
+        }
+    }
+    fn safe_outputs(&mut self) -> Out {
+        self.inner.safe_outputs()
+    }
+    fn reason(&self, program: &Interpreted<In, Out>, error: &orcl_runtime::ScanError) -> veredas_core::state::FaultReason {
+        self.inner.reason(program, error)
+    }
+}
+
+fn scripted(plan: Vec<Option<MakeError>>) -> Scripted {
+    Scripted { inner: loaded(&first()), plan, makes: 0 }
+}
+
+// R10-M1: a start after a load fault makes the program afresh (a program mended on its drive runs).
+#[test]
+fn a_start_after_a_load_fault_makes_the_program_afresh() {
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, scripted(vec![Some(MakeError::State)])).unwrap();
+    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    c.acknowledge(OFICINA, &Key).unwrap();
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 3);
+    assert_eq!(text(&c), "RUN sim() no_realtime()");
+    let values: Vec<u32> = plant.writes.iter().map(|w| w.1).collect();
+    assert_eq!(values, (0..3).map(|k| scanned(FIRST + 1 + k as u32, k)).collect::<Vec<_>>());
+}
+
+// R10-M2: a crash's power-on checks the program too, its reason kept for the host behind the 507.
+#[test]
+fn a_crash_s_power_on_checks_the_program_and_keeps_its_reason_behind_the_507() {
+    let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
+    let mut c = Controller::power_on_from(config(), SIM, Restart::Crash, loaded(&two)).unwrap();
+    assert_eq!(text(&c), "FAULT internal(id=507) sim() no_realtime()");
+    assert_eq!(c.load_error(), Some(&MakeError::State));
+    c.acknowledge(OFICINA, &Key).unwrap();
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    step(&mut c, &mut plant, &mut clock, 1);
+    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+}
+
+fn zero_at_1(index: usize) -> In {
+    if index == 1 { In { value: 9, divisor: 0 } } else { steady(index) }
+}
+
+/// `assert(!(inputs.divisor == 0), check)` at line `line`, column 3, then `out.value = inputs.value`: an assertion
+/// of the kind `check` that fails when the divisor read is zero.
+fn asserting(check: Check, line: u32) -> Code {
+    let zero = st(Place::local(5), Value::Binary(BinOp::Eq, copy(deref(3, &[1])), u32_const(0)), line);
+    let at = Span { file: 1, line, column: 3 };
+    function(
+        &[BOOL],
+        vec![
+            Block {
+                statements: vec![zero],
+                terminator: Terminator::Assert { cond: moved(5), expected: false, check, next: BlockId(1), at },
+            },
+            Block { statements: vec![st(deref(4, &[0]), Value::Use(copy(deref(3, &[0]))), line)], terminator: Terminator::Return { at } },
+        ],
+    )
+}
+
+// R10-M3 to M5, and round 9's M2 and M3: every check MIR asserts, failed, is the program's own fault, 502 at its place
+#[test]
+fn every_check_mir_asserts_is_the_program_s_fault_at_its_place() {
+    let ops = [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div, BinOp::Rem, BinOp::Shl, BinOp::Shr];
+    let mut checks: Vec<Check> = ops.into_iter().map(Check::Overflow).collect();
+    checks.extend([Check::NegOverflow, Check::DivisionByZero, Check::RemainderByZero, Check::Bounds]);
+    for (k, check) in checks.into_iter().enumerate() {
+        let line = 10 + u32::try_from(k).unwrap();
+        let (c, plant, _) = started(on(asserting(check, line)), zero_at_1, 3);
+        assert_eq!(plant.writes.iter().map(|w| w.1).collect::<Vec<_>>(), [0, SAFE.value, SAFE.value], "{check:?}");
+        assert_eq!(text(&c), format!(r#"FAULT program(id=502, at="count.rs:{line}:3") sim() no_realtime()"#), "{check:?}");
+    }
+}
+
+// R10-M6: a zero period is refused when the controller comes up, the program made or not.
+#[test]
+fn a_zero_period_is_refused_with_a_program_that_cannot_be_made_too() {
+    let two = [Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)];
+    let zero = TaskConfig { name: "main", period: Duration::ZERO };
+    let refused = Controller::power_on_from(zero, SIM, Restart::First, loaded(&two)).err();
+    assert_eq!(refused, Some(TaskError::ZeroPeriod { task: "main" }));
+}
+
+// R10-M7: a power cycle's warm start makes the program afresh at its load.
+#[test]
+fn a_power_cycle_s_warm_start_makes_the_program_afresh() {
+    let source = scripted(vec![None, Some(MakeError::Scan)]);
+    let mut c = Controller::power_on_from(config(), SIM, Restart::PowerCycle { was: StateWord::Run }, source).unwrap();
+    assert_eq!(text(&c), "STARTUP warm(id=201) load() sim() no_realtime()");
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    step(&mut c, &mut plant, &mut clock, 1);
+    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(c.load_error(), Some(&MakeError::Scan));
+}
+
+// R10-M9: the reason kept is the last load's.
+#[test]
+fn the_reason_kept_is_the_last_load_s() {
+    let source = scripted(vec![Some(MakeError::State), Some(MakeError::Scan)]);
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, source).unwrap();
+    assert_eq!(c.load_error(), Some(&MakeError::State));
+    c.acknowledge(OFICINA, &Key).unwrap();
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    step(&mut c, &mut plant, &mut clock, 1);
+    assert_eq!(text(&c), "FAULT load(id=506, download=0) sim() no_realtime()");
+    assert_eq!(c.load_error(), Some(&MakeError::Scan));
+}
