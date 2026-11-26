@@ -12,15 +12,15 @@
     "executable"
   ],
   "exitCode": 0,
-  "outputSha": "0388bff4b9b20a3a6110a16e5d1eed08d73d5f3f005379bf84d0aa3964fae9a2",
-  "outputTail": "\nrunning 7 tests\ntest a_scan_that_cannot_be_written_is_refused_before_anything_is_opened_or_replaced ... ok\ntest the_diff_prints_every_kind_of_change_a_line_each_its_texts_quoted ... ok\ntest every_usage_it_cannot_follow_is_refused_with_its_reason ... ok\ntest a_device_whose_walk_is_cut_keeps_what_was_read_of_it ... ok\ntest a_scan_with_the_ports_read_draws_the_devices_own_word_on_their_cables ... ok\ntest places_taken_or_failing_while_it_listens_leave_everything_as_it_was ... ok\ntest a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.83s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running tests/executable.rs (target/debug/build/veredas-aranha/086f59243ef4a3c8/out/executable-086f59243ef4a3c8)",
-  "ranAt": "2026-11-26T19:44:21.688Z",
-  "headCommit": "caf8dd871b4bc48e39b5d5265a07a7b0b7a368e8",
+  "outputSha": "d37518fd86670e57655a4d7db4c6fb9a3e07d802422fd093a376e23f33610c5e",
+  "outputTail": "\nrunning 7 tests\ntest the_diff_prints_every_kind_of_change_a_line_each_its_texts_quoted ... ok\ntest a_scan_that_cannot_be_written_is_refused_before_anything_is_opened_or_replaced ... ok\ntest every_usage_it_cannot_follow_is_refused_with_its_reason ... ok\ntest a_device_whose_walk_is_cut_keeps_what_was_read_of_it ... ok\ntest a_scan_with_the_ports_read_draws_the_devices_own_word_on_their_cables ... ok\ntest places_taken_or_failing_while_it_listens_leave_everything_as_it_was ... ok\ntest a_scan_written_by_the_executable_and_the_diff_of_two_say_what_the_bench_did ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 29.21s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s\n     Running tests/executable.rs (target/debug/build/veredas-aranha/086f59243ef4a3c8/out/executable-086f59243ef4a3c8)",
+  "ranAt": "2026-11-26T23:21:20.423Z",
+  "headCommit": "40d3f744c7b014e4ec0e7f524ab0724dd14ade81",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/executable.rs",
       "file": "crates/veredas-aranha/tests/executable.rs",
-      "fileSha": "79ff6797ee269ca92538dfd176e9e674b2bf0274baed2a9aaf8dd6c936cd574e"
+      "fileSha": "42826173aa45f3bed80194094c8357f47a647fc82030d3c44348c2653d1cc27a"
     }
   ]
 }

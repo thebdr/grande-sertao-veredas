@@ -12,15 +12,15 @@
     "diff"
   ],
   "exitCode": 0,
-  "outputSha": "87330103a05fb99252a96f650b5d2595ac92dab1538c896c3dbd2ded0c581304",
-  "outputTail": "test round_3::q03_management_addresses_of_zero_alone_are_a_value ... ok\ntest what_a_device_states_now_is_its_value_heard_last_each_part_of_it_compared ... ok\ntest round_3::q02_a_suite_at_zero_whose_mask_alone_differs_is_readdressed ... ok\ntest a_scan_against_itself_is_no_change_and_the_other_way_round_is_the_mirror ... ok\ntest each_change_is_found_by_the_mac_and_only_where_both_scans_state_it ... ok\ntest a_baseline_or_a_scan_that_is_no_scan_is_refused_by_name ... ok\ntest round_3::q01_a_later_stamp_on_a_lower_frame_is_the_value_heard_last ... ok\ntest a_baseline_of_the_bench_and_the_bench_changed_since_are_told_apart ... ok\ntest every_pair_of_scans_gives_the_diff_the_words_say_in_any_order_and_mirrored ... ok\ntest round_3::q04_listenings_are_scans_and_the_diff_ignores_the_order_of_a_field_s_values ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.63s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running tests/diff.rs (target/debug/build/veredas-aranha/4afdf1f0d450f2a1/out/diff-4afdf1f0d450f2a1)",
-  "ranAt": "2026-11-26T17:21:44.493Z",
-  "headCommit": "5460b2da81f9a2a378c35ec0eeab0796e2315c5b",
+  "outputSha": "5ff8b7984b2d4de03fef47bcbc728082b3a7d80808ad29fe889d8b7530b822a1",
+  "outputTail": "test round_4::hand_made_values_the_check_accepts_are_values ... ok\ntest round_3::q01_a_later_stamp_on_a_lower_frame_is_the_value_heard_last ... ok\ntest round_4::an_empty_system_name_from_the_wire_is_a_value ... ok\ntest round_4::an_interface_is_its_name_its_mac_aside ... ok\ntest round_4::conflicts_by_kind_value_and_devices_whatever_their_list_holds ... ok\ntest round_4::every_field_one_sided_against_none_and_changed_against_a_value ... ok\ntest every_pair_of_scans_gives_the_diff_the_words_say_in_any_order_and_mirrored ... ok\ntest round_3::q04_listenings_are_scans_and_the_diff_ignores_the_order_of_a_field_s_values ... ok\ntest a_baseline_of_the_bench_and_the_bench_changed_since_are_told_apart ... ok\n\ntest result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.35s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.25s\n     Running tests/diff.rs (target/debug/build/veredas-aranha/4afdf1f0d450f2a1/out/diff-4afdf1f0d450f2a1)",
+  "ranAt": "2026-11-26T23:17:37.935Z",
+  "headCommit": "40d3f744c7b014e4ec0e7f524ab0724dd14ade81",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/diff.rs",
       "file": "crates/veredas-aranha/tests/diff.rs",
-      "fileSha": "a20539392a4cec031ab0beb62e39d6db7428d523297a634815e35c5ea49a6d85"
+      "fileSha": "7484d74f8a50c5ad897f63b4bc054170d776face1161d900a5d6a3cfbefe224b"
     }
   ]
 }
