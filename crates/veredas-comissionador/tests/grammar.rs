@@ -1597,12 +1597,57 @@ fn a_stamp_s_own_fault_beside_another_key_is_core_s_words_for_the_stamp() {
     }
 }
 
+// ---- refute round 9 ------------------------------------------------------------------------
+
+#[test]
+fn a_dotted_key_split_around_the_stamp_is_blanked_as_its_own_key() {
+    let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    let one = |text: &str| {
+        let e = parse_test(text, "t").unwrap_err();
+        (e.line, e.message)
+    };
+    let core = |stamp: &str| veredas_core::schema::check(stamp, "a test file", "veredas-test", 1).unwrap_err().to_string();
+    let not_x = "the header holds `format` and `version` alone, not `x`".to_string();
+    for stamp in ["format = \"veredas-test\"\nversion = 1\n", "version = 1\nformat = \"veredas-test\"\n"] {
+        // Another key split around the stamp, its later part a value core's reader cannot hold:
+        // named at its first line, as when its parts are not split.
+        for later in ["1e400", "340282366920938463463374607431768211456", "[1e400]", "{ c = 1e400 }"] {
+            for (head, name) in [(format!("x.a = 1\n{stamp}x.b = {later}\n"), 1), (format!("x.a = 1\n{stamp}x.b.c = {later}\n"), 1), (format!("{stamp}x.a = 1\ny = 2\nx.b = {later}\n"), 3)] {
+                for b in [body, ""] {
+                    let text = format!("{head}{b}");
+                    assert_eq!(one(&text), (name, not_x.clone()), "{text:?}");
+                    assert_eq!(one(&text.replace('\n', "\r\n")), (name, not_x.clone()), "{text:?} in CRLF");
+                    assert_eq!(one(&format!("\u{feff}{text}")), (name, not_x.clone()), "{text:?} after a byte-order mark");
+                }
+            }
+        }
+        // The stamp's own fault beside it decided first, in core's words.
+        let other = stamp.replace("veredas-test", "veredas-other");
+        assert_eq!(one(&format!("x.a = 1\n{other}x.b = 1e400\n{body}")), (1, core(&format!("\n{other}\n"))));
+    }
+    // The stamp's own dotted key split around another key: core's words for the stamp as written,
+    // the other key's line blanked.
+    for stamp in ["format.a = 1\nx = 2\nformat.b = 1e400\nversion = 1\n", "format.a = 1\nx.y = 2\nformat.b = 2\nx.z = 1e400\nversion = 1\n"] {
+        let alone: String = stamp.lines().map(|l| if l.starts_with('x') { "\n".to_string() } else { format!("{l}\n") }).collect();
+        assert_eq!(one(&format!("{stamp}{body}")), (1, core(&alone)), "{stamp:?}");
+    }
+    // A key nested as deep as TOML reads it (80 parts, 80 arrays), beside a stamp at fault: walked,
+    // its line blanked, the stamp's fault in core's words; deeper, TOML's own limit, no crash.
+    let fault = (1, core("\nformat = 1\nversion = 1\n"));
+    let deep = |d: usize| format!("x = {}1{}\nformat = 1\nversion = 1\n{body}", "[".repeat(d), "]".repeat(d));
+    let dotted = |d: usize| format!("x{} = 1\nformat = 1\nversion = 1\n{body}", ".a".repeat(d - 1));
+    assert_eq!((one(&deep(80)), one(&dotted(80))), (fault.clone(), fault));
+    assert!(parse_test(&deep(10_000), "t").is_err() && parse_test(&dotted(10_000), "t").is_err());
+}
+
 // ---- the architect's Q312 (e) ----------------------------------------------------------------
 
 #[test]
 fn the_roles_a_test_names_to_sign_are_read_and_checked() {
     let c = checked(&test_of("  sign tester, witness\n  step a stop pass\n"));
     assert_eq!(c.test.sign_roles(), ["tester", "witness"]);
+    // In its order, whatever the order of the roles' names.
+    assert_eq!(checked(&test_of("  sign witness, tester\n  step a stop pass\n")).test.sign_roles(), ["witness", "tester"]);
     assert_eq!(checked(&test_of("  step a stop pass\n")).test.sign_roles(), Vec::<String>::new());
     assert_eq!(problems(&test_of("  sign boss\n  step a stop pass\n")), ["6:8: `boss` is no role (tester, witness)"]);
     assert_eq!(problems(&test_of("  sign tester, tester\n  step a stop pass\n")), ["6:16: `tester` is named twice in `sign`"]);

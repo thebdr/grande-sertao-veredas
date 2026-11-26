@@ -87,10 +87,18 @@ fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Pro
         // their line ends kept so what core's words place stays where it is. Sound, the failure
         // was another key's; not, its fault is the stamp's own, in core's words, as with no other
         // key.
+        // Each line a key starts on (a dotted key's every part, a table's and an inline table's
+        // keys, wherever they are written) belongs to the top-level key that holds it, so a dotted
+        // key split around the stamp gives each of its lines to its own key.
         let line_of = |at: usize| head[..at.min(head.len())].rfind('\n').map(|i| i + 1).unwrap_or(0);
-        let mut keys: Vec<(usize, bool)> =
-            table.get_ref().iter().map(|(k, _)| (line_of(k.span().start), k.get_ref() == "format" || k.get_ref() == "version")).collect();
+        let mut keys: Vec<(usize, bool)> = Vec::new();
+        for (k, v) in table.get_ref() {
+            let of_stamp = k.get_ref() == "format" || k.get_ref() == "version";
+            keys.push((line_of(k.span().start), of_stamp));
+            key_lines(v.get_ref(), &mut |at| keys.push((line_of(at), of_stamp)));
+        }
         keys.sort();
+        keys.dedup_by_key(|k| k.0);
         let mut alone = String::with_capacity(head.len());
         alone.push_str(&head[..keys.first().map_or(head.len(), |k| k.0)]);
         for (i, (from, of_stamp)) in keys.iter().enumerate() {
@@ -117,6 +125,25 @@ fn header(text: &str, file: &str, noun: &str, format: &str) -> Result<usize, Pro
         return Err(Problem::at(file, text, line_start + lead, format!("the header holds `format` and `version` alone, not `{name}`")));
     }
     Ok(body)
+}
+
+/// Where every key inside a value starts, at any depth: a table's keys and those of the tables
+/// and arrays within it. Bounded by the depth TOML's own reader allows.
+fn key_lines(value: &toml::de::DeValue, at: &mut dyn FnMut(usize)) {
+    match value {
+        toml::de::DeValue::Table(t) => {
+            for (k, v) in t {
+                at(k.span().start);
+                key_lines(v.get_ref(), at);
+            }
+        }
+        toml::de::DeValue::Array(a) => {
+            for v in a {
+                key_lines(v.get_ref(), at);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// What a statement may be: a script box's or a function's.
