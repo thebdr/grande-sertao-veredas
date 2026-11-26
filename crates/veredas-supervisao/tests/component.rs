@@ -1339,15 +1339,24 @@ fn the_page_compiled_in_is_built_from_the_sources_in_the_tree() {
     let dist: BTreeSet<&str> = rel.iter().filter_map(|r| r.strip_prefix("web/dist/")).collect();
     let page: BTreeSet<&str> = web::OUTPUT_FILES.into_iter().chain(["source.hash", "output.hash"]).collect();
     assert_eq!(dist, page, "the page is the three files the host serves and the build's two hashes");
+    // And the crate's two licence texts (Q35, ruled 2026-11-25: every crate but Oficina under MIT OR
+    // Apache-2.0, the copyright thebdr), each the laws' crate's copy byte for byte, the manifest
+    // stating the expression.
+    const LICENCES: [&str; 2] = ["LICENSE-APACHE", "LICENSE-MIT"];
+    for l in LICENCES {
+        assert_eq!(std::fs::read(crate_dir().join(l)).unwrap(), std::fs::read(crate_dir().join("../../tools/leis").join(l)).unwrap(), "{l}: the laws' crate's text, byte for byte");
+    }
+    let manifest = std::fs::read_to_string(crate_dir().join("Cargo.toml")).unwrap();
+    assert!(manifest.lines().any(|l| l.trim() == "license = \"MIT OR Apache-2.0\""), "the manifest's licence: {manifest}");
     let stray: Vec<&String> = rel
         .iter()
         .filter(|r| {
             let rust = r.as_str() == "Cargo.toml" || ((r.starts_with("src/") || r.starts_with("tests/")) && r.ends_with(".rs"));
             let source = r.strip_prefix("web/").is_some_and(|w| sources.iter().any(|s| s == w));
-            !(rust || source || r.starts_with("web/dist/"))
+            !(rust || source || r.starts_with("web/dist/") || LICENCES.contains(&r.as_str()))
         })
         .collect();
-    assert_eq!(stray, Vec::<&String>::new(), "a file outside the crate's code, the page's hashed sources and the page");
+    assert_eq!(stray, Vec::<&String>::new(), "a file outside the crate's code, the page's hashed sources, the page and its licence texts");
     // The build reads nothing beside them and emits nothing beside the page: its config is the
     // one this test holds, word for word (the guards' refusals are C-047's evidence, CI never
     // running Node), so a guard turned into a warning or a stamp moved is a change here.
