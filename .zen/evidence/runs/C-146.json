@@ -12,15 +12,15 @@
     "scan"
   ],
   "exitCode": 0,
-  "outputSha": "02a0a3b91677d119b3aadca1cea930b50b060dea4f4aa8d716a3be8169edb065",
-  "outputTail": "\nrunning 7 tests\ntest a_full_scan_reads_back_equal_and_the_schema_names_every_key_it_holds ... ok\ntest the_documented_example_is_the_sample_scan_s_file ... ok\ntest a_scan_is_read_back_whole_and_its_witnesses_name_its_capture_s_frames ... ok\ntest witnesses_before_a_bounded_capture_are_frames_let_go_and_none_lies_past_it ... ok\ntest a_key_nobody_reads_is_named_where_it_is ... ok\ntest a_file_of_another_format_or_version_or_with_a_key_nobody_reads_is_refused ... ok\ntest a_body_not_read_as_the_file_holds_it_is_refused ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s\n     Running tests/scan.rs (target/debug/build/veredas-aranha/ed8d06c465ab3269/out/scan-ed8d06c465ab3269)",
-  "ranAt": "2026-11-26T09:13:50.972Z",
-  "headCommit": "f6fb21ba0401ce842acf57cee4f73fc9bf56637c",
+  "outputSha": "6683b67b0ddd9845ecf602362e53aad4d10ff5fd7abadc00ef42b4237c86799c",
+  "outputTail": "running 8 tests\ntest a_full_scan_reads_back_equal_and_the_schema_names_every_key_it_holds ... ok\ntest the_documented_example_is_the_sample_scan_s_file ... ok\ntest a_scan_is_read_back_whole_and_its_witnesses_name_its_capture_s_frames ... ok\ntest witnesses_before_a_bounded_capture_are_frames_let_go_and_none_lies_past_it ... ok\ntest links_stored_otherwise_than_lesser_end_first_and_each_pair_once_are_no_scan ... ok\ntest a_key_nobody_reads_is_named_where_it_is ... ok\ntest a_file_of_another_format_or_version_or_with_a_key_nobody_reads_is_refused ... ok\ntest a_body_not_read_as_the_file_holds_it_is_refused ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.01s\n     Running tests/scan.rs (target/debug/build/veredas-aranha/fdac3f56fba44505/out/scan-fdac3f56fba44505)",
+  "ranAt": "2026-11-26T11:03:13.594Z",
+  "headCommit": "927de6325ac95cc4c9099cc021678c6cd822943f",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/scan.rs",
       "file": "crates/veredas-aranha/tests/scan.rs",
-      "fileSha": "88eb3e4e7105d86b8f5d55da4d9c92dba5254eb369bee7a7cc78139beeef6b2f"
+      "fileSha": "a5bb36d69c09cb596a6e0762fd4c4d1b9afd27f5ae9aa38f025704d4e4f459ed"
     }
   ]
 }
