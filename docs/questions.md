@@ -3385,6 +3385,120 @@ PENDING); the adapter's reason is kept for the host (`Controller::load_error`).
 
 ---
 
+## Q234 - Running unattended: memory errors and slow leaks
+
+**Raised** 2026-11-26, by the controlador session, proposing the first of the four areas Q42 left
+unopened (`docs/robustness.md`, area 6).
+
+What is ruled covers a scan that runs late (the cycle-time rule), the watchdog chain, and the
+hardware a target must have, ECC memory among it (Q226). What a controller left for years meets
+besides: memory errors, which EDAC reports, corrected or not
+(https://docs.kernel.org/admin-guide/RAS/main.html); and slow leaks, a process whose memory, open
+files or threads grow by a little a day until something gives. The scan itself allocates nothing
+once a program is loaded (C-153, C-155), but the embedded portal, its store, the logs and the
+operating system do.
+- (a) Count and say so. A corrected memory error is counted, and a rate past a threshold raises a
+  maintenance request; an uncorrected one the kernel reports in the controller's memory is the
+  runtime's failure, FAULT 507, since the program's data can no longer be trusted. The controller
+  reads its own resident memory, open files and threads against limits set when it starts: a
+  rising trend over days raises a maintenance request, a limit reached is FAULT 505 `resource`.
+- (b) As (a), and the non-real-time parts (the embedded portal) restart on a schedule the engineer
+  sets, the logic never.
+- (c) Nothing past the hardware watchdog: a leak ends as a reboot through the watchdog chain.
+
+The assistant recommends (a): it says what will fail before it fails, where (c) turns a slow leak
+into an unplanned stop and (b) restarts parts of a running plant on a calendar.
+
+**Taken meanwhile**: nothing; the area is not built.
+
+**Reversible?** Yes until built: each is a reading of the controller's own counters.
+
+---
+
+## Q235 - An old controller and a new Oficina: versions, migration, a rescue path
+
+**Raised** 2026-11-26, by the controlador session, proposing the second of the four areas Q42 left
+unopened (`docs/robustness.md`, area 7).
+
+A controller is left as the engineer left it, for years, while Oficina moves on. What versions
+there are: the controller's release, the ORCL language versions it runs (`orcl_interp::LANGUAGES`,
+C-154), the program file's format (C-154) and each TOML file's `format` and `version` (law L7,
+portal migrating or refusing).
+- (a) Oficina speaks to every controller back to a floor it states (a number of releases or of
+  years): it reads the controller's versions when it connects and writes only what that controller
+  reads, a program for its ORCL version and files in its formats.
+- (b) The controller first: Oficina refuses to download to a controller older than its own release
+  and offers the controller's update (with its own rollback) before the program.
+- (c) A rescue path always, whatever the versions: Oficina can read the state, the fault records,
+  the stored program and its source, and put the previous version back, through a small interface
+  frozen from release 1.
+
+The assistant recommends (a) with (c): updating the controller to change a program on an old
+machine is a risk its owner should choose, not one Oficina imposes; and (c) is cheap only if it is
+frozen before the first release.
+
+**Taken meanwhile**: nothing; the area is not built.
+
+**Reversible?** (a) and (b) yes; (c) only before the first release, since the frozen interface is
+what later releases keep.
+
+---
+
+## Q236 - Replacing the hardware: backup, restore, what a stranger needs
+
+**Raised** 2026-11-26, by the controlador session, proposing the third of the four areas Q42 left
+unopened (`docs/robustness.md`, area 8).
+
+The board fails after ten years; someone who never met the engineer has the cabinet, a new board
+that meets the hardware requirements (Q226) and whatever was kept.
+- (a) A backup is one file, a manifest listing its parts with their SHA-256 as a download's does
+  (Q36): the program and its source, the hardware configuration, the IO mapping, the target's own
+  settings and the retained data at that moment. Oficina makes it from the controller and restores
+  it to any target that meets the requirements, checked by its manifest; a restore asks a person
+  whether the retained data is restored or the program starts cold.
+- (b) As (a), and the backup carries a rebuild sheet in plain text: the board and drive it needs,
+  the system image's version and where to get it, the network names and addresses, what to install
+  and in what order, written for someone with no knowledge of Veredas.
+- (c) The project folder is the backup, kept by the engineer; the controller holds nothing the
+  project lacks but the retained data, saved on request.
+
+The assistant recommends (b): what fails years later is the knowledge around the program, and the
+sheet is what a stranger reads first; (c) loses the retained data and every setting made on the
+target.
+
+**Taken meanwhile**: nothing; the area is not built.
+
+**Reversible?** Yes: the backup's format is a `veredas-*` format with a version (law L7).
+
+---
+
+## Q237 - How each rule is proven by injecting faults on the bench
+
+**Raised** 2026-11-26, by the controlador session, proposing the fourth of the four areas Q42 left
+unopened (`docs/robustness.md`, area 10).
+
+Every robustness rule is a sentence of a plan; it holds only when a test shows the controller
+keeping it under the fault it guards against. Maquinar's bench plays the plant on virtual time
+(fixture first).
+- (a) A fault catalogue: for every rule a named fault the bench injects (a power cut at a chosen
+  instruction, a drive that fails a write or reports wear, a clock that jumps or an NTP that lies, a
+  device lost mid-exchange, memory full), each entry linking the test of the clause that builds the
+  rule.
+- (b) As (a), and a long soak: weeks of virtual time with faults drawn at random from the
+  catalogue, the controller's invariants checked throughout (no output but a computed or a safe
+  one, a state that reads back, nothing that grows), run before each release.
+- (c) Faults proven on real hardware in a laboratory before each release.
+
+The assistant recommends (b), with a few of (c)'s power cuts on real boards before a release: (a)
+proves each rule alone, the soak their combination, and virtual time makes years of it cheap,
+while real hardware alone is too slow to repeat.
+
+**Taken meanwhile**: nothing; the area is not built.
+
+**Reversible?** Yes: a catalogue grows entry by entry.
+
+---
+
 ## Q47 - How much debug information do development builds carry?
 
 **Raised** 2026-11-23, by the orchestrating session, on the home disk's use with ten sessions.

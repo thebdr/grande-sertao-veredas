@@ -497,9 +497,9 @@ Ruled on 2026-11-25:
   area of its own. Where the drive reports its wear the controller reads it and raises a request,
   not urgent, at a threshold the engineer sets. When the data area fails, RUN goes on, recording
   stops and a request is raised.
-- **Not opened yet** (Q42), each waiting for a proposal: running unattended beyond what is ruled
-  (memory errors, slow leaks), an old controller and a new Oficina, replacing the hardware, and how
-  each rule is proven by injecting faults on the bench.
+- **Not opened yet** (Q42), each proposed on 2026-11-26 for the architect: running unattended beyond
+  what is ruled, memory errors and slow leaks (Q234); an old controller and a new Oficina (Q235);
+  replacing the hardware (Q236); and how each rule is proven by injecting faults on the bench (Q237).
 
 ### Out of scope
 Technology objects entirely (axes, PID, cams, counters): "technology objects later", and release 1
@@ -560,7 +560,7 @@ Where each item stands on 2026-11-25:
   gets), and the minors 47 to 50, 53 and 55.
 - **Q32** the specification of what disqualifies an edit from a live takeover, proposed in
   `docs/controlador/live-takeover.md` for the architect to rule. **Q42** the robustness round's
-  areas not opened. **Q43** the security round. **Q45**, ruled point by point on 2026-11-25, all
+  areas not opened, proposed as **Q234** to **Q237**. **Q43** the security round. **Q45**, ruled point by point on 2026-11-25, all
   but one fact still to check: whether Npcap's licence allows what raw frames on Windows need.
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan gives way to the
   prior art's LET. **Q230** a program whose functions call themselves. **Q231** where an

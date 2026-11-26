@@ -1,9 +1,10 @@
 # Live takeover: what disqualifies an edit
 
 **A proposal, 2026-11-25, for the architect to rule as a document** (`docs/questions.md` Q32: "controlador writes
-the whole specification as a proposal, and the architect rules on it as a document"). Nothing here is settled
-until then, and no live takeover is built before it is ruled. `docs/controlador-plan.md` ("Online change") wins on
-intent; this file is the specification it owes.
+the whole specification as a proposal, and the architect rules on it as a document"), brought up on 2026-11-26 to
+the rulings of 2026-11-25 that bear on it (below, "Ruled since it was first written"). Nothing here is settled until
+then, and no live takeover is built before it is ruled. `docs/controlador-plan.md` ("Online change") wins on intent;
+this file is the specification it owes.
 
 ## What a live takeover is
 An edit reaches the plant through a shadow test: the new version is deployed, both versions run on the same inputs,
@@ -17,6 +18,19 @@ remains possible for all cases" (the architect, 2026-11-15).
 What was ruled with Q32 stands around this proposal: an edit that failed leaves a fault record named "the edit
 failed", not a controller fault; and while the old version watches and may still take over, the state text
 carries a term with the time it has left.
+
+### Ruled since it was first written
+- **The comparison is per variable name** (Q45's K4): with the IO mapping allowed to differ, the two versions'
+  outputs are compared by the program's variable names, not by physical channel, so a moved signal shows as one
+  line (the review's entry 15). S1 and D1 below are written so.
+- **At a swap an output that loses its writer goes safe**, the popup before the swap listing each one; **a rollback
+  is a download like any other**, through the shadow test or a stop, never a direct replacement (the review's
+  entry 15). A rollback is therefore never a live takeover.
+- **An unaccepted shadow test at a power cycle is dropped** (Q45): the version that was driving drives again and a
+  person starts the test again. T1 is written so.
+- **The controller's faults** (C-152 as built): 502 `program(at)` is the program's own error where Rust would panic;
+  what safe Rust cannot reach, and a failure of the runtime or its host, is 507 `internal`; a program that cannot be
+  made is 506 `load`. T1 is written so.
 
 ## The principle
 The old version may take over only when its picture of the plant is the plant's own: when everything the plant
@@ -32,8 +46,10 @@ test. The test itself goes on either way: a lost right is not a fault.
 ## Disqualified before the swap: the fallback cannot be armed
 The download popup offers the fallback only when none of these holds, and the controller refuses a swap with the
 fallback armed when one does (Oficina's check is a convenience; the controller's is the rule).
-- **S1. The IO mapping differs**: an output moved, added or removed, an input mapped elsewhere. Outputs are then not
-  comparable channel by channel, and an output may lose its writer at a takeover (the review's entry 15).
+- **S1. The IO mapping differs**: an output moved, added or removed, an input mapped elsewhere. The comparison by
+  variable name (Q45's K4) still sees a moved output, but a takeover would move it back: the channel the new
+  version drove loses its writer and goes safe (the review's entry 15) while the old channel takes a value again, a
+  change on two channels in one scan that no comparison before it showed the plant.
 - **S2. What may never differ in a swap differs**: the hardware configuration or the task timing (the plan, "What
   may differ"), refused for any swap already and named here for completeness.
 - **S3. What peers see differs**: the published variables, the Modbus addresses, the OPC UA nodes or which variables
@@ -46,10 +62,10 @@ fallback armed when one does (Oficina's check is a convenience; the controller's
 ## Disqualified while the old version watches: the right to take over ends
 From the swap on, the controller checks every scan. The first of these ends the right to take over; the state text
 drops the armed term, the state history records which one and when, and Oficina says so.
-- **D1. An output differs.** At the end of any scan since the swap, a physical output of the task's slice that the
-  new version wrote differs from what the old version computed for it: its value (floats compared bit for bit, the
-  interpreter being deterministic), or whether it was written at all. This is the candidate criterion of the
-  review's option (b).
+- **D1. An output differs.** At the end of any scan since the swap, an output of the task's slice that the new
+  version wrote differs from what the old version computed for the same variable name (Q45's K4): its value (floats
+  compared bit for bit, the interpreter being deterministic), or whether it was written at all. This is the
+  candidate criterion of the review's option (b).
 - **D2. A write from outside that the old version did not take alike.** A write through the embedded portal (a peer
   or Oficina) reaches both versions at their scan boundary, by name and type. A write to a variable the old version
   lacks, holds under another type, or refuses (its limits) leaves the two versions with different data the outputs
@@ -71,11 +87,13 @@ drops the armed term, the state history records which one and when, and Oficina 
 
 ## The takeover itself
 When the new version fails and none of the above has happened since the swap:
-- **T1. Which failures hand over.** A program error in the new version (the fault 502 `program(at)`) or a fault it
-  raised itself, in a scan whose outputs it therefore never wrote (C-151: a faulting scan writes no outputs of its
-  own). Not handed over, and handled as faults: the watchdog (501), since the scan did not end and the bus thread has
-  already sent the safe values; resources exhausted; the runtime's own failure; a check of the stored program that
-  fails (506 `load`, Q36); and a power cycle, after which the previous version can be put back as always.
+- **T1. Which failures hand over.** A program error in the new version (the fault 502 `program(at)`, where Rust
+  would panic) or a fault it raised itself, in a scan whose outputs it therefore never wrote (C-151: a faulting scan
+  writes no outputs of its own). Not handed over, and handled as faults: the watchdog (501), since the scan did not
+  end and the bus thread has already sent the safe values; resources exhausted (505); the runtime's own failure
+  (507), what safe Rust cannot reach among it, since then the machine and not the edit is in doubt; a check of the
+  stored program that fails (506 `load`, Q36); and a power cycle, after which the version that was driving drives
+  again and the unaccepted test is dropped (Q45), the previous version still possible to put back for a start.
 - **T2. In the failing scan.** The old version's outputs for that very scan are written in place of the new
   version's, so the plant sees no gap and no safe value. The old version becomes the only version and drives on;
   the new one is unloaded.
