@@ -11,10 +11,10 @@
     "session"
   ],
   "exitCode": 0,
-  "outputSha": "c494396a96beca7ac22c7ed180252d850167b64c8033b2764524874e546ce3df",
-  "outputTail": "test a_history_said_read_holds_every_ended_line ... ok\ntest a_log_says_when_its_start_s_history_is_in_the_store ... ok\ntest a_stop_stores_every_row_the_workers_sent_and_publishes_the_end ... ok\ntest a_file_held_from_a_past_start_says_read_only_of_its_own_history ... ok\ntest a_reader_holding_the_store_never_holds_the_pump ... ok\ntest a_history_left_unread_is_never_said_read ... ok\ntest the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says ... ok\ntest a_held_active_started_at_its_end_is_read_from_where_it_stood ... ok\ntest a_window_that_lets_go_of_a_history_before_it_is_read_never_says_it_read ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 45.75s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/0e94a57538877d80/out/veredas_portal-0e94a57538877d80)\n     Running tests/session.rs (target/debug/build/veredas-portal/ed5e27e9b4457520/out/session-ed5e27e9b4457520)",
-  "ranAt": "2026-11-26T11:13:19.201Z",
-  "headCommit": "00ff821a6fb64f30ed150da9bafbfeb12a2058de",
+  "outputSha": "5d7131b2857c06f1bef27271f5336d3a2505c4748740d9361822347b186dd33b",
+  "outputTail": "test a_history_said_read_holds_every_ended_line ... ok\ntest a_log_says_when_its_start_s_history_is_in_the_store ... ok\ntest a_stop_stores_every_row_the_workers_sent_and_publishes_the_end ... ok\ntest a_file_held_from_a_past_start_says_read_only_of_its_own_history ... ok\ntest a_reader_holding_the_store_never_holds_the_pump ... ok\ntest a_history_left_unread_is_never_said_read ... ok\ntest the_key_cap_the_retrying_states_and_a_slow_listener_s_lag_are_as_the_clause_says ... ok\ntest a_held_active_started_at_its_end_is_read_from_where_it_stood ... ok\ntest a_window_that_lets_go_of_a_history_before_it_is_read_never_says_it_read ... ok\n\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 41.23s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/0e94a57538877d80/out/veredas_portal-0e94a57538877d80)\n     Running tests/session.rs (target/debug/build/veredas-portal/ed5e27e9b4457520/out/session-ed5e27e9b4457520)",
+  "ranAt": "2026-11-26T11:55:02.814Z",
+  "headCommit": "26e42b02843693b039d1a0edaf75c23ddf42835f",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/session.rs",
@@ -24,7 +24,7 @@
     {
       "name": "crates/veredas-portal/src/tail/family/history_test.rs",
       "file": "crates/veredas-portal/src/tail/family/history_test.rs",
-      "fileSha": "6ae860606446cde35ba2a6438d0b460303327887459c5b4135f29c1145740389"
+      "fileSha": "4b7b3ae34d9f857883b338dcde3e5c28c779c20cf63aaee44fb01154f4bf2e30"
     }
   ]
 }
