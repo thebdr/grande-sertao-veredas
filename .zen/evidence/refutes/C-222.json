@@ -1,8 +1,8 @@
 {
   "clause": "C-222",
   "verdict": "holds",
-  "ranAt": "2026-11-26T08:08:55.518Z",
-  "headCommit": "0ba5bebafbd910cf3c65be7bbc51bc5ab761ba27",
+  "ranAt": "2026-11-26T11:22:57.360Z",
+  "headCommit": "1cbb68c837268162e1130ba578a866a98ccecb2f",
   "tests": [
     {
       "name": "tools/abaco-oracle/tests/parity.rs",
