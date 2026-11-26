@@ -328,6 +328,10 @@ def install(stage, top, old_top, bins):
                 links_before[name] = os.readlink(p)
     moved = False
     try:
+        # The new release's files on the disk before anything names them: renames are journaled
+        # within seconds, the data of new files only at writeback, so a power-off soon after would
+        # leave `current` naming empty files.
+        os.sync()
         os.rename(os.path.join(stage, top), dest)
         moved = True
         point(CURRENT, top)
@@ -342,6 +346,8 @@ def install(stage, top, old_top, bins):
             # another link (a tester's alias) is kept.
             if os.path.islink(link) and os.readlink(link) == THROUGH + name and name not in bins:
                 os.unlink(link)
+        # The switch on the disk before it is said.
+        os.sync()
     except OSError as e:
         # A link or a rename names what it was making second.
         why = f"{e.filename2 or e.filename or ''}: {e.strerror}".lstrip(": ")
@@ -431,6 +437,10 @@ def main(argv):
         return 2
     try:
         installed = manifest(os.path.join(CURRENT, "release.toml"))
+        # What this command reads of it, stated: a manifest without them is no installed release.
+        missing = [f"release.toml states no `{k}`" for k in ["release", "target"] if not isinstance(installed.get(k), str)]
+        if missing:
+            raise Refused(missing)
         old_top = os.readlink(CURRENT) if os.path.islink(CURRENT) else ""
         # The release `current` names, by its folder's name: a going back typed with a final `/`
         # (tab completion adds one) names the same folder.

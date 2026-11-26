@@ -419,7 +419,9 @@ passed on 2026-11-23.
   `bin/`, and every executable finds its libraries on the machine (`ldd`); then it moves it beside
   the old one under `/opt/veredas/`, points `current` at it in one step (a relative link, renamed
   over the old one), relinks the PATH (a link for each new executable, none left for one it
-  dropped) and restarts the bench and supervisão on it. The plant's files in the home folder are
+  dropped) and restarts the bench and supervisão on it. Its files are synced to the disk before
+  `current` names them, and the switch is synced before it is said, so a power-off leaves one
+  release or the other whole. The plant's files in the home folder are
   left as they are; the new release's own plant is in `/opt/veredas/current/planta`. Anything
   refused leaves the machine as it was, one update runs at a time (the release's folder locked
   to its end, the services' watch included), and a restart that fails says how to point `current`
