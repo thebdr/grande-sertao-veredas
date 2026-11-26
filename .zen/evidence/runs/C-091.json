@@ -11,15 +11,15 @@
     "store_record"
   ],
   "exitCode": 0,
-  "outputSha": "37daa5371257556db5640359eff0d935819032ce069444178548fd2377b31696",
-  "outputTail": "\nrunning 7 tests\ntest another_process_opens_the_record ... ok\ntest a_normal_stop_writes_the_last_batch_folds_the_log_and_lets_the_record_go ... ok\ntest at_its_size_limit_a_recording_stops_and_nothing_is_deleted ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\ntest the_limit_stops_the_recording_at_the_first_write_that_reaches_it ... ok\ntest the_rows_the_stop_s_last_passes_take_are_recorded ... ok\ntest a_record_is_written_once_a_period_whatever_the_poll_rate ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.38s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/29d94b54f60a86bb/out/veredas_portal-29d94b54f60a86bb)\n     Running tests/store_record.rs (target/debug/build/veredas-portal/4233a9b5228a7014/out/store_record-4233a9b5228a7014)",
-  "ranAt": "2026-11-25T00:42:03.021Z",
-  "headCommit": "5528bc11a1780ec17f11471caf1aea1cebab7d79",
+  "outputSha": "99deba82ddca7679137c202352c355a26cb2cd7580eb4c71f9f3e0afbd6d3262",
+  "outputTail": "\nrunning 6 tests\ntest another_process_opens_the_record ... ok\ntest a_normal_stop_writes_the_last_batch_folds_the_log_and_lets_the_record_go ... ok\ntest the_record_keeps_on_the_drive_what_the_window_lets_go ... ok\ntest a_record_is_written_once_a_period_whatever_the_poll_rate ... ok\ntest the_rows_the_stop_s_last_passes_take_are_recorded ... ok\ntest at_its_size_limit_a_record_lets_its_oldest_rows_go ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.42s\n\n   Compiling veredas-portal v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/portal-bf6010/crates/veredas-portal)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.00s\n     Running unittests src/lib.rs (target/debug/build/veredas-portal/0e94a57538877d80/out/veredas_portal-0e94a57538877d80)\n     Running tests/store_record.rs (target/debug/build/veredas-portal/6a154e83727426b6/out/store_record-6a154e83727426b6)",
+  "ranAt": "2026-11-26T19:54:38.254Z",
+  "headCommit": "09696815c3c98eb05b7ab2daae3b00b64ead029a",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/store_record.rs",
       "file": "crates/veredas-portal/tests/store_record.rs",
-      "fileSha": "27a413637e1c6a6946ec452727d1288f6098ea7718c23befe6a6f33397e3248c"
+      "fileSha": "5c79fa97f0f342c47a6d5110c4a8606aef9ab3c4d33a9f3f3b027e921c7f2d4e"
     }
   ]
 }
