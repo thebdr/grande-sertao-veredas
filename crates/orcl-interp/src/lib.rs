@@ -8,9 +8,10 @@
 //! - [`CoreOp`]: the closed list of core-library operations a program may call (`docs/questions.md` Q227);
 //! - [`file`]: the program file, `<name>.orclb`, its header naming its format, its language and its nightly.
 //!
-//! A program whose indices or types do not fit is refused when it is loaded, by name ([`LoadError`]), and so is one
-//! whose functions reach themselves (Q230, taken meanwhile). A program's failure while it runs is a
-//! [`ProgramError`] naming its source location, never a panic (ORCL's O11).
+//! A program whose indices or types do not fit is refused when it is loaded, by name ([`LoadError`]). It runs on a
+//! stack of the size its host gives, in slots, one whose functions call themselves among them, a call past the stack
+//! being the program's own error (`docs/questions.md` Q230). A program's failure while it runs is a [`ProgramError`]
+//! naming its source location, never a panic (ORCL's O11).
 #![forbid(unsafe_code)]
 #![deny(
     clippy::arithmetic_side_effects,

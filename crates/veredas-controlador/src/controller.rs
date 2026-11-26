@@ -142,21 +142,22 @@ impl<P: Program + Default> Source for Native<P> {
 }
 
 /// An interpreted program as its host hands it: the program `orcl-interp` loads, its scan entry, its four regions'
-/// types, its first state and its safe outputs (`docs/questions.md` Q231, ruled: the front end computes the last two
-/// and the program file will carry them, once its format holds them; until then the host hands them in). Each make
-/// loads it afresh.
+/// types, its first state, its safe outputs (`docs/questions.md` Q231, ruled: the front end computes the two and the
+/// program file will carry them, once its format holds them; until then the host hands them in) and the stack it
+/// runs on, in slots (Q230: the target's settings give it, `veredas-alvo` not built yet). Each make loads it afresh.
 pub struct Loaded<I: Image, O: Image> {
     pub program: orcl_interp::Program,
     pub entry: FunctionId,
     pub regions: Regions,
     pub state: Vec<Scalar>,
     pub safe: O,
+    pub stack: u32,
     inputs: PhantomData<fn(&I)>,
 }
 
 impl<I: Image, O: Image> Loaded<I, O> {
-    pub fn new(program: orcl_interp::Program, entry: FunctionId, regions: Regions, state: Vec<Scalar>, safe: O) -> Self {
-        Loaded { program, entry, regions, state, safe, inputs: PhantomData }
+    pub fn new(program: orcl_interp::Program, entry: FunctionId, regions: Regions, state: Vec<Scalar>, safe: O, stack: u32) -> Self {
+        Loaded { program, entry, regions, state, safe, stack, inputs: PhantomData }
     }
 }
 
@@ -165,21 +166,21 @@ impl<I: Image, O: Image> Source for Loaded<I, O> {
     type Error = MakeError;
 
     fn make(&mut self) -> Result<Interpreted<I, O>, MakeError> {
-        Interpreted::new(self.program.clone(), self.entry, self.regions, &self.state, self.safe)
+        Interpreted::new(self.program.clone(), self.entry, self.regions, &self.state, self.safe, self.stack)
     }
 
     fn safe_outputs(&mut self) -> O {
         self.safe
     }
 
-    /// The program's own error, where Rust would panic (a failed check, an index past the end), is 502
-    /// `program(at)`, `at` its source file, line and column. The runtime's own failure is 507 `internal`: code
+    /// The program's own error, where Rust would panic (a failed check, an index past the end), and a call past
+    /// the stack (Q230), is 502 `program(at)`, `at` its source file, line and column. The runtime's own failure is 507 `internal`: code
     /// marked unreachable reached, a value read before anything wrote it, an inconsistency the load should have
     /// refused, none of which safe Rust can reach, so a fault of the front end or the machine; and an image the
     /// machine refuses or outputs read back as none, the adapter's or the host's.
     fn reason(&self, program: &Interpreted<I, O>, error: &ScanError) -> FaultReason {
         match error {
-            ScanError::Program(error) if matches!(error.kind, ErrorKind::Check(_) | ErrorKind::Bounds { .. }) => {
+            ScanError::Program(error) if matches!(error.kind, ErrorKind::Check(_) | ErrorKind::Bounds { .. } | ErrorKind::Stack) => {
                 let files = &program.machine().program().files;
                 let file = files.get(error.at.file as usize).map_or("?", String::as_str);
                 FaultReason::Program { at: format!("{file}:{}:{}", error.at.line, error.at.column) }

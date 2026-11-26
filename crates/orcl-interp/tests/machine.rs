@@ -77,7 +77,7 @@ fn u32s(v: i128) -> Vec<Scalar> {
 #[test]
 fn a_loop_runs_its_blocks_and_a_call_returns_its_result_to_the_caller() {
     let (program, sum, twice) = sum_program();
-    let mut m = Machine::load(program, &[]).unwrap();
+    let mut m = Machine::load(program, &[], STACK).unwrap();
     for n in [0, 1, 2, 10, 1000] {
         let arg = [int(Int::U32, n)];
         assert_eq!(m.call(sum, &[Arg::Value(&arg)]).unwrap(), u32s(n * (n + 1) / 2).as_slice(), "sum({n})");
@@ -91,7 +91,7 @@ fn a_loop_runs_its_blocks_and_a_call_returns_its_result_to_the_caller() {
 #[test]
 fn an_overflow_is_an_error_naming_the_function_the_block_and_the_source_and_the_machine_stays_there() {
     let (program, sum, twice) = sum_program();
-    let mut m = Machine::load(program, &[]).unwrap();
+    let mut m = Machine::load(program, &[], STACK).unwrap();
     // 1 + 2 + ... + 92682 passes u32::MAX at its last addition
     let arg = [int(Int::U32, 92_682)];
     let err = m.call(twice, &[Arg::Value(&arg)]).unwrap_err();
@@ -119,11 +119,11 @@ fn an_overflow_is_an_error_naming_the_function_the_block_and_the_source_and_the_
 fn a_run_stopped_at_any_instruction_goes_on_to_the_same_end_and_a_copy_of_it_too() {
     let (program, sum, twice) = sum_program();
     let arg = [int(Int::U32, 37)];
-    let mut whole = Machine::load(program.clone(), &[]).unwrap();
+    let mut whole = Machine::load(program.clone(), &[], STACK).unwrap();
     let want = whole.call(twice, &[Arg::Value(&arg)]).unwrap().to_vec();
     let steps = whole.steps();
     for budget in 1u64..=333 {
-        let mut m = Machine::load(program.clone(), &[]).unwrap();
+        let mut m = Machine::load(program.clone(), &[], STACK).unwrap();
         m.start(twice, &[Arg::Value(&arg)]).unwrap();
         assert_eq!(m.position(), Some((twice, BlockId(0), 0)));
         let mut copy: Option<Machine> = None;
@@ -144,7 +144,7 @@ fn a_run_stopped_at_any_instruction_goes_on_to_the_same_end_and_a_copy_of_it_too
         while copy.step().unwrap() == Step::Ran {}
         assert_eq!((copy.result(), copy.steps(), copy.memory()), (want.as_slice(), steps, whole.memory()));
     }
-    let mut m = Machine::load(program, &[]).unwrap();
+    let mut m = Machine::load(program, &[], STACK).unwrap();
     m.start(sum, &[Arg::Value(&arg)]).unwrap();
     let mut seen = vec![];
     while let Some(p) = m.position() {
@@ -197,7 +197,7 @@ fn a_reference_writes_its_callers_place_and_a_host_region_is_the_state_an_entry_
             block(vec![assign(place(0), Value::Aggregate(unit, None, vec![]), 5)], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[state]).unwrap();
+    let mut m = Machine::load(b.program, &[state], STACK).unwrap();
     let region = RegionId(0);
     m.set_region(region, &[int(Int::U32, 0), int(Int::U32, 40)]).unwrap();
     for (k, b) in [(7, 42), (9, 44), (11, 46)] {
@@ -294,7 +294,7 @@ fn structures_arrays_and_enums_are_built_read_and_switched_on_as_mir_has_them() 
             block(vec![], Terminator::Unreachable { at: at(7) }),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     for (a, k) in [(3, 0), (200, 1), (255, 2)] {
         let args = ([int(Int::U8, a)], [Scalar::Bool(true)], [int(Int::Usize, k)]);
         let got = m.call(build, &[Arg::Value(&args.0), Arg::Value(&args.1), Arg::Value(&args.2)]).unwrap().to_vec();
@@ -335,7 +335,7 @@ fn an_enum_s_variant_writes_its_own_fields_and_leaves_the_rest_unwritten() {
             ret(),
         )],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let arg = [int(Int::I64, -9)];
     let got = m.call(f, &[Arg::Value(&arg)]).unwrap().to_vec();
     // E is three slots: its discriminant, then B's u8 and bool or C's i64
@@ -363,7 +363,7 @@ fn unreachable_code_and_a_value_never_written_are_errors_and_an_abort_starts_afr
             block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(1), copy(2)), 3)], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let zero = [int(Int::U8, 0)];
     assert_eq!(
         m.call(f, &[Arg::Value(&zero)]),
@@ -387,7 +387,7 @@ fn the_same_program_and_arguments_give_the_same_memory_result_and_count_every_ti
     let (program, _, twice) = sum_program();
     let runs: Vec<(Vec<Scalar>, Vec<Scalar>, u64)> = (0..3)
         .map(|_| {
-            let mut m = Machine::load(program.clone(), &[]).unwrap();
+            let mut m = Machine::load(program.clone(), &[], STACK).unwrap();
             let arg = [int(Int::U32, 500)];
             let r = m.call(twice, &[Arg::Value(&arg)]).unwrap().to_vec();
             (r, m.memory().to_vec(), m.steps())
@@ -425,9 +425,9 @@ fn a_copy_taken_at_any_instruction_or_idle_is_a_machine_of_its_own_that_goes_on_
     // a copy at every instruction of a run, at every depth, each finished and compared with the run left alone
     let (program, _, twice) = sum_program();
     let arg = [int(Int::U32, 12)];
-    let mut alone = Machine::load(program.clone(), &[]).unwrap();
+    let mut alone = Machine::load(program.clone(), &[], STACK).unwrap();
     let want = alone.call(twice, &[Arg::Value(&arg)]).unwrap().to_vec();
-    let mut m = Machine::load(program, &[]).unwrap();
+    let mut m = Machine::load(program, &[], STACK).unwrap();
     m.start(twice, &[Arg::Value(&arg)]).unwrap();
     let mut copies = 0;
     loop {
@@ -442,7 +442,7 @@ fn a_copy_taken_at_any_instruction_or_idle_is_a_machine_of_its_own_that_goes_on_
     assert_eq!(copies as u64, alone.steps(), "a copy at every instruction");
     // a copy of an idle machine, and of one just started, through a chain of calls five deep
     let (program, top) = chain(5);
-    let idle = Machine::load(program, &[]).unwrap();
+    let idle = Machine::load(program, &[], STACK).unwrap();
     let mut copy = idle.clone();
     assert_eq!(copy.call(top, &[]).unwrap(), &[int(Int::U8, 11)]);
     let mut started = idle.clone();
@@ -457,7 +457,7 @@ fn a_copy_taken_at_any_instruction_or_idle_is_a_machine_of_its_own_that_goes_on_
 #[test]
 fn a_budget_of_zero_runs_nothing_and_says_what_stands() {
     let (program, sum, _) = sum_program();
-    let mut m = Machine::load(program, &[]).unwrap();
+    let mut m = Machine::load(program, &[], STACK).unwrap();
     assert_eq!(m.run(0), Ok(Step::Idle), "nothing running");
     let arg = [int(Int::U32, 3)];
     m.start(sum, &[Arg::Value(&arg)]).unwrap();
@@ -476,7 +476,7 @@ fn a_second_start_while_an_entry_runs_is_refused_and_so_are_arguments_that_are_n
     let (u8t, u16t, unit) = (b.int(Int::U8), b.int(Int::U16), b.unit());
     let r = b.reference(u8t, true);
     let takes_ref = b.function(Function { name: "takes_ref".into(), params: 1, locals: locals(&[unit, r]), blocks: vec![block(vec![], ret())] });
-    let mut m = Machine::load(b.program, &[u8t, u16t]).unwrap();
+    let mut m = Machine::load(b.program, &[u8t, u16t], STACK).unwrap();
     let arg = [int(Int::U32, 5)];
     m.start(twice, &[Arg::Value(&arg)]).unwrap();
     m.step().unwrap();
@@ -496,7 +496,7 @@ fn slots_that_are_no_value_of_a_region_s_type_are_refused() {
     let mut b = Build::default();
     let (u8t, d) = (b.int(Int::U8), b.ty(Type::Duration));
     let opt = b.option(u8t);
-    let mut m = Machine::load(b.program, &[opt, d]).unwrap();
+    let mut m = Machine::load(b.program, &[opt, d], STACK).unwrap();
     assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 0), int(Int::U8, 9)]), Err(HostError::Slots), "None with a payload");
     assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 2), int(Int::U8, 9)]), Err(HostError::Slots), "no such variant");
     assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 1), int(Int::U8, 9)]), Ok(()));
@@ -553,7 +553,7 @@ fn a_caller_s_own_local_is_written_through_a_reference_and_a_callee_indexes_its_
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     assert_eq!(m.call(caller, &[]).unwrap(), &[int(Int::U8, 7)]);
     for k in 0..4 {
         let arg = [int(Int::Usize, k)];
@@ -591,9 +591,18 @@ fn a_callee_calling_a_small_then_a_large_function_has_room_for_both() {
         locals: locals(&[u8t]),
         blocks: vec![block(vec![], call(mid, 0, 1)), block(vec![], ret())],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    // main's frame, mid's and the larger callee's: 1 + 2 + 65 slots, the stack the host gives laid out whole (Q230)
+    let mut m = Machine::load(b.program.clone(), &[], 1 + 2 + 65).unwrap();
     assert_eq!(m.call(main, &[]).unwrap(), &[int(Int::U8, 2)]);
-    assert_eq!(m.memory().len(), 1 + 2 + 65, "main's frame, mid's and the larger callee's, laid out");
+    assert_eq!(m.memory().len(), 1 + 2 + 65);
+    // one slot less: the small callee fits, the large one is a call past the stack, at mid's second call
+    let mut m = Machine::load(b.program, &[], 1 + 2 + 64).unwrap();
+    let got = m.call(main, &[]).map(|r| r.to_vec());
+    assert!(
+        matches!(got, Err(CallError::Program(ProgramError { function, block: BlockId(1), statement: None, kind: ErrorKind::Stack, .. })) if function == mid),
+        "{got:?}"
+    );
+    assert_eq!((m.position(), m.depth()), (Some((mid, BlockId(1), 0)), 2));
 }
 
 /// `fn g(flag: bool) -> u8 { let y; if flag { y = 7 } y + 0 }`: its `y` unwritten when the flag is off.
@@ -625,7 +634,7 @@ fn a_local_is_unwritten_again_at_every_start_and_every_call() {
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     for entry in [g, f] {
         assert_eq!(m.call(entry, &[Arg::Value(&[Scalar::Bool(true)])]).unwrap(), &[int(Int::U8, 7)]);
         let e = m.call(entry, &[Arg::Value(&[Scalar::Bool(false)])]).map(|r| r.to_vec());
@@ -669,7 +678,7 @@ fn rustc_s_bounds_check_asserts_true_and_a_shift_check_too() {
             block(vec![assign(place(0), Value::Binary(BinOp::Shl, copy(1), copy(2)), 2)], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let a = [int(Int::U8, 10), int(Int::U8, 20), int(Int::U8, 30), int(Int::U8, 40)];
     for i in 0..4 {
         let arg = [int(Int::Usize, i)];
@@ -729,7 +738,7 @@ fn a_callee_s_result_of_several_slots_reaches_its_caller_whole() {
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let arg = [int(Int::U8, 9)];
     assert_eq!(m.call(main, &[Arg::Value(&arg)]).unwrap(), &[int(Int::U8, 9), Scalar::Bool(true), int(Int::U64, 7), int(Int::U32, 9)]);
     // main's frame follows its result's four slots and its u8: the Option written by `none` over `Some(9)`
@@ -753,7 +762,7 @@ fn an_enum_s_variant_is_written_with_a_discriminant_of_its_own_type() {
         locals: locals(&[unit, re]),
         blocks: vec![block(vec![assign(proj(1, vec![Projection::Deref]), Value::Aggregate(e, Some(1), vec![]), 1)], ret())],
     });
-    let mut m = Machine::load(b.program, &[e]).unwrap();
+    let mut m = Machine::load(b.program, &[e], STACK).unwrap();
     m.set_region(RegionId(0), &[int(Int::U8, 0)]).unwrap();
     m.call(set, &[Arg::Ref(RegionId(0))]).unwrap();
     assert_eq!(m.region(RegionId(0)).unwrap(), &[int(Int::U8, 1)]);
@@ -782,7 +791,7 @@ fn overflow() -> (Program, FunctionId) {
 #[test]
 fn a_copy_of_a_failed_machine_stands_where_it_failed_and_a_failed_entry_shows_no_result() {
     let (program, f) = overflow();
-    let mut m = Machine::load(program, &[]).unwrap();
+    let mut m = Machine::load(program, &[], STACK).unwrap();
     let zero = [int(Int::U8, 0)];
     assert_eq!(m.call(f, &[Arg::Value(&zero)]).unwrap(), &[int(Int::U8, 255)]);
     let one = [int(Int::U8, 1)];
@@ -827,7 +836,7 @@ fn a_value_never_written_is_an_error_wherever_an_instruction_reads_it() {
     cases.push((core(&mut b, "saturating", CoreOp::SaturatingAdd(Int::U8), &[u8t, u8t], vec![copy(1), copy(1)]), None));
     cases.push((core(&mut b, "duration", CoreOp::DurationMin, &[d, d], vec![copy(1), copy(1)]), None));
     cases.push((core(&mut b, "is_none", CoreOp::OptionIsNone, &[boolean, sopt], vec![copy(1)]), None));
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     for (f, statement) in cases {
         let name = m.program().functions[f.0 as usize].name.clone();
         let got = m.call(f, &[]).map(|r| r.to_vec());
@@ -864,7 +873,7 @@ fn a_duration_read_through_another_variant_is_an_internal_error_and_never_a_pani
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     assert_eq!(
         m.call(f, &[]),
         Err(CallError::Program(ProgramError {
@@ -904,7 +913,7 @@ fn a_callee_large_in_slots_and_another_deep_in_frames_both_have_room() {
         locals: locals(&[u8t, u8t, u8t]),
         blocks: vec![block(vec![], call(big, 1, 1)), block(vec![], call(a, 2, 2)), block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(1), copy(2)), 4)], ret())],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     assert_eq!(m.call(main, &[]).unwrap(), &[int(Int::U8, 4)], "big() + a(), a four frames deep");
     let mut copy = m.clone();
     assert_eq!(copy.call(main, &[]).unwrap(), &[int(Int::U8, 4)], "and in a copy");
@@ -936,7 +945,7 @@ fn a_variant_s_field_after_a_field_of_two_slots_is_read_where_it_was_written() {
             ret(),
         )],
     });
-    let mut m = Machine::load(b.program, &[e]).unwrap();
+    let mut m = Machine::load(b.program, &[e], STACK).unwrap();
     let arg = [int(Int::U8, 42)];
     assert_eq!(m.call(f, &[Arg::Value(&arg)]).unwrap(), &[int(Int::U8, 42)], "(e as B).1");
     assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 1), int(Int::U64, 7), int(Int::U32, 9), int(Int::U8, 42)]), Ok(()), "E::B as a region's slots");
@@ -951,7 +960,7 @@ fn a_duration_whose_seconds_are_not_a_u64_and_a_structure_of_other_slots_are_ref
     let pair = b.tuple(&[u8t, u16t]);
     let takes_d = b.function(Function { name: "d".into(), params: 1, locals: locals(&[unit, d]), blocks: vec![block(vec![], ret())] });
     let takes_pair = b.function(Function { name: "p".into(), params: 1, locals: locals(&[unit, pair]), blocks: vec![block(vec![], ret())] });
-    let mut m = Machine::load(b.program, &[d]).unwrap();
+    let mut m = Machine::load(b.program, &[d], STACK).unwrap();
     let u32_seconds = [int(Int::U32, 5), int(Int::U32, 0)];
     assert_eq!(m.set_region(RegionId(0), &u32_seconds), Err(HostError::Slots), "seconds of a u32");
     assert_eq!(m.start(takes_d, &[Arg::Value(&u32_seconds)]), Err(HostError::Arguments));
@@ -992,7 +1001,7 @@ fn out_of_order_values() -> Vec<(&'static str, Vec<Scalar>, bool)> {
 fn an_enum_listed_out_of_order_takes_each_of_its_values_and_no_other_as_a_region_a_constant_and_an_argument() {
     let mut b = Build::default();
     let e = out_of_order(&mut b);
-    let mut m = Machine::load(b.program, &[e]).unwrap();
+    let mut m = Machine::load(b.program, &[e], STACK).unwrap();
     for (name, slots, good) in out_of_order_values() {
         assert_eq!(m.set_region(RegionId(0), &slots), if good { Ok(()) } else { Err(HostError::Slots) }, "region {name}");
     }
@@ -1000,7 +1009,7 @@ fn an_enum_listed_out_of_order_takes_each_of_its_values_and_no_other_as_a_region
         let mut b = Build::default();
         let e = out_of_order(&mut b);
         b.function(Function { name: "f".into(), params: 0, locals: locals(&[e]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(e, slots.clone())), 1)], ret())] });
-        let got = Machine::load(b.program, &[]).map(|_| ());
+        let got = Machine::load(b.program, &[], STACK).map(|_| ());
         if good {
             assert_eq!(got, Ok(()), "constant {name}");
         } else {
@@ -1009,7 +1018,7 @@ fn an_enum_listed_out_of_order_takes_each_of_its_values_and_no_other_as_a_region
         let mut b = Build::default();
         let e = out_of_order(&mut b);
         let f = b.function(Function { name: "g".into(), params: 1, locals: locals(&[e, e]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
-        let mut m = Machine::load(b.program, &[]).unwrap();
+        let mut m = Machine::load(b.program, &[], STACK).unwrap();
         let got = m.call(f, &[Arg::Value(&slots)]).map(|r| r.to_vec());
         assert_eq!(got, if good { Ok(slots.clone()) } else { Err(CallError::Host(HostError::Arguments)) }, "argument {name}");
     }
@@ -1017,7 +1026,7 @@ fn an_enum_listed_out_of_order_takes_each_of_its_values_and_no_other_as_a_region
     let mut b = Build::default();
     let u8t = b.int(Int::U8);
     let opt = b.option(u8t);
-    let mut m = Machine::load(b.program, &[opt]).unwrap();
+    let mut m = Machine::load(b.program, &[opt], STACK).unwrap();
     assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, -1), Scalar::Uninit]), Err(HostError::Slots), "below None");
     assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, 0), Scalar::Uninit]), Ok(()), "None");
 }
@@ -1040,11 +1049,11 @@ fn a_type_of_no_slot_given_a_slot_is_refused_as_a_constant_a_region_and_an_argum
             ret(),
         )],
     });
-    let got = Machine::load(b.program, &[]).map(|_| ());
+    let got = Machine::load(b.program, &[], STACK).map(|_| ());
     assert!(matches!(got, Err(LoadError::Instruction { reason: "a constant whose slots are not its type's", .. })), "a constant: {got:?}");
     let mut b = Build::default();
     let (unit, boolean) = (b.unit(), b.bool());
-    let mut m = Machine::load(b.program, &[unit, boolean]).unwrap();
+    let mut m = Machine::load(b.program, &[unit, boolean], STACK).unwrap();
     m.set_region(RegionId(1), &[Scalar::Bool(false)]).unwrap();
     let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.set_region(RegionId(0), &one)));
     assert_eq!(got.ok(), Some(Err(HostError::Slots)), "a region: refused, never a panic");
@@ -1053,7 +1062,7 @@ fn a_type_of_no_slot_given_a_slot_is_refused_as_a_constant_a_region_and_an_argum
     let mut b = Build::default();
     let (unit, boolean) = (b.unit(), b.bool());
     let f = b.function(Function { name: "g".into(), params: 2, locals: locals(&[boolean, unit, boolean]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(2)), 1)], ret())] });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let got = m.call(f, &[Arg::Value(&one), Arg::Value(&[Scalar::Bool(false)])]).map(|r| r.to_vec());
     assert_eq!(got, Err(CallError::Host(HostError::Arguments)), "an argument");
     assert_eq!(m.call(f, &[Arg::Value(&[]), Arg::Value(&[Scalar::Bool(false)])]).unwrap(), &[Scalar::Bool(false)]);
@@ -1086,7 +1095,7 @@ fn an_array_of_elements_of_two_slots_is_indexed_at_its_element_s_slots_and_takes
     });
     let g = b.function(Function { name: "g".into(), params: 1, locals: locals(&[arr, arr]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
     let program = b.program;
-    let mut m = Machine::load(program.clone(), &[arr]).unwrap();
+    let mut m = Machine::load(program.clone(), &[arr], STACK).unwrap();
     let (a, c) = (|v| int(Int::U8, v), |v| int(Int::U16, v));
     for (i, x, written) in [(0, (1, 2), [(1, 9), (3, 4), (5, 6)]), (2, (5, 6), [(1, 2), (3, 4), (5, 9)])] {
         let arg = [int(Int::Usize, i)];
@@ -1107,7 +1116,7 @@ fn an_array_of_elements_of_two_slots_is_indexed_at_its_element_s_slots_and_takes
     for (slots, fits_) in [(good, true), (wrong, false)] {
         let mut p = program.clone();
         p.functions.push(Function { name: "k".into(), params: 0, locals: locals(&[arr]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(arr, slots)), 1)], ret())] });
-        let got = Machine::load(p, &[]).map(|_| ());
+        let got = Machine::load(p, &[], STACK).map(|_| ());
         assert_eq!(got.is_ok(), fits_, "a constant: {got:?}");
     }
 }
@@ -1123,7 +1132,7 @@ fn fields_of_no_slot_before_those_with_one_are_passed_by_at_their_own_offsets() 
     let e = b.ty(Type::Enum { name: "E".into(), discriminant: Int::U8, variants: vec![Variant { name: "A".into(), discriminant: 0, fields: vec![f("0", unit), f("1", u8t), f("2", boolean)] }] });
     let read_c = b.function(Function { name: "c".into(), params: 1, locals: locals(&[boolean, s]), blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Field(2)]))), 1)], ret())] });
     let program = b.program;
-    let mut m = Machine::load(program.clone(), &[s, t, e]).unwrap();
+    let mut m = Machine::load(program.clone(), &[s, t, e], STACK).unwrap();
     for (name, region, slots, good) in [
         ("S(7, true)", 0, vec![int(Int::U8, 7), Scalar::Bool(true)], true),
         ("S(7, 8)", 0, vec![int(Int::U8, 7), int(Int::U8, 8)], false),
@@ -1136,7 +1145,7 @@ fn fields_of_no_slot_before_those_with_one_are_passed_by_at_their_own_offsets() 
         let ty = [s, t, e][region as usize];
         let mut p = program.clone();
         p.functions.push(Function { name: "k".into(), params: 0, locals: locals(&[ty]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(ty, slots.clone())), 1)], ret())] });
-        assert_eq!(Machine::load(p, &[]).is_ok(), good, "a constant {name}");
+        assert_eq!(Machine::load(p, &[], STACK).is_ok(), good, "a constant {name}");
     }
     let arg = [int(Int::U8, 7), Scalar::Bool(true)];
     assert_eq!(m.call(read_c, &[Arg::Value(&arg)]).unwrap(), &[Scalar::Bool(true)], "S's field c read past its field of no slot");
@@ -1163,7 +1172,7 @@ fn a_duration_outside_its_integers_ranges_is_refused_as_a_region_an_argument_and
         ],
     });
     let program = b.program;
-    let mut m = Machine::load(program.clone(), &[d, opt]).unwrap();
+    let mut m = Machine::load(program.clone(), &[d, opt], STACK).unwrap();
     let kept = [int(Int::U64, 3), int(Int::U32, 5)];
     m.set_region(RegionId(0), &kept).unwrap();
     let one = [int(Int::U64, 1), int(Int::U32, 0)];
@@ -1173,7 +1182,7 @@ fn a_duration_outside_its_integers_ranges_is_refused_as_a_region_an_argument_and
         assert_eq!(m.start(f, &[Arg::Value(&slots), Arg::Value(&one)]), Err(HostError::Arguments), "argument: {name}");
         let mut p = program.clone();
         p.functions.push(Function { name: "k".into(), params: 0, locals: locals(&[d]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(d, slots.to_vec())), 1)], ret())] });
-        assert!(matches!(Machine::load(p, &[]), Err(LoadError::Instruction { reason: "a constant whose slots are not its type's", .. })), "constant: {name}");
+        assert!(matches!(Machine::load(p, &[], STACK), Err(LoadError::Instruction { reason: "a constant whose slots are not its type's", .. })), "constant: {name}");
     }
     let some = [int(Int::Isize, 1), int(Int::U8, 9)];
     m.set_region(RegionId(1), &some).unwrap();
@@ -1203,7 +1212,7 @@ fn a_return_value_is_unwritten_at_every_start_and_every_call() {
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     assert_eq!(m.call(g, &[]).unwrap(), &[int(Int::U8, 7)]);
     for entry in [f, main] {
         let got = m.call(entry, &[]).map(|r| r.to_vec());
@@ -1285,7 +1294,7 @@ fn an_index_into_an_array_inside_a_structure_inside_a_variant_reads_and_writes_i
             ),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let (a, c) = (|v| int(Int::U8, v), |v| int(Int::U16, v));
     // E::B(9, S { d: 3.5 s, c: [(1, 2), (3, 4), (5, 6)] }): discriminant, u8, d's two slots, six slots of c
     let mut e_b = vec![int(Int::Isize, 1), a(9)];
@@ -1325,7 +1334,7 @@ fn a_variant_before_the_last_reads_its_second_field_where_it_was_written() {
         locals: locals(&[u16t, fty]),
         blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Downcast(0), Projection::Field(1)]))), 1)], ret())],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let arg = [int(Int::Isize, 0), int(Int::U8, 5), int(Int::U16, 600)];
     assert_eq!(m.call(g, &[Arg::Value(&arg)]).unwrap(), &[int(Int::U16, 600)]);
 }
@@ -1377,7 +1386,7 @@ fn an_assignment_whose_value_reads_its_own_place_writes_the_value_read_before() 
             block(vec![assign(place(0), Value::Aggregate(out, None, vec![copy(1), copy(2)]), 4)], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let c = |v| int(Int::U16, v);
     let got = m.call(f, &[Arg::Value(&[c(1), c(2)]), Arg::Value(&[c(10), c(11), c(20), c(21), c(30), c(31)])]).unwrap().to_vec();
     assert_eq!(got, vec![c(2), c(1), c(31), c(30), c(20), c(21), c(10), c(11)]);
@@ -1430,7 +1439,7 @@ fn a_callee_writes_the_caller_s_array_through_a_reference_and_nested_indices_rea
         locals: locals(&[d, opts, usize_t]),
         blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Index(Local(2)), Projection::Downcast(1), Projection::Field(0)]))), 1)], ret())],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     for i in 0..3i128 {
         let got = m.call(caller, &[Arg::Value(&[int(Int::Usize, i)]), Arg::Value(&[int(Int::U16, 99)])]).unwrap().to_vec();
         let mut want = vec![int(Int::U8, 1), int(Int::U16, 2), int(Int::U8, 3), int(Int::U16, 4), int(Int::U8, 5), int(Int::U16, 6)];
@@ -1469,7 +1478,7 @@ fn a_failed_statement_leaves_the_machine_at_that_statement() {
         locals: locals(&[u8t, u8t]),
         blocks: vec![block(vec![assign(place(0), Value::Use(one()), 1), assign(place(0), Value::Binary(BinOp::Add, copy(1), one()), 2)], ret())],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let err = m.call(f, &[]).unwrap_err();
     assert_eq!(err, CallError::Program(ProgramError { function: f, block: BlockId(0), statement: Some(1), at: at(2), kind: ErrorKind::Uninit }));
     assert_eq!(m.position(), Some((f, BlockId(0), 1)), "the machine stays at the failed statement");
@@ -1487,7 +1496,7 @@ fn a_budget_runs_that_many_instructions_and_no_more() {
         statements.push(assign(place(0), Value::Binary(BinOp::Add, copy(0), one()), k));
     }
     let f = b.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(statements, ret())] });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     m.start(f, &[]).unwrap();
     let mut ran = 0u64;
     for budget in [1u64, 2, 3] {
@@ -1526,7 +1535,7 @@ fn is_none_on_a_region_never_set_is_uninit_at_its_call() {
             ],
         }));
     }
-    let mut m = Machine::load(b.program, &[opt]).unwrap();
+    let mut m = Machine::load(b.program, &[opt], STACK).unwrap();
     for f in fs {
         assert_eq!(m.call(f, &[Arg::Ref(RegionId(0))]).map(|r| r.to_vec()), uninit_at(f, 0, None, 4), "{f:?} on a region never set");
         m.abort();
@@ -1549,7 +1558,7 @@ fn get_or_insert_on_a_region_never_set_is_uninit_and_writes_nothing() {
             block(vec![assign(place(0), Value::Use(copy_at(proj(3, vec![Projection::Deref]))), 5)], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[opt]).unwrap();
+    let mut m = Machine::load(b.program, &[opt], STACK).unwrap();
     let now = [int(Int::U64, 3), int(Int::U32, 0)];
     assert_eq!(m.call(g, &[Arg::Ref(RegionId(0)), Arg::Value(&now)]).map(|r| r.to_vec()), uninit_at(g, 0, None, 4));
     assert_eq!(m.region(RegionId(0)).unwrap(), &[Scalar::Uninit; 3][..], "the region keeps what it held");
@@ -1574,7 +1583,7 @@ fn a_checked_addition_on_a_region_never_set_is_uninit_at_its_statement() {
             block(vec![assign(proj(1, vec![Projection::Deref]), Value::Use(copy_at(proj(2, vec![Projection::Field(0)]))), 5)], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[u8t]).unwrap();
+    let mut m = Machine::load(b.program, &[u8t], STACK).unwrap();
     assert_eq!(m.call(h, &[Arg::Ref(RegionId(0))]).map(|r| r.to_vec()), uninit_at(h, 0, Some(0), 3));
 }
 
@@ -1593,10 +1602,10 @@ fn a_reference_offered_as_a_value_is_refused_as_a_constant_a_region_and_an_argum
         blocks: vec![block(vec![assign(place(1), Value::Use(konst(r, vec![Scalar::Ref(0)])), 1), assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Deref]))), 2)], ret())],
     });
     assert_eq!(
-        Machine::load(b.program, &[u8t]).map(|_| ()),
+        Machine::load(b.program, &[u8t], STACK).map(|_| ()),
         Err(LoadError::Instruction { function: "k".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" })
     );
-    let mut m = Machine::load(good, &[u8t, r]).unwrap();
+    let mut m = Machine::load(good, &[u8t, r], STACK).unwrap();
     m.set_region(RegionId(0), &[int(Int::U8, 42)]).unwrap();
     assert_eq!(m.set_region(RegionId(1), &[Scalar::Ref(0)]), Err(HostError::Slots), "a region");
     assert_eq!(m.start(f, &[Arg::Value(&[Scalar::Ref(0)])]), Err(HostError::Arguments), "an argument");
@@ -1610,7 +1619,7 @@ fn a_float_slot_of_the_other_kind_is_refused_as_a_constant_a_region_and_an_argum
     let f = b.function(Function { name: "f".into(), params: 1, locals: locals(&[f32t, f32t]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
     let g = b.function(Function { name: "g".into(), params: 1, locals: locals(&[f64t, f64t]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
     let good = b.program.clone();
-    let mut m = Machine::load(good.clone(), &[f32t, f64t]).unwrap();
+    let mut m = Machine::load(good.clone(), &[f32t, f64t], STACK).unwrap();
     assert_eq!(m.set_region(RegionId(0), &[Scalar::F64(1.5)]), Err(HostError::Slots), "an f64 in an f32 region");
     assert_eq!(m.set_region(RegionId(1), &[Scalar::F32(1.5)]), Err(HostError::Slots), "an f32 in an f64 region");
     assert_eq!(m.start(f, &[Arg::Value(&[Scalar::F64(1.5)])]), Err(HostError::Arguments), "an f64 for an f32");
@@ -1619,7 +1628,7 @@ fn a_float_slot_of_the_other_kind_is_refused_as_a_constant_a_region_and_an_argum
         let mut b = Build { program: good.clone() };
         b.function(Function { name: "k".into(), params: 0, locals: locals(&[ty]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(ty, vec![slot])), 1)], ret())] });
         assert_eq!(
-            Machine::load(b.program, &[]).map(|_| ()),
+            Machine::load(b.program, &[], STACK).map(|_| ()),
             Err(LoadError::Instruction { function: "k".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" }),
             "a constant {slot:?}"
         );
@@ -1685,7 +1694,7 @@ fn an_option_of_another_shape_is_no_option_to_a_core_operation() {
                 }
                 _ => core_call(&mut b, op, opt, &[u8t, u32t]),
             }
-            let got = Machine::load(b.program, &[]).map(|_| ());
+            let got = Machine::load(b.program, &[], STACK).map(|_| ());
             if *good {
                 assert_eq!(got, Ok(()), "{op:?} on {shape}");
             } else {
@@ -1715,7 +1724,7 @@ fn a_failed_core_operation_leaves_the_machine_at_its_call() {
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[opt]).unwrap();
+    let mut m = Machine::load(b.program, &[opt], STACK).unwrap();
     let err = m.call(f, &[Arg::Ref(RegionId(0))]).unwrap_err();
     assert!(matches!(err, CallError::Program(ProgramError { kind: ErrorKind::Uninit, .. })), "{err:?}");
     assert_eq!(m.position(), Some((f, BlockId(0), 0)), "the machine stays at the failed call");
@@ -1728,7 +1737,7 @@ fn a_region_by_reference_for_a_parameter_taken_by_value_is_refused() {
     let mut b = Build::default();
     let u8t = b.int(Int::U8);
     let f = b.function(Function { name: "f".into(), params: 1, locals: locals(&[u8t, u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
-    let mut m = Machine::load(b.program, &[u8t]).unwrap();
+    let mut m = Machine::load(b.program, &[u8t], STACK).unwrap();
     m.set_region(RegionId(0), &[int(Int::U8, 5)]).unwrap();
     assert_eq!(m.start(f, &[Arg::Ref(RegionId(0))]), Err(HostError::Arguments));
 }
@@ -1746,7 +1755,7 @@ fn a_scalar_type_listed_twice_is_one_type() {
         locals: locals(&[TypeId(1), TypeId(2)]),
         blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Deref]))), 1)], ret())],
     });
-    let mut m = Machine::load(p, &[TypeId(1)]).expect("one type listed twice loads");
+    let mut m = Machine::load(p, &[TypeId(1)], STACK).expect("one type listed twice loads");
     m.set_region(RegionId(0), &[int(Int::U8, 5)]).unwrap();
     assert_eq!(m.call(FunctionId(0), &[Arg::Ref(RegionId(0))]).map(|r| r.to_vec()), Ok(vec![int(Int::U8, 5)]));
 }
@@ -1771,7 +1780,7 @@ fn a_switch_with_values_on_what_is_no_integer_is_refused() {
             ],
         });
         assert_eq!(
-            Machine::load(b.program, &[]).map(|_| ()),
+            Machine::load(b.program, &[], STACK).map(|_| ()),
             Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "a switch's value outside its operand's type" }),
             "a switch on a {kind}"
         );
@@ -1790,7 +1799,7 @@ fn a_checked_result_into_a_structure_of_three_fields_is_refused() {
         blocks: vec![block(vec![assign(place(0), Value::Checked(BinOp::Add, copy(1), copy(1)), 1)], ret())],
     });
     assert_eq!(
-        Machine::load(b.program, &[]).map(|_| ()),
+        Machine::load(b.program, &[], STACK).map(|_| ()),
         Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a checked result into what is no (value, bool)" })
     );
 }
@@ -1871,7 +1880,7 @@ fn every_scalar_kind_listed_twice_is_one_type_at_every_typed_place() {
     p.functions.push(func("xor", 2, &[ba, ba, bb], one(two(1, 2, BinOp::BitXor)))); // 11
     p.functions.push(func("fadd", 2, &[fa, fa, fb], one(two(1, 2, BinOp::Add)))); // 12
     p.functions.push(func("gadd", 2, &[ga, ga, gb], one(two(1, 2, BinOp::Add)))); // 13
-    let mut m = Machine::load(p, &[opt]).expect("a program listing every scalar kind twice loads");
+    let mut m = Machine::load(p, &[opt], STACK).expect("a program listing every scalar kind twice loads");
     let u = |v| vec![int(Int::U8, v)];
     let cases: Vec<(u32, Vec<Vec<Scalar>>, Vec<Scalar>)> = vec![
         (1, vec![u(7)], u(7)),
@@ -1909,7 +1918,7 @@ fn an_array_whose_first_or_middle_element_is_not_of_its_type_is_refused_as_a_reg
     let program = b.program;
     let (a, c) = (|v| int(Int::U8, v), |v| int(Int::U16, v));
     let good = vec![a(1), c(2), a(3), c(4), a(5), c(6)];
-    let mut m = Machine::load(program.clone(), &[arr]).unwrap();
+    let mut m = Machine::load(program.clone(), &[arr], STACK).unwrap();
     assert_eq!(m.set_region(RegionId(0), &good), Ok(()));
     for (name, wrong) in [("the first", vec![a(1), a(2), a(3), c(4), a(5), c(6)]), ("the middle", vec![a(1), c(2), a(3), a(4), a(5), c(6)])] {
         assert_eq!(m.set_region(RegionId(0), &wrong), Err(HostError::Slots), "{name} element's u16 a u8, as a region");
@@ -1918,7 +1927,7 @@ fn an_array_whose_first_or_middle_element_is_not_of_its_type_is_refused_as_a_reg
         let mut p = program.clone();
         p.functions.push(Function { name: "k".into(), params: 0, locals: locals(&[arr]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(arr, wrong.clone())), 1)], ret())] });
         assert_eq!(
-            Machine::load(p, &[]).map(|_| ()),
+            Machine::load(p, &[], STACK).map(|_| ()),
             Err(LoadError::Instruction { function: "k".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" }),
             "{name}, as a constant"
         );
@@ -1932,7 +1941,7 @@ fn every_argument_of_a_start_is_checked_not_the_first_alone() {
     let (u8t, u16t) = (b.int(Int::U8), b.int(Int::U16));
     let r16 = b.reference(u16t, false);
     let f = b.function(Function { name: "f".into(), params: 4, locals: locals(&[u8t, u8t, r16, u8t, r16]), blocks: vec![block(vec![assign(place(0), Value::Use(copy(1)), 1)], ret())] });
-    let mut m = Machine::load(b.program, &[u16t, u8t]).unwrap();
+    let mut m = Machine::load(b.program, &[u16t, u8t], STACK).unwrap();
     let (x, y, wide, two) = ([int(Int::U8, 1)], [int(Int::U8, 2)], [int(Int::U16, 2)], [int(Int::U8, 2), int(Int::U8, 3)]);
     assert_eq!(m.start(f, &[Arg::Value(&x), Arg::Ref(RegionId(0)), Arg::Value(&y), Arg::Ref(RegionId(0))]), Ok(()));
     m.abort();
@@ -1964,13 +1973,13 @@ fn a_later_call_argument_and_a_later_aggregate_part_of_another_type_are_refused(
         ],
     });
     assert_eq!(
-        Machine::load(call.program, &[]).map(|_| ()),
+        Machine::load(call.program, &[], STACK).map(|_| ()),
         Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "an argument of another type than its parameter" })
     );
     let mut agg = Build { program: b.program };
     agg.function(Function { name: "f".into(), params: 2, locals: locals(&[s, u8t, u16t]), blocks: vec![block(vec![assign(place(0), Value::Aggregate(s, None, vec![copy(1), copy(2)]), 1)], ret())] });
     assert_eq!(
-        Machine::load(agg.program, &[]).map(|_| ()),
+        Machine::load(agg.program, &[], STACK).map(|_| ()),
         Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a part of another type than its place" })
     );
 }
@@ -2032,7 +2041,7 @@ fn moved_operands_run_as_copies_do() {
             block(vec![assign(place(0), Value::Aggregate(out, None, vec![konst(u32t, vec![int(Int::U32, 0)]), mv(2)]), 6)], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).expect("a program of moves loads");
+    let mut m = Machine::load(b.program, &[], STACK).expect("a program of moves loads");
     let run = |m: &mut Machine, n: i128, x: Duration| {
         let (a, c) = ([int(Int::U32, n)], dur(x));
         let r = m.call(f, &[Arg::Value(&a), Arg::Value(&c)]).map(|r| r.to_vec());
@@ -2074,7 +2083,7 @@ fn an_unwritten_right_operand_is_uninit() {
         locals: locals(&[boolean, f32t, rf32]),
         blocks: vec![block(vec![assign(place(0), Value::Binary(BinOp::Lt, copy(1), copy_at(proj(2, vec![Projection::Deref]))), 8)], ret())],
     });
-    let mut m = Machine::load(b.program, &[u8t, f32t]).unwrap();
+    let mut m = Machine::load(b.program, &[u8t, f32t], STACK).unwrap();
     let one = [int(Int::U8, 1)];
     let e = m.call(h, &[Arg::Value(&one), Arg::Ref(RegionId(0))]).map(|r| r.to_vec());
     assert_eq!(e, Err(CallError::Program(ProgramError { function: h, block: BlockId(0), statement: Some(0), at: at(7), kind: ErrorKind::Uninit })));
@@ -2092,7 +2101,7 @@ fn one_statement(types: &[Type], locals_: &[u32], value: Value) -> LoadError {
         locals: locals(&locals_.iter().map(|t| TypeId(*t)).collect::<Vec<_>>()),
         blocks: vec![block(vec![assign(place(0), value, 1)], ret())],
     });
-    Machine::load(p, &[]).map(|_| ()).expect_err("refused")
+    Machine::load(p, &[], STACK).map(|_| ()).expect_err("refused")
 }
 
 fn at_statement(reason: &'static str) -> LoadError {
@@ -2121,7 +2130,7 @@ fn every_operand_of_a_binary_or_checked_operation_is_checked_at_load() {
 fn a_negative_discriminant_of_an_unsigned_enum_and_a_switch_value_below_the_least_are_refused() {
     let mut b = Build::default();
     b.ty(Type::Enum { name: "E".into(), discriminant: Int::U8, variants: vec![Variant { name: "A".into(), discriminant: -1, fields: vec![] }] });
-    assert_eq!(Machine::load(b.program, &[]).map(|_| ()), Err(LoadError::Type { ty: 0, reason: "a discriminant outside its type" }));
+    assert_eq!(Machine::load(b.program, &[], STACK).map(|_| ()), Err(LoadError::Type { ty: 0, reason: "a discriminant outside its type" }));
     let mut b = Build::default();
     let u8t = b.int(Int::U8);
     b.function(Function {
@@ -2134,7 +2143,7 @@ fn a_negative_discriminant_of_an_unsigned_enum_and_a_switch_value_below_the_leas
         ],
     });
     assert_eq!(
-        Machine::load(b.program, &[]).map(|_| ()),
+        Machine::load(b.program, &[], STACK).map(|_| ()),
         Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "a switch's value outside its operand's type" })
     );
 }
@@ -2159,7 +2168,7 @@ fn get_or_insert_through_a_shared_reference_and_a_default_of_a_structure_are_ref
                 block(vec![], ret()),
             ],
         });
-        Machine::load(p.program, &[]).map(|_| ())
+        Machine::load(p.program, &[], STACK).map(|_| ())
     };
     let refused = Err(LoadError::Instruction { function: "f".into(), block: 0, statement: None, reason: "a core operation called with types it does not take" });
     assert_eq!(call(&b, CoreOp::OptionGetOrInsert, rd, &[ropt, d]), Ok(()), "the right shape");
@@ -2187,7 +2196,7 @@ fn an_assertion_s_error_names_the_check_it_carries() {
                 block(vec![assign(place(0), Value::Use(copy(1)), 2)], ret()),
             ],
         });
-        let mut m = Machine::load(b.program, &[]).unwrap();
+        let mut m = Machine::load(b.program, &[], STACK).unwrap();
         let zero = [int(Int::U8, 0)];
         assert_eq!(
             m.call(f, &[Arg::Value(&zero)]).map(|r| r.to_vec()),
@@ -2223,7 +2232,7 @@ fn a_call_fails_at_its_own_location_and_writes_its_result_through_a_reference() 
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[u8t]).unwrap();
+    let mut m = Machine::load(b.program, &[u8t], STACK).unwrap();
     let (a, i) = ([int(Int::U8, 1), int(Int::U8, 2)], [int(Int::Usize, 2)]);
     assert_eq!(
         m.call(f, &[Arg::Value(&a), Arg::Value(&i)]).map(|r| r.to_vec()),
@@ -2254,7 +2263,7 @@ fn a_variant_written_over_a_larger_one_leaves_the_rest_unwritten() {
             ret(),
         )],
     });
-    let mut m = Machine::load(b.program, &[opt]).unwrap();
+    let mut m = Machine::load(b.program, &[opt], STACK).unwrap();
     m.call(reset, &[Arg::Ref(RegionId(0)), Arg::Value(&dur(Duration::from_millis(250)))]).unwrap();
     let read = m.region(RegionId(0)).unwrap().to_vec();
     assert_eq!(read, vec![int(Int::Isize, 0), Scalar::Uninit, Scalar::Uninit], "None, and no payload left");
@@ -2280,7 +2289,7 @@ fn a_copy_stands_where_the_original_stood_in_its_regions_too() {
             ret(),
         )],
     });
-    let mut m = Machine::load(b.program, &[u32t]).unwrap();
+    let mut m = Machine::load(b.program, &[u32t], STACK).unwrap();
     m.set_region(RegionId(0), &[int(Int::U32, 41)]).unwrap();
     m.start(bump, &[Arg::Ref(RegionId(0))]).unwrap();
     let mut idle = m.clone();
@@ -2302,7 +2311,7 @@ fn a_copy_of_an_idle_machine_shows_the_last_result() {
     let mut b = Build::default();
     let u8t = b.int(Int::U8);
     let f = b.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 7)])), 1)], ret())] });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     m.call(f, &[]).unwrap();
     let copy = m.clone();
     assert_eq!((copy.result(), copy.running(), copy.steps()), (m.result(), m.running(), m.steps()));
@@ -2384,7 +2393,7 @@ fn core_operations_take_their_operands_by_move_as_rustc_passes_them() {
             block(vec![assign(place(0), Value::Aggregate(out, None, vec![mv(5), mv(9), mv(12), mv(14), mv(15)]), 6)], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[opt]).expect("a program moving into core operations loads");
+    let mut m = Machine::load(b.program, &[opt], STACK).expect("a program moving into core operations loads");
     m.set_region(RegionId(0), &[int(Int::Isize, 0), Scalar::Uninit, Scalar::Uninit]).unwrap();
     let mut native: Option<Duration> = None;
     for (v, x) in [(Duration::from_millis(700), 3u8), (Duration::from_millis(500), 100), (Duration::from_millis(900), 130)] {
@@ -2418,7 +2427,7 @@ fn a_downcast_one_past_the_last_variant_is_refused() {
         locals: locals(&[u8t, opt]),
         blocks: vec![block(vec![assign(place(0), Value::Use(copy_at(proj(1, vec![Projection::Downcast(2), Projection::Field(0)]))), 1)], ret())],
     });
-    assert_eq!(Machine::load(b.program, &[]).map(|_| ()), Err(at_statement("no such variant")));
+    assert_eq!(Machine::load(b.program, &[], STACK).map(|_| ()), Err(at_statement("no such variant")));
 }
 
 /// d06: `switchInt(const true)` takes the branch its constant names.
@@ -2436,7 +2445,7 @@ fn a_switch_on_a_constant_takes_its_constant_s_branch() {
             block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 2)])), 3)], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     assert_eq!(m.call(f, &[]).unwrap(), &[int(Int::U8, 1)]);
 }
 
@@ -2454,7 +2463,7 @@ fn the_last_listed_variant_s_slots_past_its_fields_must_be_unwritten() {
             Variant { name: "C".into(), discriminant: -3, fields: vec![Field { name: "0".into(), ty: i64t }] },
         ],
     });
-    let mut m = Machine::load(b.program, &[e]).unwrap();
+    let mut m = Machine::load(b.program, &[e], STACK).unwrap();
     assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, -3), int(Int::I64, -9), Scalar::Uninit]), Ok(()));
     assert_eq!(m.set_region(RegionId(0), &[int(Int::Isize, -3), int(Int::I64, -9), Scalar::Bool(true)]), Err(HostError::Slots), "C(-9) with B's bool left behind");
 }
@@ -2512,7 +2521,7 @@ fn an_entry_larger_than_function_0_has_every_local_unwritten_again_at_every_star
     b.function(Function { name: "first".into(), params: 0, locals: locals(&[unit]), blocks: vec![block(vec![], ret())] });
     let u8t = b.int(Int::U8);
     let g = maybe_unwritten_r16(&mut b, "g", &[u8t, u8t, u8t]);
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     assert_eq!(m.call(g, &[Arg::Value(&[Scalar::Bool(true)])]).unwrap(), &[int(Int::U8, 7)]);
     let got = m.call(g, &[Arg::Value(&[Scalar::Bool(false)])]).map(|r| r.to_vec());
     assert!(uninit_in(got.clone(), g), "y kept the last run's value: {got:?}");
@@ -2527,7 +2536,7 @@ fn a_callee_larger_than_function_0_has_every_local_unwritten_again_at_every_call
     let u8t = b.int(Int::U8);
     let g = maybe_unwritten_r16(&mut b, "g", &[u8t, u8t, u8t]);
     let f = caller_of(&mut b, g);
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     assert_eq!(m.call(f, &[Arg::Value(&[Scalar::Bool(true)])]).unwrap(), &[int(Int::U8, 7)]);
     let got = m.call(f, &[Arg::Value(&[Scalar::Bool(false)])]).map(|r| r.to_vec());
     assert!(uninit_in(got.clone(), g), "y kept the last call's value: {got:?}");
@@ -2541,7 +2550,7 @@ fn a_callee_s_locals_are_unwritten_at_its_call_after_a_run_stopped_or_failed_ins
     let mut b = Build::default();
     let g = maybe_unwritten_r16(&mut b, "g", &[]);
     let f = caller_of(&mut b, g);
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     m.start(f, &[Arg::Value(&[Scalar::Bool(true)])]).unwrap();
     while m.position() != Some((g, BlockId(2), 0)) {
         assert_eq!(m.step(), Ok(Step::Ran));
@@ -2554,7 +2563,7 @@ fn a_callee_s_locals_are_unwritten_at_its_call_after_a_run_stopped_or_failed_ins
     let mut b = Build::default();
     let g = maybe_unwritten_r16_then(&mut b, "g", &[], Terminator::Unreachable { at: at(2) });
     let f = caller_of(&mut b, g);
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let got = m.call(f, &[Arg::Value(&[Scalar::Bool(true)])]).map(|r| r.to_vec());
     assert!(matches!(got, Err(CallError::Program(ProgramError { kind: ErrorKind::Unreachable, .. }))), "{got:?}");
     m.abort();
@@ -2593,7 +2602,7 @@ fn read_through_another_variant(secs: (Int, i128), nanos: (Int, i128)) -> Result
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     m.call(f, &[]).map(|r| r.to_vec())
 }
 
@@ -2656,7 +2665,7 @@ fn an_entry_whose_first_call_is_the_deepest_in_frames_has_room_for_it() {
             block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(1), copy(2)), 5)], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let got = m.call(scan, &[]).map(|r| r.to_vec());
     println!("scan(): {got:?}");
     assert_eq!(got, Ok(vec![int(Int::U8, 6)]), "conveyor() + alarm(), three frames deep along the first call");
@@ -2677,7 +2686,7 @@ fn a_none_with_only_its_second_payload_slot_written_is_no_value() {
     let take = b.function(Function { name: "take".into(), params: 1, locals: locals(&[unit, opt]), blocks: vec![block(vec![], ret())] });
     let _ = take;
     let program = b.program.clone();
-    let mut m = Machine::load(program, &[opt]).unwrap();
+    let mut m = Machine::load(program, &[opt], STACK).unwrap();
     assert_eq!(m.set_region(RegionId(0), &none), Ok(()), "a None");
     let got = m.set_region(RegionId(0), &stray);
     println!("set_region(None with a stray nanosecond): {got:?}, region now {:?}", m.region(RegionId(0)));
@@ -2686,7 +2695,7 @@ fn a_none_with_only_its_second_payload_slot_written_is_no_value() {
     let mut p = Build { program: b.program.clone() };
     p.function(Function { name: "f".into(), params: 0, locals: locals(&[opt]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(opt, stray.clone())), 1)], ret())] });
     assert_eq!(
-        Machine::load(p.program, &[]).map(|_| ()),
+        Machine::load(p.program, &[], STACK).map(|_| ()),
         Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a constant whose slots are not its type's" }),
         "as a constant"
     );
@@ -2699,7 +2708,7 @@ fn a_float_cast_as_bool_is_refused() {
         let mut b = Build::default();
         let (f, boolean) = (b.ty(float.clone()), b.bool());
         b.function(Function { name: "f".into(), params: 1, locals: locals(&[boolean, f]), blocks: vec![block(vec![assign(place(0), Value::Cast(copy(1), boolean), 1)], ret())] });
-        let got = Machine::load(b.program, &[]).map(|_| ());
+        let got = Machine::load(b.program, &[], STACK).map(|_| ());
         println!("{float:?} as bool: {got:?}");
         assert_eq!(got, Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "a cast `as` does not make" }), "{float:?} as bool");
     }
@@ -2732,7 +2741,7 @@ fn a_duration_whose_nanoseconds_were_never_written_is_uninit() {
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let got = m.call(f, &[]);
     println!("min of a half-written duration: {got:?}");
     assert!(matches!(got, Err(CallError::Program(ProgramError { kind: ErrorKind::Uninit, statement: None, .. }))), "{got:?}");
@@ -2774,7 +2783,7 @@ fn entry_first(deep_first: bool) -> Program {
 #[test]
 fn an_entry_listed_before_its_callees_has_room_for_its_deepest_call_first_or_last() {
     for deep_first in [true, false] {
-        let mut m = Machine::load(entry_first(deep_first), &[]).unwrap();
+        let mut m = Machine::load(entry_first(deep_first), &[], STACK).unwrap();
         let got = m.call(FunctionId(0), &[]).map(|r| r.to_vec());
         assert_eq!(got, Ok(vec![int(Int::U8, 6)]), "deep call first: {deep_first}");
         let mut copy = m.clone();
@@ -2795,7 +2804,138 @@ fn a_function_refused_for_itself_before_a_sound_one_is_named() {
         let mut p = Build { program: b.program.clone() };
         p.function(bad);
         p.function(sound.clone());
-        let got = Machine::load(p.program.clone(), &[]).map(|_| ());
+        let got = Machine::load(p.program.clone(), &[], STACK).map(|_| ());
         assert_eq!(got, Err(LoadError::Function { function: "bad".into(), reason }), "{reason}");
     }
+}
+
+// The stack the host gives (`docs/questions.md` Q230, ruled on 2026-11-26): every program loads, one whose functions
+// call themselves among them, and runs on a stack of the host's size in slots; a call past it, in slots or in
+// frames, is the program's own error at that call, and an entry the stack cannot hold is refused when started.
+
+fn sum_of(n: u32) -> [Scalar; 1] {
+    [int(Int::U32, n.into())]
+}
+
+#[test]
+fn a_function_calling_itself_runs_on_the_host_s_stack_to_its_edge() {
+    let mut b = Build::default();
+    let f = sum(&mut b);
+    // sum(n) holds n + 1 frames of five slots: on 50 slots, sum(9) is the deepest that fits, exactly
+    let mut m = Machine::load(b.program.clone(), &[], 50).unwrap();
+    assert_eq!(m.memory().len(), 50);
+    for n in 0..=9u32 {
+        assert_eq!(m.call(f, &[Arg::Value(&sum_of(n))]).unwrap(), &sum_of(n * (n + 1) / 2), "sum({n})");
+    }
+    // sum(10): its eleventh frame is a call past the stack, the program's own error at that call
+    m.start(f, &[Arg::Value(&sum_of(10))]).unwrap();
+    while m.depth() < 10 || m.position() != Some((f, BlockId(2), 1)) {
+        assert_eq!(m.step(), Ok(Step::Ran));
+    }
+    let before = m.memory().to_vec();
+    let failed = ProgramError { function: f, block: BlockId(2), statement: None, at: at(3), kind: ErrorKind::Stack };
+    assert_eq!(m.step(), Err(failed));
+    // the machine stands at the call, ten frames deep, nothing written; every step after gives the error again
+    assert_eq!((m.position(), m.depth()), (Some((f, BlockId(2), 1)), 10));
+    assert_eq!(m.memory(), &before[..]);
+    assert_eq!(m.step(), Err(failed));
+    // aborted, the same machine runs what fits again
+    m.abort();
+    assert_eq!(m.call(f, &[Arg::Value(&sum_of(9))]).unwrap(), &sum_of(45));
+    assert_eq!(m.call(f, &[Arg::Value(&sum_of(10))]).map(|r| r.to_vec()), Err(CallError::Program(failed)));
+    // on 55 slots sum(10) fits, and sum(11) does not
+    let mut m = Machine::load(b.program, &[], 55).unwrap();
+    assert_eq!(m.call(f, &[Arg::Value(&sum_of(10))]).unwrap(), &sum_of(55));
+    assert_eq!(m.call(f, &[Arg::Value(&sum_of(11))]).map(|r| r.to_vec()), Err(CallError::Program(failed)));
+}
+
+#[test]
+fn frames_of_no_slot_count_one_each_against_the_stack() {
+    // `fn f() { f() }`, its frame of no slot: as many frames as the stack has slots, then a call past it
+    let program = || {
+        let mut b = Build::default();
+        let unit = b.unit();
+        let call = Terminator::Call { callee: Callee::Function(FunctionId(0)), args: vec![], dest: place(0), next: BlockId(0), at: at(1) };
+        let f = b.function(Function { name: "f".into(), params: 0, locals: locals(&[unit]), blocks: vec![block(vec![], call)] });
+        (b.program, f)
+    };
+    for stack in [1u32, 2, 3, 4, 100] {
+        let (p, f) = program();
+        let mut m = Machine::load(p, &[], stack).unwrap();
+        let failed = ProgramError { function: f, block: BlockId(0), statement: None, at: at(1), kind: ErrorKind::Stack };
+        assert_eq!(m.call(f, &[]).map(|r| r.to_vec()), Err(CallError::Program(failed)), "a stack of {stack}");
+        assert_eq!((m.depth(), m.steps()), (stack as usize, u64::from(stack - 1)), "a stack of {stack}");
+    }
+    // a stack of none starts no entry, however small its frame
+    let (p, f) = program();
+    let mut m = Machine::load(p, &[], 0).unwrap();
+    assert_eq!(m.memory().len(), 0);
+    assert_eq!(m.start(f, &[]), Err(HostError::Stack));
+    assert!(!m.running());
+    assert_eq!(m.call(f, &[]).map(|r| r.to_vec()), Err(CallError::Host(HostError::Stack)));
+}
+
+/// `fn even(n: u32) -> bool { if n == 0 { true } else { odd(n - 1) } }` and `odd` its mirror: two functions that
+/// call each other, four slots a frame, at FunctionId 0 and 1.
+fn parity(b: &mut Build, name: &str, at_zero: bool, other: FunctionId) -> FunctionId {
+    let (u32t, boolean) = (b.int(Int::U32), b.bool());
+    let (zero, one) = (konst(u32t, vec![int(Int::U32, 0)]), konst(u32t, vec![int(Int::U32, 1)]));
+    b.function(Function {
+        name: name.into(),
+        params: 1,
+        locals: locals(&[boolean, u32t, boolean, u32t]),
+        blocks: vec![
+            block(
+                vec![assign(place(2), Value::Binary(BinOp::Eq, copy(1), zero), 1)],
+                Terminator::SwitchInt { value: copy(2), targets: vec![(0, BlockId(2))], otherwise: BlockId(1), at: at(1) },
+            ),
+            block(vec![assign(place(0), Value::Use(konst(boolean, vec![Scalar::Bool(at_zero)])), 2)], ret()),
+            block(
+                vec![assign(place(3), Value::Binary(BinOp::Sub, copy(1), one), 3)],
+                Terminator::Call { callee: Callee::Function(other), args: vec![copy(3)], dest: place(0), next: BlockId(3), at: at(3) },
+            ),
+            block(vec![], ret()),
+        ],
+    })
+}
+
+#[test]
+fn two_functions_calling_each_other_run_on_the_host_s_stack_to_its_edge() {
+    let mut b = Build::default();
+    let even = parity(&mut b, "even", true, FunctionId(1));
+    let odd = parity(&mut b, "odd", false, FunctionId(0));
+    // even(n) holds n + 1 frames of four slots: on 40 slots, even(9) is the deepest that fits
+    let mut m = Machine::load(b.program, &[], 40).unwrap();
+    for n in 0..=9u32 {
+        assert_eq!(m.call(even, &[Arg::Value(&sum_of(n))]).unwrap(), &[Scalar::Bool(n % 2 == 0)], "even({n})");
+        if n <= 8 {
+            assert_eq!(m.call(odd, &[Arg::Value(&sum_of(n))]).unwrap(), &[Scalar::Bool(n % 2 == 1)], "odd({n})");
+        }
+    }
+    // even(10)'s tenth frame is odd(1), whose call of even(0) does not fit
+    let failed = ProgramError { function: odd, block: BlockId(2), statement: None, at: at(3), kind: ErrorKind::Stack };
+    assert_eq!(m.call(even, &[Arg::Value(&sum_of(10))]).map(|r| r.to_vec()), Err(CallError::Program(failed)));
+    assert_eq!(m.depth(), 10);
+}
+
+#[test]
+fn an_entry_whose_frame_the_stack_cannot_hold_is_refused_when_started_nothing_written() {
+    // `fn f() -> u8 { let a: [u8; 8]; 5 }`, nine slots, behind a region of three
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let (eight, three) = (b.ty(Type::Array { element: u8t, len: 8 }), b.ty(Type::Array { element: u8t, len: 3 }));
+    let five = vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 5)])), 1)];
+    let f = b.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t, eight]), blocks: vec![block(five, ret())] });
+    let mut m = Machine::load(b.program.clone(), &[three], 8).unwrap();
+    assert_eq!(m.memory().len(), 3 + 8, "the region, then the stack");
+    let region = [int(Int::U8, 1), int(Int::U8, 2), int(Int::U8, 3)];
+    m.set_region(RegionId(0), &region).unwrap();
+    let before = m.memory().to_vec();
+    assert_eq!(m.start(f, &[]), Err(HostError::Stack));
+    assert!(!m.running());
+    assert_eq!(m.memory(), &before[..]);
+    assert_eq!(m.call(f, &[]).map(|r| r.to_vec()), Err(CallError::Host(HostError::Stack)));
+    // a stack of its nine slots holds it
+    let mut m = Machine::load(b.program, &[three], 9).unwrap();
+    assert_eq!(m.call(f, &[]).unwrap(), &[int(Int::U8, 5)]);
 }

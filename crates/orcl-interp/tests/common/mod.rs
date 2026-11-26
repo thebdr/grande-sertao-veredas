@@ -55,6 +55,10 @@ impl Build {
     }
 }
 
+/// The stack the tests' programs run on, in slots (`docs/questions.md` Q230: the host's size): room for every program
+/// here but the ones that ask for less or more on purpose.
+pub const STACK: u32 = 4096;
+
 pub fn locals(types: &[TypeId]) -> Vec<LocalDecl> {
     types.iter().map(|t| LocalDecl { ty: *t, name: None }).collect()
 }
@@ -134,4 +138,29 @@ pub fn samples(t: Int, rng: &mut Rng, extra: usize) -> Vec<i128> {
     v.sort();
     v.dedup();
     v
+}
+
+/// `fn sum(n: u32) -> u32 { if n == 0 { 0 } else { n + sum(n - 1) } }`, wrapping, as MIR has it: a function that
+/// calls itself, five slots a frame, `sum(n)` holding `n + 1` frames; its call at line 3, in block 2.
+pub fn sum(b: &mut Build) -> FunctionId {
+    let (u32t, boolean) = (b.int(Int::U32), b.bool());
+    let me = FunctionId(b.program.functions.len() as u32);
+    let (zero, one) = (konst(u32t, vec![int(Int::U32, 0)]), konst(u32t, vec![int(Int::U32, 1)]));
+    b.function(Function {
+        name: "sum".into(),
+        params: 1,
+        locals: locals(&[u32t, u32t, boolean, u32t, u32t]),
+        blocks: vec![
+            block(
+                vec![assign(place(2), Value::Binary(BinOp::Eq, copy(1), zero.clone()), 1)],
+                Terminator::SwitchInt { value: copy(2), targets: vec![(0, BlockId(2))], otherwise: BlockId(1), at: at(1) },
+            ),
+            block(vec![assign(place(0), Value::Use(zero), 2)], ret()),
+            block(
+                vec![assign(place(3), Value::Binary(BinOp::Sub, copy(1), one), 3)],
+                Terminator::Call { callee: Callee::Function(me), args: vec![copy(3)], dest: place(4), next: BlockId(3), at: at(3) },
+            ),
+            block(vec![assign(place(0), Value::Binary(BinOp::Add, copy(1), copy(4)), 4)], ret()),
+        ],
+    })
 }

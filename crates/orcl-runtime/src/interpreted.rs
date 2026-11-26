@@ -50,7 +50,8 @@ pub enum MakeError {
     Inputs,
     /// The outputs' default, or the safe outputs, are not a value of the outputs' type, or read back as none.
     Outputs,
-    /// The entry is no function of the program, or does not take references to the four regions.
+    /// The entry is no function of the program, does not take references to the four regions, or has a frame the
+    /// stack cannot hold.
     Entry(HostError),
 }
 
@@ -108,13 +109,14 @@ fn scan_slots(slots: &mut Vec<Scalar>, scan: &Scan) {
 }
 
 impl<I: Image, O: Image> Interpreted<I, O> {
-    /// Loads `program` with its four regions and checks that `entry` takes them: `state` is its first state and
-    /// `safe` its safe outputs, both handed in by the host (`docs/questions.md` Q231, DECISION PENDING: the front end
-    /// would compute them). The inputs' and the outputs' defaults, the safe outputs and a scan must each be a value of
-    /// its region's type.
-    pub fn new(program: Program, entry: FunctionId, regions: Regions, state: &[Scalar], safe: O) -> Result<Self, MakeError> {
+    /// Loads `program` with its four regions and a stack of `stack` slots, and checks that `entry` takes the
+    /// regions and that the stack holds its frame: `state` is its first state and `safe` its safe outputs, both
+    /// handed in by the host until the program file carries them (`docs/questions.md` Q231, ruled: the front end
+    /// computes them), and the stack's size is the target's settings', handed in by the host too (Q230). The inputs'
+    /// and the outputs' defaults, the safe outputs and a scan must each be a value of its region's type.
+    pub fn new(program: Program, entry: FunctionId, regions: Regions, state: &[Scalar], safe: O, stack: u32) -> Result<Self, MakeError> {
         let types = [regions.state, regions.scan, regions.inputs, regions.outputs];
-        let mut machine = Machine::load(program, &types).map_err(MakeError::Load)?;
+        let mut machine = Machine::load(program, &types, stack).map_err(MakeError::Load)?;
         machine.set_region(STATE, state).map_err(|_| MakeError::State)?;
         if !is_a_scan(machine.program(), regions.scan) {
             return Err(MakeError::Scan);

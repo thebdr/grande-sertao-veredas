@@ -203,8 +203,11 @@ fn code() -> Code {
 
 const REGIONS: Regions = Regions { state: COUNT, scan: SCAN, inputs: IN, outputs: OUT };
 
+/// The stack the program runs on, in slots, as the target's settings will give it (`docs/questions.md` Q230).
+const STACK: u32 = 1024;
+
 fn loaded(first: &[Scalar]) -> Loaded<In, Out> {
-    Loaded::new(code(), FunctionId(0), REGIONS, first.to_vec(), SAFE)
+    Loaded::new(code(), FunctionId(0), REGIONS, first.to_vec(), SAFE, STACK)
 }
 
 fn first() -> Vec<Scalar> {
@@ -421,7 +424,7 @@ fn what_safe_rust_cannot_reach_is_the_runtime_s_fault_not_the_program_s() {
     let mut unreachable = code();
     unreachable.functions[0].blocks[0].terminator = Terminator::Unreachable { at: at(2) };
     for program in [uninit, unreachable] {
-        let source = Loaded::new(program, FunctionId(0), REGIONS, first(), SAFE);
+        let source = Loaded::new(program, FunctionId(0), REGIONS, first(), SAFE, STACK);
         let c = Controller::power_on_from(config(), SIM, Restart::First, source).unwrap();
         let (c, plant, _) = started(c, steady, 3);
         assert_eq!(text(&c), "FAULT internal(id=507) sim() no_realtime()");
@@ -519,7 +522,7 @@ fn overflowing() -> Code {
 }
 
 fn on(program: Code) -> Controller<Interpreted<In, Out>, Loaded<In, Out>> {
-    Controller::power_on_from(config(), SIM, Restart::First, Loaded::new(program, FunctionId(0), REGIONS, first(), SAFE)).unwrap()
+    Controller::power_on_from(config(), SIM, Restart::First, Loaded::new(program, FunctionId(0), REGIONS, first(), SAFE, STACK)).unwrap()
 }
 
 #[test]
@@ -1070,4 +1073,54 @@ fn after_an_acknowledged_program_fault_the_safe_outputs_are_on_the_target_s_peri
     step(&mut c, &mut plant, &mut clock, 3);
     assert_eq!(text(&c), "RUN");
     assert_eq!(plant.writes, (0..3).map(|k| (ms(10) * k as u32, scanned(FIRST + 1 + k as u32, k as usize))).collect::<Vec<_>>());
+}
+
+// The stack the host hands in (`docs/questions.md` Q230): a scan that calls a function calling itself runs until the
+// stack is full, and that call past it is the program's own fault, 502 at its place; a stack that cannot hold the
+// scan entry's own frame makes no program, STOP 104.
+
+/// The program with its scan calling `spin` after it wrote its outputs, `fn spin() { spin() }` at `count.rs:7:9`.
+fn spinning() -> Code {
+    let mut program = code();
+    let then = Terminator::Call { callee: orcl_interp::Callee::Function(FunctionId(1)), args: vec![], dest: Place::local(0), next: BlockId(2), at: at(4) };
+    program.functions[0].blocks[1].terminator = then;
+    program.functions[0].blocks.push(Block { statements: vec![], terminator: Terminator::Return { at: at(5) } });
+    let spin = Terminator::Call {
+        callee: orcl_interp::Callee::Function(FunctionId(1)),
+        args: vec![],
+        dest: Place::local(0),
+        next: BlockId(0),
+        at: Span { file: 1, line: 7, column: 9 },
+    };
+    program.functions.push(Function {
+        name: "spin".into(),
+        params: 0,
+        locals: vec![LocalDecl { ty: UNIT, name: None }],
+        blocks: vec![Block { statements: vec![], terminator: spin }],
+    });
+    program
+}
+
+#[test]
+fn a_call_past_the_stack_is_the_program_s_fault_at_its_place() {
+    let source = Loaded::new(spinning(), FunctionId(0), REGIONS, first(), SAFE, STACK);
+    let c = Controller::power_on_from(config(), SIM, Restart::First, source).unwrap();
+    let (c, plant, _) = started(c, steady, 3);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:7:9") sim() no_realtime()"#);
+    assert_eq!(plant.writes.iter().map(|w| w.1).collect::<Vec<_>>(), [SAFE.value; 3], "the faulting scan's outputs never sent");
+    let program = c.program().unwrap();
+    assert_eq!(program.machine().depth(), STACK as usize, "as many frames as the stack has slots, spin's holding none");
+}
+
+#[test]
+fn a_stack_that_cannot_hold_the_scan_entry_s_frame_makes_no_program() {
+    // the scan's frame: four references and four scalars, eight slots
+    let c = Controller::power_on_from(config(), SIM, Restart::First, Loaded::<In, Out>::new(code(), FunctionId(0), REGIONS, first(), SAFE, 8)).unwrap();
+    assert_eq!((text(&c), c.load_error()), ("STOP sim() no_realtime()".to_string(), None));
+    let (c, plant, _) = started(c, steady, 2);
+    assert_eq!(text(&c), "RUN sim() no_realtime()");
+    assert_eq!(plant.writes.iter().map(|w| w.1).collect::<Vec<_>>(), [scanned(FIRST + 1, 0), scanned(FIRST + 2, 1)]);
+    let c = Controller::power_on_from(config(), SIM, Restart::First, Loaded::<In, Out>::new(code(), FunctionId(0), REGIONS, first(), SAFE, 7)).unwrap();
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
+    assert_eq!(c.load_error(), Some(&MakeError::Entry(orcl_interp::HostError::Stack)));
 }

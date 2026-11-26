@@ -80,7 +80,7 @@ fn ton() -> Ton {
             block(vec![assign(place(0), Value::Use(copy_at(selff(0))), 11)], ret()),
         ],
     });
-    let machine = Machine::load(b.program, &[ton, scan]).expect("the on-delay loads");
+    let machine = Machine::load(b.program, &[ton, scan], STACK).expect("the on-delay loads");
     Ton { machine, scan: f }
 }
 
@@ -166,7 +166,7 @@ fn the_rising_edge_lowered_by_hand_agrees_with_orcl_std_s_over_every_trace_of_te
             ),
         ],
     });
-    let mut m = Machine::load(b.program, &[rtrig]).unwrap();
+    let mut m = Machine::load(b.program, &[rtrig], STACK).unwrap();
     for pattern in 0u32..1024 {
         m.set_region(RegionId(0), &[Scalar::Bool(false), Scalar::Bool(false)]).unwrap();
         let mut native = orcl_std::RTrig::default();

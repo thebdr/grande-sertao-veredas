@@ -114,3 +114,26 @@ fn no_source_reaches_std_prints_or_reads_a_clock() {
         assert!(!squeezed.contains("externcrate"), "{} brings a crate in by name", path.display());
     }
 }
+
+// The twenty-fifth refute round's kill-test, kept for the clause's next change and adopted with Q230's: a panic path
+// a denied lint names (`unwrap`, `expect`, indexing), written in a form the lint does not see: inside a local
+// `macro_rules!`, as a function value, or as a path call to `Index::index`.
+#[test]
+fn no_source_hides_a_panic_the_denied_lints_name_in_a_form_they_miss() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let text = std::fs::read_to_string(&path).unwrap();
+        // comment lines left out, as the root's reading of std does; the code's words read
+        let code: Vec<&str> = text.lines().filter(|line| !line.trim_start().starts_with("//")).collect();
+        let code = code.join("\n");
+        let words: Vec<&str> = code.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).collect();
+        for refused in ["macro_rules", "unwrap", "expect", "unwrap_err", "expect_err", "unwrap_unchecked"] {
+            assert!(!words.contains(&refused), "{} names `{refused}`", path.display());
+        }
+        let squeezed: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+        for call in ["Index::index", "IndexMut::index_mut"] {
+            assert!(!squeezed.contains(call), "{} calls `{call}`", path.display());
+        }
+    }
+}

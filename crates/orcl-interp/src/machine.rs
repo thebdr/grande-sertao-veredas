@@ -53,6 +53,10 @@ pub enum ErrorKind {
     Unreachable,
     /// An index past an array's end.
     Bounds { index: i128, len: u32 },
+    /// A call past the stack: its callee's frame would end past the stack's slots, or the stack would hold more
+    /// frames than it has slots (`docs/questions.md` Q230). The machine stands at the call, nothing of the callee
+    /// written.
+    Stack,
     /// A value read before anything was written to it.
     Uninit,
     /// An inconsistency that loading should have refused; named, never a panic.
@@ -78,6 +82,8 @@ pub enum HostError {
     Arguments,
     /// Slots that are not a value of the region's type.
     Slots,
+    /// A stack that cannot hold the entry's own frame.
+    Stack,
 }
 
 impl fmt::Display for HostError {
@@ -105,19 +111,20 @@ struct Frame {
     ret: Option<(u32, u32)>,
 }
 
-/// What loading fixed: the program, its layout, the host's regions, where the stack begins, and the room every
-/// buffer of the state is given.
+/// What loading fixed: the program, its layout, the host's regions, where the stack begins and ends, and the room
+/// every buffer of the state is given.
 #[derive(Clone, Debug)]
 struct Code {
     program: Program,
     layout: Layout,
     regions: Vec<(u32, TypeId)>,
     stack: u32,
+    stack_end: u32,
     room: Room,
 }
 
-/// The most each buffer of the state ever holds, from the layout: the deepest path's frames, the largest result
-/// and the largest value built.
+/// The most each buffer of the state ever holds: as many frames as the stack has slots, the largest result and the
+/// largest value built.
 #[derive(Clone, Copy, Debug)]
 struct Room {
     frames: usize,
@@ -502,8 +509,9 @@ impl State {
                 let base = plus(frame.base, code.frame(frame.function)?.size)?;
                 let callee = code.frame(g.0)?;
                 let end = plus(base, callee.size)?;
-                if self.frames.len() >= code.room.frames {
-                    return Err(ErrorKind::Internal("a stack deeper than laid out"));
+                // Q230: the stack is the host's size; a call past it, in slots or in frames, is the program's error
+                if end > code.stack_end || self.frames.len() >= code.room.frames {
+                    return Err(ErrorKind::Stack);
                 }
                 self.memory
                     .get_mut(base as usize..end as usize)
@@ -647,8 +655,11 @@ impl State {
 }
 
 impl Machine {
-    /// Loads `program`, with a region of memory for each of `regions`' types, or says why it cannot.
-    pub fn load(program: Program, regions: &[TypeId]) -> Result<Machine, LoadError> {
+    /// Loads `program`, with a region of memory for each of `regions`' types and a stack of `stack` slots after them,
+    /// or says why it cannot. The stack's size is the host's, as the target's settings give it (`docs/questions.md`
+    /// Q230); in slots, not bytes, so a program reaches the same depth wherever it runs. A call past it is the
+    /// program's error [`ErrorKind::Stack`], and every buffer is sized here, so nothing is allocated while it runs.
+    pub fn load(program: Program, regions: &[TypeId], stack: u32) -> Result<Machine, LoadError> {
         let layout = lay_out(&program)?;
         let too_large = |index| LoadError::Region { index, reason: "memory past the machine's reach" };
         let mut placed = Vec::with_capacity(regions.len());
@@ -663,10 +674,8 @@ impl Machine {
             placed.push((at, *ty));
             at = at.checked_add(size).ok_or(too_large(index))?;
         }
-        let stack = at;
-        let deepest = layout.depth_slots.iter().copied().max().unwrap_or(0);
-        let total = stack.checked_add(deepest).ok_or(too_large(regions.len()))?;
-        let frames = layout.depth_frames.iter().copied().max().unwrap_or(0) as usize;
+        let total = at.checked_add(stack).ok_or(too_large(regions.len()))?;
+        let frames = stack as usize;
         let returns = program
             .functions
             .iter()
@@ -677,7 +686,14 @@ impl Machine {
         let regions_largest = regions.iter().filter_map(|t| layout.sizes.size.get(t.0 as usize).copied()).max().unwrap_or(0);
         let largest = layout.largest.max(regions_largest) as usize;
         Ok(Machine {
-            code: Code { program, layout, regions: placed, stack, room: Room { frames, result: returns, scratch: largest } },
+            code: Code {
+                program,
+                layout,
+                regions: placed,
+                stack: at,
+                stack_end: total,
+                room: Room { frames, result: returns, scratch: largest },
+            },
             state: State {
                 memory: vec![Scalar::Uninit; total as usize],
                 frames: Vec::with_capacity(frames),
@@ -760,7 +776,9 @@ impl Machine {
         self.state.failed = None;
     }
 
-    /// Starts `function` with `args`; its first instruction runs on the next [`Machine::step`].
+    /// Starts `function` with `args`; its first instruction runs on the next [`Machine::step`]. Refused, before
+    /// anything is written, when an entry runs, when `args` are not its parameters, or when the stack cannot hold its
+    /// own frame ([`HostError::Stack`]).
     pub fn start(&mut self, function: FunctionId, args: &[Arg<'_>]) -> Result<(), HostError> {
         let (code, state) = (&self.code, &mut self.state);
         if !state.frames.is_empty() || state.failed.is_some() {
@@ -772,7 +790,11 @@ impl Machine {
             return Err(HostError::Arguments);
         }
         let base = code.stack;
-        let end = base.checked_add(frame.size).ok_or(HostError::Arguments)? as usize;
+        let end = base.checked_add(frame.size).ok_or(HostError::Stack)?;
+        if end > code.stack_end || code.room.frames == 0 {
+            return Err(HostError::Stack);
+        }
+        let end = end as usize;
         state.memory.get_mut(base as usize..end).ok_or(HostError::Arguments)?.fill(Scalar::Uninit);
         for (i, arg) in args.iter().enumerate() {
             let local = f.locals.get(i.saturating_add(1)).ok_or(HostError::Arguments)?;

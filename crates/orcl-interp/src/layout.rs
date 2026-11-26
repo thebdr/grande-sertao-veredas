@@ -1,4 +1,4 @@
-//! The loader's half: every index and every instruction's types checked, memory laid out, the call graph walked.
+//! The loader's half: every index and every instruction's types checked, memory laid out.
 //! A program that passes runs with no allocation and no type it was not loaded with; one that does not is refused
 //! by name, before anything runs.
 use core::fmt;
@@ -20,9 +20,6 @@ pub enum LoadError {
     Function { function: String, reason: &'static str },
     /// An instruction whose indices or types do not fit; `statement` is `None` for the block's terminator.
     Instruction { function: String, block: u32, statement: Option<u32>, reason: &'static str },
-    /// A function that reaches itself through its calls, which has no deepest path to size the stack by
-    /// (`docs/questions.md` Q230, taken meanwhile): the functions of the cycle, by name, the first repeated last.
-    Recursion { cycle: Vec<String> },
     /// A host region asked for of a type the program does not have, or memory past the machine's reach.
     Region { index: usize, reason: &'static str },
 }
@@ -38,7 +35,6 @@ impl fmt::Display for LoadError {
             LoadError::Instruction { function, block, statement: None, reason } => {
                 write!(f, "`{function}`, block {block}, its terminator: {reason}")
             }
-            LoadError::Recursion { cycle } => write!(f, "a function reaches itself: {}", cycle.join(" -> ")),
             LoadError::Region { index, reason } => write!(f, "region {index}: {reason}"),
         }
     }
@@ -58,10 +54,6 @@ pub(crate) struct FrameLayout {
 pub(crate) struct Layout {
     pub sizes: Sizes,
     pub frames: Vec<FrameLayout>,
-    /// For each function, the slots of the deepest path of calls from it, its own frame included.
-    pub depth_slots: Vec<u32>,
-    /// For each function, the frames on that path.
-    pub depth_frames: Vec<u32>,
     /// The largest type, in slots: the scratch a value is built in before it is written.
     pub largest: u32,
 }
@@ -631,83 +623,5 @@ pub(crate) fn lay_out(program: &Program) -> Result<Layout, LoadError> {
         }
     }
 
-    let (depth_slots, depth_frames) = depths(program, &frames)?;
-    Ok(Layout {
-        sizes,
-        frames,
-        depth_slots,
-        depth_frames,
-        largest,
-    })
-}
-
-fn callees(function: &Function) -> impl Iterator<Item = u32> + '_ {
-    function.blocks.iter().filter_map(|block| match &block.terminator {
-        Terminator::Call { callee: Callee::Function(g), .. } => Some(g.0),
-        _ => None,
-    })
-}
-
-/// The deepest path of calls from every function, in slots and in frames; a cycle refused, by its functions'
-/// names.
-fn depths(program: &Program, frames: &[FrameLayout]) -> Result<(Vec<u32>, Vec<u32>), LoadError> {
-    let n = program.functions.len();
-    let mut state = vec![0u8; n];
-    let mut slots = vec![0u32; n];
-    let mut count = vec![0u32; n];
-    let name = |f: u32| program.functions.get(f as usize).map(|g| g.name.clone()).unwrap_or_default();
-    for root in 0..n {
-        // an explicit stack: (function, its callees still to visit), so a deep call graph does not exhaust ours
-        let root = u32::try_from(root).map_err(|_| LoadError::Region { index: 0, reason: "too many functions" })?;
-        if state.get(root as usize) == Some(&2) {
-            continue;
-        }
-        let mut path: Vec<(u32, Vec<u32>)> = Vec::new();
-        let first = program.functions.get(root as usize).map(|f| callees(f).collect()).unwrap_or_default();
-        path.push((root, first));
-        if let Some(s) = state.get_mut(root as usize) {
-            *s = 1;
-        }
-        while let Some((f, pending)) = path.last_mut() {
-            let f = *f;
-            if let Some(g) = pending.pop() {
-                match state.get(g as usize) {
-                    Some(1) => {
-                        let start = path.iter().position(|(h, _)| *h == g).unwrap_or(0);
-                        let mut cycle: Vec<String> = path.iter().skip(start).map(|(h, _)| name(*h)).collect();
-                        cycle.push(name(g));
-                        return Err(LoadError::Recursion { cycle });
-                    }
-                    Some(0) => {
-                        if let Some(s) = state.get_mut(g as usize) {
-                            *s = 1;
-                        }
-                        let next = program.functions.get(g as usize).map(|h| callees(h).collect()).unwrap_or_default();
-                        path.push((g, next));
-                    }
-                    _ => {}
-                }
-            } else {
-                let function = program.functions.get(f as usize);
-                let (mut deepest_slots, mut deepest_frames) = (0u32, 0u32);
-                for g in function.into_iter().flat_map(callees) {
-                    deepest_slots = deepest_slots.max(slots.get(g as usize).copied().unwrap_or(0));
-                    deepest_frames = deepest_frames.max(count.get(g as usize).copied().unwrap_or(0));
-                }
-                let own = frames.get(f as usize).map(|fr| fr.size).unwrap_or(0);
-                let too_deep = LoadError::Region { index: 0, reason: "a stack past the machine's reach" };
-                if let Some(s) = slots.get_mut(f as usize) {
-                    *s = add(own, deepest_slots).ok_or(too_deep.clone())?;
-                }
-                if let Some(c) = count.get_mut(f as usize) {
-                    *c = add(1, deepest_frames).ok_or(too_deep)?;
-                }
-                if let Some(s) = state.get_mut(f as usize) {
-                    *s = 2;
-                }
-                path.pop();
-            }
-        }
-    }
-    Ok((slots, count))
+    Ok(Layout { sizes, frames, largest })
 }

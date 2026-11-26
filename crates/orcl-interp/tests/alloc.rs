@@ -108,7 +108,7 @@ fn running_entries_calls_core_operations_and_failures_allocate_nothing() {
     };
     let mid = pass(&mut b, "mid", leaf);
     let deep = pass(&mut b, "deep", mid);
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let args: Vec<[Scalar; 1]> = (0..2000).map(|n| [int(Int::U32, n)]).collect();
     let big = [int(Int::U32, 1 << 30)];
     let ((), asked) = watching(|| {
@@ -300,7 +300,7 @@ fn every_kind_of_instruction_and_every_core_operation_allocates_nothing_in_a_mac
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[optd]).unwrap();
+    let mut m = Machine::load(b.program, &[optd], STACK).unwrap();
     let region = RegionId(0);
     let none = [int(Int::Isize, 0), Scalar::Uninit, Scalar::Uninit];
     let a_duration = [int(Int::U64, 2), int(Int::U32, 0)];
@@ -343,7 +343,7 @@ fn loading_a_program_with_a_huge_array_aggregate_asks_for_no_memory_of_the_array
     });
     let program = b.program;
     let before = BYTES.with(|b| b.get());
-    let (got, _) = watching(|| Machine::load(program, &[]).map(|_| ()));
+    let (got, _) = watching(|| Machine::load(program, &[], STACK).map(|_| ()));
     let asked = BYTES.with(|b| b.get()) - before;
     assert_eq!(got, Err(LoadError::Instruction { function: "f".into(), block: 0, statement: Some(0), reason: "an aggregate with too many or too few parts" }));
     assert!(asked < 1 << 20, "{asked} bytes asked for while loading");
@@ -362,7 +362,7 @@ fn an_entry_returning_more_slots_than_the_first_function_allocates_nothing_in_a_
         locals: locals(&[triple, u8t]),
         blocks: vec![block(vec![assign(place(0), Value::Aggregate(triple, None, vec![copy(1), copy(1), copy(1)]), 1)], ret())],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let mut copy = m.clone();
     let arg = [int(Int::U8, 7)];
     let want = [int(Int::U8, 7); 3];
@@ -381,7 +381,7 @@ fn a_type_the_program_only_declares_asks_for_no_room_at_load() {
     let f = b.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 3)])), 1)], ret())] });
     let program = b.program;
     let before = BYTES.with(|b| b.get());
-    let (m, _) = watching(|| Machine::load(program, &[]));
+    let (m, _) = watching(|| Machine::load(program, &[], STACK));
     let asked = BYTES.with(|b| b.get()) - before;
     assert!(asked < 1 << 20, "{asked} bytes asked for while loading");
     assert_eq!(m.unwrap().call(f, &[]).unwrap(), &[int(Int::U8, 3)]);
@@ -408,7 +408,7 @@ fn a_region_s_part_copied_whole_through_a_reference_allocates_nothing_in_a_machi
         locals: locals(&[unit, ra, rb]),
         blocks: vec![block(vec![assign(proj(1, vec![Projection::Deref]), Value::Use(copy_at(proj(2, vec![Projection::Deref]))), 1)], ret())],
     });
-    let mut m = Machine::load(b.program, &[u8t, s, arr]).unwrap();
+    let mut m = Machine::load(b.program, &[u8t, s, arr], STACK).unwrap();
     let mut slots = vec![int(Int::U8, 0); 64];
     slots.extend((0..64).map(|i| int(Int::U8, i)));
     m.set_region(RegionId(1), &slots).unwrap();
@@ -458,7 +458,7 @@ fn chain(depth: u32) -> (Program, FunctionId) {
 #[test]
 fn a_copy_taken_at_any_instruction_of_a_chain_of_calls_allocates_nothing_as_it_goes_on() {
     let (p, entry) = chain(5);
-    let mut m = Machine::load(p, &[]).unwrap();
+    let mut m = Machine::load(p, &[], STACK).unwrap();
     m.start(entry, &[]).unwrap();
     let mut k = 0;
     loop {
@@ -492,7 +492,7 @@ fn a_copy_taken_after_a_small_value_was_built_allocates_nothing_building_a_large
             ret(),
         )],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     m.start(f, &[]).unwrap();
     for k in 0..4 {
         let mut copy = m.clone();
@@ -522,7 +522,7 @@ fn the_larger_region_listed_first_and_copied_in_part_through_a_reference_allocat
             ret(),
         )],
     });
-    let mut m = Machine::load(b.program, &[s, u8t]).unwrap();
+    let mut m = Machine::load(b.program, &[s, u8t], STACK).unwrap();
     let state: Vec<Scalar> = (0..64).map(|i| int(Int::U8, i % 32)).collect();
     m.set_region(RegionId(0), &state).unwrap();
     m.set_region(RegionId(1), &[int(Int::U8, 0)]).unwrap();
@@ -557,7 +557,7 @@ fn a_function_whose_largest_callee_is_called_between_two_smaller_has_room_for_it
         locals: locals(&[u8t, u8t, u8t]),
         blocks: vec![block(vec![], call(small, 1, 1)), block(vec![], call(large, 2, 2)), block(vec![], call(small, 1, 3)), block(vec![assign(place(0), Value::Use(copy(2)), 2)], ret())],
     });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let got = m.call(main, &[]).map(|r| r.to_vec());
     assert_eq!(got, Ok(vec![int(Int::U8, 2)]));
 }
@@ -577,7 +577,7 @@ fn an_entry_returning_the_most_slots_listed_between_two_others_allocates_nothing
         blocks: vec![block(vec![assign(place(0), Value::Aggregate(wide, None, (0..8).map(c8).collect()), 1)], ret())],
     });
     b.function(Function { name: "last".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(c8(1)), 1)], ret())] });
-    let mut m = Machine::load(b.program, &[]).unwrap();
+    let mut m = Machine::load(b.program, &[], STACK).unwrap();
     let (got, asked) = watching(|| m.call(mid, &[]).map(|r| r.len()));
     assert_eq!((got, asked), (Ok(8), 0));
 }
@@ -596,9 +596,35 @@ fn the_largest_of_three_regions_listed_in_the_middle_copied_whole_allocates_noth
         locals: locals(&[unit, rw, rw]),
         blocks: vec![block(vec![assign(proj(2, vec![Projection::Deref]), Value::Use(copy_at(proj(1, vec![Projection::Deref]))), 1)], ret())],
     });
-    let mut m = Machine::load(b.program, &[u8t, wide, wide, u8t]).unwrap();
+    let mut m = Machine::load(b.program, &[u8t, wide, wide, u8t], STACK).unwrap();
     m.set_region(RegionId(1), &(0..8).map(|v| int(Int::U8, v)).collect::<Vec<_>>()).unwrap();
     let (got, asked) = watching(|| m.call(f, &[Arg::Ref(RegionId(1)), Arg::Ref(RegionId(2))]).map(|_| ()));
     assert_eq!((got, asked), (Ok(()), 0));
     assert_eq!(m.region(RegionId(2)), m.region(RegionId(1)));
+}
+
+/// A function calling itself, run to the stack's edge and past it, and a copy taken at every depth: no allocation
+/// once loaded, the stack's frames laid out at load whatever the recursion (Q230).
+#[test]
+fn a_function_calling_itself_to_the_stack_s_edge_and_past_it_allocates_nothing_nor_does_its_copy() {
+    let mut b = Build::default();
+    let f = sum(&mut b);
+    let mut m = Machine::load(b.program, &[], 50).unwrap();
+    let nine = [int(Int::U32, 9)];
+    let ten = [int(Int::U32, 10)];
+    let (got, asked) = watching(|| m.call(f, &[Arg::Value(&nine)]).map(|r| r.len()));
+    assert_eq!((got, asked, m.result()), (Ok(1), 0, &[int(Int::U32, 45)][..]));
+    let (got, asked) = watching(|| m.call(f, &[Arg::Value(&ten)]).map(|r| r.len()));
+    assert!(matches!(got, Err(CallError::Program(ProgramError { kind: ErrorKind::Stack, .. }))), "{got:?}");
+    assert_eq!(asked, 0);
+    m.abort();
+    m.start(f, &[Arg::Value(&nine)]).unwrap();
+    loop {
+        let mut copy = m.clone();
+        let (got, asked) = watching(|| copy.run(u64::MAX));
+        assert_eq!((got, asked, copy.result()), (Ok(Step::Returned), 0, &[int(Int::U32, 45)][..]), "{} calls deep", m.depth());
+        if m.step().unwrap() == Step::Returned {
+            break;
+        }
+    }
 }
