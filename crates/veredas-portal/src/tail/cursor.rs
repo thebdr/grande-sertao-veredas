@@ -65,6 +65,41 @@ fn is_identity(handle: &Handle, id: &Identity) -> bool {
     }
 }
 
+/// How many of a file's first bytes stand for it in a [`Reach`].
+pub(crate) const HEAD_BYTES: usize = 64;
+
+/// Where a read-in of history must reach: the file's length when the start found it, and its
+/// first bytes then. A file cut in place and written again has another head whatever its length
+/// now: a writer without `O_APPEND` writes past the old end into a hole that reads as NULs, and
+/// one with it starts again at the top (C-096).
+#[derive(Clone, Debug)]
+pub(crate) struct Reach {
+    pub len: u64,
+    pub head: Vec<u8>,
+}
+
+/// The first `n` bytes of `file` (fewer if it is shorter), read from its top; the position is
+/// left wherever the read ended.
+fn read_head(file: &mut File, n: usize) -> std::io::Result<Vec<u8>> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut head = vec![0u8; n];
+    let mut got = 0;
+    while got < n {
+        match file.read(&mut head[got..])? {
+            0 => break,
+            k => got += k,
+        }
+    }
+    head.truncate(got);
+    Ok(head)
+}
+
+/// The first bytes of the file at `path`, through a handle of its own: empty when it cannot be
+/// read (no head to compare, the length alone kept).
+pub(crate) fn head_of(path: &Path) -> Vec<u8> {
+    File::open(path).and_then(|mut f| read_head(&mut f, HEAD_BYTES)).unwrap_or_default()
+}
+
 /// The outcome of one `read_new` pass.
 #[derive(Debug)]
 pub(crate) enum ReadStep {
@@ -287,9 +322,24 @@ impl TailedFile {
         &self.handle
     }
 
-    /// The bytes of the file consumed so far.
-    pub(crate) fn offset(&self) -> u64 {
-        self.offset
+    /// The file's reach now: its length and first bytes, the cursor's position kept.
+    pub(crate) fn reach_now(&mut self) -> Result<Reach, SourceError> {
+        Ok(Reach { len: self.disk_len()?, head: self.head(HEAD_BYTES)? })
+    }
+
+    /// Whether this file's read reached `reach`: past the length the start found, its head the
+    /// same. A head that cannot be read now reached nothing.
+    pub(crate) fn reached(&mut self, reach: &Reach) -> bool {
+        self.offset >= reach.len && self.head(reach.head.len()).is_ok_and(|h| h == reach.head)
+    }
+
+    /// The file's first `n` bytes, the cursor's position kept.
+    fn head(&mut self, n: usize) -> Result<Vec<u8>, SourceError> {
+        let offset = self.offset;
+        let file = self.handle.as_file_mut();
+        let head = read_head(file, n).map_err(|e| SourceError::io(&self.path, e))?;
+        file.seek(SeekFrom::Start(offset)).map_err(|e| SourceError::io(&self.path, e))?;
+        Ok(head)
     }
 
     /// How many in-place truncations this cursor has reread from the top.

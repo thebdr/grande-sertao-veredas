@@ -185,11 +185,15 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     // Read from its start, the file's history ends at its length when the start looked at it:
     // the read-in must reach it, or the file was cut in place (a copy-and-truncate rotation) and
     // the history is lost.
-    let mut history_to: Option<u64> = match (cfg.start, &active, &held) {
-        (FileStart::Begin, Some(tf), _) => Some(tf.disk_len()?),
-        (FileStart::Begin, None, Some((len, _))) => Some(*len),
-        _ => None,
-    };
+    // A held file's bytes cannot be read at the look: its length alone is kept.
+    let mut history_to: Option<crate::tail::cursor::Reach> = None;
+    if cfg.start == FileStart::Begin {
+        if let Some(tf) = active.as_mut() {
+            history_to = Some(tf.reach_now()?);
+        } else if let Some((len, _)) = &held {
+            history_to = Some(crate::tail::cursor::Reach { len: *len, head: Vec::new() });
+        }
+    }
     let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };
 
     loop {
@@ -264,7 +268,7 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
                 // Read to its end as it stood: the start's history sent, if the read reached the
                 // length it had when the start looked; short of it, cut in place, lost.
                 match history_to.take() {
-                    Some(to) if tf.offset() < to => crate::tail::mark_history_lost(&history),
+                    Some(to) if !tf.reached(&to) => crate::tail::mark_history_lost(&history),
                     _ => crate::tail::mark_history_read(&history, sent.get()),
                 }
 

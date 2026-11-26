@@ -163,7 +163,7 @@ fn read_range_full(
     path: &Path,
     offset: u64,
     encoding: Option<DetectedEncoding>,
-    to: Option<u64>,
+    to: Option<&crate::tail::cursor::Reach>,
     grace: Duration,
     stop: &AtomicBool,
     emit: &mut dyn FnMut(String),
@@ -192,7 +192,7 @@ fn read_range_full(
     // in place before or while it was read (a copy-and-truncate rotation) lost what was cut.
     Ok(if stop.load(Ordering::Relaxed) {
         Unread::Stopped
-    } else if to.is_some_and(|to| cursor.truncations() > cut || cursor.offset() < to) {
+    } else if to.is_some_and(|to| cursor.truncations() > cut || !cursor.reached(to)) {
         // Only a read that holds history: a file of new content cut while read is new content
         // lost, and a caller awaiting a held file would read it again.
         Unread::Held
@@ -501,7 +501,7 @@ fn fixed_adopt(
 enum BackfillAttach {
     /// The seam; `history_to` the planned active's length at the locate when the cursor is that
     /// file, which its first read must reach for the history to be whole.
-    Attached { cursor: Box<TailedFile>, key: OrderKey, name: String, known: HashSet<String>, history_to: Option<u64> },
+    Attached { cursor: Box<TailedFile>, key: OrderKey, name: String, known: HashSet<String>, history_to: Option<crate::tail::cursor::Reach> },
     /// No family member on disk: fall through to a normal (born-mode) live attach; everything
     /// appearing later is newer than a past start.
     FamilyEmpty,
@@ -554,7 +554,7 @@ fn attach_backfill(
             return Ok(BackfillAttach::Stopped);
         }
         let (off, enc) = if i == 0 { (plan.first_offset, plan.first_encoding) } else { (0, None) };
-        read(read_range_full(&f.path, off, enc, Some(f.len), cfg.drain_grace, stop, emit)?);
+        read(read_range_full(&f.path, off, enc, Some(&f.reach), cfg.drain_grace, stop, emit)?);
         consumed.insert(f.name.clone());
     }
 
@@ -588,13 +588,13 @@ fn attach_backfill(
                     key: planned.key,
                     name: planned.name.clone(),
                     known: consumed,
-                    history_to: Some(planned.len),
+                    history_to: Some(planned.reach.clone()),
                 }),
                 None => {
                     // Vanished before it was reached: read any remnant, then converge on the
                     // newest by rank. Gone (names are stable in this mode: deleted) or read to its
                     // end, every member of the history is read; whatever is born newer is new.
-                    let unread = read_range_full(&planned.path, off, enc, Some(planned.len), cfg.drain_grace, stop, emit)?;
+                    let unread = read_range_full(&planned.path, off, enc, Some(&planned.reach), cfg.drain_grace, stop, emit)?;
                     read(unread);
                     if unread == Unread::No {
                         swept();
@@ -631,7 +631,7 @@ fn attach_backfill(
                         // The remains hold the planned active's history up to where the locate
                         // found its end; what is younger is new.
                         let (to, (off, enc)) = match pending.take() {
-                            Some(seek) => (Some(planned.len), seek),
+                            Some(seek) => (Some(&planned.reach), seek),
                             None => (None, (0, None)),
                         };
                         read(read_range_full(&f.path, off, enc, to, cfg.drain_grace, stop, emit)?);
@@ -666,7 +666,7 @@ fn attach_backfill(
                             // Never rotated, the fixed path is the planned active: its history
                             // ends where the locate found it; rotated, its remains were read and
                             // what sits at the path is new.
-                            let history_to = pending.map(|_| planned.len);
+                            let history_to = pending.map(|_| planned.reach.clone());
                             return Ok(BackfillAttach::Attached {
                                 cursor: Box::new(cursor),
                                 key: OrderKey::NONE,
@@ -754,7 +754,7 @@ fn run_family(
     // the seam: the same handle, the exact offset, live from here.
     let mut backfilled: Option<(TailedFile, OrderKey, String)> = None;
     // Where the seam's first read must reach for the start's history to be whole.
-    let mut history_to: Option<u64> = None;
+    let mut history_to: Option<crate::tail::cursor::Reach> = None;
     if let FamilyStart::Backfill(start_at) = cfg.start {
         let swept = || crate::tail::mark_history_read(&history, sent.get());
         let lost = || crate::tail::mark_history_lost(&history);
@@ -996,7 +996,7 @@ fn run_family(
         // backfill's seam): the start's history sent, if the seam's read reached where the locate
         // found its end; short of it, the file was cut in place and the history is lost.
         match history_to.take() {
-            Some(to) if cursor.offset() < to => crate::tail::mark_history_lost(&history),
+            Some(to) if !cursor.reached(&to) => crate::tail::mark_history_lost(&history),
             _ => crate::tail::mark_history_read(&history, sent.get()),
         }
 

@@ -320,3 +320,72 @@ fn a_history_cut_in_place_before_it_is_read_is_lost() {
     let cut: Vec<std::path::PathBuf> = [file, fixed.join("current.log"), dir.path().join("newest/plant_2.log"), dir.path().join("member/plant_1.log")].into();
     BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !cut.contains(at));
 }
+
+/// A hook cutting `path` in place once as a copy-and-truncate rotation does under a writer that
+/// does not open with `O_APPEND`: the file emptied, the writer's next ten lines written at its own
+/// offset, the old end, so the file is at once longer than before, a hole of NULs at its top.
+fn cut_sparse_once(path: &std::path::Path) {
+    let (at, mut done) = (path.to_path_buf(), false);
+    BEFORE_OPEN.lock().unwrap().push((
+        path.to_path_buf(),
+        Box::new(move || {
+            if !done {
+                use std::io::{Seek, SeekFrom, Write};
+                done = true;
+                let mut f = std::fs::OpenOptions::new().write(true).open(&at).unwrap();
+                let end = f.metadata().unwrap().len();
+                f.set_len(0).unwrap();
+                f.seek(SeekFrom::Start(end)).unwrap();
+                let body: String = (90_000..90_010u32).map(|i| format!("2026-07-19 {:02}:{:02}:{:02} temp={i} state=run\n", 1 + i / 3600, (i / 60) % 60, i % 60)).collect();
+                f.write_all(body.as_bytes()).unwrap();
+            }
+        }),
+    ));
+}
+
+/// A history cut in place and written past its old end before it is read, a writer without
+/// `O_APPEND` (C-096's eleventh refute round): by its length a file that grew, by its first bytes
+/// another file, so the history is lost, never said read: a file read from its start, a fixed-name
+/// family's active at the seam, a member before its replay. The NULs of the hole read as one line.
+#[cfg(unix)]
+#[test]
+fn a_history_cut_and_written_past_its_old_end_is_lost() {
+    use crate::tail::{FileStart, FileTailSource, TailConfig};
+    let start = NaiveDateTime::parse_from_str("2026-07-19 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+    let stamps = || TimestampSpec::new(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ["%Y-%m-%d %H:%M:%S"]).unwrap();
+    let backfill = || FamilyTailConfig { start: FamilyStart::Backfill(start), ..FamilyTailConfig::default() };
+    let lost = crate::tail::HISTORY_LOST;
+    let dir = tempfile::tempdir().unwrap();
+    let mark = |(_, m): (u64, u64)| m;
+
+    let file = dir.path().join("sparse.log");
+    write(&file, 0..50_000);
+    cut_sparse_once(&file);
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let path = file.to_string_lossy().into_owned();
+    let source = FileTailSource::new("one", "one", &path, TailConfig { start: FileStart::Begin, ..TailConfig::default() }).with_history_read(Arc::clone(&history));
+    assert_eq!(mark(run_cut(Box::new(source), &history, 10)), lost, "the file");
+
+    let fixed = dir.path().join("fixed");
+    std::fs::create_dir_all(&fixed).unwrap();
+    write(&fixed.join("done_1.log"), 0..100);
+    write(&fixed.join("current.log"), 100..50_000);
+    cut_sparse_once(&fixed.join("current.log"));
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let spec = FamilySpec::new(&fixed, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let source = FamilyTailSource::new("fixed", "fixed", spec, backfill()).with_timestamps(stamps()).with_history_read(Arc::clone(&history));
+    assert_eq!(mark(run_cut(Box::new(source), &history, 110)), lost, "the fixed family's active");
+
+    let fam = dir.path().join("member");
+    std::fs::create_dir_all(&fam).unwrap();
+    write(&fam.join("plant_1.log"), 0..50_000);
+    write(&fam.join("plant_2.log"), 50_000..50_100);
+    cut_sparse_once(&fam.join("plant_1.log"));
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let spec = FamilySpec::new(&fam, r"plant_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+    let source = FamilyTailSource::new("member", "member", spec, backfill()).with_timestamps(stamps()).with_history_read(Arc::clone(&history));
+    assert_eq!(mark(run_cut(Box::new(source), &history, 110)), lost, "the member");
+
+    let cut: Vec<std::path::PathBuf> = [file, fixed.join("current.log"), fam.join("plant_1.log")].into();
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !cut.contains(at));
+}
