@@ -942,6 +942,81 @@ round's (Q43):
   "(b) Say what release 1 serves" (discrete IO, no closed loops, no axes). Not chosen: a PID
   function block in the standard library now, and an import from PLCopen XML.
 
+**Ruled in part** 2026-11-26, by the architect, four more answers:
+
+- Entry 40, the release. Asked "Following your answer of yesterday (\"Name ladder's release\"): in
+  which release does ladder become editable?", "Release 2": ladder is a read-only view in release 1
+  and editable in the release after it.
+
+- Entry 42. Asked "A technician without the project cannot open what is running, though the source
+  archive is kept on the controller for exactly that, and connecting needs an SSH key set up first.
+  Which options hold? (The review's pick: (a) and (b); (c) can wait.)", chosen: "(b) Pair in one
+  step" (Oficina creates the key and installs it); not chosen: "(a) Open the project from the
+  target" and "(c) One connection view".
+
+- Entry 43. Asked "Colour and contrast: good, warning and fault collapse into one khaki under the
+  most common colour blindness (answered by the mark-and-word rule); the outline `#494360` on the
+  soft tone is 1.54 to 1 where a control's only edge needs 3 to 1; and no light theme exists. Which
+  hold?", chosen: "Oficina carries mark-and-word" and "A light theme joins the list"; not chosen:
+  "Outline becomes #7A7399", so the outline's colour stays as it is.
+
+- Entry 44. Asked "No way to reuse blocks across projects, and nothing says how a structure appears
+  in watch tables. Which options hold? (The review's pick: both.)", both chosen: "(a) A library is a
+  pinned crate" (named by path or by Git revision, pinned in the project file, no build scripts),
+  "(b) Structures expand by member" (in watch tables, forcing and the IO mapping).
+
+**Ruled in part** 2026-11-26, by the architect, four more entries:
+
+- Entry 45. Asked "An acceptance test needs the IO list, the alarm list and the cross-reference on
+  paper, and nothing in the list exports anything but comissionador's test report. Which options
+  hold? (The review's pick: (a) and (b).)", all three chosen: "(a) Export the three lists" (to CSV
+  and PDF, among controlador's surfaces), "(b) An example per network", "(c) Context help".
+
+- Entry 46. Asked "The list does not say what a Rust engineer gets. Does the plan state it: an ORCL
+  project is a cargo crate whose logic `cargo test` runs, the checker works outside Oficina and in
+  CI, and the allowed subset of Rust is published as one page?", "Yes, the plan says all three".
+
+- Minor 47. Asked "A shadow test is accepted automatically when its time limit runs out (your
+  choice). Is that recorded in the download history as \"accepted by timeout\", and as an event?",
+  "Yes, recorded as such".
+
+- Minor 48. Asked "A one-value fix is a whole deployment (your choice). Do the documents say that
+  \"force once now\" on a variable is the online change of a value (TIA's Modify), and that when the
+  doubled scan of a shadow test does not fit, the way is stop and download, the popup saying so?",
+  "Yes, both said".
+
+**Ruled in part** 2026-11-26, by the architect, four minors:
+
+- Minor 49. Asked "The three force modes use words a TIA user does not know. Do tables always show
+  the mode in words, never the [!] mark alone?", "Yes, always in words".
+
+- Minor 50. Asked "The state strip is English inside a translated interface (your choice; the detail
+  view is translated). Which additions hold?", both chosen: "A \"seen\" mark on a request", "Decode
+  the shadow term".
+
+- Minor 51. Asked "Oficina stands on four outside projects on the Qt side (cxx-qt at 0.10,
+  KDDockWidgets, Spix with one maintainer, Qt releasing every six months), and Qt's own Rust bridge
+  is a preview until early 2027. The spike has since passed on cxx-qt. What holds?", "Pin Qt; review
+  the bridge in 2027": one Qt version per release, and the bridge looked at again when Qt's own
+  leaves preview.
+
+- Minor 52. Asked "On a virtual machine without a GPU, Qt Quick's software backend cannot draw 3D at
+  all. Is the single fallback the normal pipeline over a software rasteriser (WARP on Windows,
+  llvmpipe on Linux), chosen before the first window, so that switching is a restart?", "No 3D
+  without a GPU", against the review's wording: without a GPU Oficina runs with Qt Quick's software
+  backend and the 3D view is unavailable.
+
+**Ruled in part** 2026-11-26, by the architect:
+
+- Minor 54. Asked "The components have Portuguese names by law L2, and a foreign user meets
+  \"Supervisão\", \"Comissionador\", \"Ábaco\". Do the screens show each component's role as a
+  subtitle, the command palette matching unaccented spellings and English aliases?", "Yes, subtitle
+  and aliases".
+
+With it every entry of the review is ruled but minor 53 (items that wait on undecided work, to be
+marked so in the plans: bookkeeping) and minor 55 (a crash and a power cut look alike: ruled with
+Q228's point 8 on 2026-11-25).
+
 ## Q32 - What disqualifies an edit from a live takeover?
 
 **Raised** 2026-11-15, by the architect, ruling on the review's entry 5.
@@ -1587,6 +1662,51 @@ The round's list so far, beside P-014's two items (Q29):
   who did what), 38 (the Cyber Resilience Act) and 39 (the fieldbus organisations' terms).
 
 **Taken meanwhile**: nothing is built before the round (P-014).
+
+**Ruled in part** 2026-11-26, by the architect, point by point (the review's security entries 32 to
+39 are ruled under Q31, entry 33 answering Q29 and P-014's two items):
+
+- A controller's first credential. Asked "A controller's first credential. Your positions: default
+  pairs in a public manual do not cover it (\"most users will leave defaults\"), \"a password is
+  always better than no password\", and keeping it safe \"belongs to the integrator\". What does a
+  controller ship with?", the architect's own words, none of the options (none set at first
+  commissioning by force, SSH keys only, a documented default): "credential-less usage permitted,
+  discouraged". How it is discouraged is put next.
+
+- An expired certificate. Asked "A known peer's certificate has passed its end date (the maintenance
+  request a year ahead is ruled). Does the secured link to that peer cut, or go on with a warning?",
+  "Goes on, urgent request": the link stays up and an urgent maintenance request stands until the
+  certificate is renewed.
+
+- An unconfirmed date. Asked "While the controller's date is unconfirmed (dead clock battery, no NTP
+  yet) it cannot judge any certificate's dates. What does a secured link do meanwhile?", "Accept
+  known peers, dates unjudged": a peer whose certificate the controller already trusts is accepted
+  without judging dates, the link marked so; an unknown certificate is refused as always.
+
+**Ruled in part** 2026-11-26, by the architect, four more points; with them the round's list as it
+stood is gone through:
+
+- How credential-less use is discouraged. Asked "Following your answer (\"credential-less usage
+  permitted, discouraged\"): how does a controller without a credential discourage it?", "Oficina's
+  warning only": Oficina warns at each connection to a controller without a credential, and the
+  controller itself raises nothing; against a maintenance request, a condition in the state text,
+  and the documents alone.
+
+- Certificates after 2038. Asked "The suite's certificates all end on 19 January 2038 (ruled). A
+  certificate issued late lives short, and after that date the rule can issue none. Which end date
+  do certificates issued from then on carry?", "Decide with the security study".
+
+- A signed download. Asked "A hash guards a download against corruption, not against a person. Does
+  the download's manifest carry a signature, which the controller checks before it accepts the
+  download?", "With the security study".
+
+- A keyed check. Asked "Yesterday's rule (digest, session, number, identities, freshness) guards
+  against transmission faults, not against a person. Does each altering request also carry a keyed
+  check (HTTP Message Signatures, RFC 9421)?", "With the security study".
+
+So three points wait for the security study the architect postponed (the briefing's J4): the end
+date after 2038, a signature over a download's manifest, a keyed check on altering requests. Its
+first output is ruled: the gap list against the Cyber Resilience Act's Annex I (Q31 entry 38).
 
 ## Q44 - Conversion to native PLC code: the type table's open points
 
