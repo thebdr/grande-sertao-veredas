@@ -98,7 +98,7 @@ fn one_port_heard_on_an_interface_is_its_cable_and_several_are_none() {
     assert_eq!(
         t.notes,
         [
-            "dev-c's port-002 said it was leaving: no cable is drawn to it".to_string(),
+            format!("{} port-002 said it was leaving: no cable is drawn to it", topology::device_id(C)),
             format!("eth2 hears LLDP from 2 ports ({} port-001, {} port-001): a mirror port or a hub, no cable is drawn from it", topology::device_id(B), topology::device_id(C)),
         ]
     );
@@ -162,7 +162,7 @@ fn a_neighbour_is_found_by_its_mac_or_announced_chassis_never_by_a_name() {
         ],
     );
     let ls = links(&t);
-    let chassis = |k: &str, port: u8| End { node: topology::chassis_id(&format!("local:{k}")), port: format!("port-{port:03}") };
+    let chassis = |k: &str, port: u8| End { node: topology::chassis_id(k), port: format!("port-{port:03}") };
     assert!(ls.contains(&link(end(A, 2), chassis("dev-x", 1), Confidence::Reported, 1)), "{ls:?}");
     assert!(ls.contains(&link(end(A, 3), chassis("dev-d", 1), Confidence::Reported, 1)), "{ls:?}");
     assert!(ls.contains(&(end(A, 4), end(C, 1), Confidence::Reported, 1)), "{ls:?}");
@@ -172,9 +172,9 @@ fn a_neighbour_is_found_by_its_mac_or_announced_chassis_never_by_a_name() {
     assert_eq!(
         ch,
         [
-            ("chassis:local:dev-d".to_string(), NodeKind::Chassis, "dev-d (not yet identified)".to_string()),
-            ("chassis:local:dev-q".to_string(), NodeKind::Chassis, "dev-q (not yet identified)".to_string()),
-            ("chassis:local:dev-x".to_string(), NodeKind::Chassis, "dev-x (ambiguous: 2 devices)".to_string()),
+            ("chassis:dev-d".to_string(), NodeKind::Chassis, "dev-d (not yet identified)".to_string()),
+            ("chassis:dev-q".to_string(), NodeKind::Chassis, "dev-q (not yet identified)".to_string()),
+            ("chassis:dev-x".to_string(), NodeKind::Chassis, "dev-x (ambiguous: 2 devices)".to_string()),
         ]
     );
     assert!(t.notes.contains(&"a neighbour names chassis \"dev-x\", which 2 devices announce: its links go to that chassis, not to a guess".to_string()), "{:?}", t.notes);
@@ -268,13 +268,13 @@ fn what_is_drawn_and_said_is_only_what_the_evidence_holds() {
     // chassis no device announces.
     let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None), with_sys_name(lldp(B, "dev-b", 1, "eth2", 2, 1, 20, None), "sys-b")]);
     let t = topology::build(&f, &[], &[said(A, 2, "sys-b", 1, None)]);
-    assert!(links(&t).contains(&link(end(A, 2), End { node: topology::chassis_id("local:sys-b"), port: "port-001".into() }, Confidence::Reported, 1)), "{:?}", links(&t));
+    assert!(links(&t).contains(&link(end(A, 2), End { node: topology::chassis_id("sys-b"), port: "port-001".into() }, Confidence::Reported, 1)), "{:?}", links(&t));
     // Nothing said that is not so: a neighbour found by a MAC its chassis agrees with, and one
     // naming a chassis nobody announces; the chassis joins A's component.
     let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None), lldp(B, "dev-b", 1, "eth2", 2, 1, 20, None)]);
     let t = topology::build(&f, &[], &[said(A, 2, "dev-b", 1, Some(port_mac(B, 1))), said(A, 3, "dev-q", 1, None)]);
     assert_eq!(t.notes, Vec::<String>::new());
-    assert_eq!(t.components, [vec![topology::chassis_id("local:dev-q"), topology::device_id(A), topology::device_id(B), "if:eth1".to_string(), "if:eth2".to_string()]]);
+    assert_eq!(t.components, [vec![topology::chassis_id("dev-q"), topology::device_id(A), topology::device_id(B), "if:eth1".to_string(), "if:eth2".to_string()]]);
     // A word no read said is none; one from a device nothing heard is not drawn, said.
     let z = Mac([0x02, 0, 0, 0, 0, 0x7A]);
     let t = topology::build(&f, &[], &[Neighbour { witnesses: 0, ..said(A, 2, "dev-b", 1, Some(port_mac(B, 1))) }, said(z, 1, "dev-a", 1, None)]);
@@ -329,4 +329,193 @@ fn a_ring_is_its_domain_whatever_mrrt_says_the_current_domain_and_no_self_loop()
     let t = topology::build(&moved, &[], &[]);
     assert_eq!(t.rings.iter().map(|r| r.domain.clone()).collect::<Vec<_>>(), ["09".repeat(16)]);
     assert_eq!(t.nodes[0].rings, ["09".repeat(16)]);
+}
+
+/// The second refute round's cases: each one a place the clause states and the first test let go.
+mod round_2 {
+    use super::*;
+
+    fn eth(name: &str) -> End {
+        End { node: topology::interface_id(name), port: String::new() }
+    }
+
+    /// Every order of `obs`, fused: the same fusion whatever order the frames are applied in.
+    fn in_every_order(obs: &[Observation]) -> Fusion {
+        let first = fused(obs);
+        let n = obs.len();
+        let mut idx: Vec<usize> = (0..n).collect();
+        // Heap's algorithm, every permutation of a few frames.
+        let mut c = vec![0usize; n];
+        let mut i = 0;
+        while i < n {
+            if c[i] < i {
+                if i % 2 == 0 { idx.swap(0, i) } else { idx.swap(c[i], i) }
+                let order: Vec<Observation> = idx.iter().map(|k| obs[*k].clone()).collect();
+                assert_eq!(fused(&order), first, "{idx:?}");
+                c[i] += 1;
+                i = 0;
+            } else {
+                c[i] = 0;
+                i += 1;
+            }
+        }
+        first
+    }
+
+    #[test]
+    fn a_port_that_left_and_came_back_elsewhere_has_moved_and_joins_nothing() {
+        // A's port 1 on eth1, leaving there; B's port 1 on eth1 after; A's port 1 back on eth2.
+        let obs = [lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None), lldp(A, "dev-a", 1, "eth1", 2, 1, 0, None), lldp(B, "dev-b", 1, "eth1", 3, 2, 20, None), lldp(A, "dev-a", 1, "eth2", 4, 3, 20, None)];
+        let t = topology::build(&in_every_order(&obs), &[], &[]);
+        assert_eq!(links(&t), [link(end(A, 1), eth("eth2"), Confidence::Heard, 1), link(end(B, 1), eth("eth1"), Confidence::Heard, 1)]);
+        assert_eq!(t.notes, Vec::<String>::new());
+        // A alone: moved, no hub.
+        let t = topology::build(&in_every_order(&[obs[0].clone(), obs[1].clone(), obs[3].clone()]), &[], &[]);
+        assert_eq!(links(&t), [link(end(A, 1), eth("eth2"), Confidence::Heard, 1)]);
+        assert_eq!(t.notes, Vec::<String>::new());
+        // Heard on two interfaces since it last left: a hub or a mirror, said.
+        let hub = [obs[0].clone(), obs[1].clone(), lldp(A, "dev-a", 1, "eth1", 5, 4, 20, None), obs[3].clone()];
+        let t = topology::build(&in_every_order(&hub), &[], &[]);
+        assert_eq!(links(&t), []);
+        assert_eq!(t.notes, [format!("{} port-001 is heard on 2 interfaces (eth1, eth2): a hub or a mirror joins them, no cable is drawn to it", topology::device_id(A))]);
+    }
+
+    #[test]
+    fn a_leaving_port_is_no_sender_and_one_back_is_its_cable_again() {
+        // A on eth1; B on eth1 that then leaves: A's cable, B's leaving said.
+        let t = topology::build(&fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None), lldp(B, "dev-b", 1, "eth1", 2, 1, 20, None), lldp(B, "dev-b", 1, "eth1", 3, 2, 0, None)]), &[], &[]);
+        assert_eq!(links(&t), [link(end(A, 1), eth("eth1"), Confidence::Heard, 1)]);
+        assert_eq!(t.notes, [format!("{} port-001 said it was leaving: no cable is drawn to it", topology::device_id(B))]);
+        // A on eth1, leaving, then on eth1 again: its cable, three frames heard there, nothing said.
+        let t = topology::build(&fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None), lldp(A, "dev-a", 1, "eth1", 2, 1, 0, None), lldp(A, "dev-a", 1, "eth1", 3, 2, 20, None)]), &[], &[]);
+        assert_eq!(links(&t), [link(end(A, 1), eth("eth1"), Confidence::Heard, 3)]);
+        assert_eq!(t.notes, Vec::<String>::new());
+        // The witnesses of a heard link: the frames heard on its interface, five of them.
+        let five: Vec<Observation> = (0..5).map(|i| lldp(A, "dev-a", 1, "eth1", i, i, 20, None)).collect();
+        assert_eq!(links(&topology::build(&fused(&five), &[], &[])), [link(end(A, 1), eth("eth1"), Confidence::Heard, 5)]);
+        // A leaving device stays a member of its ring (the ring is its configuration), open.
+        let ring = Some([7; 16]);
+        let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, ring), lldp(B, "dev-b", 1, "eth2", 2, 1, 20, ring), lldp(C, "dev-c", 1, "eth3", 3, 2, 20, ring), lldp(C, "dev-c", 1, "eth3", 4, 3, 0, ring)]);
+        let t = topology::build(&f, &[], &[said(A, 2, "dev-b", 3, Some(port_mac(B, 3)))]);
+        assert_eq!((t.rings[0].members.clone(), t.rings[0].closed), ([A, B, C].map(topology::device_id).to_vec(), false));
+    }
+
+    /// An LLDP frame announcing `chassis`, a PROFINET chassis MAC with it.
+    fn announcing(dev: Mac, chassis: ChassisId, iface: &str, frame: u64) -> Observation {
+        let mut pdu = LldpPdu::new(chassis, PortId::Local { id: "port-001".into() }, 20);
+        pdu.pn.chassis_mac = Some(dev);
+        Observation { witness: Witness { probe: Probe::LldpHeard, iface: iface.into(), at_ns: frame, frame }, observed: Observed::Lldp { src: port_mac(dev, 1), pdu } }
+    }
+
+    #[test]
+    fn a_chassis_is_its_text_whatever_its_subtype_and_one_two_devices_announce_is_neither() {
+        let a = lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None);
+        // B announces "x" as a local id, C as an interface name: two devices, so neither.
+        let f = fused(&[a.clone(), announcing(B, ChassisId::Local { id: "x".into() }, "eth2", 1), announcing(C, ChassisId::IfName { name: "x".into() }, "eth3", 2)]);
+        let t = topology::build(&f, &[], &[said(A, 2, "x", 1, None)]);
+        assert!(links(&t).contains(&link(end(A, 2), End { node: topology::chassis_id("x"), port: "port-001".into() }, Confidence::Reported, 1)), "{:?}", links(&t));
+        let ch: Vec<(String, String)> = t.nodes.iter().filter(|n| n.kind == NodeKind::Chassis).map(|n| (n.id.clone(), n.label.clone())).collect();
+        assert_eq!(ch, [("chassis:x".to_string(), "x (ambiguous: 2 devices)".to_string())]);
+        assert_eq!(t.notes, ["a neighbour names chassis \"x\", which 2 devices announce: its links go to that chassis, not to a guess".to_string()]);
+        // C alone announcing it as an interface name: C.
+        let f = fused(&[a.clone(), announcing(C, ChassisId::IfName { name: "x".into() }, "eth3", 2)]);
+        let t = topology::build(&f, &[], &[said(A, 2, "x", 1, None)]);
+        assert!(links(&t).contains(&link(end(A, 2), end(C, 1), Confidence::Reported, 1)), "{:?}", links(&t));
+        assert_eq!(t.notes, Vec::<String>::new());
+        // An empty chassis is none: no node, no join, said once per port.
+        let f = fused(&[a.clone(), lldp(B, "dev-b", 1, "eth2", 2, 1, 20, None), announcing(C, ChassisId::Local { id: String::new() }, "eth3", 2)]);
+        let t = topology::build(&f, &[], &[said(A, 2, "", 1, None), said(A, 2, "", 4, None), said(B, 2, "", 1, None)]);
+        assert_eq!(links(&t).iter().filter(|l| l.2 != Confidence::Heard).count(), 0);
+        assert!(t.nodes.iter().all(|n| n.kind != NodeKind::Chassis));
+        assert_eq!(t.notes, [topology::device_id(A), topology::device_id(B)].map(|d| format!("{d} port-002 reports a neighbour with no chassis and no MAC: not drawn")));
+        // A chassis id a device announced before it announced another is still its own.
+        let f2 = fused(&[a.clone(), announcing(C, ChassisId::Local { id: "x".into() }, "eth3", 2), announcing(C, ChassisId::Local { id: "y".into() }, "eth3", 3)]);
+        let t2 = topology::build(&f2, &[], &[said(A, 2, "x", 1, None)]);
+        assert!(links(&t2).contains(&link(end(A, 2), end(C, 1), Confidence::Reported, 1)), "{:?}", links(&t2));
+        // Found by the MAC, an empty chassis says nothing.
+        let t = topology::build(&f, &[], &[said(A, 2, "", 1, Some(port_mac(B, 1)))]);
+        assert!(links(&t).contains(&link(end(A, 2), end(B, 1), Confidence::Reported, 1)));
+        assert_eq!(t.notes, Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_mac_taken_is_said_on_every_path_and_nothing_where_nothing_is_taken() {
+        let d = Mac([0x02, 0, 0, 0, 0, 0x0D]);
+        let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None), lldp(B, "dev-x", 1, "eth2", 2, 1, 20, None), lldp(C, "dev-x", 1, "eth3", 3, 2, 20, None), lldp(d, "dev-d", 1, "eth4", 4, 3, 20, None)]);
+        let taken = |port: u8, chassis: &str, m: Mac| format!("{} port-{port:03} names chassis {chassis:?}, which another device announces, from the port MAC of {}: the MAC is taken", topology::device_id(A), topology::device_id(m));
+        // A port MAC of one of two devices announcing the chassis: the other announces it too.
+        let t = topology::build(&f, &[], &[said(A, 4, "dev-x", 1, Some(port_mac(C, 1)))]);
+        assert_eq!(t.notes, [taken(4, "dev-x", C)]);
+        // A device's own MAC against a chassis another device announces.
+        let t = topology::build(&f, &[], &[said(A, 5, "dev-d", 1, Some(B))]);
+        assert!(links(&t).contains(&link(end(A, 5), end(B, 1), Confidence::Reported, 1)));
+        assert_eq!(t.notes, [taken(5, "dev-d", B)]);
+        // A MAC with a chassis no one announces, or the one its own device announces: nothing.
+        let t = topology::build(&f, &[], &[said(A, 6, "whatever", 1, Some(d)), said(A, 7, "dev-d", 1, Some(port_mac(d, 1)))]);
+        assert_eq!(t.notes, Vec::<String>::new());
+        // Three words from one port, each a MAC taken, two of them alike but for their chassis:
+        // the same topology in every order.
+        let words = [said(A, 2, "dev-x", 1, Some(port_mac(d, 1))), said(A, 2, "dev-a", 1, Some(port_mac(d, 1))), said(A, 2, "dev-d", 1, Some(port_mac(B, 1)))];
+        let one = topology::build(&f, &[], &words);
+        for order in [[2, 1, 0], [1, 0, 2], [0, 2, 1]] {
+            assert_eq!(topology::build(&f, &[], &order.map(|i| words[i].clone())), one, "{order:?}");
+        }
+        assert_eq!(one.notes, [taken(2, "dev-a", d), taken(2, "dev-d", B), taken(2, "dev-x", d)]);
+    }
+
+    #[test]
+    fn components_largest_first_then_by_their_nodes() {
+        // A on eth1; B heard by DCP alone, naming a chassis nobody announces.
+        let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None), hello(B, "dev-b", 1)]);
+        let t = topology::build(&f, &[], &[said(B, 2, "nobody", 1, None)]);
+        assert_eq!(t.components, [vec!["chassis:nobody".to_string(), topology::device_id(B)], vec![topology::device_id(A), "if:eth1".to_string()], vec!["if:eth9".to_string()]]);
+    }
+
+    #[test]
+    fn a_ring_is_the_domain_stated_last_and_two_pairs_of_cables_are_no_ring() {
+        let (seven, nine) = (Some([7; 16]), Some([9; 16]));
+        let back = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, seven), lldp(A, "dev-a", 1, "eth1", 2, 1, 20, nine), lldp(A, "dev-a", 1, "eth1", 3, 2, 20, seven)]);
+        let t = topology::build(&back, &[], &[]);
+        assert_eq!(t.rings.iter().map(|r| r.domain.clone()).collect::<Vec<_>>(), ["07".repeat(16)]);
+        // Four members, two pairs each joined by two cables: as many links as members, every one
+        // of degree two, not one cycle.
+        let d = Mac([0x02, 0, 0, 0, 0, 0x0D]);
+        let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, seven), lldp(B, "dev-b", 1, "eth2", 2, 1, 20, seven), lldp(C, "dev-c", 1, "eth3", 3, 2, 20, seven), lldp(d, "dev-d", 1, "eth4", 4, 3, 20, seven)]);
+        let pairs = [said(A, 2, "dev-b", 2, None), said(A, 3, "dev-b", 3, None), said(C, 2, "dev-d", 2, None), said(C, 3, "dev-d", 3, None)];
+        let t = topology::build(&f, &[], &pairs);
+        assert_eq!(t.links.iter().filter(|l| l.confidence == Confidence::Reported).count(), 4);
+        assert_eq!((t.rings[0].members.len(), t.rings[0].closed), (4, false));
+    }
+
+    #[test]
+    fn a_port_id_is_cut_at_its_first_dot_and_the_reporting_port_s_too() {
+        let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None), lldp(B, "dev-b", 1, "eth2", 2, 1, 20, None)]);
+        let t = topology::build(&f, &[], &[Neighbour { port: "port-002.plc.line-1".into(), peer_port: "port-001.plc.line-1".into(), ..said(A, 2, "dev-b", 1, Some(port_mac(B, 1))) }]);
+        assert!(links(&t).contains(&link(end(A, 2), end(B, 1), Confidence::Reported, 1)), "{:?}", links(&t));
+        // As fusion's own port names do.
+        assert_eq!(PortId::Local { id: "port-001.plc.line-1".into() }.short(), "port-001");
+    }
+
+    #[test]
+    fn a_word_no_read_said_says_nothing_and_a_device_nothing_heard_is_said_once_a_port() {
+        let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None)]);
+        let z = Mac([0x02, 0, 0, 0, 0, 0x7A]);
+        let t = topology::build(&f, &[], &[Neighbour { witnesses: 0, ..said(z, 1, "dev-a", 1, None) }]);
+        assert_eq!(t.notes, Vec::<String>::new());
+        let t = topology::build(&f, &[], &[said(z, 1, "dev-a", 1, None), Neighbour { port: "port-001.dev-z".into(), ..said(z, 1, "dev-q", 2, None) }]);
+        assert_eq!(t.notes, [format!("{} port-001 reports a neighbour, but nothing heard that device: not drawn", topology::device_id(z))]);
+        // Two devices of one label, each leaving: each named by its MAC.
+        let f = fused(&[lldp(A, "dev-x", 1, "eth1", 1, 0, 0, None), lldp(B, "dev-x", 1, "eth2", 2, 1, 0, None)]);
+        assert_eq!(topology::build(&f, &[], &[]).notes, [A, B].map(|m| format!("{} port-001 said it was leaving: no cable is drawn to it", topology::device_id(m))));
+    }
+
+    #[test]
+    fn an_interface_named_twice_keeps_its_mac() {
+        let f = fused(&[lldp(A, "dev-a", 1, "eth1", 1, 0, 20, None)]);
+        let here = Mac([0x02, 0, 0, 0, 0, 0xE1]);
+        for list in [[Interface { name: "eth1".into(), mac: Some(here) }, Interface { name: "eth1".into(), mac: None }], [Interface { name: "eth1".into(), mac: None }, Interface { name: "eth1".into(), mac: Some(here) }]] {
+            let t = topology::build(&f, &list, &[]);
+            assert_eq!(t.nodes.iter().filter(|n| n.id == "if:eth1").map(|n| n.mac).collect::<Vec<_>>(), [Some(here)]);
+        }
+    }
 }

@@ -95,6 +95,13 @@ impl<T: PartialEq + Clone> Field<T> {
     }
 }
 
+/// What a port's frames were on one interface: how many, and the place (stamp, index) of the last.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnInterface {
+    pub frames: u64,
+    pub last: (u64, u64),
+}
+
 /// One port of a device, as its own LLDP frames describe it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Port {
@@ -111,6 +118,9 @@ pub struct Port {
     /// The interfaces its frames were heard on: LLDP is link-local, so a port heard on one of this
     /// machine's interfaces is cabled to it.
     pub heard_on: BTreeSet<String>,
+    /// Each of those interfaces with the frames heard there and the place of the last, so what was
+    /// heard before its last leaving is told from what was heard since.
+    pub on: BTreeMap<String, OnInterface>,
     /// When it said it was leaving (a time to live of 0), unless a later frame came: its last
     /// leaving frame against its last other frame, by stamp then index.
     pub left_ns: Option<u64>,
@@ -132,6 +142,12 @@ impl Port {
         self.settle();
     }
 
+    /// The interfaces it was heard on since it last said it was leaving (all of them when it never
+    /// said so): none while it is leaving.
+    pub fn heard_since_leaving(&self) -> BTreeSet<String> {
+        self.on.iter().filter(|(_, on)| self.leaving.is_none_or(|l| on.last > l)).map(|(i, _)| i.clone()).collect()
+    }
+
     fn settle(&mut self) {
         self.left_ns = match (self.leaving, self.spoke) {
             (Some(l), spoke) if spoke.is_none_or(|s| l > s) => Some(l.0),
@@ -149,6 +165,11 @@ impl Port {
         self.pvid.absorb(o.pvid);
         self.mau_type.absorb(o.mau_type);
         self.heard_on.extend(o.heard_on);
+        for (iface, theirs) in o.on {
+            let mine = self.on.entry(iface).or_default();
+            mine.frames += theirs.frames;
+            mine.last = mine.last.max(theirs.last);
+        }
         self.leaving = self.leaving.max(o.leaving);
         self.spoke = self.spoke.max(o.spoke);
         self.settle();
@@ -402,6 +423,9 @@ impl Fusion {
                 port.last_ns = port.last_ns.max(w.at_ns);
                 port.frames += 1;
                 port.heard_on.insert(w.iface.clone());
+                let on = port.on.entry(w.iface.clone()).or_default();
+                on.frames += 1;
+                on.last = on.last.max(when(w));
                 port.port_mac.observe(*src, w);
                 if let Some(v) = &pdu.port_desc {
                     port.desc.observe(v.clone(), w);

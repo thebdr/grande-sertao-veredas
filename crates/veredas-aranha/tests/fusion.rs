@@ -748,3 +748,29 @@ mod round_3 {
         }
     }
 }
+
+/// What a port's frames were on each interface: how many, and the place of the last, whatever the
+/// order they are applied in; its leaving told from what was heard since (the topology's heard
+/// rule, C-145).
+#[test]
+fn a_port_keeps_its_frames_on_each_interface_and_what_was_heard_since_it_left() {
+    use veredas_aranha::fusion::OnInterface;
+    let up = pn_lldp("io-device-1", "port-001", 20);
+    let down = pn_lldp("io-device-1", "port-001", 0);
+    let obs = [lldp_at(PORT, &up, "eth1", 10, 0), lldp_at(PORT, &up, "eth1", 20, 1), lldp_at(PORT, &down, "eth1", 30, 2), lldp_at(PORT, &up, "eth2", 40, 3), lldp_at(PORT, &up, "eth1", 25, 4)];
+    let mut reversed = obs.to_vec();
+    reversed.reverse();
+    for order in [obs.to_vec(), reversed] {
+        let f = fused(&order);
+        let p = &f.devices[&DEV].ports["port-001"];
+        assert_eq!(p.on.iter().map(|(i, o)| (i.as_str(), *o)).collect::<Vec<_>>(), [("eth1", OnInterface { frames: 4, last: (30, 2) }), ("eth2", OnInterface { frames: 1, last: (40, 3) })]);
+        assert_eq!(p.heard_since_leaving(), BTreeSet::from(["eth2".to_string()]));
+        assert_eq!(p.left_ns, None);
+    }
+    // Leaving last: heard nowhere since.
+    let f = fused(&obs[..3]);
+    assert_eq!(f.devices[&DEV].ports["port-001"].heard_since_leaving(), BTreeSet::new());
+    // Never leaving: every interface.
+    let f = fused(&[obs[0].clone(), obs[3].clone()]);
+    assert_eq!(f.devices[&DEV].ports["port-001"].heard_since_leaving(), BTreeSet::from(["eth1".to_string(), "eth2".to_string()]));
+}

@@ -56,7 +56,10 @@ rather than repeating every type.
   management addresses); `arp_ip`; its `ports` by short name, each with its `id`, `port_mac`,
   `desc`, `pn_status` (PROFINET's RTClass 2 and 3 port status, `rtc2` and `rtc3`), `delays`
   (`rx_local`, `rx_remote`, `tx_local`, `tx_remote` and `cable_local`, in nanoseconds), `mrp`
-  (`domain_uuid`, `mrrt`), `pvid`, `mau_type` (fields as above), the interfaces it was `heard_on`, its last leaving frame and last other frame (`leaving`,
+  (`domain_uuid`, `mrrt`), `pvid`, `mau_type` (fields as above), the interfaces it was `heard_on`
+  and, `on` each of them, the `frames` heard there and the `last` one's stamp and frame number
+  (what was heard before its last leaving is told from what was heard since), its last leaving
+  frame and last other frame (`leaving`,
   `spoke`: a stamp and a frame number each, absent when none) and when it left (`left_ns`, absent
   unless its last frame said so), its `first_ns`, `last_ns` and `frames`; what it was `heard`
   doing (`dcp-heard`, `dcp-request-heard`, `lldp-heard`, `arp-heard`), on which interfaces
@@ -65,7 +68,8 @@ rather than repeating every type.
 - `conflicts`, ordered by kind and value: each with its `kind` (`duplicate-name`, `duplicate-ip`,
   `name-changed`, `ip-changed`, `reports-ip-conflict`), the `value` it is about and the `macs` of
   the devices.
-- `topology` (C-145): its `nodes` (`id`, `kind`: `device`, `interface` or `chassis`, `label`, `mac`,
+- `topology` (C-145): its `nodes` (`id`: `dev:<mac>`, `if:<name>` or `chassis:<the chassis id's
+  text>`; `kind`: `device`, `interface` or `chassis`, `label`, `mac`,
   `ports`, the MRP `rings` its ports are in), `links` (ends `a` and `b`, each a `node` and a `port`,
   the lesser first; `confidence`: `heard`, `reported` or `confirmed`; `witnesses`), `rings`
   (`domain`, `members`, `closed`), `components` (node ids, the largest first) and `notes` (what it
@@ -262,6 +266,10 @@ probe = "lldp-heard"
 iface = "eth1"
 at_ns = 1764000001000000000
 frame = 1
+
+[devices.ports.port-001.on.eth1]
+frames = 1
+last = [1764000001000000000, 1]
 
 [[devices]]
 mac = "02:00:00:00:00:02"

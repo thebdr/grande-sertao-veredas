@@ -209,7 +209,8 @@ fn a_full_scan_reads_back_equal_and_the_schema_names_every_key_it_holds() {
     assert!(scan.topology.nodes.iter().any(|n| n.kind == topology::NodeKind::Chassis));
     assert!(scan.topology.links.iter().any(|l| l.confidence == topology::Confidence::Confirmed));
     // Every key the file holds is named in the schema's "The keys", in backticks; the keys of a
-    // map by name (an interface's, a port's, a frame class) are its data, not its keys.
+    // map by name (an interface's, a port's, a frame class, what a port was on each interface)
+    // are its data, not its keys.
     fn keys(v: &toml::Value, by_name: bool, out: &mut std::collections::BTreeSet<String>) {
         match v {
             toml::Value::Table(t) => {
@@ -217,7 +218,7 @@ fn a_full_scan_reads_back_equal_and_the_schema_names_every_key_it_holds() {
                     if !by_name {
                         out.insert(k.clone());
                     }
-                    keys(x, matches!(k.as_str(), "interfaces" | "ports" | "by_class"), out);
+                    keys(x, matches!(k.as_str(), "interfaces" | "ports" | "by_class" | "on"), out);
                 }
             }
             toml::Value::Array(a) => a.iter().for_each(|x| keys(x, false, out)),

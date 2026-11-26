@@ -4,15 +4,17 @@
 //! between them with the confidence their evidence earns; MRP rings; connected components; and a
 //! note for everything it declines to draw.
 //!
-//! - **Heard**: exactly one device's port was heard on one of this machine's interfaces (LLDP is
-//!   link-local, so that is the far end of the interface's cable). An interface hearing several
-//!   ports is a mirror port or a hub, and no cable is drawn from it; a port that said it was
-//!   leaving is no one's cable.
+//! - **Heard**: exactly one device's port was heard on one of this machine's interfaces since it
+//!   last said it was leaving, and on no other since (LLDP is link-local, so that is the far end of
+//!   the interface's cable). An interface hearing several such ports is a mirror port or a hub, and
+//!   no cable is drawn from it; a port that said it was leaving is no one's cable, and what it was
+//!   heard on before is no longer its own.
 //! - **Reported**: a device's own word on its port's neighbour (its port data, read by the implicit
 //!   read), the neighbour found by its MAC (a device's, or the one device whose port it is), else
-//!   by the chassis id it announces in its own LLDP when exactly one device does. A name is never
-//!   a key: a station name heard by DCP joins nothing. A chassis that two devices announce, or
-//!   none, is a chassis node of its own, said ambiguous or not yet identified.
+//!   by the chassis id it announces in its own LLDP, its text whatever the subtype (a port data's
+//!   peer chassis is a bare text), when exactly one device does. A name is never a key: a station
+//!   name heard by DCP joins nothing, and an empty chassis id is none. A chassis that two devices
+//!   announce, or none, is a chassis node of its own, said ambiguous or not yet identified.
 //! - **Confirmed**: both ends report each other.
 //!
 //! A ring is an MRP domain and the devices with a port in it (whatever MRRT's port status says:
@@ -37,7 +39,7 @@ pub enum NodeKind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Node {
-    /// `dev:<mac>`, `if:<name>`, `chassis:<key>`.
+    /// `dev:<mac>`, `if:<name>`, `chassis:<its text>`.
     pub id: String,
     pub kind: NodeKind,
     pub label: String,
@@ -69,7 +71,7 @@ pub struct Link {
     pub a: End,
     pub b: End,
     pub confidence: Confidence,
-    /// Frames heard (a heard link), or reports (a reported or confirmed one).
+    /// Frames heard on its interface (a heard link), or reports (a reported or confirmed one).
     pub witnesses: u64,
 }
 
@@ -104,7 +106,7 @@ pub struct Neighbour {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Topology {
-    /// Devices by MAC, then interfaces by name, then chassis by key.
+    /// Devices by MAC, then interfaces by name, then chassis by text.
     pub nodes: Vec<Node>,
     /// By their ends.
     pub links: Vec<Link>,
@@ -123,8 +125,8 @@ pub fn interface_id(name: &str) -> String {
     format!("if:{name}")
 }
 
-pub fn chassis_id(key: &str) -> String {
-    format!("chassis:{key}")
+pub fn chassis_id(text: &str) -> String {
+    format!("chassis:{text}")
 }
 
 /// A port id as a port's short name: `port-001.station` is `port-001`.
@@ -146,21 +148,33 @@ pub fn build(fusion: &Fusion, interfaces: &[Interface], neighbours: &[Neighbour]
         let id = device_id(d.mac);
         let mut rings = BTreeSet::new();
         for p in d.ports.values() {
+            // The domain its port states last, leaving or not: membership is the ring's
+            // configuration, and a member gone leaves the ring open.
             if let Some(m) = p.mrp.current() {
                 rings.insert(m.domain_hex());
                 domains.entry(m.domain_hex()).or_default().insert(id.clone());
             }
             if p.left_ns.is_some() {
-                t.notes.push(format!("{}'s {} said it was leaving: no cable is drawn to it", d.label(), p.id));
+                note(&mut t.notes, format!("{id} {} said it was leaving: no cable is drawn to it", p.id));
                 continue;
             }
-            for iface in &p.heard_on {
-                heard.entry(iface.clone()).or_default().insert((id.clone(), p.id.clone()), p.frames);
+            // Only where it was heard since it last said it was leaving: a port that left one
+            // interface and came back on another has moved, not joined the two.
+            for iface in p.heard_since_leaving() {
+                let frames = p.on.get(&iface).map_or(0, |on| on.frames);
+                heard.entry(iface).or_default().insert((id.clone(), p.id.clone()), frames);
             }
         }
         t.nodes.push(Node { id, kind: NodeKind::Device, label: d.label(), mac: Some(d.mac), ports: d.ports.keys().cloned().collect(), rings: rings.into_iter().collect() });
     }
-    let mut ifaces: BTreeMap<String, Option<Mac>> = interfaces.iter().map(|i| (i.name.clone(), i.mac)).collect();
+    // An interface named twice keeps the first MAC it is given.
+    let mut ifaces: BTreeMap<String, Option<Mac>> = BTreeMap::new();
+    for i in interfaces {
+        let mac = ifaces.entry(i.name.clone()).or_insert(i.mac);
+        if mac.is_none() {
+            *mac = i.mac;
+        }
+    }
     for d in fusion.devices.values() {
         for iface in d.heard_on.iter().chain(d.ports.values().flat_map(|p| p.heard_on.iter())) {
             ifaces.entry(iface.clone()).or_insert(None);
@@ -182,7 +196,7 @@ pub fn build(fusion: &Fusion, interfaces: &[Interface], neighbours: &[Neighbour]
     for ((node, port), on) in &ifaces_of {
         if on.len() > 1 {
             let on: Vec<&str> = on.iter().map(String::as_str).collect();
-            t.notes.push(format!("{node} {port} is heard on {} interfaces ({}): a hub or a mirror joins them, no cable is drawn to it", on.len(), on.join(", ")));
+            note(&mut t.notes, format!("{node} {port} is heard on {} interfaces ({}): a hub or a mirror joins them, no cable is drawn to it", on.len(), on.join(", ")));
         }
     }
     for (iface, senders) in &heard {
@@ -193,15 +207,20 @@ pub fn build(fusion: &Fusion, interfaces: &[Interface], neighbours: &[Neighbour]
             }
         } else {
             let list: Vec<String> = senders.keys().map(|(n, p)| format!("{n} {p}")).collect();
-            t.notes.push(format!("{iface} hears LLDP from {} ports ({}): a mirror port or a hub, no cable is drawn from it", senders.len(), list.join(", ")));
+            note(&mut t.notes, format!("{iface} hears LLDP from {} ports ({}): a mirror port or a hub, no cable is drawn from it", senders.len(), list.join(", ")));
         }
     }
 
     // Reported and confirmed, from the devices' own words on their neighbours.
+    // A chassis by its text, whatever subtype its LLDP gives it: a port data's peer chassis is a
+    // bare text. An empty one is no chassis.
     let mut claims: BTreeMap<String, BTreeSet<Mac>> = BTreeMap::new();
     for d in fusion.devices.values() {
         for c in &d.chassis.candidates {
-            claims.entry(c.value.clone()).or_default().insert(d.mac);
+            let text = chassis_text(&c.value);
+            if !text.is_empty() {
+                claims.entry(text.to_string()).or_default().insert(d.mac);
+            }
         }
     }
     let mut chassis_nodes: BTreeMap<String, String> = BTreeMap::new();
@@ -214,31 +233,36 @@ pub fn build(fusion: &Fusion, interfaces: &[Interface], neighbours: &[Neighbour]
             continue;
         }
         if !fusion.devices.contains_key(&n.device) {
-            t.notes.push(format!("{} {} reports a neighbour, but nothing heard that device: not drawn", device_id(n.device), short(&n.port)));
+            note(&mut t.notes, format!("{} {} reports a neighbour, but nothing heard that device: not drawn", device_id(n.device), short(&n.port)));
             continue;
         }
         let local = End { node: device_id(n.device), port: short(&n.port) };
         let by_mac = n.peer_mac.filter(|m| m.0 != [0; 6]).and_then(|m| if fusion.devices.contains_key(&m) { Some(m) } else { fusion.port_owner(m) });
-        let key = format!("local:{}", n.chassis);
-        let by_chassis = claims.get(&key).filter(|c| c.len() == 1).and_then(|c| c.iter().next().copied());
+        let text = n.chassis.as_str();
+        let claimed = claims.get(text);
+        let by_chassis = claimed.filter(|c| c.len() == 1).and_then(|c| c.iter().next().copied());
         let remote = match (by_mac, by_chassis) {
             (Some(m), _) => {
-                if claims.get(&key).is_some_and(|c| c.iter().any(|d| *d != m)) {
-                    t.notes.push(format!("{} {} names chassis {:?}, which another device announces, from the port MAC of {}: the MAC is taken", device_id(n.device), local.port, n.chassis, device_id(m)));
+                if claimed.is_some_and(|c| c.iter().any(|d| *d != m)) {
+                    note(&mut t.notes, format!("{} {} names chassis {text:?}, which another device announces, from the port MAC of {}: the MAC is taken", device_id(n.device), local.port, device_id(m)));
                 }
                 device_id(m)
             }
             (None, Some(c)) => device_id(c),
+            (None, None) if text.is_empty() => {
+                note(&mut t.notes, format!("{} {} reports a neighbour with no chassis and no MAC: not drawn", device_id(n.device), local.port));
+                continue;
+            }
             (None, None) => {
-                let claimants = claims.get(&key).map_or(0, BTreeSet::len);
-                chassis_nodes.entry(key.clone()).or_insert_with(|| {
+                let claimants = claimed.map_or(0, BTreeSet::len);
+                chassis_nodes.entry(text.to_string()).or_insert_with(|| {
                     if claimants > 1 {
-                        format!("{} (ambiguous: {claimants} devices)", n.chassis)
+                        format!("{text} (ambiguous: {claimants} devices)")
                     } else {
-                        format!("{} (not yet identified)", n.chassis)
+                        format!("{text} (not yet identified)")
                     }
                 });
-                chassis_id(&key)
+                chassis_id(text)
             }
         };
         let remote = End { node: remote, port: short(&n.peer_port) };
@@ -251,12 +275,12 @@ pub fn build(fusion: &Fusion, interfaces: &[Interface], neighbours: &[Neighbour]
             e.1 += n.witnesses;
         }
     }
-    for (key, label) in &chassis_nodes {
-        let claimants = claims.get(key).map_or(0, BTreeSet::len);
+    for (text, label) in &chassis_nodes {
+        let claimants = claims.get(text).map_or(0, BTreeSet::len);
         if claimants > 1 {
-            t.notes.push(format!("a neighbour names chassis {:?}, which {claimants} devices announce: its links go to that chassis, not to a guess", &key["local:".len()..]));
+            note(&mut t.notes, format!("a neighbour names chassis {text:?}, which {claimants} devices announce: its links go to that chassis, not to a guess"));
         }
-        t.nodes.push(Node { id: chassis_id(key), kind: NodeKind::Chassis, label: label.clone(), mac: None, ports: Vec::new(), rings: Vec::new() });
+        t.nodes.push(Node { id: chassis_id(text), kind: NodeKind::Chassis, label: label.clone(), mac: None, ports: Vec::new(), rings: Vec::new() });
     }
     for ((a, b), (wa, wb)) in said {
         let confidence = if wa > 0 && wb > 0 { Confidence::Confirmed } else { Confidence::Reported };
@@ -300,6 +324,18 @@ pub fn build(fusion: &Fusion, interfaces: &[Interface], neighbours: &[Neighbour]
         t.rings.push(Ring { domain, members: members.into_iter().collect(), closed: one_cycle });
     }
     t
+}
+
+/// A note, said once.
+fn note(notes: &mut Vec<String>, n: String) {
+    if !notes.contains(&n) {
+        notes.push(n);
+    }
+}
+
+/// A chassis key's text, whatever its subtype: `local:x`, `ifname:x` and `mac:x` are `x`.
+fn chassis_text(key: &str) -> &str {
+    key.split_once(':').map_or(key, |(_, text)| text)
 }
 
 fn push(links: &mut Vec<Link>, a: End, b: End, confidence: Confidence, witnesses: u64) {
