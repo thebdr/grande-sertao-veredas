@@ -2944,3 +2944,115 @@ fn an_entry_whose_frame_the_stack_cannot_hold_is_refused_when_started_nothing_wr
     let mut m = Machine::load(b.program, &[three], on_stack(9)).unwrap();
     assert_eq!(m.call(f, &[]).unwrap(), &[int(Int::U8, 5)]);
 }
+
+// The twenty-sixth refute round's tests (the critic's probes, adopted): the ceiling counting the largest region's
+// room, the frames' edges, `Default` into an `Option` of its own discriminant type and over a `Some`, and a callee
+// whose frame would end past `u32`.
+
+/// a call refused by the frames' condition writes nothing of its callee. `a() -> b() -> g(9)` on a stack of
+/// two slots: a and b of no slot are its two frames; g's one slot fits, its frame does not.
+#[test]
+fn a_call_past_the_stack_s_frames_writes_nothing_of_its_callee() {
+    let mut b = Build::default();
+    let (unit, u8t) = (b.unit(), b.int(Int::U8));
+    let g = b.function(Function { name: "g".into(), params: 1, locals: locals(&[unit, u8t]), blocks: vec![block(vec![], ret())] });
+    let bf = b.function(Function {
+        name: "b".into(),
+        params: 0,
+        locals: locals(&[unit]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(g), args: vec![konst(u8t, vec![int(Int::U8, 9)])], dest: place(0), next: BlockId(1), at: at(7) }),
+            block(vec![], ret()),
+        ],
+    });
+    let a = b.function(Function {
+        name: "a".into(),
+        params: 0,
+        locals: locals(&[unit]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(bf), args: vec![], dest: place(0), next: BlockId(1), at: at(6) }),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[], on_stack(2)).unwrap();
+    // g(5) as an entry leaves its parameter in the stack's first slot
+    m.call(g, &[Arg::Value(&[int(Int::U8, 5)])]).unwrap();
+    let before = m.memory().to_vec();
+    assert_eq!(before[0], int(Int::U8, 5));
+    let failed = ProgramError { function: bf, block: BlockId(0), statement: None, at: at(7), kind: ErrorKind::Stack };
+    assert_eq!(m.call(a, &[]).map(|r| r.to_vec()), Err(CallError::Program(failed)));
+    assert_eq!((m.position(), m.depth()), (Some((bf, BlockId(0), 0)), 2));
+    assert_eq!(m.memory(), &before[..], "nothing of g written");
+}
+
+/// the frames are counted against the stack's slots, not its end: behind a region of ten, a stack of four holds
+/// four frames of no slot.
+#[test]
+fn frames_count_against_the_stack_s_slots_behind_a_region() {
+    let mut b = Build::default();
+    let (unit, u8t) = (b.unit(), b.int(Int::U8));
+    let ten = b.ty(Type::Array { element: u8t, len: 10 });
+    let call = Terminator::Call { callee: Callee::Function(FunctionId(0)), args: vec![], dest: place(0), next: BlockId(0), at: at(1) };
+    let f = b.function(Function { name: "f".into(), params: 0, locals: locals(&[unit]), blocks: vec![block(vec![], call)] });
+    let mut m = Machine::load(b.program, &[ten], on_stack(4)).unwrap();
+    let got = m.call(f, &[]).map(|r| r.to_vec());
+    assert!(matches!(got, Err(CallError::Program(ProgramError { kind: ErrorKind::Stack, .. }))), "{got:?}");
+    assert_eq!(m.depth(), 4);
+}
+
+/// the stack laid out after the regions: a region's slots are the memory's first.
+#[test]
+fn the_regions_come_first_then_the_stack() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let three = b.ty(Type::Array { element: u8t, len: 3 });
+    let f = b.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 7)])), 1)], ret())] });
+    let mut m = Machine::load(b.program, &[three], on_stack(1)).unwrap();
+    let region = [int(Int::U8, 1), int(Int::U8, 2), int(Int::U8, 3)];
+    m.set_region(RegionId(0), &region).unwrap();
+    m.call(f, &[]).unwrap();
+    assert_eq!(m.memory(), &[int(Int::U8, 1), int(Int::U8, 2), int(Int::U8, 3), int(Int::U8, 7)][..]);
+}
+
+/// A callee whose frame would end past `u32`: `main`, a frame of 2^18 slots, calls
+/// `g`, a frame of 16383 locals of 2^18 slots, on a stack of 2^18 + 1 under the tests' ceiling: g's frame would end at
+/// 2^32, past the stack, which the clause names `ErrorKind::Stack`.
+#[test]
+fn a_callee_ending_past_u32_is_a_call_past_the_stack() {
+    let mut b = Build::default();
+    let (unit, u8t) = (b.unit(), b.int(Int::U8));
+    let quarter = b.ty(Type::Array { element: u8t, len: 1 << 18 });
+    let mut g_locals = vec![unit];
+    g_locals.extend(std::iter::repeat_n(quarter, 16383));
+    let g = b.function(Function { name: "g".into(), params: 0, locals: locals(&g_locals), blocks: vec![block(vec![], ret())] });
+    let main = b.function(Function {
+        name: "main".into(),
+        params: 0,
+        locals: locals(&[unit, quarter]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Function(g), args: vec![], dest: place(0), next: BlockId(1), at: at(2) }),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[], on_stack((1 << 18) + 1)).unwrap();
+    let got = m.call(main, &[]).map(|r| r.to_vec());
+    assert_eq!(
+        got,
+        Err(CallError::Program(ProgramError { function: main, block: BlockId(0), statement: None, at: at(2), kind: ErrorKind::Stack }))
+    );
+}
+
+/// a start refused for its stack leaves the last entry's result and count as they were.
+#[test]
+fn a_start_refused_for_its_stack_keeps_the_last_result() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let eight = b.ty(Type::Array { element: u8t, len: 8 });
+    let small = b.function(Function { name: "small".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![assign(place(0), Value::Use(konst(u8t, vec![int(Int::U8, 7)])), 1)], ret())] });
+    let big = b.function(Function { name: "big".into(), params: 0, locals: locals(&[u8t, eight]), blocks: vec![block(vec![], ret())] });
+    let mut m = Machine::load(b.program, &[], on_stack(4)).unwrap();
+    m.call(small, &[]).unwrap();
+    let (result, steps) = (m.result().to_vec(), m.steps());
+    assert_eq!(m.start(big, &[]), Err(HostError::Stack));
+    assert_eq!((m.result(), m.steps()), (&result[..], steps));
+}

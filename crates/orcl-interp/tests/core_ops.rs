@@ -443,3 +443,56 @@ fn a_checked_shift_into_an_option_whose_discriminant_is_a_u8_writes_a_u8() {
     assert_eq!(call(&mut m, f, &[vec![int(Int::U8, 3)], vec![int(Int::U32, 2)]]), vec![int(Int::U8, 1), int(Int::U8, 12)]);
     assert_eq!(call(&mut m, f, &[vec![int(Int::U8, 3)], vec![int(Int::U32, 8)]]), vec![int(Int::U8, 0), Scalar::Uninit]);
 }
+
+// The twenty-sixth refute round's tests (the critic's probes, adopted): the ceiling counting the largest region's
+// room, the frames' edges, `Default` into an `Option` of its own discriminant type and over a `Some`, and a callee
+// whose frame would end past `u32`.
+
+/// `Default` into an `Option` whose discriminant the program gives as a `u8` writes a `u8` 0, as
+/// `get_or_insert` and a checked shift write the option's own discriminant type.
+#[test]
+fn default_into_an_option_of_a_u8_discriminant_writes_a_u8() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let opt = b.ty(Type::Enum {
+        name: "Option".into(),
+        discriminant: Int::U8,
+        variants: vec![
+            Variant { name: "None".into(), discriminant: 0, fields: vec![] },
+            Variant { name: "Some".into(), discriminant: 1, fields: vec![Field { name: "0".into(), ty: u8t }] },
+        ],
+    });
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[opt]),
+        blocks: vec![
+            block(vec![], Terminator::Call { callee: Callee::Core(CoreOp::Default), args: vec![], dest: place(0), next: BlockId(1), at: at(1) }),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
+    assert_eq!(m.call(f, &[]).map(|r| r.to_vec()), Ok(vec![int(Int::U8, 0), Scalar::Uninit]));
+}
+
+/// `Default` into an `Option` place that held `Some(5)` leaves no payload: `None` whole.
+#[test]
+fn default_over_a_some_leaves_no_payload() {
+    let mut b = Build::default();
+    let u8t = b.int(Int::U8);
+    let opt = b.option(u8t);
+    let f = b.function(Function {
+        name: "f".into(),
+        params: 0,
+        locals: locals(&[opt]),
+        blocks: vec![
+            block(
+                vec![assign(place(0), Value::Aggregate(opt, Some(1), vec![konst(u8t, vec![int(Int::U8, 5)])]), 1)],
+                Terminator::Call { callee: Callee::Core(CoreOp::Default), args: vec![], dest: place(0), next: BlockId(1), at: at(2) },
+            ),
+            block(vec![], ret()),
+        ],
+    });
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
+    assert_eq!(m.call(f, &[]).map(|r| r.to_vec()), Ok(vec![int(Int::Isize, 0), Scalar::Uninit]));
+}

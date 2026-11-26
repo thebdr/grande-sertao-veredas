@@ -637,3 +637,32 @@ fn a_function_calling_itself_to_the_stack_s_edge_and_past_it_allocates_nothing_n
         }
     }
 }
+
+// The twenty-sixth refute round's tests (the critic's probes, adopted): the ceiling counting the largest region's
+// room, the frames' edges, `Default` into an `Option` of its own discriminant type and over a `Some`, and a callee
+// whose frame would end past `u32`.
+
+/// `fn f() { f() }` to the stack's edge, under the counter: the frames' room is the stack's slots, in the
+/// machine and in a copy taken at every depth.
+#[test]
+fn frames_of_no_slot_to_the_stack_s_edge_allocate_nothing_nor_does_a_copy() {
+    let mut b = Build::default();
+    let unit = b.unit();
+    let call = Terminator::Call { callee: Callee::Function(FunctionId(0)), args: vec![], dest: place(0), next: BlockId(0), at: at(1) };
+    let f = b.function(Function { name: "f".into(), params: 0, locals: locals(&[unit]), blocks: vec![block(vec![], call)] });
+    let mut m = Machine::load(b.program, &[], on_stack(64)).unwrap();
+    let (got, asked) = watching(|| m.call(f, &[]).map(|r| r.len()));
+    assert!(matches!(got, Err(CallError::Program(ProgramError { kind: ErrorKind::Stack, .. }))), "{got:?}");
+    assert_eq!((asked, m.depth()), (0, 64));
+    m.abort();
+    m.start(f, &[]).unwrap();
+    loop {
+        let mut copy = m.clone();
+        let (got, asked) = watching(|| copy.run(u64::MAX));
+        assert!(matches!(got, Err(ProgramError { kind: ErrorKind::Stack, .. })), "{got:?}");
+        assert_eq!((asked, copy.depth()), (0, 64), "a copy at depth {}", m.depth());
+        if m.step().is_err() {
+            break;
+        }
+    }
+}

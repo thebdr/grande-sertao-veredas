@@ -518,7 +518,8 @@ impl State {
                 let (dest, _) = code.resolve(&self.memory, frame, dest)?;
                 let base = plus(frame.base, code.frame(frame.function)?.size)?;
                 let callee = code.frame(g.0)?;
-                let end = plus(base, callee.size)?;
+                // a frame that would end past `u32` ends past the stack too: the program's error, as at a start
+                let end = base.checked_add(callee.size).ok_or(ErrorKind::Stack)?;
                 // Q230: the stack is the host's size; a call past it, in slots or in frames, is the program's error
                 if end > code.stack_end || self.frames.len() >= code.room.frames {
                     return Err(ErrorKind::Stack);

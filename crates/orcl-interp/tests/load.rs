@@ -2162,3 +2162,41 @@ fn a_switch_s_last_target_after_a_sound_one_is_refused() {
         assert_eq!(got, refused_at_the_switch(reason), "{reason}, the last target after a sound one");
     }
 }
+
+// The twenty-sixth refute round's tests (the critic's probes, adopted): the ceiling counting the largest region's
+// room, the frames' edges, `Default` into an `Option` of its own discriminant type and over a `Some`, and a callee
+// whose frame would end past `u32`.
+
+/// a region larger than every local: its room in the scratch counted in the ceiling. `fn f() -> u8` behind a
+/// region of ten: regions 10, stack 1, the largest value 10 (the region's), the largest result 1: 22 slots.
+#[test]
+fn the_largest_region_s_room_is_counted_in_the_ceiling() {
+    let program = || {
+        let mut b = Build::default();
+        let u8t = b.int(Int::U8);
+        let ten = b.ty(Type::Array { element: u8t, len: 10 });
+        b.function(Function { name: "f".into(), params: 0, locals: locals(&[u8t]), blocks: vec![block(vec![], ret())] });
+        (b.program, ten)
+    };
+    let (p, ten) = program();
+    assert!(Machine::load(p, &[ten], Limits { stack: 1, memory: 22 }).is_ok());
+    let (p, ten) = program();
+    assert_eq!(
+        Machine::load(p, &[ten], Limits { stack: 1, memory: 21 }).map(|_| ()),
+        Err(LoadError::Region { index: 1, reason: "memory past the host's limit" })
+    );
+}
+
+/// a sum past u32 at a ceiling of u32::MAX: a local of u32::MAX slots and a stack of one, 2^32 slots, refused
+/// before anything is allocated (the tests' allocator aborts a load that asks for it).
+#[test]
+fn a_sum_past_u32_is_refused_at_the_greatest_ceiling() {
+    let mut b = Build::default();
+    let (u8t, unit) = (b.int(Int::U8), b.unit());
+    let huge = b.ty(Type::Array { element: u8t, len: u32::MAX });
+    b.function(Function { name: "f".into(), params: 0, locals: locals(&[unit, huge]), blocks: vec![block(vec![], ret())] });
+    assert_eq!(
+        Machine::load(b.program, &[], Limits { stack: 1, memory: u32::MAX }).map(|_| ()),
+        Err(LoadError::Region { index: 0, reason: "memory past the host's limit" })
+    );
+}
