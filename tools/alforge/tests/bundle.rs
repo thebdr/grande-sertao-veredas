@@ -252,7 +252,7 @@ fn the_cut_refuses_a_version_another_release_pinned_at_other_code_before_buildin
     let r = Repo { dir: tempfile::tempdir().unwrap() };
     r.git(&["init", "-q", "-b", "main"]);
     r.write(".gitignore", "/target/\n");
-    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\"]\n");
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n");
     r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
     r.write("crates/veredas-core/src/lib.rs", "\n");
     r.write("tools/alforge/maquina/maquina.toml", &recipe_with("cpus = 4", "cpus = 4"));
@@ -621,7 +621,7 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
     let r = Repo { dir: tempfile::tempdir().unwrap() };
     r.git(&["init", "-q", "-b", "main"]);
     r.write(".gitignore", "/target/\n");
-    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\"]\n");
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n");
     r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
     r.write("crates/veredas-core/src/lib.rs", "\n");
     // The recipe's base at an address nothing answers: a cut whose suite passes stops at the
@@ -867,7 +867,8 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
     // A component that ships no executable has its library built alone, for its dep-info.
     let build = |p: &str, bins: &[&str], lib: &str| builder::Build { package: p.into(), bins: bins.iter().map(|b| b.to_string()).collect(), lib: Some(lib.into()), features: vec![] };
     // Portal's `porteiro` requires features, which its build turns on whatever its defaults are
-    // (docs/questions.md Q443), each quoted for the shell as cargo states it.
+    // (docs/questions.md Q443), each quoted for the shell: a dependency's as cargo states it, its
+    // own as `<package>/<feature>`, which a root package of the workspace cannot take for its own.
     let mut portal = build("veredas-portal", &["veredas-portal", "porteiro"], "veredas_portal");
     portal.features = vec!["dep/servir".into(), "it's".into()];
     let builds = vec![build("veredas-aranha", &[], "veredas_aranha"), build("veredas-maquinar", &["veredas-bancada"], "veredas_maquinar"), portal];
@@ -883,7 +884,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
          cd /build/src\nmkdir -p /build/out/bin /build/out/deps\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
          cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\n\
          cargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\n\
-         cargo build --release --locked --offline --jobs 4 -p veredas-portal --bins --features 'dep/servir' --features 'it'\\''s'\n\
+         cargo build --release --locked --offline --jobs 4 -p veredas-portal --bins --features 'dep/servir' --features 'veredas-portal/it'\\''s'\n\
          {control}\nmissing=\n\
          cp target/release/libveredas_aranha.d /build/out/deps/\n\
          if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; cp target/release/veredas-bancada.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-bancada\"; missing=1; fi\n\
@@ -917,7 +918,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         let log = std::fs::read_to_string(&log_path).unwrap();
         assert_eq!(
             std::fs::read_to_string(d.path().join("calls")).unwrap(),
-            "cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\ncargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\ncargo build --release --locked --offline --jobs 4 -p veredas-portal --bins --features dep/servir --features it's\n"
+            "cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\ncargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\ncargo build --release --locked --offline --jobs 4 -p veredas-portal --bins --features dep/servir --features veredas-portal/it's\n"
         );
         assert_eq!(std::fs::read_to_string(root.join("out/toolchain")).unwrap(), "rustc 1.100.0 (0ef1bc386 2026-11-09)\n");
         let mut shipped: Vec<String> = std::fs::read_dir(root.join("out/bin")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
@@ -1086,7 +1087,7 @@ fn trial_cut(root: &Path) -> (Result<cut::Cut, CutError>, bool) {
 
 #[test]
 fn every_refusal_before_the_build_stops_the_cut_with_nothing_built() {
-    let workspace = "[workspace]\nmembers = [\"crates/veredas-core\"]\n";
+    let workspace = "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n";
     let message = |got: Result<cut::Cut, CutError>| match got {
         Err(e) => e.to_string(),
         Ok(c) => panic!("cut: {:?}", c.manifest),
@@ -1259,7 +1260,7 @@ fn a_release_already_cut_where_the_cut_writes_takes_part_in_its_check() {
     let r = Repo { dir: tempfile::tempdir().unwrap() };
     r.git(&["init", "-q", "-b", "main"]);
     r.write(".gitignore", "/target/\n");
-    r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\"]\n");
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n");
     r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
     r.write("crates/veredas-core/src/lib.rs", "\n");
     r.write("tools/alforge/maquina/maquina.toml", &recipe_with("cpus = 4", "cpus = 4"));
@@ -1438,7 +1439,7 @@ fn a_real_cut_refuses_unread_inputs_and_a_shared_executable_before_its_suite_run
         (
             "a shared executable",
             vec![
-                ("Cargo.toml", "[workspace]\nmembers = [\"crates/veredas-core\", \"crates/veredas-b\"]\n"),
+                ("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\", \"crates/veredas-b\"]\n"),
                 ("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"ferramenta\"\npath = \"src/f.rs\"\n"),
                 ("crates/veredas-core/src/f.rs", "fn main() {}\n"),
                 ("crates/veredas-b/Cargo.toml", "[package]\nname = \"veredas-b\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[[bin]]\nname = \"ferramenta\"\npath = \"src/f.rs\"\n"),
@@ -1447,7 +1448,7 @@ fn a_real_cut_refuses_unread_inputs_and_a_shared_executable_before_its_suite_run
             "`ferramenta` is an executable of veredas-b and veredas-core: a bundle holds one executable a name\n",
         ),
     ] {
-        let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+        let (r, _) = repo_for_cut("[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
         for (f, t) in &files {
             r.write(f, t);
         }
@@ -1462,7 +1463,7 @@ fn a_real_cut_refuses_unread_inputs_and_a_shared_executable_before_its_suite_run
 
 #[test]
 fn a_proc_macro_component_has_its_library_built_for_its_dep_info() {
-    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\", \"crates/veredas-macro\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let (r, _) = repo_for_cut("[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\", \"crates/veredas-macro\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
     r.write("crates/veredas-macro/Cargo.toml", "[package]\nname = \"veredas-macro\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\n");
     r.write("crates/veredas-macro/src/lib.rs", "\n");
     let c = r.commit("a proc-macro component");
@@ -1481,7 +1482,7 @@ fn round_fifteen_shared_names_with_required_features_crate_types_and_a_tracked_o
         Ok(c) => panic!("cut: {:?}", c.manifest),
     };
     // Two components each naming `ferramenta`, with required features their defaults turn on.
-    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-a\", \"crates/veredas-b\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let (r, _) = repo_for_cut("[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-a\", \"crates/veredas-b\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
     for c in ["veredas-a", "veredas-b"] {
         r.write(
             &format!("crates/{c}/Cargo.toml"),
@@ -1494,7 +1495,7 @@ fn round_fifteen_shared_names_with_required_features_crate_types_and_a_tracked_o
     assert_eq!(message(got), "`ferramenta` is an executable of veredas-a and veredas-b: a bundle holds one executable a name");
     assert!(!left);
     // A commit tracking a file under target/, where the build's output goes: refused.
-    let (r, c) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let (r, c) = repo_for_cut("[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
     let _ = c;
     r.write("target/tracked.txt", "a file of the tree\n");
     r.git(&["add", "-f", "target/tracked.txt"]);
@@ -1503,7 +1504,7 @@ fn round_fifteen_shared_names_with_required_features_crate_types_and_a_tracked_o
     assert_eq!(message(got), format!("commit {c} tracks target/ (tracked.txt): the build's own output folder holds no file of the tree"));
     assert!(!left);
     // A component that ships no executable has a library the cut builds, whatever its crate type.
-    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/*\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let (r, _) = repo_for_cut("[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
     for (name, lib) in [("veredas-rl", "crate-type = [\"rlib\"]"), ("veredas-dy", "crate-type = [\"dylib\"]"), ("veredas-st", "crate-type = [\"staticlib\"]"), ("veredas-cd", "crate-type = [\"cdylib\"]"), ("veredas-pm", "proc-macro = true")] {
         r.write(&format!("crates/{name}/Cargo.toml"), &format!("[package]\nname = \"{name}\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[lib]\n{lib}\n"));
         r.write(&format!("crates/{name}/src/lib.rs"), "\n");
@@ -1518,7 +1519,7 @@ fn round_fifteen_shared_names_with_required_features_crate_types_and_a_tracked_o
 #[test]
 fn round_sixteen_a_control_character_in_a_name_and_the_builders_input_beside_the_trees_config() {
     // A name holding a newline, which would cut cargo's reading of rustc's dep-info short.
-    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let (r, _) = repo_for_cut("[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
     r.write("crates/veredas-core/src/a\nb.txt", "x\n");
     let c = r.commit("a newline in a name");
     let mut refusals = Vec::new();
@@ -1526,7 +1527,7 @@ fn round_sixteen_a_control_character_in_a_name_and_the_builders_input_beside_the
     assert_eq!(refusals, [format!("commit {c}: the path \"crates/veredas-core/src/a\\nb.txt\" holds a control character: a release's tree names its files without one")]);
     // The builder's input: the tree as git holds it, a configuration it tracks left byte for byte,
     // the vendored sources' stanza beside it.
-    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let (r, _) = repo_for_cut("[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
     let tracked = "[build]\nrustflags = [\"-Cdebuginfo=0\"]\n";
     r.write(".cargo/config.toml", tracked);
     r.write("Cargo.lock", "version = 4\n\n[[package]]\nname = \"veredas-core\"\nversion = \"2.0.0\"\n");
@@ -1540,7 +1541,7 @@ fn round_sixteen_a_control_character_in_a_name_and_the_builders_input_beside_the
 
 #[test]
 fn every_bin_ships_and_the_manifest_is_checked_again_as_built() {
-    let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
+    let (r, _) = repo_for_cut("[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
     r.write(
         "crates/veredas-core/Cargo.toml",
         "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\nf = []\ng = []\n\n[[bin]]\nname = \"um\"\npath = \"src/a.rs\"\nrequired-features = [\"f\"]\n\n[[bin]]\nname = \"dois\"\npath = \"src/b.rs\"\nrequired-features = [\"f\", \"g\"]\n",
@@ -1578,7 +1579,7 @@ fn round_seventeen_two_builds_writing_one_dep_info_are_refused_before_the_build(
     // Two components shipping no executable, both naming their library `shared`; a third with a
     // bin `libtres` beside a fourth's library `tres`: each pair writes one dep-info file.
     let (r, _) = repo_for_cut(
-        "[workspace]\nmembers = [\"crates/veredas-a\", \"crates/veredas-b\", \"crates/veredas-c\", \"crates/veredas-d\"]\n",
+        "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-a\", \"crates/veredas-b\", \"crates/veredas-c\", \"crates/veredas-d\"]\n",
         Some(&recipe_with("cpus = 4", "cpus = 4")),
     );
     for (c, extra) in [
@@ -1670,7 +1671,7 @@ fn round_eighteen_names_cargos_dep_info_misreads_are_refused_and_its_words_read_
         // A folder's name ending in a space, as a file's does.
         ("crates/veredas-core/src/data /x.rs", "holds a backslash or a whitespace other than a space, or ends in a space: cargo's dep-info would misread it, and a release's tree names its files without one"),
     ] {
-        let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", None);
+        let (r, _) = repo_for_cut("[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n", None);
         r.write(name, "\n");
         let c = r.commit("an odd name");
         let mut refusals = Vec::new();
@@ -1680,7 +1681,7 @@ fn round_eighteen_names_cargos_dep_info_misreads_are_refused_and_its_words_read_
     let unicode_spaces: Vec<char> = ['\u{85}', '\u{a0}', '\u{1680}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}'].into_iter().chain('\u{2000}'..='\u{200a}').collect();
     assert!(unicode_spaces.iter().all(|c| c.is_whitespace()));
     for c in &unicode_spaces {
-        let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", None);
+        let (r, _) = repo_for_cut("[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n", None);
         let name = format!("crates/veredas-core/src/x{c}y.rs");
         r.write(&name, "\n");
         let commit = r.commit("a Unicode whitespace");
@@ -1692,7 +1693,7 @@ fn round_eighteen_names_cargos_dep_info_misreads_are_refused_and_its_words_read_
     }
     // Every C1 control at the export too, a control character each.
     for c in '\u{80}'..='\u{9f}' {
-        let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", None);
+        let (r, _) = repo_for_cut("[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n", None);
         let name = format!("crates/veredas-core/src/x{c}y.rs");
         r.write(&name, "\n");
         let commit = r.commit("a C1 control");

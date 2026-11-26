@@ -99,6 +99,13 @@ fn quoted(word: &str) -> String {
     format!("'{}'", word.replace('\'', "'\\''"))
 }
 
+/// What turns `package`'s required `features` on in its build, run from the workspace's root: each
+/// of its own features named `<package>/<feature>` (a root package of the workspace would take a
+/// bare one as its own), a dependency's (`dep/feature`) as cargo states it.
+pub fn feature_args(package: &str, features: &[String]) -> Vec<String> {
+    features.iter().flat_map(|f| ["--features".to_string(), if f.contains('/') { f.clone() } else { format!("{package}/{f}") }]).collect()
+}
+
 /// The script the builder machine runs on the commit's tree: the toolchain's and the C library's
 /// versions written down, each component of `builds` built alone with `cargo build --release
 /// --locked --offline -p <component> --bins`, each feature its executables need turned on
@@ -115,7 +122,7 @@ pub fn script(r: &Recipe, builds: &[Build]) -> String {
         .iter()
         .filter_map(|b| {
             let what = match (b.bins.is_empty(), b.lib.is_some()) {
-                (false, _) => format!("--bins{}", b.features.iter().map(|f| format!(" --features {}", quoted(f))).collect::<String>()),
+                (false, _) => format!("--bins{}", feature_args(&b.package, &b.features).iter().map(|w| format!(" {}", if w == "--features" { w.clone() } else { quoted(w) })).collect::<String>()),
                 (true, true) => "--lib".to_string(),
                 (true, false) => return None,
             };

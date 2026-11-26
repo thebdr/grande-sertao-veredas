@@ -312,11 +312,12 @@ impl Workspace<'_> {
         // Each folder but its top tests, benches and examples, unless a shipped target starts there
         // (docs/questions.md Q445, ruled 2026-11-26 "Tests left out").
         let mut left: Vec<String> = Vec::new();
+        let dirs: BTreeSet<&str> = used.iter().map(|m| m.dir.as_str()).collect();
         for m in &used {
-            let out = left_out(self.tree, m);
+            let out = left_out(self.tree, m, &dirs);
             named.insert(format!("{}/", m.dir), self.folder_id(&m.dir, &out)?);
             for f in out {
-                named.insert(f.clone(), LEFT_OUT.to_string());
+                named.entry(f.clone()).or_insert_with(|| LEFT_OUT.to_string());
                 left.push(f);
             }
             // A package of another workspace inherits keys from that workspace's manifest, read
@@ -385,13 +386,25 @@ impl Workspace<'_> {
         };
         let root = read("Cargo.toml")?;
         let table = |t: &toml::Table, k: &str| t.get(k).and_then(|v| v.as_table()).cloned();
+        // `[project]` is cargo's older name for `[package]`, which it still reads.
+        let package_of = |t: &toml::Table| table(t, "package").or_else(|| table(t, "project"));
         let ws = table(&root, "workspace").unwrap_or_default();
+        let package = table(&ws, "package").unwrap_or_default();
+        let resolver = effective_resolver(&root, &ws, &package);
+        if resolver == "1" {
+            return Err(
+                "its workspace resolves features with resolver 1 (no `resolver` stated in a virtual workspace, or a root package of edition 2015 or 2018): a test's dependencies and the root package's then turn features on in what ships, which no version names; a release's workspace resolves with 2 or later".to_string(),
+            );
+        }
         let mut out = BTreeMap::new();
         let mut part = |key: String, value: Option<&toml::Value>| {
             out.insert(format!("Cargo.toml: {key}"), value.map(value_id).unwrap_or_else(|| "absent".to_string()));
         };
+        // The resolver cargo uses, wherever it comes from (the workspace's, the root package's
+        // own, or its edition's).
+        part("resolver".into(), Some(&toml::Value::String(resolver)));
         // Each named where the manifest states it: one stated at one commit alone differs.
-        for (key, value) in [("workspace.resolver", ws.get("resolver")), ("cargo-features", root.get("cargo-features")), ("patch", root.get("patch")), ("replace", root.get("replace"))] {
+        for (key, value) in [("cargo-features", root.get("cargo-features")), ("patch", root.get("patch")), ("replace", root.get("replace"))] {
             if value.is_some() {
                 part(key.into(), value);
             }
@@ -400,11 +413,10 @@ impl Workspace<'_> {
             part(format!("profile.{name}"), Some(&profile));
         }
         let inherits = |v: &toml::Value| v.as_table().and_then(|t| t.get("workspace")).and_then(|w| w.as_bool()) == Some(true);
-        let package = table(&ws, "package").unwrap_or_default();
         let dependencies = table(&ws, "dependencies").unwrap_or_default();
         for m in used.iter().filter(|m| m.workspace.is_empty()) {
             let own = read(&format!("{}Cargo.toml", prefix(&m.dir)))?;
-            for (k, v) in table(&own, "package").unwrap_or_default() {
+            for (k, v) in package_of(&own).unwrap_or_default() {
                 if inherits(&v) {
                     part(format!("workspace.package.{k}"), package.get(&k));
                 }
@@ -513,15 +525,52 @@ fn prefix(dir: &str) -> String {
 }
 
 /// The top folders of a package (`crates/x/tests/`) holding its tests, benches and examples alone,
-/// which its folder's identity leaves out: each that the commit holds and no target that ships (a
-/// library, an executable, a build script) starts in.
-fn left_out(tree: &Path, m: &Member) -> Vec<String> {
+/// which its folder's identity leaves out: each that the commit holds, that no target that ships (a
+/// library, an executable, a build script) starts in, that holds no package a build uses (`dirs`),
+/// and that no module rustc reads can reach: none is left out when a shipped target's crate root,
+/// or a `mod.rs`, lies at the package's top (its `mod examples;` is `examples/mod.rs`), nor one
+/// beside a file named after it (`tests.rs`, whose modules are read from `tests/`).
+fn left_out(tree: &Path, m: &Member, dirs: &BTreeSet<&str>) -> Vec<String> {
+    let top = prefix(&m.dir);
+    let at_top = m.sources.iter().any(|s| normal(Path::new(s)).is_some_and(|p| Path::new(&p).parent() == Some(Path::new(&m.dir)))) || tree.join(format!("{top}mod.rs")).is_file();
+    if at_top {
+        return Vec::new();
+    }
     TEST_FOLDERS
         .iter()
-        .map(|t| format!("{}{t}/", prefix(&m.dir)))
+        .filter(|t| !tree.join(format!("{top}{t}.rs")).exists())
+        .map(|t| format!("{top}{t}/"))
         .filter(|f| tree.join(f).is_dir())
         .filter(|f| !m.sources.iter().any(|s| normal(Path::new(s)).is_some_and(|p| p.starts_with(f.as_str()))))
+        .filter(|f| !dirs.iter().any(|d| format!("{d}/").starts_with(f.as_str())))
         .collect()
+}
+
+/// The feature resolver cargo builds the workspace with: the workspace's `resolver`, else the root
+/// package's own, else its edition's (2015 and 2018: 1; 2021: 2; later: 3), else 1 for a virtual
+/// workspace, as cargo 1.100 reads it.
+fn effective_resolver(root: &toml::Table, ws: &toml::Table, ws_package: &toml::Table) -> String {
+    let text = |v: &toml::Value| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
+    if let Some(r) = ws.get("resolver") {
+        return text(r);
+    }
+    let Some(package) = root.get("package").or_else(|| root.get("project")).and_then(|p| p.as_table()) else {
+        return "1".to_string();
+    };
+    if let Some(r) = package.get("resolver") {
+        return text(r);
+    }
+    let edition = match package.get("edition") {
+        Some(v) if v.as_table().and_then(|t| t.get("workspace")).and_then(|w| w.as_bool()) == Some(true) => ws_package.get("edition").map(text),
+        Some(v) => Some(text(v)),
+        None => None,
+    };
+    match edition.as_deref() {
+        None | Some("2015") | Some("2018") => "1",
+        Some("2021") => "2",
+        Some(_) => "3",
+    }
+    .to_string()
 }
 
 /// A TOML value's identity: its canonical JSON, tables in key order, its text's layout and comments
