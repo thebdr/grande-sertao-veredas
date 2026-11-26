@@ -182,6 +182,14 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     if cfg.start == FileStart::End || (active.is_none() && held.is_none()) {
         crate::tail::mark_history_read(&history, 0);
     }
+    // Read from its start, the file's history ends at its length when the start looked at it:
+    // the read-in must reach it, or the file was cut in place (a copy-and-truncate rotation) and
+    // the history is lost.
+    let mut history_to: Option<u64> = match (cfg.start, &active, &held) {
+        (FileStart::Begin, Some(tf), _) => Some(tf.disk_len()?),
+        (FileStart::Begin, None, Some((len, _))) => Some(*len),
+        _ => None,
+    };
     let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };
 
     loop {
@@ -239,15 +247,26 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
                 }
             }
             Some(tf) => {
+                #[cfg(test)]
+                if history_to.is_some() {
+                    crate::tail::family::before_open(&path);
+                }
                 match tf.read_new(&mut emit)? {
                     ReadStep::Truncated => {
+                        if history_to.take().is_some() {
+                            crate::tail::mark_history_lost(&history);
+                        }
                         tf.handle_truncation(&mut emit)?;
                         continue; // re-read the fresh content now
                     }
                     ReadStep::Progress => {}
                 }
-                // Read to its end as it stood: the start's history sent.
-                crate::tail::mark_history_read(&history, sent.get());
+                // Read to its end as it stood: the start's history sent, if the read reached the
+                // length it had when the start looked; short of it, cut in place, lost.
+                match history_to.take() {
+                    Some(to) if tf.offset() < to => crate::tail::mark_history_lost(&history),
+                    _ => crate::tail::mark_history_read(&history, sent.get()),
+                }
 
                 match tf.check_path() {
                     PathStatus::Same => {}

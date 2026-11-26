@@ -108,6 +108,8 @@ pub(crate) struct TailedFile {
     /// A head under four bytes that was no complete mark, with the bytes that followed it until
     /// the encoding decided: text from before the attach unless it proves a mark.
     short_head: Option<Vec<u8>>,
+    /// The in-place truncations this cursor reread from the top: what was cut is never read.
+    truncations: u32,
 }
 
 impl TailedFile {
@@ -125,6 +127,7 @@ impl TailedFile {
             skip_until_newline: false,
             skip_raw_until_newline: false,
             short_head: None,
+            truncations: 0,
         };
         if start == FileStart::End {
             tf.seek_to_end()?;
@@ -156,6 +159,7 @@ impl TailedFile {
             skip_until_newline: false,
             skip_raw_until_newline: false,
             short_head: None,
+            truncations: 0,
         };
         if offset > 0 {
             tf.handle.as_file_mut().seek(SeekFrom::Start(offset)).map_err(|e| SourceError::io(path, e))?;
@@ -281,6 +285,16 @@ impl TailedFile {
 
     pub fn identity(&self) -> &Handle {
         &self.handle
+    }
+
+    /// The bytes of the file consumed so far.
+    pub(crate) fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    /// How many in-place truncations this cursor has reread from the top.
+    pub(crate) fn truncations(&self) -> u32 {
+        self.truncations
     }
 
     /// Whether the file held open is the one a look recorded the identity of.
@@ -413,6 +427,7 @@ impl TailedFile {
         self.flush_pending(emit);
         self.handle.as_file_mut().seek(SeekFrom::Start(0)).map_err(|e| SourceError::io(&self.path, e))?;
         self.offset = 0;
+        self.truncations += 1;
         self.decoder.reset();
         self.skip_until_newline = false;
         self.skip_raw_until_newline = false;

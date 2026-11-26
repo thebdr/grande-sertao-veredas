@@ -30,6 +30,8 @@ pub(crate) struct PlanFile {
     pub path: PathBuf,
     pub name: String,
     pub key: OrderKey,
+    /// Its length when the locate peeked it: where the start's history in it ends.
+    pub len: u64,
 }
 
 #[derive(Debug)]
@@ -344,7 +346,8 @@ fn locate_once(
 
     let plan_files: Vec<PlanFile> = candidates[begin..]
         .iter()
-        .map(|&i| PlanFile { path: files[i].path.clone(), name: files[i].file_name.clone(), key: files[i].key })
+        .zip(&peeks[begin..])
+        .map(|(&i, peek)| PlanFile { path: files[i].path.clone(), name: files[i].file_name.clone(), key: files[i].key, len: peek.len })
         .collect();
     let plan_names: std::collections::HashSet<&str> = plan_files.iter().map(|f| f.name.as_str()).collect();
     let skipped =

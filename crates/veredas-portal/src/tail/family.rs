@@ -153,14 +153,17 @@ const PATIENCE: Duration = Duration::from_millis(500);
 /// flush the final partial. A file that cannot be opened within `PATIENCE` is skipped: it
 /// vanished mid-burst and nothing of it is readable.
 fn read_full(path: &Path, grace: Duration, stop: &AtomicBool, emit: &mut dyn FnMut(String)) -> Result<(), SourceError> {
-    read_range_full(path, 0, None, grace, stop, emit).map(|_| ())
+    read_range_full(path, 0, None, None, grace, stop, emit).map(|_| ())
 }
 
-/// `read_full` from a byte offset with a known encoding: the backfill's replay primitive.
+/// `read_full` from a byte offset with a known encoding: the backfill's replay primitive. `to`, a
+/// member's length when the locate peeked it: the start's history in it, which the read must
+/// reach, or the file was cut in place before or while it was read and that history is lost.
 fn read_range_full(
     path: &Path,
     offset: u64,
     encoding: Option<DetectedEncoding>,
+    to: Option<u64>,
     grace: Duration,
     stop: &AtomicBool,
     emit: &mut dyn FnMut(String),
@@ -182,10 +185,20 @@ fn read_range_full(
             Err(_) => return Ok(Unread::Held),
         }
     };
+    let cut = cursor.truncations();
     cursor.drain_stable(grace, stop, emit)?;
     cursor.flush_pending(emit);
-    // A stop may cut the drain short: read in part, never said read.
-    Ok(if stop.load(Ordering::Relaxed) { Unread::Stopped } else { Unread::No })
+    // A stop may cut the drain short: read in part, never said read. A file holding history cut
+    // in place before or while it was read (a copy-and-truncate rotation) lost what was cut.
+    Ok(if stop.load(Ordering::Relaxed) {
+        Unread::Stopped
+    } else if to.is_some_and(|to| cursor.truncations() > cut || cursor.offset() < to) {
+        // Only a read that holds history: a file of new content cut while read is new content
+        // lost, and a caller awaiting a held file would read it again.
+        Unread::Held
+    } else {
+        Unread::No
+    })
 }
 
 #[cfg(test)]
@@ -212,7 +225,7 @@ fn read_retired(
     younger.sort_by(|x, y| rank(x).cmp(&rank(y)));
     for g in younger {
         loop {
-            match read_range_full(&g.path, 0, None, cfg.drain_grace, stop, emit)? {
+            match read_range_full(&g.path, 0, None, None, cfg.drain_grace, stop, emit)? {
                 Unread::No => break,
                 Unread::Stopped => return Ok(false),
                 Unread::Held => wait_tick(wake_rx, cfg.poll_interval),
@@ -284,7 +297,7 @@ fn sweep_after_held_open(
 pub(crate) static BEFORE_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
-fn before_open(path: &Path) {
+pub(crate) fn before_open(path: &Path) {
     if let Ok(mut hooks) = BEFORE_OPEN.lock() {
         for (at, hook) in hooks.iter_mut() {
             if at == path {
@@ -486,7 +499,9 @@ fn fixed_adopt(
 
 /// The outcome of a backfill attach.
 enum BackfillAttach {
-    Attached { cursor: Box<TailedFile>, key: OrderKey, name: String, known: HashSet<String> },
+    /// The seam; `history_to` the planned active's length at the locate when the cursor is that
+    /// file, which its first read must reach for the history to be whole.
+    Attached { cursor: Box<TailedFile>, key: OrderKey, name: String, known: HashSet<String>, history_to: Option<u64> },
     /// No family member on disk: fall through to a normal (born-mode) live attach; everything
     /// appearing later is newer than a past start.
     FamilyEmpty,
@@ -539,7 +554,7 @@ fn attach_backfill(
             return Ok(BackfillAttach::Stopped);
         }
         let (off, enc) = if i == 0 { (plan.first_offset, plan.first_encoding) } else { (0, None) };
-        read(read_range_full(&f.path, off, enc, cfg.drain_grace, stop, emit)?);
+        read(read_range_full(&f.path, off, enc, Some(f.len), cfg.drain_grace, stop, emit)?);
         consumed.insert(f.name.clone());
     }
 
@@ -559,6 +574,8 @@ fn attach_backfill(
                 if stop.load(Ordering::Relaxed) {
                     return Ok(BackfillAttach::Stopped);
                 }
+                #[cfg(test)]
+                before_open(&planned.path);
                 match TailedFile::open_at(&planned.path, off, enc) {
                     Ok(c) => break Some(c),
                     Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
@@ -566,21 +583,25 @@ fn attach_backfill(
                 }
             };
             match opened {
-                Some(cursor) => {
-                    Ok(BackfillAttach::Attached { cursor: Box::new(cursor), key: planned.key, name: planned.name.clone(), known: consumed })
-                }
+                Some(cursor) => Ok(BackfillAttach::Attached {
+                    cursor: Box::new(cursor),
+                    key: planned.key,
+                    name: planned.name.clone(),
+                    known: consumed,
+                    history_to: Some(planned.len),
+                }),
                 None => {
                     // Vanished before it was reached: read any remnant, then converge on the
                     // newest by rank. Gone (names are stable in this mode: deleted) or read to its
                     // end, every member of the history is read; whatever is born newer is new.
-                    let unread = read_range_full(&planned.path, off, enc, cfg.drain_grace, stop, emit)?;
+                    let unread = read_range_full(&planned.path, off, enc, Some(planned.len), cfg.drain_grace, stop, emit)?;
                     read(unread);
                     if unread == Unread::No {
                         swept();
                     }
                     match newest_catch_up(spec, cfg, (planned.key, planned.name.clone()), stop, wake_rx, emit)? {
                         None => Ok(BackfillAttach::Stopped),
-                        Some((c, k, nm)) => Ok(BackfillAttach::Attached { cursor: Box::new(c), key: k, name: nm, known: consumed }),
+                        Some((c, k, nm)) => Ok(BackfillAttach::Attached { cursor: Box::new(c), key: k, name: nm, known: consumed, history_to: None }),
                     }
                 }
             }
@@ -607,8 +628,13 @@ fn attach_backfill(
                         if stop.load(Ordering::Relaxed) {
                             return Ok(BackfillAttach::Stopped);
                         }
-                        let (off, enc) = pending.take().unwrap_or((0, None));
-                        read(read_range_full(&f.path, off, enc, cfg.drain_grace, stop, emit)?);
+                        // The remains hold the planned active's history up to where the locate
+                        // found its end; what is younger is new.
+                        let (to, (off, enc)) = match pending.take() {
+                            Some(seek) => (Some(planned.len), seek),
+                            None => (None, (0, None)),
+                        };
+                        read(read_range_full(&f.path, off, enc, to, cfg.drain_grace, stop, emit)?);
                         consumed.insert(f.file_name.clone());
                     }
                     continue;
@@ -637,11 +663,16 @@ fn attach_backfill(
                             }
                         };
                         if clean {
+                            // Never rotated, the fixed path is the planned active: its history
+                            // ends where the locate found it; rotated, its remains were read and
+                            // what sits at the path is new.
+                            let history_to = pending.map(|_| planned.len);
                             return Ok(BackfillAttach::Attached {
                                 cursor: Box::new(cursor),
                                 key: OrderKey::NONE,
                                 name: fixed_name.clone(),
                                 known: consumed,
+                                history_to,
                             });
                         }
                         // Fell behind: drop the unread cursor; the loop sweeps again (the offset
@@ -722,6 +753,8 @@ fn run_family(
     // A backfill start replays history from the located point first; the cursor it returns IS
     // the seam: the same handle, the exact offset, live from here.
     let mut backfilled: Option<(TailedFile, OrderKey, String)> = None;
+    // Where the seam's first read must reach for the start's history to be whole.
+    let mut history_to: Option<u64> = None;
     if let FamilyStart::Backfill(start_at) = cfg.start {
         let swept = || crate::tail::mark_history_read(&history, sent.get());
         let lost = || crate::tail::mark_history_lost(&history);
@@ -731,8 +764,9 @@ fn run_family(
                 nothing_to_read();
                 preexisted = Some(false);
             }
-            BackfillAttach::Attached { cursor, key, name, known: consumed } => {
+            BackfillAttach::Attached { cursor, key, name, known: consumed, history_to: to } => {
                 known = consumed;
+                history_to = to;
                 backfilled = Some((*cursor, key, name));
             }
         }
@@ -947,15 +981,24 @@ fn run_family(
 
         match cursor.read_new(&mut emit)? {
             ReadStep::Truncated => {
-                // An in-place truncation of the active file: the degenerate single-file case.
+                // An in-place truncation of the active file: the degenerate single-file case. Cut
+                // before the seam's history was read (a copy-and-truncate rotation), what was cut
+                // is never read: the history is lost.
+                if history_to.take().is_some() {
+                    crate::tail::mark_history_lost(&history);
+                }
                 cursor.handle_truncation(&mut emit)?;
                 continue;
             }
             ReadStep::Progress => {}
         }
         // The attached active read to its end as it stood (from its end, its beginning, or a
-        // backfill's seam): the start's history sent.
-        crate::tail::mark_history_read(&history, sent.get());
+        // backfill's seam): the start's history sent, if the seam's read reached where the locate
+        // found its end; short of it, the file was cut in place and the history is lost.
+        match history_to.take() {
+            Some(to) if cursor.offset() < to => crate::tail::mark_history_lost(&history),
+            _ => crate::tail::mark_history_read(&history, sent.get()),
+        }
 
         match spec.active_mode() {
             ActiveMode::NewestByOrder => {

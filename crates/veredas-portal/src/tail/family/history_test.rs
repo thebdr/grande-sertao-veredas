@@ -235,3 +235,88 @@ fn a_listing_out_of_patience_after_the_fixed_open_never_says_the_history_read() 
     std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
     BEFORE_OPEN.lock().unwrap().retain(|(at, _)| *at != fixed);
 }
+
+/// Runs `source` until it has sent `lines` and a moment more, then stops it: what it sent, and
+/// its history's mark.
+fn run_cut(source: Box<dyn Source>, history: &Arc<AtomicU64>, lines: u64) -> (u64, u64) {
+    let (tx, rx) = channel();
+    let handle = source.start(tx).unwrap();
+    let started = Instant::now();
+    let mut sent = 0u64;
+    while sent < lines && started.elapsed() < Duration::from_secs(20) {
+        sent += rx.try_iter().count() as u64;
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    handle.request_stop();
+    handle.join().unwrap();
+    sent += rx.try_iter().count() as u64;
+    (sent, history.load(Ordering::SeqCst))
+}
+
+/// A hook cutting `path` in place once (a copy-and-truncate rotation: the same file, emptied) and
+/// writing ten new lines into it.
+fn cut_once(path: &std::path::Path) {
+    let (at, mut done) = (path.to_path_buf(), false);
+    BEFORE_OPEN.lock().unwrap().push((
+        path.to_path_buf(),
+        Box::new(move || {
+            if !done {
+                done = true;
+                write(&at, 90_000..90_010);
+            }
+        }),
+    ));
+}
+
+/// A history cut in place before it is read is never said read (C-096's tenth refute round): a
+/// file read from a start in the past, cut before its first read; a fixed-name family's active
+/// and a newest-by-order family's, cut before the backfill's seam opens them; a member cut before
+/// the replay opens it. Each reads the ten lines written after the cut, and the history is lost:
+/// the read never reached where the start found the file's end.
+#[test]
+fn a_history_cut_in_place_before_it_is_read_is_lost() {
+    use crate::tail::{FileStart, FileTailSource, TailConfig};
+    let start = NaiveDateTime::parse_from_str("2026-07-19 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+    let stamps = || TimestampSpec::new(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", ["%Y-%m-%d %H:%M:%S"]).unwrap();
+    let backfill = || FamilyTailConfig { start: FamilyStart::Backfill(start), ..FamilyTailConfig::default() };
+    let lost = crate::tail::HISTORY_LOST;
+    let dir = tempfile::tempdir().unwrap();
+
+    // A file read from its start, cut before its first read.
+    let file = dir.path().join("one.log");
+    write(&file, 0..50_000);
+    cut_once(&file);
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let path = file.to_string_lossy().into_owned();
+    let source = FileTailSource::new("one", "one", &path, TailConfig { start: FileStart::Begin, ..TailConfig::default() }).with_history_read(Arc::clone(&history));
+    assert_eq!(run_cut(Box::new(source), &history, 10), (10, lost), "the file");
+
+    // A fixed-name family's active, cut before the seam opens it.
+    let fixed = dir.path().join("fixed");
+    std::fs::create_dir_all(&fixed).unwrap();
+    write(&fixed.join("done_1.log"), 0..100);
+    write(&fixed.join("current.log"), 100..50_000);
+    cut_once(&fixed.join("current.log"));
+    let history = Arc::new(AtomicU64::new(u64::MAX));
+    let spec = FamilySpec::new(&fixed, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let source = FamilyTailSource::new("fixed", "fixed", spec, backfill()).with_timestamps(stamps()).with_history_read(Arc::clone(&history));
+    assert_eq!(run_cut(Box::new(source), &history, 110), (110, lost), "the fixed family's active");
+
+    // A newest-by-order family's active, cut before the seam opens it; and a member before its
+    // replay.
+    for (name, cut) in [("newest", "plant_2.log"), ("member", "plant_1.log")] {
+        let fam = dir.path().join(name);
+        std::fs::create_dir_all(&fam).unwrap();
+        let (first, second) = if cut == "plant_2.log" { (0..100, 100..50_000) } else { (0..50_000, 50_000..50_100) };
+        write(&fam.join("plant_1.log"), first);
+        write(&fam.join("plant_2.log"), second);
+        cut_once(&fam.join(cut));
+        let history = Arc::new(AtomicU64::new(u64::MAX));
+        let spec = FamilySpec::new(&fam, r"plant_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+        let source = FamilyTailSource::new(name, name, spec, backfill()).with_timestamps(stamps()).with_history_read(Arc::clone(&history));
+        assert_eq!(run_cut(Box::new(source), &history, 110), (110, lost), "the {name}");
+    }
+    let cut: Vec<std::path::PathBuf> = [file, fixed.join("current.log"), dir.path().join("newest/plant_2.log"), dir.path().join("member/plant_1.log")].into();
+    BEFORE_OPEN.lock().unwrap().retain(|(at, _)| !cut.contains(at));
+}
