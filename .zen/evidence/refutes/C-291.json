@@ -1,18 +1,18 @@
 {
   "clause": "C-291",
   "verdict": "holds",
-  "ranAt": "2026-11-23T07:09:13.965Z",
-  "headCommit": "3370391e1ce4445a28c447fe9827278b9b7b9aec",
+  "ranAt": "2026-11-26T11:19:18.268Z",
+  "headCommit": "09767470e617c9c66e27a9f5394a5072474ded1e",
   "tests": [
     {
-      "name": "tools/entrega/tests/bundle.rs",
-      "file": "tools/entrega/tests/bundle.rs",
-      "symbolSha": "8ab61f179b5a55a7b1ec3fb4a4b011c7ab62126c423e6c4bcca3964ea65b9bf0"
+      "name": "tools/alforge/tests/bundle.rs",
+      "file": "tools/alforge/tests/bundle.rs",
+      "symbolSha": "00de5f1dac1c978341ea97c7dd7a338654e71c840696fceb8f723b59f3125aa7"
     },
     {
-      "name": "tools/entrega/tests/cut.rs",
-      "file": "tools/entrega/tests/cut.rs",
-      "symbolSha": "1f1824c4633fcf27d332f348a105a853d3261e3b6ed4731581239ada45fa4959"
+      "name": "tools/alforge/tests/cut.rs",
+      "file": "tools/alforge/tests/cut.rs",
+      "symbolSha": "a563c9e248d8c4b32fa44a75b6d51450d71cdc85fa12d7cd673d0ec6b776d438"
     }
   ]
 }
