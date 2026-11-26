@@ -128,9 +128,13 @@ Keys (each required unless a default is given):
    component alone (in one build cargo unifies features across the packages it builds, so one
    component's manifest would reach another's executables) under the toolchain the suite was
    tested with (the development machine's `rustc`), the executables handed back on another disk
-   with cargo's dep-info for each (`target/release/<bin>.d`: every file of the tree its
-   compilation read). Each file it names lies in what its component's version names, or the cut
-   refuses it by name: the sources' scan of step 1 is proven against the compiler at every cut. Built on the development machine (Ubuntu 26.10,
+   with cargo's dep-info for each (`target/release/<bin>.d`: every file rustc read and every
+   file a build script declared with `rerun-if-changed`). Each file it names lies in what its
+   component's version names, or the cut refuses it by name: the sources' scan of step 1 is
+   proven against the compiler at every cut. What a build script reads without declaring it, a
+   header the C compiler it runs includes, and what a proc-macro reads while it expands are in no
+   dep-info, so the cut does not judge them (Q448 asks whether it should, by building each
+   component from a tree holding only what its version names, or by tracing its builds). Built on the development machine (Ubuntu 26.10,
    glibc 2.44), portal and supervisão need `GLIBC_2.44` and do not start on Debian 13 (the probe
    below); built on the oldest, they run there and on every newer system. The builder's disk is
    the base image with the recipe's packages (a C and C++ compiler) and the toolchain from

@@ -1737,3 +1737,68 @@ fn round_eighteen_names_cargos_dep_info_misreads_are_refused_and_its_words_read_
         ["target/release/build/x-0123456789abcdeg/out/d.rs", "target/release/build/x/0123456789abcdeg/out/c.rs"]
     );
 }
+
+#[test]
+fn round_twenty_one_what_rustc_does_not_read_is_in_no_dep_info() {
+    use std::process::Command;
+    // A throwaway workspace built by the suite's cargo. A build script reads one file it declares
+    // and one it does not, generating code from both; a proc-macro by path reads a file while it
+    // expands. The dep-info cargo writes names the declared one, which the cut judges (here refused,
+    // outside the version), and neither of the others: the limit C-291 states (docs/questions.md
+    // Q448).
+    let scratch = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let ws = scratch.path().join("ws");
+    let w = |rel: &str, text: &str| {
+        let p = ws.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    w("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n");
+    w("docs/declarado.txt", "um\n");
+    w("docs/tabela.txt", "9\n");
+    w("docs/objetos.txt", "bomba\n");
+    w("crates/veredas-a/Cargo.toml", "[package]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    w(
+        "crates/veredas-a/build.rs",
+        "fn main() {\n    println!(\"cargo::rerun-if-changed=build.rs\");\n    println!(\"cargo::rerun-if-changed=../../docs/declarado.txt\");\n    \
+         let a = std::fs::read_to_string(\"../../docs/declarado.txt\").unwrap();\n    let b = std::fs::read_to_string(\"../../docs/tabela.txt\").unwrap();\n    \
+         let out = std::env::var(\"OUT_DIR\").unwrap();\n    std::fs::write(format!(\"{out}/tabela.rs\"), format!(\"pub const T: &str = {:?};\\n\", format!(\"{} {}\", a.trim(), b.trim()))).unwrap();\n}\n",
+    );
+    w("crates/veredas-a/src/main.rs", "include!(concat!(env!(\"OUT_DIR\"), \"/tabela.rs\"));\nfn main() { println!(\"{T}\"); }\n");
+    w("crates/veredas-m/Cargo.toml", "[package]\nname = \"veredas-m\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\n");
+    w(
+        "crates/veredas-m/src/lib.rs",
+        "use proc_macro::TokenStream;\n#[proc_macro]\npub fn objetos(_: TokenStream) -> TokenStream {\n    \
+         let t = std::fs::read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../docs/objetos.txt\")).unwrap();\n    format!(\"{:?}\", t.trim()).parse().unwrap()\n}\n",
+    );
+    w("crates/veredas-b/Cargo.toml", "[package]\nname = \"veredas-b\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nveredas-m = { path = \"../veredas-m\" }\n");
+    w("crates/veredas-b/src/main.rs", "fn main() { println!(\"{}\", veredas_m::objetos!()); }\n");
+    for p in ["veredas-a", "veredas-b"] {
+        let built = Command::new("cargo")
+            .args(["build", "--release", "--offline", "-p", p, "--bins", "--target-dir"])
+            .arg(ws.join("target"))
+            .current_dir(&ws)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("CARGO_BUILD_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{p}: {}", String::from_utf8_lossy(&built.stderr));
+    }
+    let ran = |p: &str| String::from_utf8(Command::new(ws.join("target/release").join(p)).output().unwrap().stdout).unwrap();
+    assert_eq!((ran("veredas-a"), ran("veredas-b")), ("um 9\n".to_string(), "bomba\n".to_string()), "each executable holds what was read");
+    let src = ws.display().to_string();
+    let vendor = scratch.path().join("vendor").display().to_string();
+    let info = |p: &str| std::fs::read_to_string(ws.join("target/release").join(format!("{p}.d"))).unwrap();
+    let (a, b) = (info("veredas-a"), info("veredas-b"));
+    // The declared file is named, and judged: outside the component's version, refused.
+    let inputs = alforge::inputs::Inputs(
+        [("crates/veredas-a/", "1"), ("crates/veredas-b/", "2"), ("crates/veredas-m/", "3"), ("Cargo.toml", "4")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+    );
+    let own = |n: &[&str]| alforge::inputs::Packages { names: n.iter().map(|s| s.to_string()).collect(), vendored: Default::default() };
+    assert_eq!(alforge::inputs::read_outside(&a, &src, &vendor, &inputs, &own(&["veredas-a"])), ["docs/declarado.txt"]);
+    // What the build script read undeclared and what the proc-macro read are in no dep-info.
+    assert!(!a.contains("tabela.txt") && !b.contains("objetos.txt"), "{a}\n{b}");
+    assert_eq!(alforge::inputs::read_outside(&b, &src, &vendor, &inputs, &own(&["veredas-b", "veredas-m"])), Vec::<String>::new());
+}

@@ -3280,6 +3280,39 @@ until the first public release (Q436, "Nowhere yet").
 
 **Reversible?** Yes: a file of a few lines.
 
+## Q448 - Does the cut hold every file a build opens to what its version names, or what rustc reads?
+
+**Raised** 2026-11-26, by the release member, from C-291's refute round 21.
+
+A version names everything its build reads (Q441). The cut proves it with cargo's dep-info, which
+holds what rustc read and what a build script declared (`rerun-if-changed`). Three ordinary forms
+read files the dep-info never names:
+- a build script reading a shared data file without declaring it (code generated from it);
+- a header the C compiler a build script runs includes (`cc` with a shared include folder);
+- a file a proc-macro by path reads while it expands.
+
+On a real workspace the critic built, changing only such files changed two executables under one
+version, with `alforge check` and the cut both passing. No shipped component does this today.
+
+Options:
+- (a) A stated limit: the cut judges what rustc reads and a build script declares (taken
+  meanwhile).
+- (b) Each component built from a tree holding only what its version names, so any other read
+  fails the build. Cargo needs every member's manifest and targets, so the other members are
+  stubbed. Each component's build compiles its own dependencies, and a real cut takes several
+  times longer (today about 15 minutes).
+- (c) Each build traced in the builder (`strace -f` on the file calls), and every path opened
+  under the tree judged against the version's inputs. A cut takes longer by the tracing alone,
+  and the builder disk gains `strace`.
+
+**Recommended**: (c): it judges exactly what the build opened, at a moderate cost, and it reaches
+what (b) does without stubbing the workspace.
+
+**Taken meanwhile** (most reversible): (a), the limit stated in C-290 and C-291 and shown by a test
+built with the suite's own cargo.
+
+**Reversible?** Yes: (b) and (c) add to the cut's judgement and change no manifest.
+
 ---
 
 ## Q229 - A pulse that comes back with no new edge, and which preset a timer is judged against
