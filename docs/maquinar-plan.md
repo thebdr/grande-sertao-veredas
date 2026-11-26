@@ -362,9 +362,53 @@ The architect's decisions of 13 to 16 November 2026 that touch the bench
 - **Two new dependencies**, allowed by the architect: the interpreter and a physics engine.
 - **The codecs it shares with aranha move into core** with the fieldbus masters (Q5, revisited).
 - **Q12 stands:** the bench has no interface of its own. Its surfaces are Oficina's.
-- Open, all under Q31: the review's entries 25 (the two extensions can only be modules here, since
-  laws L1 and L2 refuse them as crates), 27 (the EtherCAT bench device; the EtherNet/IP fork), 31
-  (two scene models) and 36 (a bench device on a real network passing for a real one).
+- Ruled on 2026-11-25 under Q31 (`docs/questions.md` holds the questions and the answers word for
+  word):
+  - Entry 26, "(a)+(b) Modbus proves, real device": Modbus TCP is the bus on which the runtime is
+    first proven; PROFINET stays the first fieldbus written, and from its first clause the PROFINET
+    work has a real device in the loop and a real controller's captured traffic as fixtures. For
+    the bench: the PROFINET device's AR and cyclic data are proven against those captures as well
+    as against core's controller, so the captures are a need (the architect's hardware).
+  - Entry 27, "(a) A partial emulator, said so" and "(b) Real terminals in the loop"; EtherNet/IP is
+    not moved to a later release. C-113 already says what it covers and no more ("functional,
+    never exact in time", the list of what it leaves out); real terminals are the commissioning
+    proof of core's master, beside the emulator, not instead of it.
+  - Entry 31, "(a) View-only 3D first" and "(b) Ready-made behaviours only": Oficina's view draws a
+    scene from the scene file and plays back the positions the bench sends; `reflexo` stays its
+    ready-made models (C-115) until controlador's interpreter exists.
+  - Entry 36, "(a) Interfaces declared isolated" and "(c) Bench identity refused"; not "(b) A scan
+    refuses a live network". Two capabilities of the bench, proposed below, the second agreed with
+    controlador through the orchestrator.
+- Open under Q31: entry 25 (the two extensions can only be modules here, since laws L1 and L2
+  refuse them as crates).
+
+## Entry 36: proposed, not built
+A bench device on a real network can pass for a real one: a laptop plugged into a plant answers
+with a real device's station name and a controller takes it, its "guard closed" then coming from a
+model. The architect chose two answers (2026-11-25); both are proposals here, their clause numbers
+the next free in the bench's block.
+- **Proposed C-117, interfaces declared isolated.** A bench file states the network interfaces it
+  may use: a top-level `isolated` list of interface names, each a statement by whoever writes the
+  file that the interface is on a network of its own (a veth pair, a cable to the device under
+  test, a switch with nothing else on it). The reader refuses by place a PROFINET device or an
+  EtherCAT segment whose `interface` the list lacks, and `Bench::start` refuses an IP part (OPC UA,
+  Modbus, EtherNet/IP) whose `bind` is neither a loopback address nor an address one of the listed
+  interfaces holds, before anything opens. The bench checks the statement's form, not its truth:
+  probing the network was entry 36's option (b), not chosen. A file version 1 took with a raw part
+  or another bind would now be refused, so the key comes with `veredas-bench` version 2: a version 1
+  file still loads with loopback parts alone, and a raw part or another bind in it is refused by
+  place, saying version 2 declares its interface. The worked example and every reference example
+  move to version 2.
+- **Proposed C-118, a bench identity a controller refuses outside simulation.** Every bench device
+  says it is the bench, in the field its bus has for a vendor's text, read before any data is
+  exchanged, and the bench file cannot turn it off: PROFINET's DCP type of station (the
+  DeviceVendorValue an Identify returns) and I&M0's order id; EtherNet/IP's Identity object's
+  product name (ListIdentity and attribute 7); EtherCAT's device name and order number in the SII;
+  Modbus TCP's Read Device Identification (function 43/14, the VendorName object), which the
+  server would answer for the first time. The proposal is a fixed prefix, `veredas-bench:`, before
+  the text the file gives (cut to what the field holds); controlador, outside simulation, refuses a
+  device whose field carries it. The form (the prefix, the fields, whether the vendor and device
+  ids carry a mark too) is agreed with controlador before the code, through the orchestrator.
 
 ## Traps
 Recorded as the port meets them.
