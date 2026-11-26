@@ -1,8 +1,12 @@
 //! Every operation MIR has on scalars gives what the compiled program gives: each run in the machine and compared
 //! with Rust's own operation on the native type, for every integer type at its bounds, their neighbours, small
 //! values and values drawn at random, and for every pair of 8-bit values.
+mod cap;
 mod common;
 use common::*;
+
+#[global_allocator]
+static CAPPED: cap::Capped = cap::Capped;
 use orcl_interp::*;
 
 const BINARY: [BinOp; 16] = [
@@ -210,7 +214,7 @@ fn ops() -> Ops {
             casts.push(((t, to), f));
         }
     }
-    let machine = Machine::load(b.program, &[], STACK).expect("the operations load");
+    let machine = Machine::load(b.program, &[], LIMITS).expect("the operations load");
     Ops { machine, binary, checked, unary, casts }
 }
 
@@ -347,7 +351,7 @@ fn bool_operations_give_what_rust_gives() {
         locals: locals(&[u8t, boolean]),
         blocks: vec![block(vec![assign(place(0), Value::Cast(copy(1), u8t), 1)], ret())],
     });
-    let mut m = Machine::load(b.program, &[], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
     for x in [false, true] {
         for y in [false, true] {
             let want = [x & y, x | y, x ^ y, x == y, x != y, !x & y, x <= y, x & !y, x >= y];
@@ -443,7 +447,7 @@ fn float_arithmetic_comparison_and_casts_give_what_rust_gives() {
         locals: locals(&[f32t, f64t]),
         blocks: vec![block(vec![assign(place(0), Value::Cast(copy(1), f32t), 1)], ret())],
     });
-    let mut m = Machine::load(b.program, &[], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
     let values = floats_f64();
     for (wide, op, f) in &fns {
         for x in &values {
@@ -545,7 +549,7 @@ fn every_float_negation_and_cast_between_floats_and_from_bool_gives_what_rust_gi
         })
         .collect();
     let bool_bool = one(&mut b, boolean, boolean, Value::Cast(copy(1), boolean));
-    let mut m = Machine::load(b.program, &[], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
     for x in floats_f64() {
         let narrow = x as f32;
         let got = run(&mut m, neg32, &[Scalar::F32(narrow)]).unwrap();
@@ -588,7 +592,7 @@ fn a_wide_integer_becomes_the_nearest_float_in_one_rounding() {
             fns.push((t, fty == f32t, f));
         }
     }
-    let mut m = Machine::load(b.program, &[], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
     let mut values: Vec<i128> = vec![];
     for k in 25..64 {
         // 2^k + 2^(k-24) + 1: halfway between two f32s, plus one below the f64's precision

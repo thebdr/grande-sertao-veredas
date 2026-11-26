@@ -1,8 +1,12 @@
 //! The program file: written and read back to the same program, its bytes pinned for one small program, a file of
 //! another format or language refused by its header before anything else is read, and every truncated or damaged
 //! copy of a file either refused at a byte or read to a program that writes back to the very same bytes.
+mod cap;
 mod common;
 use common::*;
+
+#[global_allocator]
+static CAPPED: cap::Capped = cap::Capped;
 use orcl_interp::file::{self, FileError, Header, FORMAT, LANGUAGES, MAGIC};
 use orcl_interp::*;
 
@@ -266,8 +270,8 @@ fn a_program_read_from_its_file_runs_as_the_one_written() {
     });
     let program = b.program;
     let (_, back) = file::read(&file::write(&header(), &program)).unwrap();
-    let mut written = Machine::load(program, &[], STACK).unwrap();
-    let mut read = Machine::load(back, &[], STACK).unwrap();
+    let mut written = Machine::load(program, &[], LIMITS).unwrap();
+    let mut read = Machine::load(back, &[], LIMITS).unwrap();
     for n in [0, 1, 10, 1000] {
         let arg = [int(Int::U64, n)];
         let w = written.call(f, &[Arg::Value(&arg)]).map(|r| r.to_vec());

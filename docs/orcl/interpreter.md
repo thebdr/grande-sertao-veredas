@@ -75,8 +75,11 @@ Everything a program needs is sized when it is loaded, so nothing is allocated d
   when it loads the program, as it hands in the program;
 - a reference is the index of a slot in that memory; it never outlives its call (O3), so it never dangles.
 
-A slot takes 32 bytes as built, and a program's memory is allocated whole at load; a limit on it belongs to the
-target's settings (`veredas-alvo`), not built yet.
+A slot takes 32 bytes as built, and a program's memory is allocated whole at load, within a ceiling its host gives with
+the stack, in slots (`Limits`): the regions, the stack, the room for the largest value built and for the largest
+result, together at most that, checked before anything is allocated, so no size a program file or a setting names
+reaches the allocator past it. Both are the target's settings' (`veredas-alvo`, not built yet), handed in by the host
+meanwhile.
 
 ## Running
 - **A machine** holds the loaded program, its memory and its stack. It calls an entry with its arguments and runs it

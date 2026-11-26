@@ -177,6 +177,14 @@ Read on 2026-11-22 from Veredas 1's branch `supervisao-plan` (2026-11-11): `crat
 - **The front end's section above**, before `crates/orcl-front` (law L6 reads this file for it).
 - **The interpreter's design** (`interpreter.md`), before `crates/orcl-interp`.
 
+## Traps
+- **A loader test can allocate what a file or a setting names** (2026-11-26): a size from a program, a region or a
+  host's limit reaches the allocator if a check before it regresses, and 2^31 slots are 64 GiB. On 2026-11-26 a first
+  draft of a test of Q230's stack loaded 2^31 slots for real and filled the machine's memory and swap. So every test
+  binary of `orcl-interp`, `orcl-runtime` and `veredas-controlador` that loads programs runs under an allocator
+  refusing any one allocation past 1 GiB (`crates/orcl-interp/tests/cap/mod.rs`): a regression aborts its test
+  instead; a critic's mutant runs also go under `ulimit -v` and a memory scope of their own.
+
 ## Open
 - Left open by Q223's ruling: whether O7's publish at the end of a writer's scan should give way to the prior art's
   LET, at the end of its logical period (`language/README.md`, "Not settled yet").

@@ -59,6 +59,17 @@ impl Build {
 /// here but the ones that ask for less or more on purpose.
 pub const STACK: u32 = 4096;
 
+/// The memory a test's machine may lay out in all, in slots: 2^20 (32 MiB at 32 bytes a slot).
+pub const MEMORY: u32 = 1 << 20;
+
+/// The host's limits most tests load with.
+pub const LIMITS: Limits = Limits { stack: STACK, memory: MEMORY };
+
+/// The tests' memory ceiling with a stack of `stack` slots.
+pub fn on_stack(stack: u32) -> Limits {
+    Limits { stack, memory: MEMORY }
+}
+
 pub fn locals(types: &[TypeId]) -> Vec<LocalDecl> {
     types.iter().map(|t| LocalDecl { ty: *t, name: None }).collect()
 }

@@ -12,7 +12,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use orcl_interp::{ErrorKind, FunctionId, Scalar};
+use orcl_interp::{ErrorKind, FunctionId, Limits, Scalar};
 use orcl_runtime::{
     Clock, Fault, Image, Interpreted, Io, MakeError, Regions, RunState, ScanError, Task, TaskConfig, TaskError,
     TaskProgram,
@@ -143,21 +143,22 @@ impl<P: Program + Default> Source for Native<P> {
 
 /// An interpreted program as its host hands it: the program `orcl-interp` loads, its scan entry, its four regions'
 /// types, its first state, its safe outputs (`docs/questions.md` Q231, ruled: the front end computes the two and the
-/// program file will carry them, once its format holds them; until then the host hands them in) and the stack it
-/// runs on, in slots (Q230: the target's settings give it, `veredas-alvo` not built yet). Each make loads it afresh.
+/// program file will carry them, once its format holds them; until then the host hands them in) and the limits its
+/// machine runs within, its stack's size and its memory's ceiling, in slots (Q230: the target's settings give them,
+/// `veredas-alvo` not built yet). Each make loads it afresh.
 pub struct Loaded<I: Image, O: Image> {
     pub program: orcl_interp::Program,
     pub entry: FunctionId,
     pub regions: Regions,
     pub state: Vec<Scalar>,
     pub safe: O,
-    pub stack: u32,
+    pub limits: Limits,
     inputs: PhantomData<fn(&I)>,
 }
 
 impl<I: Image, O: Image> Loaded<I, O> {
-    pub fn new(program: orcl_interp::Program, entry: FunctionId, regions: Regions, state: Vec<Scalar>, safe: O, stack: u32) -> Self {
-        Loaded { program, entry, regions, state, safe, stack, inputs: PhantomData }
+    pub fn new(program: orcl_interp::Program, entry: FunctionId, regions: Regions, state: Vec<Scalar>, safe: O, limits: Limits) -> Self {
+        Loaded { program, entry, regions, state, safe, limits, inputs: PhantomData }
     }
 }
 
@@ -166,7 +167,7 @@ impl<I: Image, O: Image> Source for Loaded<I, O> {
     type Error = MakeError;
 
     fn make(&mut self) -> Result<Interpreted<I, O>, MakeError> {
-        Interpreted::new(self.program.clone(), self.entry, self.regions, &self.state, self.safe, self.stack)
+        Interpreted::new(self.program.clone(), self.entry, self.regions, &self.state, self.safe, self.limits)
     }
 
     fn safe_outputs(&mut self) -> O {

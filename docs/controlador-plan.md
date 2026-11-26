@@ -60,7 +60,7 @@ time."
   program is lowered (Q227). `docs/orcl/README.md`, "The front end".
 - **The interpreter is proven against Rust by a fixed conformance suite.**
 - **What an interpreted program runs on** (2026-11-26): a stack of the size the target's settings give,
-  laid out at load, on which every program Rust compiles runs, one whose functions call themselves
+  laid out at load within a memory ceiling they give too, checked before anything is allocated, on which every program Rust compiles runs, one whose functions call themselves
   among them, a call past it being the fault 502 `program(at)` (Q230); its first state and its safe
   outputs computed when the front end builds it and written into its file, a program whose
   `safe_outputs` reads its state refused (Q231); no instruction budget, the entry running to its

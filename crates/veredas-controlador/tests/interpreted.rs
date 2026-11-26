@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 use orcl_interp::{
+    Limits,
     BinOp, Block, BlockId, Check, Const, Field, Function, FunctionId, Int, Local, LocalDecl, Operand, Place,
     Program as Code, Projection, Scalar, Span, Statement, Terminator, Type, TypeId, Value,
 };
@@ -203,11 +204,40 @@ fn code() -> Code {
 
 const REGIONS: Regions = Regions { state: COUNT, scan: SCAN, inputs: IN, outputs: OUT };
 
-/// The stack the program runs on, in slots, as the target's settings will give it (`docs/questions.md` Q230).
+/// The limits the program runs within, in slots, as the target's settings will give them (`docs/questions.md` Q230):
+/// a stack of 1024 and a memory of 2^16.
 const STACK: u32 = 1024;
+const LIMITS: Limits = Limits { stack: STACK, memory: 1 << 16 };
+
+/// The tests' allocator: the system's, refusing any one allocation past 1 GiB, an abort of the test binary, so a
+/// regression that lays out what a program or a host names fails a test and never fills the machine.
+struct Capped;
+
+// SAFETY: every call within the ceiling is handed to the system's allocator unchanged; one past it is refused with a
+// null pointer, which the collections answer with `handle_alloc_error`, an abort.
+unsafe impl std::alloc::GlobalAlloc for Capped {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        if layout.size() > 1 << 30 {
+            return std::ptr::null_mut();
+        }
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
+        if new_size > 1 << 30 {
+            return std::ptr::null_mut();
+        }
+        unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static CAPPED: Capped = Capped;
 
 fn loaded(first: &[Scalar]) -> Loaded<In, Out> {
-    Loaded::new(code(), FunctionId(0), REGIONS, first.to_vec(), SAFE, STACK)
+    Loaded::new(code(), FunctionId(0), REGIONS, first.to_vec(), SAFE, LIMITS)
 }
 
 fn first() -> Vec<Scalar> {
@@ -424,7 +454,7 @@ fn what_safe_rust_cannot_reach_is_the_runtime_s_fault_not_the_program_s() {
     let mut unreachable = code();
     unreachable.functions[0].blocks[0].terminator = Terminator::Unreachable { at: at(2) };
     for program in [uninit, unreachable] {
-        let source = Loaded::new(program, FunctionId(0), REGIONS, first(), SAFE, STACK);
+        let source = Loaded::new(program, FunctionId(0), REGIONS, first(), SAFE, LIMITS);
         let c = Controller::power_on_from(config(), SIM, Restart::First, source).unwrap();
         let (c, plant, _) = started(c, steady, 3);
         assert_eq!(text(&c), "FAULT internal(id=507) sim() no_realtime()");
@@ -522,7 +552,7 @@ fn overflowing() -> Code {
 }
 
 fn on(program: Code) -> Controller<Interpreted<In, Out>, Loaded<In, Out>> {
-    Controller::power_on_from(config(), SIM, Restart::First, Loaded::new(program, FunctionId(0), REGIONS, first(), SAFE, STACK)).unwrap()
+    Controller::power_on_from(config(), SIM, Restart::First, Loaded::new(program, FunctionId(0), REGIONS, first(), SAFE, LIMITS)).unwrap()
 }
 
 #[test]
@@ -1103,7 +1133,7 @@ fn spinning() -> Code {
 
 #[test]
 fn a_call_past_the_stack_is_the_program_s_fault_at_its_place() {
-    let source = Loaded::new(spinning(), FunctionId(0), REGIONS, first(), SAFE, STACK);
+    let source = Loaded::new(spinning(), FunctionId(0), REGIONS, first(), SAFE, LIMITS);
     let c = Controller::power_on_from(config(), SIM, Restart::First, source).unwrap();
     let (c, plant, _) = started(c, steady, 3);
     assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:7:9") sim() no_realtime()"#);
@@ -1115,12 +1145,22 @@ fn a_call_past_the_stack_is_the_program_s_fault_at_its_place() {
 #[test]
 fn a_stack_that_cannot_hold_the_scan_entry_s_frame_makes_no_program() {
     // the scan's frame: four references and four scalars, eight slots
-    let c = Controller::power_on_from(config(), SIM, Restart::First, Loaded::<In, Out>::new(code(), FunctionId(0), REGIONS, first(), SAFE, 8)).unwrap();
+    let c = Controller::power_on_from(config(), SIM, Restart::First, Loaded::<In, Out>::new(code(), FunctionId(0), REGIONS, first(), SAFE, Limits { stack: 8, ..LIMITS })).unwrap();
     assert_eq!((text(&c), c.load_error()), ("STOP sim() no_realtime()".to_string(), None));
     let (c, plant, _) = started(c, steady, 2);
     assert_eq!(text(&c), "RUN sim() no_realtime()");
     assert_eq!(plant.writes.iter().map(|w| w.1).collect::<Vec<_>>(), [scanned(FIRST + 1, 0), scanned(FIRST + 2, 1)]);
-    let c = Controller::power_on_from(config(), SIM, Restart::First, Loaded::<In, Out>::new(code(), FunctionId(0), REGIONS, first(), SAFE, 7)).unwrap();
+    let c = Controller::power_on_from(config(), SIM, Restart::First, Loaded::<In, Out>::new(code(), FunctionId(0), REGIONS, first(), SAFE, Limits { stack: 7, ..LIMITS })).unwrap();
     assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
     assert_eq!(c.load_error(), Some(&MakeError::Entry(orcl_interp::HostError::Stack)));
+}
+
+// A memory ceiling the program does not fit (Q230) makes no program: STOP 104, the machine's reason kept.
+#[test]
+fn a_memory_ceiling_the_program_does_not_fit_makes_no_program() {
+    let small = Limits { memory: STACK, ..LIMITS };
+    let c = Controller::power_on_from(config(), SIM, Restart::First, Loaded::<In, Out>::new(code(), FunctionId(0), REGIONS, first(), SAFE, small)).unwrap();
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
+    let reason = orcl_interp::LoadError::Region { index: 4, reason: "memory past the host's limit" };
+    assert_eq!(c.load_error(), Some(&MakeError::Load(reason)));
 }

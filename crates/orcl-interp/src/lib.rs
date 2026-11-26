@@ -10,7 +10,8 @@
 //!
 //! A program whose indices or types do not fit is refused when it is loaded, by name ([`LoadError`]). It runs on a
 //! stack of the size its host gives, in slots, one whose functions call themselves among them, a call past the stack
-//! being the program's own error (`docs/questions.md` Q230). A program's failure while it runs is a [`ProgramError`]
+//! being the program's own error, and lays out no more memory than its host's ceiling (`docs/questions.md` Q230,
+//! [`Limits`]). A program's failure while it runs is a [`ProgramError`]
 //! naming its source location, never a panic (ORCL's O11).
 #![forbid(unsafe_code)]
 #![deny(
@@ -30,7 +31,7 @@ mod program;
 
 pub use core_ops::CoreOp;
 pub use layout::LoadError;
-pub use machine::{Arg, CallError, ErrorKind, HostError, Machine, ProgramError, RegionId, Step};
+pub use machine::{Arg, CallError, ErrorKind, HostError, Limits, Machine, ProgramError, RegionId, Step};
 pub use ops::Scalar;
 pub use program::{
     BinOp, Block, BlockId, Callee, Check, Const, Field, Function, FunctionId, Int, Local, LocalDecl, Operand, Place,

@@ -16,6 +16,16 @@ use crate::program::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RegionId(pub u32);
 
+/// What a host lets a machine lay out, in slots (`docs/questions.md` Q230: the target's settings give both).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// The stack's size: the frames of the calls in progress; as many frames as it has slots, at most.
+    pub stack: u32,
+    /// The most slots the machine lays out in all: its regions, its stack, and the room for the largest value it
+    /// builds and for the largest result. Checked before anything is allocated.
+    pub memory: u32,
+}
+
 /// An argument the host passes to an entry: a reference to one of its regions, or a value's slots.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Arg<'a> {
@@ -655,11 +665,14 @@ impl State {
 }
 
 impl Machine {
-    /// Loads `program`, with a region of memory for each of `regions`' types and a stack of `stack` slots after them,
-    /// or says why it cannot. The stack's size is the host's, as the target's settings give it (`docs/questions.md`
-    /// Q230); in slots, not bytes, so a program reaches the same depth wherever it runs. A call past it is the
-    /// program's error [`ErrorKind::Stack`], and every buffer is sized here, so nothing is allocated while it runs.
-    pub fn load(program: Program, regions: &[TypeId], stack: u32) -> Result<Machine, LoadError> {
+    /// Loads `program`, with a region of memory for each of `regions`' types and a stack of `limits.stack` slots
+    /// after them, or says why it cannot. The stack's size and the memory's ceiling are the host's, as the target's
+    /// settings give them (`docs/questions.md` Q230); in slots, not bytes, so a program reaches the same depth
+    /// wherever it runs. Every buffer is sized here, its size checked against `limits.memory` before anything is
+    /// allocated, so nothing is allocated while it runs and a size the program or the host names never reaches the
+    /// allocator past the ceiling. A call past the stack is the program's error [`ErrorKind::Stack`].
+    pub fn load(program: Program, regions: &[TypeId], limits: Limits) -> Result<Machine, LoadError> {
+        let stack = limits.stack;
         let layout = lay_out(&program)?;
         let too_large = |index| LoadError::Region { index, reason: "memory past the machine's reach" };
         let mut placed = Vec::with_capacity(regions.len());
@@ -682,9 +695,16 @@ impl Machine {
             .filter_map(|f| f.locals.first())
             .filter_map(|l| layout.sizes.size.get(l.ty.0 as usize).copied())
             .max()
-            .unwrap_or(0) as usize;
+            .unwrap_or(0);
         let regions_largest = regions.iter().filter_map(|t| layout.sizes.size.get(t.0 as usize).copied()).max().unwrap_or(0);
-        let largest = layout.largest.max(regions_largest) as usize;
+        let largest = layout.largest.max(regions_largest);
+        // the ceiling, before any buffer is allocated: the regions and the stack (which a slot's index must reach),
+        // the largest value built and the largest result, in slots, summed where no sum of three `u32`s overflows
+        let laid_out = u64::from(total).saturating_add(u64::from(largest)).saturating_add(u64::from(returns));
+        if laid_out > u64::from(limits.memory) {
+            return Err(LoadError::Region { index: regions.len(), reason: "memory past the host's limit" });
+        }
+        let (largest, returns) = (largest as usize, returns as usize);
         Ok(Machine {
             code: Code {
                 program,

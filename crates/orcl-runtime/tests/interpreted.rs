@@ -6,6 +6,7 @@ use std::cell::Cell;
 use std::time::Duration;
 
 use orcl_interp::{
+    Limits,
     BinOp, Block, BlockId, Check, Const, ErrorKind, Field, Function, FunctionId, HostError, Int, LocalDecl, Operand,
     Place, Program as Code, ProgramError, Projection, Scalar, Span, Statement, Terminator, Type, TypeId, Value,
 };
@@ -23,11 +24,15 @@ thread_local! {
     static ASKED: Cell<usize> = const { Cell::new(0) };
 }
 
-// SAFETY: every call is handed to the system's allocator unchanged; counting touches no memory it returns.
+// SAFETY: every call within the ceiling is handed to the system's allocator unchanged, one past it refused with a
+// null pointer (an abort, `handle_alloc_error`); counting touches no memory it returns.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if WATCHED.with(|w| w.get()) {
             ASKED.with(|a| a.set(a.get() + 1));
+        }
+        if layout.size() > CEILING {
+            return std::ptr::null_mut();
         }
         unsafe { System.alloc(layout) }
     }
@@ -37,6 +42,9 @@ unsafe impl GlobalAlloc for Counting {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         if WATCHED.with(|w| w.get()) {
             ASKED.with(|a| a.set(a.get() + 1));
+        }
+        if new_size > CEILING {
+            return std::ptr::null_mut();
         }
         unsafe { System.realloc(ptr, layout, new_size) }
     }
@@ -256,11 +264,16 @@ fn code() -> Code {
 
 const REGIONS: Regions = Regions { state: ACC, scan: SCAN, inputs: IN, outputs: OUT };
 
-/// The stack the program runs on, in slots, as the target's settings will give it (`docs/questions.md` Q230).
-const STACK: u32 = 1024;
+/// The limits the program runs within, in slots, as the target's settings will give them (`docs/questions.md` Q230):
+/// a stack of 1024 and a memory of 2^16.
+const LIMITS: Limits = Limits { stack: 1024, memory: 1 << 16 };
+
+/// An allocation past this is refused, an abort of the test binary, so a regression that lays out what a program or
+/// a host names fails a test and never fills the machine.
+const CEILING: usize = 1 << 30;
 
 fn interpreted(total: u32) -> Interpreted<In, Out> {
-    Interpreted::new(code(), FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, total.into())], SAFE, STACK).unwrap()
+    Interpreted::new(code(), FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, total.into())], SAFE, LIMITS).unwrap()
 }
 
 // The plant: inputs drawn from the read's index, a divisor of zero on the reads it is told, and the time each read
@@ -439,7 +452,7 @@ impl<I: Copy, O> Io<I, O> for Feed<I> {
 #[test]
 fn an_image_the_machine_refuses_or_outputs_that_read_back_as_none_fault_the_task_by_name() {
     let state = [Scalar::Int(Int::U32, 0)];
-    let program = Interpreted::<Wrong, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, STACK).unwrap();
+    let program = Interpreted::<Wrong, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, LIMITS).unwrap();
     let mut task = Task::new(config(), program).unwrap();
     let mut feed = Feed(vec![Wrong(In { x: 1, y: 1 }), Wrong(In { x: 13, y: 1 })]);
     let mut clock = VirtualClock::new();
@@ -448,7 +461,7 @@ fn an_image_the_machine_refuses_or_outputs_that_read_back_as_none_fault_the_task
     let want = RunState::Faulted { at: Duration::from_millis(10), fault: Fault::Program { error: ScanError::Host(HostError::Slots) } };
     assert_eq!((r.state, *r.outputs), (want, SAFE), "inputs the machine refuses");
 
-    let program = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(SAFE), STACK).unwrap();
+    let program = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(SAFE), LIMITS).unwrap();
     let mut task = Task::new(config(), program).unwrap();
     // from a total of 0, an `x` of 13: the scan's sum is 13
     let mut feed = Feed(vec![In { x: 13, y: 1 }]);
@@ -462,7 +475,7 @@ fn an_image_the_machine_refuses_or_outputs_that_read_back_as_none_fault_the_task
 fn the_adapter_refuses_by_name_what_does_not_fit_when_it_is_made() {
     let state = [Scalar::Int(Int::U32, 0)];
     let make = |code: Code, entry: u32, regions: Regions, state: &[Scalar]| {
-        Interpreted::<In, Out>::new(code, FunctionId(entry), regions, state, SAFE, STACK).map(|_| ())
+        Interpreted::<In, Out>::new(code, FunctionId(entry), regions, state, SAFE, LIMITS).map(|_| ())
     };
     assert_eq!(make(code(), 0, REGIONS, &state), Ok(()), "the program as it is");
     // a program the machine refuses: a reference to a type past the last
@@ -483,9 +496,9 @@ fn the_adapter_refuses_by_name_what_does_not_fit_when_it_is_made() {
     assert_eq!(make(code(), 0, Regions { inputs: OUT, ..REGIONS }, &state), Err(MakeError::Inputs), "inputs of another type");
     assert_eq!(make(code(), 0, Regions { outputs: IN, ..REGIONS }, &state), Err(MakeError::Outputs), "outputs of another type");
     // safe outputs that read back as none, and outputs whose default does
-    let picky = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(Out { sum: 13, ..SAFE }), STACK);
+    let picky = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(Out { sum: 13, ..SAFE }), LIMITS);
     assert_eq!(picky.map(|_| ()), Err(MakeError::Outputs), "safe outputs that read back as none");
-    let picky_default = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(SAFE), STACK);
+    let picky_default = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(SAFE), LIMITS);
     assert!(picky_default.is_ok(), "outputs whose default reads back");
     // an entry that is no function, and ones whose parameters are not the four regions' references
     assert_eq!(make(code(), 1, REGIONS, &state), Err(MakeError::Entry(HostError::NoSuchFunction)), "no such function");
@@ -594,9 +607,9 @@ impl Image for NoneDefault {
 fn outputs_whose_default_is_no_value_of_their_type_or_reads_back_as_none_are_refused_when_made() {
     // M04, M04b (the default's image refused) and M05 (the default read back)
     let state = [Scalar::Int(Int::U32, 0)];
-    let bad = Interpreted::<In, BadDefault>::new(code(), FunctionId(0), REGIONS, &state, BadDefault(SAFE), STACK);
+    let bad = Interpreted::<In, BadDefault>::new(code(), FunctionId(0), REGIONS, &state, BadDefault(SAFE), LIMITS);
     assert_eq!(bad.map(|_| ()), Err(MakeError::Outputs), "a default that is no value of the outputs' type");
-    let none = Interpreted::<In, NoneDefault>::new(code(), FunctionId(0), REGIONS, &state, NoneDefault(SAFE), STACK);
+    let none = Interpreted::<In, NoneDefault>::new(code(), FunctionId(0), REGIONS, &state, NoneDefault(SAFE), LIMITS);
     assert_eq!(none.map(|_| ()), Err(MakeError::Outputs), "a default that reads back as none");
 }
 
@@ -630,7 +643,7 @@ fn looping(n: u32) -> Code {
 #[test]
 fn a_scan_of_half_a_million_instructions_runs_to_its_return_with_no_budget() {
     // M07: no instruction budget; a scan of some 500 000 instructions ends at its return
-    let p = Interpreted::<In, Out>::new(looping(100_000), FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, STACK).unwrap();
+    let p = Interpreted::<In, Out>::new(looping(100_000), FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let mut clock = VirtualClock::new();
     let r = task.step(&mut Feed(vec![In::default()]), &mut clock);
@@ -668,7 +681,7 @@ impl Image for WrongOut {
 fn an_output_image_the_machine_refuses_faults_the_task_as_the_host_s_error() {
     // M08 (refusal ignored), M10 (named Outputs)
     let state = [Scalar::Int(Int::U32, 0)];
-    let p = Interpreted::<In, WrongOut>::new(code(), FunctionId(0), REGIONS, &state, WrongOut(SAFE), STACK).unwrap();
+    let p = Interpreted::<In, WrongOut>::new(code(), FunctionId(0), REGIONS, &state, WrongOut(SAFE), LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let mut feed = Feed(vec![In { x: 13, y: 1 }, In { x: 1, y: 1 }]);
     let mut clock = VirtualClock::new();
@@ -699,7 +712,7 @@ fn a_time_and_a_cycle_past_32_bits_reach_the_program_exactly() {
 fn nothing_of_the_program_runs_after_a_fault_that_leaves_the_machine_idle() {
     // M22: after an Outputs fault the machine is idle, so a run would show in the state region
     let state = [Scalar::Int(Int::U32, 0)];
-    let p = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(SAFE), STACK).unwrap();
+    let p = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(SAFE), LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let mut feed = Feed(vec![In { x: 13, y: 1 }, In { x: 1, y: 1 }, In { x: 1, y: 1 }, In { x: 1, y: 1 }]);
     let mut clock = VirtualClock::new();
@@ -719,7 +732,7 @@ fn the_entry_handed_in_is_the_one_each_scan_calls() {
     // a leaf taking the four regions is function 0; the scan entry handed in is function 1
     let mut other = code();
     other.functions.insert(0, leaf(&[TypeId(9), TypeId(10), TypeId(11), TypeId(12)]));
-    let mut p = Interpreted::<In, Out>::new(other, FunctionId(1), REGIONS, &[Scalar::Int(Int::U32, 5)], SAFE, STACK).unwrap();
+    let mut p = Interpreted::<In, Out>::new(other, FunctionId(1), REGIONS, &[Scalar::Int(Int::U32, 5)], SAFE, LIMITS).unwrap();
     let mut out = Out::default();
     let scan = Scan { now: Duration::ZERO, period: Duration::from_millis(10), cycle: 0 };
     TaskProgram::scan(&mut p, &scan, &In { x: 3, y: 1 }, &mut out).unwrap();
@@ -767,7 +780,7 @@ fn inputs_wider_than_the_other_regions_allocate_nothing_scan_after_scan() {
     other.types = types(&[Type::Array { element: U32, len: 8 }, Type::Ref { to: TypeId(13), mutable: false }]);
     other.functions = vec![leaf(&[TypeId(9), TypeId(10), TypeId(14), TypeId(12)])];
     let regions = Regions { inputs: TypeId(13), ..REGIONS };
-    let p = Interpreted::<Wide, Out>::new(other, FunctionId(0), regions, &[Scalar::Int(Int::U32, 0)], SAFE, STACK).unwrap();
+    let p = Interpreted::<Wide, Out>::new(other, FunctionId(0), regions, &[Scalar::Int(Int::U32, 0)], SAFE, LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let mut clock = VirtualClock::new();
     struct Many;
@@ -805,7 +818,7 @@ impl Image for Long {
 #[test]
 fn an_image_of_more_slots_than_its_region_faults_the_task_as_the_host_s_error() {
     let state = [Scalar::Int(Int::U32, 0)];
-    let p = Interpreted::<Long, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, STACK).unwrap();
+    let p = Interpreted::<Long, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let mut feed = Feed(vec![Long(In { x: 1, y: 1 }), Long(In { x: 13, y: 1 })]);
     let mut clock = VirtualClock::new();
@@ -818,7 +831,7 @@ fn an_image_of_more_slots_than_its_region_faults_the_task_as_the_host_s_error() 
 #[test]
 fn safe_outputs_that_are_no_value_of_the_outputs_type_are_refused_beside_a_default_that_is() {
     let state = [Scalar::Int(Int::U32, 0)];
-    let refused = Interpreted::<In, WrongOut>::new(code(), FunctionId(0), REGIONS, &state, WrongOut(Out { sum: 13, ..SAFE }), STACK);
+    let refused = Interpreted::<In, WrongOut>::new(code(), FunctionId(0), REGIONS, &state, WrongOut(Out { sum: 13, ..SAFE }), LIMITS);
     assert_eq!(refused.map(|_| ()), Err(MakeError::Outputs));
 }
 
@@ -845,7 +858,7 @@ fn a_period_below_the_microsecond_reaches_the_scan_region() {
 fn a_scan_faulting_by_its_outputs_or_as_the_host_s_error_asks_nothing_of_the_heap() {
     // the scan that faults by `Outputs` or by `Host`, under the counting allocator
     let state = [Scalar::Int(Int::U32, 0)];
-    let p = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(SAFE), STACK).unwrap();
+    let p = Interpreted::<In, Picky>::new(code(), FunctionId(0), REGIONS, &state, Picky(SAFE), LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let mut feed = Feed(vec![In { x: 13, y: 1 }, In { x: 1, y: 1 }]);
     let mut clock = VirtualClock::new();
@@ -855,7 +868,7 @@ fn a_scan_faulting_by_its_outputs_or_as_the_host_s_error_asks_nothing_of_the_hea
     });
     assert_eq!((s, asked), (RunState::Faulted { at: Duration::ZERO, fault: Fault::Program { error: ScanError::Outputs } }, 0));
 
-    let p = Interpreted::<Wrong, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, STACK).unwrap();
+    let p = Interpreted::<Wrong, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let mut feed = Feed(vec![Wrong(In { x: 13, y: 1 }), Wrong(In { x: 1, y: 1 })]);
     let mut clock = VirtualClock::new();
@@ -887,7 +900,7 @@ impl Image for LongOut {
 fn an_output_image_of_more_slots_than_its_region_faults_the_task_as_the_host_s_error() {
     // the outputs' image of six slots on the second scan
     let state = [Scalar::Int(Int::U32, 0)];
-    let p = Interpreted::<In, LongOut>::new(code(), FunctionId(0), REGIONS, &state, LongOut(SAFE), STACK).unwrap();
+    let p = Interpreted::<In, LongOut>::new(code(), FunctionId(0), REGIONS, &state, LongOut(SAFE), LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let mut feed = Feed(vec![In { x: 13, y: 1 }, In { x: 1, y: 1 }]);
     let mut clock = VirtualClock::new();
@@ -928,7 +941,7 @@ fn after_a_program_fault_the_regions_hold_what_the_failing_scan_left() {
 fn inputs_of_another_type_of_the_same_length_are_refused_when_made() {
     // a `Duration` (u64, u32) for inputs whose image writes two u32s
     let state = [Scalar::Int(Int::U32, 0)];
-    let made = Interpreted::<In, Out>::new(code(), FunctionId(0), Regions { inputs: DURATION, ..REGIONS }, &state, SAFE, STACK);
+    let made = Interpreted::<In, Out>::new(code(), FunctionId(0), Regions { inputs: DURATION, ..REGIONS }, &state, SAFE, LIMITS);
     assert_eq!(made.map(|_| ()), Err(MakeError::Inputs));
 }
 
@@ -936,7 +949,7 @@ fn inputs_of_another_type_of_the_same_length_are_refused_when_made() {
 fn a_scan_whose_image_is_refused_runs_nothing_of_the_program() {
     // the inputs refused on the second scan; the state as the first scan left it
     let state = [Scalar::Int(Int::U32, 0)];
-    let p = Interpreted::<Wrong, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, STACK).unwrap();
+    let p = Interpreted::<Wrong, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let mut feed = Feed(vec![Wrong(In { x: 1, y: 1 }), Wrong(In { x: 13, y: 1 })]);
     let mut clock = VirtualClock::new();
@@ -947,7 +960,7 @@ fn a_scan_whose_image_is_refused_runs_nothing_of_the_program() {
     assert_eq!(m.region(orcl_runtime::interpreted::STATE).unwrap(), &[Scalar::Int(Int::U32, 1)][..], "inputs refused");
 
     // the output image refused on the second scan; the state as the first scan left it
-    let p = Interpreted::<In, WrongOut>::new(code(), FunctionId(0), REGIONS, &state, WrongOut(SAFE), STACK).unwrap();
+    let p = Interpreted::<In, WrongOut>::new(code(), FunctionId(0), REGIONS, &state, WrongOut(SAFE), LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let mut feed = Feed(vec![In { x: 13, y: 1 }, In { x: 1, y: 1 }]);
     let mut clock = VirtualClock::new();
@@ -1017,7 +1030,7 @@ fn a_program_error_in_a_callee_s_statement_is_named_where_it_failed() {
         }],
     };
     let program = Code { types: types(&[]), functions: vec![entry, div], files: vec!["div.rs".into()] };
-    let p = Interpreted::<In, Out>::new(program, FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, STACK).unwrap();
+    let p = Interpreted::<In, Out>::new(program, FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let r = task.step(&mut Feed(vec![In { x: 1, y: 0 }]), &mut VirtualClock::new());
     let error = ProgramError {
@@ -1045,7 +1058,7 @@ fn a_scan_whose_cycle_holds_only_zero_is_refused_when_made() {
     let mut other = code();
     other.types = types(&[zero, scan, Type::Ref { to: TypeId(14), mutable: false }]);
     other.functions = vec![leaf(&[TypeId(9), TypeId(15), TypeId(11), TypeId(12)])];
-    let made = Interpreted::<In, Out>::new(other, FunctionId(0), Regions { scan: TypeId(14), ..REGIONS }, &[Scalar::Int(Int::U32, 0)], SAFE, STACK);
+    let made = Interpreted::<In, Out>::new(other, FunctionId(0), Regions { scan: TypeId(14), ..REGIONS }, &[Scalar::Int(Int::U32, 0)], SAFE, LIMITS);
     assert_eq!(made.map(|_| ()), Err(MakeError::Scan));
 }
 
@@ -1071,7 +1084,7 @@ fn counting() -> Code {
 /// Nothing of the program runs when it is made: a counter's first scan counts 1 from a first state of 0.
 #[test]
 fn nothing_of_the_program_runs_when_it_is_made_a_counter_s_first_scan_counting_one() {
-    let p = Interpreted::<In, Out>::new(counting(), FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, STACK).unwrap();
+    let p = Interpreted::<In, Out>::new(counting(), FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, LIMITS).unwrap();
     assert_eq!(p.machine().region(orcl_runtime::interpreted::STATE).unwrap(), &[Scalar::Int(Int::U32, 0)][..], "the first state, as made");
     let mut task = Task::new(config(), p).unwrap();
     let mut clock = VirtualClock::new();
@@ -1099,7 +1112,7 @@ impl Image for Longer {
 #[test]
 fn an_image_of_more_slots_than_the_room_grows_it_once() {
     let state = [Scalar::Int(Int::U32, 0)];
-    let mut p = Interpreted::<Longer, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, STACK).unwrap();
+    let mut p = Interpreted::<Longer, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, LIMITS).unwrap();
     let scan = Scan { now: Duration::ZERO, period: Duration::from_millis(10), cycle: 0 };
     let mut out = Out::default();
     let (a, first) = asked_by(|| TaskProgram::scan(&mut p, &scan, &Longer(In { x: 13, y: 1 }), &mut out));
@@ -1129,7 +1142,7 @@ fn an_index_past_the_end_is_the_program_s_error_by_its_kind() {
         }],
     };
     let program = Code { types: types(&[Type::Array { element: U32, len: 2 }, Type::Int(Int::Usize)]), functions: vec![f], files: vec!["index.rs".into()] };
-    let p = Interpreted::<In, Out>::new(program, FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, STACK).unwrap();
+    let p = Interpreted::<In, Out>::new(program, FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let r = task.step(&mut Feed(vec![In { x: 1, y: 1 }]), &mut VirtualClock::new());
     let RunState::Faulted { fault: Fault::Program { error: ScanError::Program(e) }, .. } = r.state else { panic!("{:?}", r.state) };
@@ -1142,8 +1155,8 @@ fn a_program_the_machine_refuses_is_refused_by_the_machine_s_own_reason() {
     let state = [Scalar::Int(Int::U32, 0)];
     let mut bad = code();
     bad.types.push(Type::Ref { to: TypeId(99), mutable: false });
-    let want = orcl_interp::Machine::load(bad.clone(), &[ACC, SCAN, IN, OUT], STACK).err().unwrap();
-    let made = Interpreted::<In, Out>::new(bad, FunctionId(0), REGIONS, &state, SAFE, STACK).map(|_| ());
+    let want = orcl_interp::Machine::load(bad.clone(), &[ACC, SCAN, IN, OUT], LIMITS).err().unwrap();
+    let made = Interpreted::<In, Out>::new(bad, FunctionId(0), REGIONS, &state, SAFE, LIMITS).map(|_| ());
     assert_eq!(made, Err(MakeError::Load(want)));
 }
 
@@ -1164,7 +1177,7 @@ fn a_program_error_in_a_later_block_is_named_by_its_block() {
         ],
     };
     let program = Code { types: types(&[]), functions: vec![f], files: vec!["div.rs".into()] };
-    let p = Interpreted::<In, Out>::new(program, FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, STACK).unwrap();
+    let p = Interpreted::<In, Out>::new(program, FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let r = task.step(&mut Feed(vec![In { x: 1, y: 0 }]), &mut VirtualClock::new());
     let RunState::Faulted { fault: Fault::Program { error: ScanError::Program(e) }, .. } = r.state else { panic!("{:?}", r.state) };
@@ -1176,18 +1189,18 @@ fn a_program_error_in_a_later_block_is_named_by_its_block() {
 #[test]
 fn the_stack_handed_in_holds_the_scan_entry_s_frame_or_the_adapter_is_refused() {
     let state = [Scalar::Int(Int::U32, 0)];
-    let m = orcl_interp::Machine::load(code(), &[ACC, SCAN, IN, OUT], STACK).unwrap();
+    let m = orcl_interp::Machine::load(code(), &[ACC, SCAN, IN, OUT], LIMITS).unwrap();
     let frame: u32 = code().functions[0].locals.iter().map(|l| m.size_of(l.ty).unwrap()).sum();
     assert!(frame > 4, "{frame} slots");
-    let p = Interpreted::<In, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, frame).unwrap();
+    let p = Interpreted::<In, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, Limits { stack: frame, ..LIMITS }).unwrap();
     assert_eq!(p.machine().memory().len() as u32, (0..4).map(|r| m.region(orcl_interp::RegionId(r)).unwrap().len() as u32).sum::<u32>() + frame);
     let mut task = Task::new(config(), p).unwrap();
     let mut clock = VirtualClock::new();
     let r = task.step(&mut Feed(vec![In { x: 6, y: 3 }]), &mut clock);
     assert_eq!(r.state, RunState::Running);
-    let made = Interpreted::<In, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, frame - 1).map(|_| ());
+    let made = Interpreted::<In, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, Limits { stack: frame - 1, ..LIMITS }).map(|_| ());
     assert_eq!(made, Err(MakeError::Entry(HostError::Stack)));
-    let made = Interpreted::<In, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, 0).map(|_| ());
+    let made = Interpreted::<In, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, Limits { stack: 0, ..LIMITS }).map(|_| ());
     assert_eq!(made, Err(MakeError::Entry(HostError::Stack)));
 }
 
@@ -1221,9 +1234,9 @@ fn scan_of_other_time(which: usize) -> (Code, Code) {
 fn a_scan_whose_time_is_no_duration_is_refused_when_made() {
     let (e, p) = scan_of_other_time(0);
     let state = [Scalar::Int(Int::U32, 0)];
-    let made = Interpreted::<In, Out>::new(e, FunctionId(0), Regions { scan: TypeId(14), ..REGIONS }, &state, SAFE, STACK);
+    let made = Interpreted::<In, Out>::new(e, FunctionId(0), Regions { scan: TypeId(14), ..REGIONS }, &state, SAFE, LIMITS);
     assert_eq!(made.map(|_| ()), Err(MakeError::Scan), "a time of an enum holding a scan of zeros");
-    let made = Interpreted::<In, Out>::new(p, FunctionId(0), Regions { scan: TypeId(17), ..REGIONS }, &state, SAFE, STACK);
+    let made = Interpreted::<In, Out>::new(p, FunctionId(0), Regions { scan: TypeId(17), ..REGIONS }, &state, SAFE, LIMITS);
     assert_eq!(made.map(|_| ()), Err(MakeError::Scan), "a time of a struct of a u64 and a u32");
 }
 
@@ -1231,9 +1244,9 @@ fn a_scan_whose_time_is_no_duration_is_refused_when_made() {
 fn a_scan_whose_period_is_no_duration_is_refused_when_made() {
     let (e, p) = scan_of_other_time(1);
     let state = [Scalar::Int(Int::U32, 0)];
-    let made = Interpreted::<In, Out>::new(e, FunctionId(0), Regions { scan: TypeId(14), ..REGIONS }, &state, SAFE, STACK);
+    let made = Interpreted::<In, Out>::new(e, FunctionId(0), Regions { scan: TypeId(14), ..REGIONS }, &state, SAFE, LIMITS);
     assert_eq!(made.map(|_| ()), Err(MakeError::Scan), "a period of an enum holding a scan of zeros");
-    let made = Interpreted::<In, Out>::new(p, FunctionId(0), Regions { scan: TypeId(17), ..REGIONS }, &state, SAFE, STACK);
+    let made = Interpreted::<In, Out>::new(p, FunctionId(0), Regions { scan: TypeId(17), ..REGIONS }, &state, SAFE, LIMITS);
     assert_eq!(made.map(|_| ()), Err(MakeError::Scan), "a period of a struct of a u64 and a u32");
 }
 
@@ -1255,7 +1268,7 @@ fn a_program_error_s_file_and_column_are_the_machine_s() {
         }],
     };
     let program = Code { types: types(&[]), functions: vec![f], files: vec!["lib.rs".into(), "div.rs".into()] };
-    let p = Interpreted::<In, Out>::new(program, FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, STACK).unwrap();
+    let p = Interpreted::<In, Out>::new(program, FunctionId(0), REGIONS, &[Scalar::Int(Int::U32, 0)], SAFE, LIMITS).unwrap();
     let mut task = Task::new(config(), p).unwrap();
     let r = task.step(&mut Feed(vec![In { x: 1, y: 0 }]), &mut VirtualClock::new());
     let RunState::Faulted { fault: Fault::Program { error: ScanError::Program(e) }, .. } = r.state else { panic!("{:?}", r.state) };
@@ -1287,7 +1300,7 @@ fn a_scan_of_no_structure_holding_zeros_is_refused_when_made() {
     let mut other = code();
     other.types = types(&[z, Type::Ref { to: TypeId(13), mutable: false }]);
     other.functions = vec![leaf(&[TypeId(9), TypeId(14), TypeId(11), TypeId(12)])];
-    let made = Interpreted::<In, Out>::new(other, FunctionId(0), Regions { scan: TypeId(13), ..REGIONS }, &[Scalar::Int(Int::U32, 0)], SAFE, STACK);
+    let made = Interpreted::<In, Out>::new(other, FunctionId(0), Regions { scan: TypeId(13), ..REGIONS }, &[Scalar::Int(Int::U32, 0)], SAFE, LIMITS);
     assert_eq!(made.map(|_| ()), Err(MakeError::Scan));
 }
 
@@ -1298,6 +1311,18 @@ fn a_scan_of_a_fourth_field_is_refused_when_made() {
     let mut other = code();
     other.types = types(&[scan, Type::Ref { to: TypeId(13), mutable: false }]);
     other.functions = vec![leaf(&[TypeId(9), TypeId(14), TypeId(11), TypeId(12)])];
-    let made = Interpreted::<In, Out>::new(other, FunctionId(0), Regions { scan: TypeId(13), ..REGIONS }, &[Scalar::Int(Int::U32, 0)], SAFE, STACK);
+    let made = Interpreted::<In, Out>::new(other, FunctionId(0), Regions { scan: TypeId(13), ..REGIONS }, &[Scalar::Int(Int::U32, 0)], SAFE, LIMITS);
     assert_eq!(made.map(|_| ()), Err(MakeError::Scan));
+}
+
+/// The memory ceiling handed in (Q230): the four regions, the stack and the room for values past it refuse the
+/// program when the adapter is made, by the machine's reason, before anything is allocated.
+#[test]
+fn a_memory_ceiling_the_program_does_not_fit_refuses_it_when_made() {
+    let state = [Scalar::Int(Int::U32, 0)];
+    let made = |memory| Interpreted::<In, Out>::new(code(), FunctionId(0), REGIONS, &state, SAFE, Limits { memory, ..LIMITS }).map(|_| ());
+    let past = Err(MakeError::Load(orcl_interp::LoadError::Region { index: 4, reason: "memory past the host's limit" }));
+    assert_eq!(made(1024), past, "the stack alone fills it");
+    assert_eq!(made(0), past);
+    assert_eq!(made(1 << 16), Ok(()));
 }

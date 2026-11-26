@@ -26,7 +26,7 @@ fn the_crate_root_is_exactly_its_attributes_its_modules_and_its_exports() {
             "mod program;",
             "pub use core_ops::CoreOp;",
             "pub use layout::LoadError;",
-            "pub use machine::{Arg, CallError, ErrorKind, HostError, Machine, ProgramError, RegionId, Step};",
+            "pub use machine::{Arg, CallError, ErrorKind, HostError, Limits, Machine, ProgramError, RegionId, Step};",
             "pub use ops::Scalar;",
             "pub use program::{",
             "    BinOp, Block, BlockId, Callee, Check, Const, Field, Function, FunctionId, Int, Local, LocalDecl, Operand, Place,",

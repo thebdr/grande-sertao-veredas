@@ -3,7 +3,7 @@
 use crate::task::TaskProgram;
 use core::marker::PhantomData;
 use core::time::Duration;
-use orcl_interp::{Arg, CallError, FunctionId, HostError, Int, LoadError, Machine, Program, ProgramError, RegionId, Scalar, Type, TypeId};
+use orcl_interp::{Arg, CallError, FunctionId, HostError, Int, Limits, LoadError, Machine, Program, ProgramError, RegionId, Scalar, Type, TypeId};
 use orcl_std::Scan;
 use std::vec::Vec;
 
@@ -39,7 +39,7 @@ pub struct Regions {
 /// Why an interpreted program cannot be made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MakeError {
-    /// The machine refused the program.
+    /// The machine refused the program, or its regions and stack past the host's memory ceiling.
     Load(LoadError),
     /// The first state's slots are not a value of the state's type.
     State,
@@ -109,14 +109,15 @@ fn scan_slots(slots: &mut Vec<Scalar>, scan: &Scan) {
 }
 
 impl<I: Image, O: Image> Interpreted<I, O> {
-    /// Loads `program` with its four regions and a stack of `stack` slots, and checks that `entry` takes the
-    /// regions and that the stack holds its frame: `state` is its first state and `safe` its safe outputs, both
-    /// handed in by the host until the program file carries them (`docs/questions.md` Q231, ruled: the front end
-    /// computes them), and the stack's size is the target's settings', handed in by the host too (Q230). The inputs'
-    /// and the outputs' defaults, the safe outputs and a scan must each be a value of its region's type.
-    pub fn new(program: Program, entry: FunctionId, regions: Regions, state: &[Scalar], safe: O, stack: u32) -> Result<Self, MakeError> {
+    /// Loads `program` with its four regions within the host's `limits` (its stack's size and its memory's
+    /// ceiling, in slots), and checks that `entry` takes the regions and that the stack holds its frame: `state` is
+    /// its first state and `safe` its safe outputs, both handed in by the host until the program file carries them
+    /// (`docs/questions.md` Q231, ruled: the front end computes them), and the limits are the target's settings',
+    /// handed in by the host too (Q230). The inputs' and the outputs' defaults, the safe outputs and a scan must each
+    /// be a value of its region's type.
+    pub fn new(program: Program, entry: FunctionId, regions: Regions, state: &[Scalar], safe: O, limits: Limits) -> Result<Self, MakeError> {
         let types = [regions.state, regions.scan, regions.inputs, regions.outputs];
-        let mut machine = Machine::load(program, &types, stack).map_err(MakeError::Load)?;
+        let mut machine = Machine::load(program, &types, limits).map_err(MakeError::Load)?;
         machine.set_region(STATE, state).map_err(|_| MakeError::State)?;
         if !is_a_scan(machine.program(), regions.scan) {
             return Err(MakeError::Scan);

@@ -1,7 +1,11 @@
 //! Every operation of the closed list gives what core's own function gives, called from the machine as MIR calls
 //! it: by value, or through a reference where core's function takes `&self`.
+mod cap;
 mod common;
 use common::*;
+
+#[global_allocator]
+static CAPPED: cap::Capped = cap::Capped;
 use core::time::Duration;
 use orcl_interp::*;
 
@@ -99,7 +103,7 @@ fn the_integer_operations_give_what_core_gives_on_every_integer_type() {
             fns.push((t, op, caller(&mut b, op, opt, &[ty, u32t])));
         }
     }
-    let mut m = Machine::load(b.program, &[], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
     let mut rng = Rng(0xC0DE_0000_0000_0001);
     for (t, op, f) in fns {
         let values = samples(t, &mut rng, 10);
@@ -169,7 +173,7 @@ fn the_duration_operations_give_what_core_gives() {
             (op, f)
         })
         .collect();
-    let mut m = Machine::load(b.program, &[], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
     let mut rng = Rng(0xC0DE_0000_0000_0002);
     let mut counts: Vec<u64> = vec![0, 1, 999, 1000, 1001, 60_000, u64::MAX / 1000, u64::MAX - 1, u64::MAX];
     counts.extend((0..20).map(|_| rng.next()));
@@ -257,7 +261,7 @@ fn an_option_is_filled_once_read_through_its_reference_and_asked_whether_it_hold
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[opt], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[opt], LIMITS).unwrap();
     let region = RegionId(0);
     m.set_region(region, &[int(Int::Isize, 0), Scalar::Uninit, Scalar::Uninit]).unwrap();
     assert_eq!(m.call(is_none, &[Arg::Ref(region)]).unwrap(), &[Scalar::Bool(true)]);
@@ -289,7 +293,7 @@ fn a_default_is_false_zero_or_no_time() {
     fns.push((caller(&mut b, CoreOp::Default, f32t, &[]), vec![Scalar::F32(f32::default())]));
     fns.push((caller(&mut b, CoreOp::Default, f64t, &[]), vec![Scalar::F64(f64::default())]));
     fns.push((caller(&mut b, CoreOp::Default, d, &[]), dur(Duration::default())));
-    let mut m = Machine::load(b.program, &[], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
     for (f, want) in fns {
         let got = call(&mut m, f, &[]);
         // compared slot by slot and, for a float, bit for bit: `-0.0 == 0.0` would let a negative zero pass
@@ -326,7 +330,7 @@ fn a_checked_shift_s_none_after_a_some_into_the_same_place_leaves_no_payload() {
             blocks: vec![block(vec![], sh(1, 1)), block(vec![], sh(9, 2)), block(vec![], ret())],
         }));
     }
-    let mut m = Machine::load(b.program, &[], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
     for f in fns {
         assert_eq!(call(&mut m, f, &[vec![int(Int::U8, 3)]]), vec![int(Int::Isize, 0), Scalar::Uninit]);
     }
@@ -364,7 +368,7 @@ fn get_or_insert_writes_the_option_s_own_discriminant_type() {
             block(vec![], ret()),
         ],
     });
-    let mut m = Machine::load(b.program, &[opt], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[opt], LIMITS).unwrap();
     m.set_region(RegionId(0), &[int(Int::U8, 0), Scalar::Uninit]).unwrap();
     m.call(f, &[Arg::Ref(RegionId(0))]).unwrap();
     assert_eq!(m.region(RegionId(0)).unwrap(), &[int(Int::U8, 1), int(Int::U8, 4)]);
@@ -397,7 +401,7 @@ fn a_duration_constant_passed_to_a_core_operation_gives_what_core_gives() {
         });
         fns.push((op, const_first, f));
     }
-    let mut m = Machine::load(b.program, &[], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
     for x in [Duration::ZERO, Duration::from_millis(700), k, Duration::new(1, 500_000_001), Duration::new(9, 1)] {
         for (op, const_first, f) in &fns {
             let want = match (op, const_first) {
@@ -425,7 +429,7 @@ fn a_checked_shift_into_an_option_whose_discriminant_is_a_u8_writes_a_u8() {
         ],
     });
     let f = caller(&mut b, CoreOp::CheckedShl(Int::U8), opt, &[u8t, u32t]);
-    let mut m = Machine::load(b.program, &[], STACK).unwrap();
+    let mut m = Machine::load(b.program, &[], LIMITS).unwrap();
     assert_eq!(call(&mut m, f, &[vec![int(Int::U8, 3)], vec![int(Int::U32, 2)]]), vec![int(Int::U8, 1), int(Int::U8, 12)]);
     assert_eq!(call(&mut m, f, &[vec![int(Int::U8, 3)], vec![int(Int::U32, 8)]]), vec![int(Int::U8, 0), Scalar::Uninit]);
 }
