@@ -1,0 +1,26 @@
+{
+  "clause": "C-147",
+  "command": "cargo test -j 8 -p veredas-aranha --test diff",
+  "commandArgv": [
+    "cargo",
+    "test",
+    "-j",
+    "8",
+    "-p",
+    "veredas-aranha",
+    "--test",
+    "diff"
+  ],
+  "exitCode": 0,
+  "outputSha": "e57d2730d157af4a3f546d12f0d11dc7335e22339ca4fa8070c990129b170dab",
+  "outputTail": "\nrunning 5 tests\ntest a_scan_against_itself_is_no_change_and_the_other_way_round_is_the_mirror ... ok\ntest each_change_is_found_by_the_mac_and_only_where_both_scans_state_it ... ok\ntest a_baseline_or_a_scan_that_is_no_scan_is_refused_by_name ... ok\ntest every_pair_of_scans_gives_the_diff_the_words_say_in_any_order_and_mirrored ... ok\ntest a_baseline_of_the_bench_and_the_bench_changed_since_are_told_apart ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running tests/diff.rs (target/debug/build/veredas-aranha/0a93e45a657fde19/out/diff-0a93e45a657fde19)",
+  "ranAt": "2026-11-26T08:49:29.861Z",
+  "headCommit": "7590f05dc6b43f03497d2a61a9ff0d7e208dea59",
+  "tests": [
+    {
+      "name": "crates/veredas-aranha/tests/diff.rs",
+      "file": "crates/veredas-aranha/tests/diff.rs",
+      "fileSha": "c40e16c3e0c75a1308289e1039a2c057627aee19aa5ab467b60a09046e0d3503"
+    }
+  ]
+}
