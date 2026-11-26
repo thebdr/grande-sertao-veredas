@@ -1598,7 +1598,7 @@ its I&M0 and its port's data.
 - `vendor_id` (`0`), `device_id` (`0`): its vendor and device ids.
 - `ip` (none): its IP suite, as an inline table; absent, 0.0.0.0 and not set.
 - `hello` (`true`): a Hello at start.
-- `lldp_interval_ms` (`5000`): between LLDP frames, up to 3600000 (802.1AB's hour); `0` sends none.
+- `lldp_interval_ms` (`5000`): between LLDP frames, 10 to 3600000 (802.1AB's hour); `0` sends none.
 - `port` (`"port-001"`): its port's name, `port-xyz` or `port-xyz-abcde` (xyz 001 to 255, abcde
   five digits).
 - `seed` (none): the seed of its answers' spread over a response delay; the clock when absent.

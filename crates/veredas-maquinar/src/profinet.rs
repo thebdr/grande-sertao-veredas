@@ -17,7 +17,7 @@
 pub mod ip;
 
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 #[cfg(target_os = "linux")]
 use std::time::Duration;
@@ -161,6 +161,9 @@ pub enum ProfinetError {
 
 /// The longest interval between LLDP frames: 802.1AB's msgTxInterval tops at 3600 s.
 pub const MAX_LLDP_INTERVAL_MS: u64 = 3_600_000;
+/// The shortest LLDP interval: the device polls its link each millisecond, so a shorter one would
+/// not be kept (round 6: 1 to 4 ms all sent at the poll's pace).
+pub const MIN_LLDP_INTERVAL_MS: u64 = 10;
 
 /// Validate a configuration before anything opens.
 pub fn validate(cfg: &ProfinetConfig) -> Result<(), ProfinetError> {
@@ -183,6 +186,9 @@ pub fn validate(cfg: &ProfinetConfig) -> Result<(), ProfinetError> {
     }
     if cfg.lldp_interval_ms > MAX_LLDP_INTERVAL_MS {
         return Err(bad(format!("profinet.lldp_interval_ms: {}, over {MAX_LLDP_INTERVAL_MS} (an hour, 802.1AB's longest)", cfg.lldp_interval_ms)));
+    }
+    if (1..MIN_LLDP_INTERVAL_MS).contains(&cfg.lldp_interval_ms) {
+        return Err(bad(format!("profinet.lldp_interval_ms: {}, under {MIN_LLDP_INTERVAL_MS} (0 sends none)", cfg.lldp_interval_ms)));
     }
     let visible = |t: &str| t.bytes().all(|b| (0x20..=0x7E).contains(&b));
     // DCP carries the vendor's text as visible ASCII: another byte would silence every frame that
@@ -266,9 +272,6 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     muted: AtomicBool,
-    /// The mutes so far (`State::mutes`), readable without the lock: read when a frame is read, so
-    /// a mute between the read and the taking, even one lifted at once, drops the request.
-    mutes: AtomicU64,
     stop: AtomicBool,
 }
 
@@ -325,7 +328,6 @@ impl ProfinetHandle {
         self.shared.muted.store(muted, Ordering::SeqCst);
         if muted {
             state.mutes += 1;
-            self.shared.mutes.store(state.mutes, Ordering::SeqCst);
         }
     }
 
@@ -399,7 +401,6 @@ pub fn start(cfg: &ProfinetConfig) -> Result<ProfinetHandle, ProfinetError> {
     let shared = Arc::new(Shared {
         state: Mutex::new(State { identity: identity_of(cfg, mac), status: ProfinetStatus::new(mac), neighbour: None, mutes: 0 }),
         muted: AtomicBool::new(false),
-        mutes: AtomicU64::new(0),
         stop: AtomicBool::new(false),
     });
     if cfg.hello {
@@ -492,9 +493,23 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
             }
             false
         });
-        let Ok(Some(received)) = link.recv(Duration::from_millis(5)) else { continue };
-        // The mutes when it was read: one since, however short, and the request is not taken.
-        let read_mutes = shared.mutes.load(Ordering::SeqCst);
+        // The frame read and the mutes noted under one hold of the lock `set_muted` takes, so a
+        // mute is before the read or counted after it (round 6: noted just after the read, a mute
+        // set and lifted in between let a request read before it be taken, 5 rounds of 16 000);
+        // the link has no wait without a read, so an empty read waits a millisecond outside it.
+        let (received, read_mutes) = {
+            let state = shared.lock();
+            let got = link.recv(Duration::ZERO);
+            let mutes = state.mutes;
+            drop(state);
+            match got {
+                Ok(Some(received)) => (received, mutes),
+                _ => {
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+            }
+        };
         let Ok(frame) = ether::parse(&received.bytes) else { continue };
         match frame.ethertype {
             ether::ETHERTYPE_LLDP => {
@@ -547,7 +562,9 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                 }
                 continue;
             }
-            ether::ETHERTYPE_PROFINET if frame.dst == mac || frame.dst == Mac::DCP_MULTICAST => {}
+            // From one station alone: a group or the all-zero source is no station's (IEEE 802.3),
+            // so a request from one is not taken and no answer goes to a group (round 6).
+            ether::ETHERTYPE_PROFINET if (frame.dst == mac || frame.dst == Mac::DCP_MULTICAST) && !frame.src.is_multicast() && frame.src != Mac([0; 6]) => {}
             _ => continue,
         }
         if shared.muted.load(Ordering::SeqCst) {

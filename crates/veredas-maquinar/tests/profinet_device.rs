@@ -1748,3 +1748,200 @@ mod round_5 {
         });
     }
 }
+
+/// C-112's sixth refute round: the critic's probes (`~/.cache/veredas/critic-c112-r6/probes`), kept
+/// as pins: an Identify of no filter matching nothing; the IP status not set without an address;
+/// a damaged block of a suboption it does not set answered 0x02; a request from a group or the
+/// all-zero source not taken; an LLDP interval under 10 ms refused; an Identify's answer naming the
+/// device as it was when the request was taken. The mute read with the frame under one lock is
+/// pinned by the critic's instrumented probe alone (`p7`: no black-box test sees the read).
+mod round_6 {
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::dcp::{self, DcpPdu, Filter, IpSuite};
+    use veredas_aranha::profinet::ether;
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::*;
+
+    const DEVICE: &str = "interface = \"b0\"\nstation = \"io-device-1\"\nalias = \"port-001.switch-1\"\nvendor_id = 7\ndevice_id = 9\nip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\nlldp_interval_ms = 200\nseed = 3\nhello = false\n";
+
+    fn config(text: &str) -> ProfinetConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn link(iface: &str, ethertype: u16) -> RawLink {
+        RawLink::open_with(iface, Options { ethertype: Some(ethertype), promiscuous: false, outgoing: false }).unwrap()
+    }
+
+    fn wait(within: Duration, mut done: impl FnMut() -> bool) -> bool {
+        let begun = Instant::now();
+        while begun.elapsed() < within {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        done()
+    }
+
+    /// The next DCP frame within `within`: its source, destination and PDU.
+    fn next_dcp(link: &RawLink, within: Duration) -> Option<(Mac, Mac, DcpPdu)> {
+        let begun = Instant::now();
+        while begun.elapsed() < within {
+            let r = link.recv(within.saturating_sub(begun.elapsed())).unwrap()?;
+            let f = ether::parse(&r.bytes).unwrap();
+            if f.ethertype == ether::ETHERTYPE_PROFINET {
+                return Some((f.src, f.dst, dcp::decode(f.payload).unwrap()));
+            }
+        }
+        None
+    }
+
+    /// A DCP PDU by hand: its blocks padded to even lengths.
+    fn raw_pdu(frame_id: u16, service: u8, xid: u32, delay: u16, blocks: &[(u8, u8, Vec<u8>)]) -> Vec<u8> {
+        let mut data = Vec::new();
+        for (o, s, d) in blocks {
+            data.extend_from_slice(&[*o, *s]);
+            data.extend_from_slice(&(d.len() as u16).to_be_bytes());
+            data.extend_from_slice(d);
+            if d.len() % 2 == 1 {
+                data.push(0);
+            }
+        }
+        let mut pdu = frame_id.to_be_bytes().to_vec();
+        pdu.extend_from_slice(&[service, 0]);
+        pdu.extend_from_slice(&xid.to_be_bytes());
+        pdu.extend_from_slice(&delay.to_be_bytes());
+        pdu.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        pdu.extend_from_slice(&data);
+        pdu
+    }
+
+    /// An Ethernet frame by hand, whatever its source.
+    fn raw_frame(dst: Mac, src: Mac, ethertype: u16, payload: &[u8]) -> Vec<u8> {
+        let mut f = dst.0.to_vec();
+        f.extend_from_slice(&src.0);
+        f.extend_from_slice(&ethertype.to_be_bytes());
+        f.extend_from_slice(payload);
+        f.resize(f.len().max(60), 0);
+        f
+    }
+
+    /// A block's qualifier, then its data.
+    fn q(q: u16, d: &[u8]) -> Vec<u8> {
+        [q.to_be_bytes().to_vec(), d.to_vec()].concat()
+    }
+
+    #[test]
+    fn an_identify_of_no_filter_matches_nothing() {
+        netns::isolated("round_6::an_identify_of_no_filter_matches_nothing", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            let pdu = raw_pdu(dcp::FRAME_ID_IDENTIFY_REQ, 5, 77, 1, &[]);
+            ctl.send(&ether::build(Mac::DCP_MULTICAST, me, ether::ETHERTYPE_PROFINET, &pdu).unwrap()).unwrap();
+            assert!(wait(Duration::from_secs(2), || dev.status().identify_passed == 1), "the Identify read and passed");
+            assert_eq!(next_dcp(&ctl, Duration::from_millis(300)).map(|(_, _, p)| p.xid), None);
+            assert_eq!(dev.status().identify_answered, 0);
+        });
+    }
+
+    #[test]
+    fn the_ip_status_says_not_set_without_an_address() {
+        netns::isolated("round_6::the_ip_status_says_not_set_without_an_address", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(&DEVICE.replace("ip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\n", ""))).unwrap();
+            let ask = |xid: u32| {
+                ctl.send(&dcp::identify_request(me, xid, 1, &Filter::All).unwrap()).unwrap();
+                let (_, _, a) = next_dcp(&ctl, Duration::from_secs(2)).expect("an answer");
+                dcp::DeviceIdentity::from_blocks(&a.blocks).ip_status.map(|s| s.set)
+            };
+            let fresh = ask(1);
+            let suite = IpSuite { ip: "10.0.0.5".parse().unwrap(), mask: "255.0.0.0".parse().unwrap(), gateway: "0.0.0.0".parse().unwrap() };
+            ctl.send(&dcp::set_ip_request(dev.mac, me, 2, &suite, true).unwrap()).unwrap();
+            next_dcp(&ctl, Duration::from_secs(2)).expect("the Set's answer");
+            let addressed = ask(3);
+            let none = IpSuite { ip: "0.0.0.0".parse().unwrap(), mask: "0.0.0.0".parse().unwrap(), gateway: "0.0.0.0".parse().unwrap() };
+            ctl.send(&dcp::set_ip_request(dev.mac, me, 4, &none, true).unwrap()).unwrap();
+            next_dcp(&ctl, Duration::from_secs(2)).expect("the Set's answer");
+            let cleared = ask(5);
+            assert_eq!((fresh, addressed, cleared), (Some(0), Some(1), Some(0)), "not set, set, not set");
+        });
+    }
+
+    #[test]
+    fn a_damaged_block_of_a_suboption_it_does_not_set_is_answered_0x02() {
+        netns::isolated("round_6::a_damaged_block_of_a_suboption_it_does_not_set_is_answered_0x02", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            // The vendor not text, an alias not text, a MAC of five bytes: held, not set.
+            let blocks = vec![(2u8, 1u8, q(1, b"v\xe4ndor")), (2, 6, q(1, b"port-001.sw\xe4tch")), (1, 1, q(1, &[2, 0, 0, 0, 1]))];
+            let pdu = raw_pdu(dcp::FRAME_ID_GET_SET, 4, 1, 0, &blocks);
+            ctl.send(&ether::build(dev.mac, me, ether::ETHERTYPE_PROFINET, &pdu).unwrap()).unwrap();
+            let r = next_dcp(&ctl, Duration::from_secs(2)).map(|(_, _, p)| dcp::control_responses(&p));
+            assert_eq!(r, Some(vec![(2, 1, 2), (2, 6, 2), (1, 1, 2)]));
+        });
+    }
+
+    /// No station sends from a group or the all-zero address (IEEE 802.3): an Identify, a Set and
+    /// a Get from one are not taken, the Set not applied, no answer sent to a group.
+    #[test]
+    fn a_request_from_a_group_or_the_zero_source_is_not_taken() {
+        netns::isolated("round_6::a_request_from_a_group_or_the_zero_source_is_not_taken", &[("a0", "b0")], || {
+            let ctl = RawLink::open_with("a0", Options { ethertype: Some(ether::ETHERTYPE_PROFINET), promiscuous: true, outgoing: false }).unwrap();
+            let dev = start(&config(DEVICE)).unwrap();
+            let mut answered = Vec::new();
+            for (i, src) in [Mac::DCP_MULTICAST, Mac::BROADCAST, Mac([0; 6])].into_iter().enumerate() {
+                let xid = 10 * i as u32;
+                let identify = raw_pdu(dcp::FRAME_ID_IDENTIFY_REQ, 5, xid + 1, 1, &[(0xFF, 0xFF, vec![])]);
+                ctl.send(&raw_frame(Mac::DCP_MULTICAST, src, ether::ETHERTYPE_PROFINET, &identify)).unwrap();
+                answered.extend(next_dcp(&ctl, Duration::from_millis(300)).map(|(s, d, p)| (src, s, d, p.xid)));
+                let name = format!("from-group-{i}");
+                let set = raw_pdu(dcp::FRAME_ID_GET_SET, 4, xid + 2, 0, &[(2, 2, q(1, name.as_bytes()))]);
+                ctl.send(&raw_frame(dev.mac, src, ether::ETHERTYPE_PROFINET, &set)).unwrap();
+                answered.extend(next_dcp(&ctl, Duration::from_millis(300)).map(|(s, d, p)| (src, s, d, p.xid)));
+                let mut get = raw_pdu(dcp::FRAME_ID_GET_SET, 3, xid + 3, 0, &[]);
+                get.truncate(10);
+                get.extend_from_slice(&2u16.to_be_bytes());
+                get.extend_from_slice(&[2, 2]);
+                ctl.send(&raw_frame(dev.mac, src, ether::ETHERTYPE_PROFINET, &get)).unwrap();
+                answered.extend(next_dcp(&ctl, Duration::from_millis(300)).map(|(s, d, p)| (src, s, d, p.xid)));
+            }
+            let s = dev.status();
+            assert_eq!((answered, dev.station(), s.identify_passed, s.identify_answered), (vec![], "io-device-1".to_string(), 0, 0));
+        });
+    }
+
+    #[test]
+    fn an_lldp_interval_under_10_ms_is_refused() {
+        for (ms, want) in [(1u64, Some("profinet.lldp_interval_ms: 1, under 10 (0 sends none)".to_string())), (9, Some("profinet.lldp_interval_ms: 9, under 10 (0 sends none)".to_string())), (10, None), (0, None)] {
+            let mut cfg = ProfinetConfig::new("b0");
+            cfg.lldp_interval_ms = ms;
+            assert_eq!(validate(&cfg).err().map(|e| e.to_string()), want, "{ms} ms");
+        }
+    }
+
+    /// An Identify of factor 200 (its answer due at 1.23 s, seed 3), then a Set renaming the
+    /// device, answered at once: the Identify's answer, sent after, names the device as it was
+    /// when the request was taken.
+    #[test]
+    fn an_identify_s_answer_names_the_device_as_it_was_taken() {
+        netns::isolated("round_6::an_identify_s_answer_names_the_device_as_it_was_taken", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            ctl.send(&dcp::identify_request(me, 1, 200, &Filter::Name("io-device-1".into())).unwrap()).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            ctl.send(&dcp::set_name_request(dev.mac, me, 2, "renamed-1", true).unwrap()).unwrap();
+            let mut seen = Vec::new();
+            while let Some((_, _, p)) = next_dcp(&ctl, Duration::from_millis(2500)) {
+                seen.push((p.xid, dcp::DeviceIdentity::from_blocks(&p.blocks).name));
+            }
+            assert_eq!((seen, dev.station()), (vec![(2, None), (1, Some("io-device-1".to_string()))], "renamed-1".to_string()));
+        });
+    }
+}
