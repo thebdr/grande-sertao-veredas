@@ -109,6 +109,20 @@ fn the_default_holds_the_plant_facing_layers_and_each_master_is_its_own() {
         .map(|d| d["name"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(required, set(&["serde", "thiserror", "toml"]));
+    // No build-dependency, there being no build script to use one, and no dependency renamed: a
+    // feature's `dep:` name is its crate's own, so no other crate rides it under that name.
+    let odd: Vec<String> = core["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["kind"] != "dev")
+        .filter(|d| d["kind"] == "build" || !d["rename"].is_null())
+        .map(|d| format!("{} ({}, as {})", d["name"], d["kind"], d["rename"]))
+        .collect();
+    assert!(
+        odd.is_empty(),
+        "a build-dependency or a renamed one: {odd:?}"
+    );
 }
 
 #[test]
@@ -157,8 +171,23 @@ fn without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone() 
         reached.is_empty(),
         "a plant's stack without the default features: {reached:?}"
     );
-    // The default form holds it all, so every current user sees no change.
-    let (whole, _) = tree(&[]);
+    // The default form holds it all, so every current user sees no change: its direct
+    // dependencies, by package name, are the three and the plant-facing layers' six.
+    let (whole, direct) = tree(&[]);
+    let layers = [
+        "async-opcua-client",
+        "async-opcua-types",
+        "chrono",
+        "regex",
+        "socket2",
+        "tokio",
+    ];
+    let mut want = set(&["serde", "thiserror", "toml"]);
+    want.extend(layers.iter().map(|c| c.to_string()));
+    assert_eq!(direct, want, "the default form's direct dependencies");
+    let (_, demo) = tree(&["--no-default-features", "--features", "demo-server"]);
+    want.insert("async-opcua-server".to_string());
+    assert_eq!(demo, want, "the demo plant's direct dependencies");
     for c in [
         "async-opcua-client",
         "async-opcua-types",
@@ -173,8 +202,8 @@ fn without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone() 
         !whole.contains("async-opcua-server"),
         "the server's crate in the default form"
     );
-    // Each master asked alone brings its own framing and a runtime, and neither the other's
-    // framing nor any OPC UA, regex or chrono.
+    // Each master asked alone brings its own framing and a runtime and nothing else directly, by
+    // package name, and reaches neither the other's framing nor any OPC UA crate, regex or chrono.
     for (master, own, other) in [
         (
             "modbus",
@@ -187,17 +216,22 @@ fn without_its_default_features_core_stands_on_serde_toml_and_thiserror_alone() 
             &["tokio-modbus"][..],
         ),
     ] {
-        let (whole, _) = tree(&["--no-default-features", "--features", master]);
+        let (whole, direct) = tree(&["--no-default-features", "--features", master]);
+        let mut want = set(&["serde", "thiserror", "toml", "tokio"]);
+        want.extend(own.iter().map(|c| c.to_string()));
+        assert_eq!(direct, want, "{master} alone: its direct dependencies");
         assert!(whole.contains("tokio"), "{master}: no runtime");
         for c in own {
             assert!(whole.contains(*c), "{master}: {c} missing");
         }
-        for c in other
-            .iter()
-            .chain(&["async-opcua-client", "async-opcua-types", "regex", "chrono"])
-        {
+        for c in other.iter().chain(&["regex", "chrono"]) {
             assert!(!whole.contains(*c), "{master} alone reaches {c}");
         }
+        let opcua: Vec<&String> = whole
+            .iter()
+            .filter(|c| c.starts_with("async-opcua"))
+            .collect();
+        assert!(opcua.is_empty(), "{master} alone reaches OPC UA: {opcua:?}");
     }
 }
 
