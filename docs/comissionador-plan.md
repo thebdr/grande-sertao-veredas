@@ -250,6 +250,10 @@ Recorded as the build meets them.
   (`SourceHealth::history_read`, C-096). A history that cannot be whole is never said read, so the
   replay keeps a bound of its own; a log with no stamps holds nothing of a past window and is not
   waited for then.
+- **A session's store is fresh** (C-205). Portal refuses a database already at the store's path,
+  so a session started for a replay holds only what its start reads: nothing from before the
+  point the start reads from (a live start reads nothing old). A window opening before that point
+  is refused, not replayed over a store without it.
 
 - **A word the language reads by its place is no reserved word** (C-201). `max` was reserved for
   `retry <step> max <n>` and is also a built-in call, so `max(a, b)` could not be written. The

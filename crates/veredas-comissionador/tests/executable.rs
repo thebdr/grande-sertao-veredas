@@ -94,6 +94,19 @@ fn run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict() {
     std::fs::write(dir.path().join("project.toml"), project_text(&bench, true, 4)).unwrap();
     std::fs::write(dir.path().join("off.toml"), project_text(&bench, false, 4)).unwrap();
     std::fs::write(dir.path().join("off5.toml"), project_text(&bench, false, 4).replacen("value = 4 }", "value = 5 }", 1)).unwrap();
+    // Reply rules that send differently and once listed alike (refute round 5): a field copied
+    // against a value naming it, and a value holding the listing's separator.
+    let off = project_text(&bench, false, 4);
+    let alike = [
+        ("from.toml", off.clone()),
+        ("text.toml", off.replacen("{ name = \"item\", from = \"item\" }", "{ name = \"item\", value = \"from item\" }", 1)),
+        ("comma1.toml", off.replacen("{ name = \"dest\", value = 4 }, { name = \"flag\", value = 1 }", "{ name = \"dest\", value = \"4, flag: 1\" }, { name = \"flag\", value = \"2\" }", 1)),
+        ("comma2.toml", off.replacen("{ name = \"dest\", value = 4 }, { name = \"flag\", value = 1 }", "{ name = \"dest\", value = \"4\" }, { name = \"flag\", value = \"1, flag: 2\" }", 1)),
+    ];
+    for (name, text) in &alike {
+        assert!(*name == "from.toml" || *text != off, "{name} is a rule of its own");
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
     let (code, stdout, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "project.toml"]));
     assert_eq!(code, 0, "{stdout:?} {stderr:?}");
     assert_eq!(stdout[0], "start #1 pass: sorter.command(code: 1): sent");
@@ -126,13 +139,32 @@ fn run_starts_the_session_runs_live_keeps_the_run_and_answers_by_its_verdict() {
     let fp = stderr[0].split('`').nth(1).unwrap().to_string();
     let mut want = vec![format!("the run is refused: the test writes, and portal's write switch is off: its 3 gated writes and the session's 1 reply, confirmed as `{fp}`, arm it for the run")];
     want.extend(writes.iter().map(|w| format!("  {w}")));
-    want.push("  sorter: on announce reply answer(item: from item, dest: 4, flag: 1)".to_string());
+    want.push("  sorter: on announce reply answer(item: from item, dest: \"4\", flag: \"1\")".to_string());
     assert_eq!(stderr, want);
     assert_ne!(fp, veredas_comissionador::run::writes_fingerprint(&c, &[]), "the reply counted in the fingerprint");
     // A reply edited in the project asks again.
     let (code, _, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off5.toml", "--arm", &fp]));
     assert_eq!((code, stderr[0].contains("confirms no list of this test's")), (4, true), "{stderr:?}");
     assert_eq!(writes, ["send sorter.command(code: 1)", "send sorter.command(code: 0)", "send sorter.command(code: 0)"]);
+    // Two rules that send differently are listed apart and fingerprinted apart: the one's
+    // confirmation asks again for the other.
+    let refusal = |project: &str, arm: &[&str]| {
+        let mut args = vec!["run", "chk-012.test", "--project", project];
+        args.extend_from_slice(arm);
+        let (code, stdout, stderr) = out(&exe(dir.path(), &args));
+        assert_eq!((code, stdout.len()), (4, 0), "{project}: {stderr:?}");
+        stderr
+    };
+    for (a, b, la, lb) in [
+        ("from.toml", "text.toml", "(item: from item, dest: \"4\", flag: \"1\")", "(item: \"from item\", dest: \"4\", flag: \"1\")"),
+        ("comma1.toml", "comma2.toml", "(item: from item, dest: \"4, flag: 1\", flag: \"2\")", "(item: from item, dest: \"4\", flag: \"1, flag: 2\")"),
+    ] {
+        let (ea, eb) = (refusal(a, &[]), refusal(b, &[]));
+        assert_eq!((ea[4].as_str(), eb[4].as_str()), (format!("  sorter: on announce reply answer{la}").as_str(), format!("  sorter: on announce reply answer{lb}").as_str()));
+        let (fa, fb) = (ea[0].split('`').nth(1).unwrap().to_string(), eb[0].split('`').nth(1).unwrap().to_string());
+        assert_ne!(fa, fb, "{a} and {b}");
+        assert!(refusal(b, &["--arm", &fa])[0].contains(&format!("`{fa}` confirms no list of this test's")), "{b} armed by {a}'s confirmation");
+    }
     assert!(!dir.path().join("runs/chk-012/0002").exists(), "a refused run is no run");
     let (code, _, stderr) = out(&exe(dir.path(), &["run", "chk-012.test", "--project", "off.toml", "--arm", "0123456789abcdef"]));
     assert_eq!((code, stderr[0].starts_with("the run is refused: the test writes, and portal's write switch is off: `0123456789abcdef` confirms no list of this test's")), (4, true), "{stderr:?}");
@@ -414,6 +446,47 @@ fn a_replay_waits_for_portal_to_say_each_history_is_read() {
     let (code, stdout, stderr) = out(&exe_env(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9], &[("VEREDAS_COMISSIONADOR_READ_IN", "3")]));
     assert_eq!((code, stdout.len(), dir.path().join("runs").exists()), (4, 0, false), "{stderr:?}");
     assert_eq!(stderr, ["the history of `plant` was not in the store after 3 s (0 lines read): the replay is refused"]);
+}
+
+// ---- refute round 5 ------------------------------------------------------------------------
+
+#[test]
+fn a_window_opening_before_the_session_s_start_is_refused() {
+    // A session's store is fresh, holding nothing from before its start's point: a window that
+    // opens before it is refused, nothing run and nothing kept, where it was replayed at once over
+    // a store without it (aborted at the window's end, kept).
+    let base = veredas_portal::serve::store_now_ms() - 3_600_000;
+    let window: String = (0..10).map(|i| stamped(base + i * 1000, &format!("{}.0", 20 + i))).collect();
+    let two_hours = "start = { last_hours = 2 }";
+    let at = veredas_comissionador::eval::time_text(veredas_portal::serve::store_now_ms() - 2_400_000);
+    let at = &at[..19];
+    // A live start, then a start forty minutes back, a family whose newest member is twenty
+    // minutes old.
+    for (start, family) in [(String::new(), false), (format!("start = \"{at}\""), true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let project = if family {
+            let fam = dir.path().join("fam");
+            std::fs::create_dir(&fam).unwrap();
+            std::fs::write(fam.join("plant1.log"), &window).unwrap();
+            std::fs::write(fam.join("plant2.log"), stamped(base + 2_400_000, "10.0")).unwrap();
+            log_project("dir = \"fam\"\npattern = \"plant(?P<idx>\\\\d+)\\\\.log\"")
+        } else {
+            std::fs::write(dir.path().join("plant.log"), &window).unwrap();
+            log_project("file = \"plant.log\"")
+        };
+        assert!(project.contains(two_hours));
+        std::fs::write(dir.path().join("project.toml"), project.replace(two_hours, &start)).unwrap();
+        let (t0, t9) = window_test(dir.path(), base);
+        let (code, stdout, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9]));
+        assert_eq!((code, stdout.len(), dir.path().join("runs").exists(), stderr.len()), (4, 0, false, 1), "{stderr:?}");
+        let opens = format!("the window opens at {t0}, before the session's start ");
+        let tail = " (the project's `[session] start`): the replay is refused";
+        if family {
+            assert_eq!(stderr[0], format!("{opens}reads from {at}.000{tail}"));
+        } else {
+            assert!(stderr[0].starts_with(&format!("{opens}is live, at ")) && stderr[0].ends_with(tail), "{stderr:?}");
+        }
+    }
 }
 
 #[test]

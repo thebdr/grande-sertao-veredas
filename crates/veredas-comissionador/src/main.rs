@@ -13,7 +13,8 @@
 //! Each option is given once, followed by its value, never an empty one. Exit codes: 0 the file is
 //! sound or the run passed; 1 the file has problems or the run failed; 2 the command line is wrong;
 //! 3 the run was aborted; 4 the run was refused before it started (its folder cannot be made, the
-//! project or its session cannot start, a log's history is not in the store, the engine refuses it),
+//! project or its session cannot start, a replay's window opens before the session's start or a
+//! log's history is not in the store, the engine refuses it),
 //! nothing run, nothing kept and the folders made for it removed; 5 the run ran, its verdict
 //! printed, but could not be kept.
 //!
@@ -60,6 +61,12 @@ const READ_IN: Duration = Duration::from_secs(600);
 
 fn read_in() -> Duration {
     std::env::var("VEREDAS_COMISSIONADOR_READ_IN").ok().and_then(|v| v.parse().ok()).map(Duration::from_secs).unwrap_or(READ_IN)
+}
+
+/// A name as the listing shows it: as written when it is a plain word, in quotes otherwise, so a
+/// listing reads one way only.
+fn word(s: &str) -> String {
+    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')) { s.to_string() } else { format!("{s:?}") }
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -247,7 +254,9 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
         }
     };
     // The session's own replies, which the armed switch lets reach the plant as well: shown with
-    // the test's gated writes and confirmed with them (Q321).
+    // the test's gated writes and confirmed with them (Q321), each rule in one reading only (a
+    // value in quotes, a field it copies after `from`, a name in quotes unless it is a plain
+    // word), so two rules that send differently never show, nor fingerprint, alike.
     let replies: Vec<String> = loaded
         .channels
         .iter()
@@ -257,18 +266,33 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
                     .fields
                     .iter()
                     .map(|f| match (&f.from, &f.value) {
-                        (Some(from), _) => format!("{}: from {from}", f.name),
-                        (_, Some(v)) => format!("{}: {}", f.name, v.text()),
-                        _ => f.name.clone(),
+                        (Some(from), _) => format!("{}: from {}", word(&f.name), word(from)),
+                        (_, Some(v)) => format!("{}: {:?}", word(&f.name), v.text()),
+                        _ => word(&f.name),
                     })
                     .collect();
-                format!("{}: on {} reply {}({})", ch.source_id, r.on, r.send, fields.join(", "))
+                format!("{}: on {} reply {}({})", word(&ch.source_id), word(&r.on), word(&r.send), fields.join(", "))
             })
         })
         .collect();
-    // The session's start on the store's axis: a log stamped at or after it has read its history.
+    // The session's start on the store's axis.
     let begun_at = chrono::Local::now().naive_local();
-    let session = match Session::start(loaded.session_config(begun_at)) {
+    let config = loaded.session_config(begun_at);
+    // A session's store is fresh: it holds nothing from before the point its start reads from (a
+    // live start's being the start itself), so a window opening before it is never whole there.
+    if let RunMode::Replay { from_ms, .. } = &mode.mode {
+        let reads_from = config.start.unwrap_or(begun_at).and_utc().timestamp_millis();
+        if *from_ms < reads_from {
+            let start = if config.start.is_some() { "reads from" } else { "is live, at" };
+            tell!(
+                "the window opens at {}, before the session's start {start} {} (the project's `[session] start`): the replay is refused",
+                veredas_comissionador::eval::time_text(*from_ms),
+                veredas_comissionador::eval::time_text(reads_from)
+            );
+            return 4;
+        }
+    }
+    let session = match Session::start(config) {
         Ok(s) => std::rc::Rc::new(s),
         Err(e) => {
             tell!("{}: the session did not start: {e}", project.display());
