@@ -118,6 +118,16 @@ pub struct NamedVariable {
     pub(crate) is_optional: bool,
 }
 
+impl NamedVariable {
+    /// The parameter's name as the formula spells it (`_xlpm.` and all), which a host compares
+    /// with the calls in the LAMBDA's body as the engine binds them, by `utils::name_key`. Veredas
+    /// fork change 41: its debug print escapes a backslash, a combining mark or a format character
+    /// that a name may hold.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 #[derive(PartialEq, Clone, Debug, serde::Serialize)]
 pub enum ExpectedTokens {
     // We know the next token could be a range

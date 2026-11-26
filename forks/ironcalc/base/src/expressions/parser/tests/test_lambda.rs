@@ -340,3 +340,19 @@ fn lambda_single_char_rc_param_roundtrips_in_r1c1_mode() {
         "LAMBDA(r,...) should parse in R1C1 mode, got {t:?}"
     );
 }
+
+#[test]
+fn a_parameter_s_name_reads_as_the_formula_spells_it() {
+    // Veredas fork change 41: a host reads a LAMBDA parameter's name whole; the characters a name
+    // may hold that a debug print escapes (a backslash, a combining mark, a format character)
+    // stand as they are, and the parameter's call in the body is spelled the same
+    let mut p = parser();
+    for name in ["h", "\\h", "h\u{301}", "g\u{200D}h", "Área"] {
+        let node = p.parse(&format!("LAMBDA({name},{name}(1))"), &cell());
+        let Node::LambdaDefKind { parameters, body } = node else { panic!("{name}: {node:?}") };
+        assert_eq!(parameters.iter().map(NamedVariable::name).collect::<Vec<_>>(), [name], "{name}");
+        let Node::NamedFunctionKind { name: called, .. } = *body else { panic!("{name}: {body:?}") };
+        assert_eq!(crate::expressions::utils::name_key(&called), crate::expressions::utils::name_key(parameters[0].name()), "{name}");
+    }
+}
+
