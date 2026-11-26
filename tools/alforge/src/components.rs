@@ -248,6 +248,27 @@ pub fn list(root: &Path, commit: &str, release: Option<&str>) -> Result<String, 
         entries.insert(bom_ref.clone(), Entry { bom_ref, kind, name: p.name.clone(), version: p.version.clone(), licence: p.licence.clone(), purl: purl_of, sha256, properties });
     }
 
+    // Qt and KDDockWidgets, which the bundle carries for Oficina's window (docs/questions.md Q446),
+    // at the versions the commit's recipe names: the release's own, not a crate's.
+    let mut carried: Vec<String> = Vec::new();
+    if let Some(folder) = crate::folder_at(root, commit).map_err(|e| refused(e.to_string()))?
+        && let Some(text) = git::show(root, commit, &format!("{folder}/maquina/maquina.toml")).map_err(|e| refused(e.to_string()))?
+        && let Some(q) = crate::machine::Recipe::load(&text).map_err(|e| refused(format!("commit {commit}: its recipe: {e}")))?.builder.qt
+    {
+        for (name, version, licence, cpe) in [
+            ("qt", q.version.as_str(), "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only", Some(format!("cpe:2.3:a:qt:qt:{}:*:*:*:*:*:*:*", q.version))),
+            ("kddockwidgets", q.kddockwidgets.as_str(), "GPL-2.0-only OR GPL-3.0-only", None),
+        ] {
+            let bom_ref = format!("pkg:generic/{name}@{version}");
+            let mut properties = vec![("veredas:carried".to_string(), "lib/qt".to_string())];
+            if let Some(c) = cpe {
+                properties.push(("veredas:cpe".to_string(), c));
+            }
+            entries.insert(bom_ref.clone(), Entry { bom_ref: bom_ref.clone(), kind: "library", name: name.to_string(), version: version.to_string(), licence: Licence::Expression(licence.to_string()), purl: Some(bom_ref.clone()), sha256: None, properties });
+            depends.entry(bom_ref.clone()).or_default();
+            carried.push(bom_ref);
+        }
+    }
     let version = release.map(str::to_string).unwrap_or_else(|| commit.to_string());
     let components: Vec<Value> = entries
         .values()
@@ -270,7 +291,11 @@ pub fn list(root: &Path, commit: &str, release: Option<&str>) -> Result<String, 
             c
         })
         .collect();
-    let dependencies: Vec<Value> = depends.iter().map(|(r, on)| json!({ "ref": r, "dependsOn": on.iter().collect::<Vec<_>>() })).collect();
+    let mut dependencies: Vec<Value> = depends.iter().map(|(r, on)| json!({ "ref": r, "dependsOn": on.iter().collect::<Vec<_>>() })).collect();
+    carried.sort();
+    if !carried.is_empty() {
+        dependencies.push(json!({ "ref": format!("veredas@{version}"), "dependsOn": carried }));
+    }
     let doc = json!({
         "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
         "bomFormat": "CycloneDX",

@@ -183,7 +183,7 @@ fn this_repositorys_head_lists_every_component_and_every_crate_its_versions_name
     for h in held.values() {
         named.extend(h.inputs.as_ref().unwrap().0.keys().filter_map(|k| k.strip_prefix("Cargo.lock: ")).map(|k| k.split(" (").next().unwrap().to_string()));
     }
-    let purls: Vec<&Value> = listed.iter().filter(|c| c["purl"].is_string()).copied().collect();
+    let purls: Vec<&Value> = listed.iter().filter(|c| c["purl"].as_str().is_some_and(|p| p.starts_with("pkg:cargo/"))).copied().collect();
     assert!(purls.len() > 100, "{}", purls.len());
     for c in &purls {
         let key = format!("{} {}", c["name"].as_str().unwrap(), c["version"].as_str().unwrap());
@@ -195,6 +195,17 @@ fn this_repositorys_head_lists_every_component_and_every_crate_its_versions_name
     // No crate of another platform alone (Windows' own, which the lock holds and the version names).
     assert!(named.iter().any(|n| n.starts_with("windows-sys ")));
     assert!(!purls.iter().any(|c| c["name"].as_str().is_some_and(|n| n.starts_with("windows"))));
+    // Qt and KDDockWidgets at the recipe's versions, which the release carries for Oficina's window
+    // (Q446), each with its licence expression; the release depends on them.
+    let recipe = alforge::machine::Recipe::load_file(&root.join("tools/alforge/maquina/maquina.toml")).unwrap();
+    let q = recipe.builder.qt.unwrap();
+    let qt = listed.iter().find(|c| c["name"] == "qt").unwrap();
+    assert_eq!((qt["version"].as_str(), qt["purl"].as_str()), (Some(q.version.as_str()), Some(format!("pkg:generic/qt@{}", q.version).as_str())));
+    assert_eq!(qt["licenses"], serde_json::json!([{ "expression": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only" }]));
+    let kdd = listed.iter().find(|c| c["name"] == "kddockwidgets").unwrap();
+    assert_eq!((kdd["version"].as_str(), kdd["licenses"].clone()), (Some(q.kddockwidgets.as_str()), serde_json::json!([{ "expression": "GPL-2.0-only OR GPL-3.0-only" }])));
+    let release = doc["dependencies"].as_array().unwrap().iter().find(|d| d["ref"] == format!("veredas@{head}")).unwrap();
+    assert_eq!(release["dependsOn"], serde_json::json!([format!("pkg:generic/kddockwidgets@{}", q.kddockwidgets), format!("pkg:generic/qt@{}", q.version)]));
     // Ábaco uses the IronCalc fork kept in the tree, by path.
     assert!(listed.iter().any(|c| c["properties"].as_array().is_some_and(|p| p.iter().any(|x| x["value"] == "forks/ironcalc/base"))));
 }
