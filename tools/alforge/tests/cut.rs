@@ -36,15 +36,16 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
     assert_eq!(c.manifest_path, out.path().join("0.0.0-trial.291.toml"));
     assert_eq!(manifest::check(&root, &c.manifest).unwrap(), Vec::<String>::new());
     let held = manifest::components_at(&root, &head, &mut Vec::new()).unwrap();
-    // Each component ships its bins without required features and those cargo's default build made
-    // (oficina's window, needing `shell`, not among them).
+    // Each component ships every bin, built with the features its executables need (Q443):
+    // Oficina's window among them, with `shell` on.
     for x in &c.manifest.components {
         let h = &held[&x.name];
-        let mut want: Vec<String> = h.bins.iter().cloned().chain(h.optional.iter().filter(|b| work.join("out/bin").join(b).is_file()).cloned()).collect();
-        want.sort();
-        assert_eq!(x.bins, want, "{}", x.name);
+        assert_eq!(x.bins, h.bins.iter().cloned().collect::<Vec<_>>(), "{}", x.name);
+        for b in &x.bins {
+            assert!(work.join("out/bin").join(b).is_file(), "{b} built");
+        }
     }
-    assert!(c.manifest.components.iter().any(|x| x.name == "veredas-oficina" && x.bins.is_empty()), "oficina's window is not built without `shell`");
+    assert!(c.manifest.components.iter().any(|x| x.name == "veredas-oficina" && x.bins == ["veredas-oficina"]), "oficina's window ships");
     let pinned: Vec<(String, String)> = c.manifest.components.iter().map(|x| (x.name.clone(), x.version.to_string())).collect();
     let at_head: Vec<(String, String)> = held.values().map(|h| (h.name.clone(), h.version.clone())).collect();
     assert_eq!(pinned, at_head);

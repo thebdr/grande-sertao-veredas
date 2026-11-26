@@ -1,12 +1,14 @@
 //! What a component's version names in a release (docs/questions.md Q441, ruled 2026-11-25 "All
 //! build inputs"): everything a build of its executables reads but the toolchain, so a change to
 //! any of it bumps the version. Its folder and the folder of every member it uses (its normal and
-//! build dependencies by path, transitively; a test's never goes into an executable); every file
-//! outside those folders their sources name by a literal `#[path]`, `include_str!`, `include_bytes!`
-//! or `include!`; the lock file's entries for its external dependencies, transitively; the
-//! workspace's manifest; and the cargo configuration at the root. Each input is named and
-//! identified as git stores it at the commit (a folder by its tree, a file by its blob, a locked
-//! package by its source and checksum), so two commits are compared without building either.
+//! build dependencies by path, transitively; a test's never goes into an executable), each but its
+//! top `tests/`, `benches/` and `examples/` (Q445); every file outside those folders their sources
+//! name by a literal `#[path]`, `include_str!`, `include_bytes!` or `include!`; the lock file's
+//! entries for its external dependencies, transitively; what cargo reads of the workspace's
+//! manifest to build it (Q442); and the cargo configuration at the root. Each input is named and
+//! identified as git stores it at the commit (a folder by its entries, a file by its blob, a part
+//! of the manifest by its value, a locked package by its source and checksum), so two commits are
+//! compared without building either.
 //!
 //! The cut builds each component alone, so cargo unifies features within its own inputs and no
 //! other component's manifest reaches its executables, and holds what cargo's dep-info says each
@@ -21,25 +23,51 @@ use crate::git;
 const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
 
 /// A component's build inputs: each named (a folder ending in `/`, a file by its path, a locked
-/// package as `Cargo.lock: <name> <version>`) with its identity at the commit.
+/// package as `Cargo.lock: <name> <version>`, a part of the workspace's manifest as
+/// `Cargo.toml: <key>`) with its identity at the commit. A folder whose identity is [`LEFT_OUT`] is
+/// one of an input folder's top `tests/`, `benches/` and `examples/`, which it does not name.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Inputs(pub BTreeMap<String, String>);
 
+/// The identity of a package folder's top `tests/`, `benches/` or `examples/` folder: what only the
+/// tests read never goes into an executable (docs/questions.md Q445, ruled 2026-11-26 "Tests left
+/// out"), unless a shipped target starts there.
+pub const LEFT_OUT: &str = "left out: its tests' own";
+
+/// The top folders of a package that hold its tests, benches and examples, as cargo finds them.
+pub const TEST_FOLDERS: [&str; 3] = ["tests", "benches", "examples"];
+
+/// Whether an input's name is no file of the tree: a lock file's entry or a part of the manifest.
+fn is_part(name: &str) -> bool {
+    name.starts_with("Cargo.lock: ") || name.starts_with("Cargo.toml: ")
+}
+
 impl Inputs {
     /// The inputs whose identity differs between the two (one there and not in the other included),
-    /// in name order.
+    /// in name order. A folder left out ([`LEFT_OUT`]) is no input: a test folder added or removed
+    /// charges nothing, and its package's folder says whether what ships moved.
     pub fn differ(&self, other: &Inputs) -> Vec<String> {
+        let named = |i: &Inputs, n: &str| i.0.get(n).filter(|v| *v != LEFT_OUT).cloned();
         let names: BTreeSet<&String> = self.0.keys().chain(other.0.keys()).collect();
-        names.into_iter().filter(|n| self.0.get(*n) != other.0.get(*n)).cloned().collect()
+        names.into_iter().filter(|n| named(self, n) != named(other, n)).cloned().collect()
     }
 
     /// Whether a file of the tree (its path from the root) is one of these inputs or lies in one of
-    /// their folders.
+    /// their folders, and not in a folder they leave out ([`LEFT_OUT`]) unless named as a file.
     pub fn covers(&self, path: &str) -> bool {
-        // A lock file's entry (`Cargo.lock: <name> <version>`) is no file of the tree; a folder
-        // given by its own path (a build script's `rerun-if-changed=.`) is that folder.
-        let file = !path.starts_with("Cargo.lock: ") && self.0.contains_key(path);
-        file || self.0.keys().any(|k| k.ends_with('/') && (path.starts_with(k.as_str()) || k.strip_suffix('/') == Some(path)))
+        // A lock file's entry (`Cargo.lock: <name> <version>`) and a part of the manifest
+        // (`Cargo.toml: <key>`) are no file of the tree.
+        if !is_part(path) && self.0.get(path).is_some_and(|v| v != LEFT_OUT) {
+            return true;
+        }
+        // The innermost folder holding it decides (a folder given by its own path, a build script's
+        // `rerun-if-changed=.`, is that folder): an input folder covers it, a test folder of one
+        // does not.
+        self.0
+            .iter()
+            .filter(|(k, _)| k.ends_with('/') && (path.starts_with(k.as_str()) || k.strip_suffix('/') == Some(path)))
+            .max_by_key(|(k, _)| k.len())
+            .is_some_and(|(_, v)| v != LEFT_OUT)
     }
 }
 
@@ -153,10 +181,8 @@ impl Workspace<'_> {
     pub fn inputs_and_packages(&self, name: &str) -> Result<(Inputs, Packages), String> {
         let lock = self.lock()?;
         let mut named = BTreeMap::new();
-        // The workspace's manifest whole, any byte of it charging every component (docs/questions.md
-        // Q442: what cargo reads of it for this component alone is recommended).
-        // DECISION PENDING (Q442)
-        for f in ["Cargo.toml", ".cargo/config.toml", ".cargo/config"] {
+        // A cargo configuration at the root (the cut refuses one before cargo reads it).
+        for f in [".cargo/config.toml", ".cargo/config"] {
             named.insert(f.to_string(), self.object(f)?);
         }
         // The packages by path it uses, transitively: those it names by path, and those the lock
@@ -278,18 +304,30 @@ impl Workspace<'_> {
                 unfollowed.join(", ")
             ));
         }
+        // Each folder but its top tests, benches and examples, unless a shipped target starts there
+        // (docs/questions.md Q445, ruled 2026-11-26 "Tests left out").
+        let mut left: Vec<String> = Vec::new();
         for m in &used {
-            named.insert(format!("{}/", m.dir), self.object(&m.dir)?);
-            // A package of another workspace inherits keys from that workspace's manifest.
+            let out = left_out(self.tree, m);
+            named.insert(format!("{}/", m.dir), self.folder_id(&m.dir, &out)?);
+            for f in out {
+                named.insert(f.clone(), LEFT_OUT.to_string());
+                left.push(f);
+            }
+            // A package of another workspace inherits keys from that workspace's manifest, read
+            // whole.
             if !m.workspace.is_empty() {
                 let f = format!("{}/Cargo.toml", m.workspace);
                 let id = self.object(&f)?;
                 named.insert(f, id);
             }
         }
+        // What cargo reads of the workspace's own manifest to build it (docs/questions.md Q442,
+        // ruled 2026-11-26 "Only what cargo reads for it").
+        named.extend(self.manifest_parts(&used)?);
         // Files outside those folders their sources name.
         let folders: Vec<String> = used.iter().map(|m| format!("{}/", m.dir)).collect();
-        for path in self.named_outside(&used, &folders)? {
+        for path in self.named_outside(&used, &folders, &left)? {
             let id = self.object(&path)?;
             named.insert(path, id);
         }
@@ -306,23 +344,106 @@ impl Workspace<'_> {
         Ok((Inputs(named), packages))
     }
 
-    /// The files outside `folders` that the Rust sources of `used` (but their tests', benches' and
-    /// examples') name by a literal `#[path]`, `include_str!`, `include_bytes!` or `include!`,
-    /// resolved from the naming file's folder; a named Rust file is read in turn.
-    fn named_outside(&self, used: &[&Member], folders: &[String]) -> Result<BTreeSet<String>, String> {
+    /// The identity of a package's folder at the commit: its entries as git stores them, but the
+    /// folders `left` leaves out (its top tests, benches and examples), so a change there charges
+    /// nothing.
+    fn folder_id(&self, dir: &str, left: &[String]) -> Result<String, String> {
+        use sha2::{Digest, Sha256};
+        let spec = format!("{}:{dir}", self.commit);
+        let listing = git::run(self.root, &["ls-tree", "-z", &spec])
+            .map_err(|e| format!("git cannot name {dir} at {}: {e}", self.commit))?
+            .ok_or_else(|| format!("git cannot list {dir} at {}", self.commit))?;
+        let mut h = Sha256::new();
+        for entry in listing.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+            let text = String::from_utf8_lossy(entry);
+            let (info, name) = text.split_once('\t').unwrap_or_default();
+            if info.split_whitespace().nth(1) == Some("tree") && left.contains(&format!("{}{name}/", prefix(dir))) {
+                continue;
+            }
+            h.update(entry);
+            h.update([0]);
+        }
+        Ok(format!("{:x}", h.finalize()))
+    }
+
+    /// What cargo reads of the workspace's manifest (`Cargo.toml` at the root) to build the packages
+    /// `used`, each part named `Cargo.toml: <key>` and identified by its value (its text's layout
+    /// and comments apart): the resolver, every profile, `[patch]` and `[replace]` whole, a
+    /// `cargo-features` line, and each `[workspace.package]` key, `[workspace.dependencies]` entry
+    /// and `[workspace.lints]` table one of them inherits from it, in its package, its normal and
+    /// build dependencies (by target too) and its lints. Its member list, its other tables and what
+    /// other members alone inherit are not read for them.
+    fn manifest_parts(&self, used: &[&Member]) -> Result<BTreeMap<String, String>, String> {
+        let read = |file: &str| -> Result<toml::Table, String> {
+            let text = std::fs::read_to_string(self.tree.join(file)).map_err(|e| format!("its {file} does not read: {e}"))?;
+            toml::from_str(&text).map_err(|e| format!("its {file} does not read: {}", e.message()))
+        };
+        let root = read("Cargo.toml")?;
+        let table = |t: &toml::Table, k: &str| t.get(k).and_then(|v| v.as_table()).cloned();
+        let ws = table(&root, "workspace").unwrap_or_default();
+        let mut out = BTreeMap::new();
+        let mut part = |key: String, value: Option<&toml::Value>| {
+            out.insert(format!("Cargo.toml: {key}"), value.map(value_id).unwrap_or_else(|| "absent".to_string()));
+        };
+        // Each named where the manifest states it: one stated at one commit alone differs.
+        for (key, value) in [("workspace.resolver", ws.get("resolver")), ("cargo-features", root.get("cargo-features")), ("patch", root.get("patch")), ("replace", root.get("replace"))] {
+            if value.is_some() {
+                part(key.into(), value);
+            }
+        }
+        for (name, profile) in table(&root, "profile").unwrap_or_default() {
+            part(format!("profile.{name}"), Some(&profile));
+        }
+        let inherits = |v: &toml::Value| v.as_table().and_then(|t| t.get("workspace")).and_then(|w| w.as_bool()) == Some(true);
+        let package = table(&ws, "package").unwrap_or_default();
+        let dependencies = table(&ws, "dependencies").unwrap_or_default();
+        for m in used.iter().filter(|m| m.workspace.is_empty()) {
+            let own = read(&format!("{}Cargo.toml", prefix(&m.dir)))?;
+            for (k, v) in table(&own, "package").unwrap_or_default() {
+                if inherits(&v) {
+                    part(format!("workspace.package.{k}"), package.get(&k));
+                }
+            }
+            // Its normal and build dependencies, by target too; a test's never goes into an
+            // executable.
+            let mut tables: Vec<toml::Table> = ["dependencies", "build-dependencies", "build_dependencies"].iter().filter_map(|k| table(&own, k)).collect();
+            for (_, t) in table(&own, "target").unwrap_or_default() {
+                if let Some(t) = t.as_table() {
+                    tables.extend(["dependencies", "build-dependencies", "build_dependencies"].iter().filter_map(|k| table(t, k)));
+                }
+            }
+            for t in tables {
+                for (name, v) in t {
+                    if inherits(&v) {
+                        part(format!("workspace.dependencies.{name}"), dependencies.get(&name));
+                    }
+                }
+            }
+            if own.get("lints").is_some_and(inherits) {
+                part("workspace.lints".into(), ws.get("lints"));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The files outside `folders`, or inside a folder `left` leaves out, that the Rust sources of
+    /// `used` (but what only their tests, benches and examples hold) name by a literal `#[path]`,
+    /// `include_str!`, `include_bytes!` or `include!`, resolved from the naming file's folder; a
+    /// named Rust file is read in turn.
+    fn named_outside(&self, used: &[&Member], folders: &[String], left: &[String]) -> Result<BTreeSet<String>, String> {
         let mut files: Vec<String> = Vec::new();
         let mut out = BTreeSet::new();
         for m in used {
-            walk(self.tree, &m.dir, &mut files).map_err(|e| format!("{}'s sources do not read: {e}", m.dir))?;
+            walk(self.tree, &m.dir, left, &mut files).map_err(|e| format!("{}'s sources do not read: {e}", m.dir))?;
         }
-        // Every Rust file a target starts from or a source names is read, wherever it lies (a
-        // shipped target's source may sit in a folder's `examples/`, which the sweep leaves out).
+        let inside = |path: &str| folders.iter().any(|f| path.starts_with(f.as_str())) && !left.iter().any(|l| path.starts_with(l.as_str()));
+        // Every Rust file a target starts from or a source names is read, wherever it lies.
         let mut scanned: BTreeSet<String> = files.iter().cloned().collect();
         for m in used {
             // A target whose source lies outside the folders: that file, and what it names.
             for s in &m.sources {
                 let path = normal(Path::new(s)).ok_or_else(|| format!("{} builds from `{s}`, outside the commit's tree", m.name))?;
-                if !folders.iter().any(|f| path.starts_with(f.as_str())) {
+                if !inside(&path) {
                     out.insert(path.clone());
                 }
                 if scanned.insert(path.clone()) {
@@ -338,7 +459,7 @@ impl Workspace<'_> {
             let from = Path::new(&file).parent().unwrap_or(Path::new(""));
             for (lit, rust) in named(&text) {
                 let path = normal(&from.join(&lit)).ok_or_else(|| format!("{file} names `{lit}`, outside the commit's tree"))?;
-                if !folders.iter().any(|f| path.starts_with(f.as_str())) {
+                if !inside(&path) {
                     out.insert(path.clone());
                 }
                 // Read in turn when rustc reads it as Rust, whatever its name ends with
@@ -381,27 +502,50 @@ fn resolve(lock: &[Locked], d: &str) -> Result<usize, String> {
     }
 }
 
-/// Every `.rs` file under `dir` of the tree (paths from the root, in name order), its tests',
-/// benches' and examples' included (a shipped target may start there; docs/questions.md Q445 asks
-/// whether what tests alone read should charge).
-fn walk(tree: &Path, dir: &str, out: &mut Vec<String>) -> std::io::Result<()> {
-    fn inner(tree: &Path, rel: &str, top: bool, out: &mut Vec<String>) -> std::io::Result<()> {
-        let _ = top;
+/// The folder's path with a final `/`, or nothing for the root.
+fn prefix(dir: &str) -> String {
+    if dir.is_empty() { String::new() } else { format!("{dir}/") }
+}
+
+/// The top folders of a package (`crates/x/tests/`) holding its tests, benches and examples alone,
+/// which its folder's identity leaves out: each that the commit holds and no target that ships (a
+/// library, an executable, a build script) starts in.
+fn left_out(tree: &Path, m: &Member) -> Vec<String> {
+    TEST_FOLDERS
+        .iter()
+        .map(|t| format!("{}{t}/", prefix(&m.dir)))
+        .filter(|f| tree.join(f).is_dir())
+        .filter(|f| !m.sources.iter().any(|s| normal(Path::new(s)).is_some_and(|p| p.starts_with(f.as_str()))))
+        .collect()
+}
+
+/// A TOML value's identity: its canonical JSON, tables in key order, its text's layout and comments
+/// apart.
+fn value_id(v: &toml::Value) -> String {
+    serde_json::to_value(v).map(|j| j.to_string()).unwrap_or_else(|e| format!("unreadable: {e}"))
+}
+
+/// Every `.rs` file under `dir` of the tree (paths from the root, in name order) but under the
+/// folders `left` leaves out (its tests', benches' and examples' own).
+fn walk(tree: &Path, dir: &str, left: &[String], out: &mut Vec<String>) -> std::io::Result<()> {
+    fn inner(tree: &Path, rel: &str, left: &[String], out: &mut Vec<String>) -> std::io::Result<()> {
         let mut entries: Vec<_> = std::fs::read_dir(tree.join(rel))?.collect::<Result<_, _>>()?;
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
             let name = e.file_name().to_string_lossy().into_owned();
-            let path = format!("{rel}/{name}");
+            let path = format!("{}{name}", prefix(rel));
             let kind = e.file_type()?;
             if kind.is_dir() {
-                inner(tree, &path, false, out)?;
+                if !left.contains(&format!("{path}/")) {
+                    inner(tree, &path, left, out)?;
+                }
             } else if kind.is_file() && name.ends_with(".rs") {
                 out.push(path);
             }
         }
         Ok(())
     }
-    inner(tree, dir, true, out)
+    inner(tree, dir, left, out)
 }
 
 /// The string literals a Rust source names files by: `#[path = "…"]`, `path = "…"` inside a

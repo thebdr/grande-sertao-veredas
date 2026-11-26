@@ -89,32 +89,35 @@ pub struct Build {
     pub bins: Vec<String>,
     /// Its library target's name, built (`--lib`) when it ships no executable.
     pub lib: Option<String>,
-    /// Its executables with required features: copied out when cargo's build with the default
-    /// features made them, and so shipped (docs/questions.md Q443).
-    pub optional: Vec<String>,
+    /// The features its executables need, turned on in its build whatever its defaults are
+    /// (docs/questions.md Q443).
+    pub features: Vec<String>,
+}
+
+/// A word quoted for the shell, whatever it holds.
+fn quoted(word: &str) -> String {
+    format!("'{}'", word.replace('\'', "'\\''"))
 }
 
 /// The script the builder machine runs on the commit's tree: the toolchain's and the C library's
 /// versions written down, each component of `builds` built alone with `cargo build --release
-/// --locked --offline -p <component> --bins` (`--lib` for one that ships no executable), so cargo
+/// --locked --offline -p <component> --bins`, each feature its executables need turned on
+/// (`--features`, docs/questions.md Q443; `--lib` for one that ships no executable), so cargo
 /// unifies features within its own inputs, never across components, as many jobs as the builder
 /// has processors, no name under `/build` holding a control character once they are built
 /// ([`CONTROL_CHECK`]), and every executable copied out with cargo's dep-info for it (a library's
-/// dep-info alone); a bin cargo did not build (a required feature the defaults do not turn on) is
-/// named, never skipped, and fails the script, so the cut refuses a release that would ship less
-/// than its components name.
+/// dep-info alone); a bin cargo did not build is named, never skipped, and fails the script, so the
+/// cut refuses a release that would ship less than its components name.
 pub fn script(r: &Recipe, builds: &[Build]) -> String {
-    // A component with an executable every release ships builds its bins; one without builds its
-    // library too, whose dep-info then holds the build to its inputs.
+    // A component with executables builds them; one without builds its library, whose dep-info
+    // then holds the build to its inputs.
     let cargo: String = builds
         .iter()
         .filter_map(|b| {
-            let what = match (b.bins.is_empty(), b.optional.is_empty(), b.lib.is_some()) {
-                (false, _, _) => "--bins",
-                (true, false, true) => "--lib --bins",
-                (true, false, false) => "--bins",
-                (true, true, true) => "--lib",
-                (true, true, false) => return None,
+            let what = match (b.bins.is_empty(), b.lib.is_some()) {
+                (false, _) => format!("--bins{}", b.features.iter().map(|f| format!(" --features {}", quoted(f))).collect::<String>()),
+                (true, true) => "--lib".to_string(),
+                (true, false) => return None,
             };
             Some(format!("cargo build --release --locked --offline --jobs {} -p {} {what}\n", r.builder.cpus, b.package))
         })
@@ -126,7 +129,6 @@ pub fn script(r: &Recipe, builds: &[Build]) -> String {
             b.bins
                 .iter()
                 .map(|b| format!("if [ -f target/release/{b} ]; then cp target/release/{b} /build/out/bin/; cp target/release/{b}.d /build/out/deps/; else echo \"ALFORGE-MISSING {b}\"; missing=1; fi\n"))
-                .chain(b.optional.iter().map(|o| format!("if [ -f target/release/{o} ]; then cp target/release/{o} /build/out/bin/; cp target/release/{o}.d /build/out/deps/; fi\n")))
                 .chain(lib)
                 .collect::<Vec<_>>()
         })
@@ -164,7 +166,7 @@ pub fn outcome(log: &str, console: &str, unpacked: bool, log_path: &Path) -> Res
         return Err(VmError::Failed {
             program: "the build in the builder machine".into(),
             status: "refused".into(),
-            stderr: missing.iter().map(|b| format!("cargo built no `{b}` with the default features: the release would not ship it")).collect::<Vec<_>>().join("\n"),
+            stderr: missing.iter().map(|b| format!("cargo built no `{b}` with the features its executables need: the release would not ship it")).collect::<Vec<_>>().join("\n"),
         });
     }
     if !unpacked || !log.contains("ALFORGE-BUILD-OK") || !console.contains("ALFORGE-BUILD-EXIT 0") {

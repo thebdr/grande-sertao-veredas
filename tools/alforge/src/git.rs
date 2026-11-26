@@ -135,6 +135,10 @@ pub fn export_tree(root: &Path, commit: &str, prefixes: &[&str], dest: &Path) ->
         if path.starts_with("Cargo.lock: ") {
             return Err(ExportError::Refused(format!("the path {path:?} is named as a build input names a lock file's entry")));
         }
+        // Nor so: a part of the workspace's manifest is `Cargo.toml: <key>`.
+        if path.starts_with("Cargo.toml: ") {
+            return Err(ExportError::Refused(format!("the path {path:?} is named as a build input names a part of the workspace's manifest")));
+        }
         if path.split('/').any(|part| part.is_empty() || part == "." || part == "..") {
             return Err(ExportError::Refused(format!("the path `{path}` has a `..`, `.` or empty part: it would be written outside its place")));
         }

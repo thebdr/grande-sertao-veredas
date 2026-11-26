@@ -241,53 +241,17 @@ pub fn unpack_checked(packed: &Path, check: &Path, name: &str) -> Result<PathBuf
     Ok(extracted)
 }
 
-/// What the cut says of each bin with required features cargo's default build did not make (in
-/// `bin`, what the builder handed back): not shipped.
-pub fn not_made(held: &std::collections::BTreeMap<String, manifest::Held>, bin: &Path) -> Vec<String> {
-    held.values()
-        .flat_map(|h| {
-            h.optional
-                .iter()
-                .filter(|b| !bin.join(b).is_file())
-                .map(|b| format!("{}'s `{b}` was not built with its default features: not shipped (docs/questions.md Q443)", h.name))
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
-/// The components as built: each ships its bins without required features and those with required
-/// features cargo's default build made (in `bin`, what the builder handed back), each one cargo did
-/// not make said; the manifest written from them, read back and checked against the repository again.
-/// The components as built, the manifest's text and the manifest read back, and what the cut says
-/// of each bin it does not ship.
-pub type AsBuilt = (std::collections::BTreeMap<String, manifest::Held>, String, Manifest, Vec<String>);
-
-#[allow(clippy::too_many_arguments)]
-pub fn as_built(
-    root: &Path,
-    release: &semver::Version,
-    commit: &str,
-    target: &str,
-    rustc: &str,
-    tested: &str,
-    held: &std::collections::BTreeMap<String, manifest::Held>,
-    bin: &Path,
-) -> Result<AsBuilt, CutError> {
-    let said = not_made(held, bin);
-    let mut shipped = held.clone();
-    for h in shipped.values_mut() {
-        let made: std::collections::BTreeSet<String> = h.optional.iter().filter(|b| bin.join(b).is_file()).cloned().collect();
-        h.bins.extend(made);
-        h.optional.clear();
-    }
-    let components: Vec<(String, String, Vec<String>)> = shipped.values().map(|h| (h.name.clone(), h.version.clone(), h.bins.iter().cloned().collect())).collect();
-    let text = manifest_text(release, commit, target, rustc, &components, tested);
-    let manifest = manifest::load(&text).map_err(|e| refused(format!("the manifest to be written does not read back: {e}")))?;
+/// The manifest written once the components are built: the one planned before the build, read back
+/// and checked against the repository again (a HEAD that left the commit's history meanwhile is
+/// refused). Every bin ships, built with the features its executables need (docs/questions.md
+/// Q443), or the builder refused the build.
+pub fn as_built(root: &Path, release: &semver::Version, text: &str) -> Result<Manifest, CutError> {
+    let manifest = manifest::load(text).map_err(|e| refused(format!("the manifest to be written does not read back: {e}")))?;
     let against = manifest::check(root, &manifest)?;
     if !against.is_empty() {
         return Err(refused(format!("release {release} would not check as built:\n{}", against.join("\n"))));
     }
-    Ok((shipped, text, manifest, said))
+    Ok(manifest)
 }
 
 pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
@@ -324,7 +288,7 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     // two components build would ship one of them where the manifest names both.
     let mut builders: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
     for h in held.values() {
-        for b in h.bins.iter().chain(&h.optional) {
+        for b in &h.bins {
             builders.entry(b.as_str()).or_default().push(h.name.as_str());
         }
     }
@@ -341,7 +305,7 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     // last one's, and the earlier build's reads would go unjudged.
     let mut writers: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
     for h in held.values() {
-        for b in h.bins.iter().chain(&h.optional) {
+        for b in &h.bins {
             writers.entry(format!("{b}.d")).or_default().push(format!("{}'s executable `{b}`", h.name));
         }
         if let Some(l) = &h.lib {
@@ -372,11 +336,9 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     let rustc = suite_rustc(root, &tmp, std::env::vars_os())?;
     let toolchain = rustc.split_whitespace().nth(1).ok_or_else(|| refused(format!("rustc printed `{rustc}`")))?.to_string();
     let target = "x86_64-unknown-linux-gnu";
-    // Planned with every bin it may ship; written once the build has said which of those with
-    // required features cargo made.
+    // Planned with every bin, each built with the features its executables need (Q443).
     let tested = if o.run_suite { SUITE } else { NOT_RUN };
-    let components: Vec<(String, String, Vec<String>)> =
-        held.values().map(|h| (h.name.clone(), h.version.clone(), h.bins.iter().chain(&h.optional).cloned().collect())).collect();
+    let components: Vec<(String, String, Vec<String>)> = held.values().map(|h| (h.name.clone(), h.version.clone(), h.bins.iter().cloned().collect())).collect();
     let text = manifest_text(&o.release, &commit, target, &rustc, &components, tested);
     let manifest = manifest::load(&text).map_err(|e| refused(format!("the manifest to be written does not read back: {e}")))?;
     // Checked as any manifest is, against the repository and, for a real cut, against every
@@ -419,15 +381,12 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     // Each component built alone, its executables named.
     let builds: Vec<builder::Build> = held
         .values()
-        .map(|h| builder::Build { package: h.name.clone(), bins: h.bins.iter().cloned().collect(), lib: h.lib.clone(), optional: h.optional.iter().cloned().collect() })
+        .map(|h| builder::Build { package: h.name.clone(), bins: h.bins.iter().cloned().collect(), lib: h.lib.clone(), features: h.features.iter().cloned().collect() })
         .collect();
     std::fs::create_dir_all(&o.work)?;
     let built = builder::build(&recipe, root, &commit, &toolchain, &builds, &o.work)?;
     eprintln!("alforge: built under {} on {}", built.toolchain, built.libc);
-    let (held, text, manifest, said) = as_built(root, &o.release, &commit, target, &rustc, tested, &held, &built.out.join("bin"))?;
-    for line in said {
-        eprintln!("alforge: {line}");
-    }
+    let manifest = as_built(root, &o.release, &text)?;
     let name = format!("veredas-{}-{target}", o.release);
     let (packed, extracted) = after_build(&recipe, root, &commit, &rustc, &built, &name, &held, &text, &o.work)?;
     eprintln!("alforge: running the bundle's bench and supervisão together");

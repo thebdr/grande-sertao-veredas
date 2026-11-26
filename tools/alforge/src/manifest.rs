@@ -189,13 +189,14 @@ pub struct Held {
     pub name: String,
     /// Its version, as cargo reads its manifest.
     pub version: String,
-    /// Its executables every release ships: each `bin` target cargo names for it with no required
-    /// feature.
+    /// Its executables every release ships: each `bin` target cargo names for it, built with the
+    /// features they need (docs/questions.md Q443, ruled 2026-11-26 "With the features its
+    /// executables need").
     pub bins: BTreeSet<String>,
-    /// Its `bin` targets with required features: a release ships each one cargo's build with the
-    /// default features builds, which the cut sees (C-291), never a model of cargo's features
-    /// (docs/questions.md Q443).
-    pub optional: BTreeSet<String>,
+    /// The features its executables need, whatever its default features are: the union of its
+    /// bins' `required-features` as cargo states them (`shell`, `dep/feature`), turned on in its
+    /// one build.
+    pub features: BTreeSet<String>,
     /// Its library target's name (`veredas_core`), if it has one: what the cut builds of a
     /// component that ships no executable, to hold that build too to its inputs.
     pub lib: Option<String>,
@@ -418,16 +419,12 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
             let Some(dir) = manifest.parent().and_then(from_root).filter(|d| d.starts_with("crates/")) else { continue };
             let name = pkg["name"].as_str().unwrap_or_default().to_string();
             let version = pkg["version"].as_str().unwrap_or_default().to_string();
-            // DECISION PENDING (Q443): a bin with required features ships when cargo's default build
-            // makes it, as the cut sees.
-            let (mut bins, mut optional) = (BTreeSet::new(), BTreeSet::new());
+            // Every bin ships, built with what its executables require (Q443).
+            let (mut bins, mut features) = (BTreeSet::new(), BTreeSet::new());
             for t in pkg["targets"].as_array().into_iter().flatten().filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "bin"))) {
                 let Some(b) = t["name"].as_str() else { continue };
-                if t["required-features"].as_array().is_some_and(|r| !r.is_empty()) {
-                    optional.insert(b.to_string());
-                } else {
-                    bins.insert(b.to_string());
-                }
+                bins.insert(b.to_string());
+                features.extend(t["required-features"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)));
             }
             let lib = pkg["targets"]
                 .as_array()
@@ -439,7 +436,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                 Ok((i, p)) => (Ok(i), p),
                 Err(e) => (Err(e), inputs::Packages::default()),
             };
-            held.insert(name.clone(), Held { dir, name, version, bins, optional, lib, inputs, packages });
+            held.insert(name.clone(), Held { dir, name, version, bins, features, lib, inputs, packages });
         }
         Ok(None)
     })();
@@ -517,8 +514,7 @@ pub fn check(root: &Path, m: &Manifest) -> Result<Vec<String>, CheckError> {
         for b in h.bins.difference(&listed) {
             refusals.push(format!("{} builds `{b}` at {c} and the manifest does not ship it", x.name));
         }
-        // One with required features is shipped or not as the cut saw cargo build it.
-        for b in listed.difference(&h.bins).filter(|b| !h.optional.contains(*b)) {
+        for b in listed.difference(&h.bins) {
             refusals.push(format!("{} builds no `{b}` at {c}", x.name));
         }
     }

@@ -293,8 +293,9 @@ fn the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_the
     r.write("crates/veredas-maquinar/src/lib.rs", "\n");
     r.write("crates/veredas-maquinar/src/bin/b.rs", "fn main() {}\n");
     // A bin with required features (here one the defaults turn on through another feature, and
-    // one they leave off) is shipped as cargo's default build makes it, which the cut sees (C-291,
-    // docs/questions.md Q443): a manifest may name it or leave it out, never name a bin there is not.
+    // one they leave off) ships, built with what it requires (docs/questions.md Q443, ruled
+    // 2026-11-26 "With the features its executables need"): a manifest names every bin, and no
+    // bin there is not.
     r.write(
         "crates/veredas-core/Cargo.toml",
         "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"full\"]\nfull = [\"serve\"]\nserve = []\nextra = []\n\n\
@@ -318,14 +319,14 @@ fn the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_the
     assert_eq!(
         got,
         vec![
-            want("veredas-core", &[]),
+            want("veredas-core", &["extra", "servido"]),
             want("veredas-maquinar", &["a"]),
             want("veredas-portal", &["porteiro"]),
             want("veredas-velho", &["velho"]),
         ]
     );
-    assert_eq!(held["veredas-core"].optional.iter().collect::<Vec<_>>(), ["extra", "servido"]);
-    assert!(held.values().filter(|h| h.name != "veredas-core").all(|h| h.optional.is_empty()));
+    assert_eq!(held["veredas-core"].features.iter().collect::<Vec<_>>(), ["extra", "serve"]);
+    assert!(held.values().filter(|h| h.name != "veredas-core").all(|h| h.features.is_empty()));
     let text = |core_bins: &str| format!(
         "format = \"veredas-release\"\nversion = 1\nrelease = \"2.0.0\"\ncommit = \"{c}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
          [[component]]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nbins = [{core_bins}]\n\n\
@@ -334,10 +335,13 @@ fn the_executables_are_the_ones_cargo_builds_and_the_members_as_cargo_spells_the
          [[component]]\nname = \"veredas-velho\"\nversion = \"2.0.0\"\nbins = [\"velho\"]\n\n\
          [tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
     );
-    for shipped in ["", "\"servido\"", "\"extra\", \"servido\""] {
-        assert_eq!(checked(&r, &text(shipped)), Vec::<String>::new(), "{shipped}");
-    }
-    assert_eq!(checked(&r, &text("\"servido\", \"outro\"")), [format!("veredas-core builds no `outro` at {c}")]);
+    assert_eq!(checked(&r, &text("\"extra\", \"servido\"")), Vec::<String>::new());
+    assert_eq!(checked(&r, &text("\"servido\"")), [format!("veredas-core builds `extra` at {c} and the manifest does not ship it")]);
+    assert_eq!(
+        checked(&r, &text("")),
+        [format!("veredas-core builds `extra` at {c} and the manifest does not ship it"), format!("veredas-core builds `servido` at {c} and the manifest does not ship it")]
+    );
+    assert_eq!(checked(&r, &text("\"extra\", \"servido\", \"outro\"")), [format!("veredas-core builds no `outro` at {c}")]);
     // A workspace cargo cannot read is refused with cargo's reason.
     r.write("crates/veredas-velho/Cargo.toml", "[package]\nname = 3\n");
     let c2 = r.commit("a manifest cargo refuses");
@@ -1050,15 +1054,17 @@ fn a_version_names_everything_its_build_reads_but_the_toolchain() {
     let c1 = r.commit("the suite");
     let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
     let names = |n: &str| -> Vec<String> { held[n].inputs.as_ref().unwrap().0.keys().cloned().collect() };
-    let root = [".cargo/config", ".cargo/config.toml", "Cargo.toml"];
+    let root = [".cargo/config", ".cargo/config.toml"];
     let with = |more: &[&str]| -> Vec<String> {
         let mut v: Vec<String> = root.iter().chain(more).map(|s| s.to_string()).collect();
         v.sort();
         v
     };
-    // Portal: its folder and core's, the files it names (its test's too: the folder is read whole,
-    // docs/questions.md Q445), serde; never tempfile, its tests' dependency alone.
-    assert_eq!(names("veredas-portal"), with(&["Cargo.lock: serde 1.0.200", "crates/veredas-core/", "crates/veredas-portal/", "docs/notes.txt", "docs/shared.rs", "docs/test-only.md"]));
+    // Portal: its folder and core's, the files it names, serde; never tempfile, its tests'
+    // dependency alone, nor its tests and what they alone name (docs/questions.md Q445), nor the
+    // workspace's manifest, which states nothing cargo reads to build it (Q442).
+    assert_eq!(names("veredas-portal"), with(&["Cargo.lock: serde 1.0.200", "crates/veredas-core/", "crates/veredas-portal/", "crates/veredas-portal/tests/", "docs/notes.txt", "docs/shared.rs"]));
+    assert_eq!(held["veredas-portal"].inputs.as_ref().unwrap().0["crates/veredas-portal/tests/"], alforge::inputs::LEFT_OUT);
     assert_eq!(held["veredas-portal"].inputs.as_ref().unwrap().0["Cargo.lock: serde 1.0.200"], "aaaa");
     assert_eq!(held["veredas-portal"].inputs.as_ref().unwrap().0[".cargo/config.toml"], "absent");
     // The bench: the fork's folder and its workspace's manifest, read by cargo there, and what the
@@ -1071,11 +1077,23 @@ fn a_version_names_everything_its_build_reads_but_the_toolchain() {
     type Case = (&'static str, Box<dyn FnOnce(&Repo)>, Vec<String>);
     let cases: Vec<Case> = vec![
         ("a file nothing names", Box::new(|r: &Repo| r.write("docs/other.md", "changed\n")), vec![]),
-        ("a file portal's test alone names (Q445)", Box::new(|r: &Repo| r.write("docs/test-only.md", "changed\n")), vec![charged("veredas-portal", "2.0.0-alpha.3", "docs/test-only.md")]),
+        ("a file portal's test alone names (Q445)", Box::new(|r: &Repo| r.write("docs/test-only.md", "changed\n")), vec![]),
         (
-            "portal's test",
+            "portal's test (Q445)",
             Box::new(|r: &Repo| r.write("crates/veredas-portal/tests/reads.rs", "const DOC: &str = include_str!(\"../../../docs/test-only.md\");\nconst MORE: u8 = 1;\n")),
-            vec![charged("veredas-portal", "2.0.0-alpha.3", "crates/veredas-portal/")],
+            vec![],
+        ),
+        ("a test added to core (Q445)", Box::new(|r: &Repo| r.write("crates/veredas-core/tests/new.rs", "#[test]\nfn t() {}\n")), vec![]),
+        ("a bench added to core (Q445)", Box::new(|r: &Repo| r.write("crates/veredas-core/benches/b.rs", "fn main() {}\n")), vec![]),
+        (
+            "a file `tests` beside core's sources, no folder of tests",
+            Box::new(|r: &Repo| r.write("crates/veredas-core/tests", "a file\n")),
+            vec![charged("veredas-core", "2.0.0", "crates/veredas-core/"), charged("veredas-portal", "2.0.0-alpha.3", "crates/veredas-core/")],
+        ),
+        (
+            "a test folder deeper than the top, which goes into the library",
+            Box::new(|r: &Repo| r.write("crates/veredas-core/src/tests/mod.rs", "\n")),
+            vec![charged("veredas-core", "2.0.0", "crates/veredas-core/"), charged("veredas-portal", "2.0.0-alpha.3", "crates/veredas-core/")],
         ),
         (
             "core's code",
@@ -1107,7 +1125,19 @@ fn a_version_names_everything_its_build_reads_but_the_toolchain() {
                 let t = std::fs::read_to_string(r.path().join("Cargo.toml")).unwrap();
                 r.write("Cargo.toml", &format!("{t}\n[profile.release]\nlto = true\n"));
             }),
-            vec![charged("veredas-core", "2.0.0", "Cargo.toml"), charged("veredas-maquinar", "2.1.0", "Cargo.toml"), charged("veredas-portal", "2.0.0-alpha.3", "Cargo.toml")],
+            vec![
+                charged("veredas-core", "2.0.0", "Cargo.toml: profile.release"),
+                charged("veredas-maquinar", "2.1.0", "Cargo.toml: profile.release"),
+                charged("veredas-portal", "2.0.0-alpha.3", "Cargo.toml: profile.release"),
+            ],
+        ),
+        (
+            "a comment and a member list in the workspace's manifest (Q442)",
+            Box::new(|r: &Repo| {
+                let t = std::fs::read_to_string(r.path().join("Cargo.toml")).unwrap();
+                r.write("Cargo.toml", &format!("# The suite.\n{}", t.replace("[\"crates/veredas-core\", ", "[\n    # The foundation.\n    \"crates/veredas-core\",\n    ")));
+            }),
+            vec![],
         ),
     ];
     for (what, edit, want) in cases {
@@ -1208,11 +1238,12 @@ fn a_source_names_files_by_literal_paths_alone() {
 }
 
 #[test]
-fn a_bin_with_required_features_ships_as_cargos_own_build_makes_it() {
+fn a_bin_with_required_features_ships_built_with_what_its_executables_need() {
     // Required features of every form cargo reads (an optional dependency's implicit feature
     // through `x/f`, a dependency's feature asked by its declaration, one never asked, a weak `?/`
-    // on a dependency nothing enables, a feature that is off): alforge models none of it. The
-    // cut's manifest names those cargo's default build made, as `cut::as_built` reads its output.
+    // on a dependency nothing enables, a feature that is off): each is turned on as cargo states
+    // it, whatever the defaults are (docs/questions.md Q443, ruled 2026-11-26 "With the features
+    // its executables need"), and every bin ships.
     let r = Repo::new();
     r.write("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n");
     r.write(".gitignore", "/target/\n");
@@ -1240,29 +1271,24 @@ fn a_bin_with_required_features_ships_as_cargos_own_build_makes_it() {
     assert_eq!(refusals, Vec::<String>::new());
     let core = &held["veredas-core"];
     let names = |s: &std::collections::BTreeSet<String>| s.iter().cloned().collect::<Vec<_>>();
-    assert_eq!(names(&core.bins), ["sempre"]);
-    assert_eq!(names(&core.optional), ["needs-b", "needs-cx", "needs-cy", "needs-dx", "needs-z"]);
-    // Cargo's own build with the default features, alone.
+    assert_eq!(names(&core.bins), ["needs-b", "needs-cx", "needs-cy", "needs-dx", "needs-z", "sempre"]);
+    assert_eq!(names(&core.features), ["veredas-base", "veredas-cx/x", "veredas-cx/y", "veredas-dx/y", "z"]);
+    // Cargo's own build of it alone with those features, as the builder runs it: every bin made.
     let target = tempfile::tempdir().unwrap();
-    let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .args(["build", "--offline", "-q", "-p", "veredas-core", "--bins"])
-        .env("CARGO_TARGET_DIR", target.path())
-        .current_dir(r.path())
-        .output()
-        .unwrap();
+    let mut args: Vec<String> = ["build", "--offline", "-q", "-p", "veredas-core", "--bins"].iter().map(|s| s.to_string()).collect();
+    for f in &core.features {
+        args.extend(["--features".to_string(), f.clone()]);
+    }
+    let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into())).args(&args).env("CARGO_TARGET_DIR", target.path()).current_dir(r.path()).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let built: Vec<String> = bins.iter().map(|(b, _)| b.to_string()).filter(|b| target.path().join("debug").join(b).exists()).collect();
-    assert_eq!(built, ["needs-b", "needs-cx", "needs-cy"], "cargo's own reading: the dependency's default turns `y` on");
+    let built: Vec<String> = core.bins.iter().filter(|b| target.path().join("debug").join(b).exists()).cloned().collect();
+    assert_eq!(built, names(&core.bins));
+    // The manifest the cut plans names them all and checks as built.
     let release = semver::Version::parse("9.9.9").unwrap();
-    let (shipped, text, m, said) = alforge::cut::as_built(r.path(), &release, &c, "x86_64-unknown-linux-gnu", "rustc 1.100.0", alforge::cut::NOT_RUN, &held, &target.path().join("debug")).unwrap();
-    let mut want = built.clone();
-    want.push("sempre".into());
-    assert_eq!(names(&shipped["veredas-core"].bins), want);
-    assert!(shipped.values().all(|h| h.optional.is_empty()));
-    let listed = &m.components.iter().find(|x| x.name == "veredas-core").unwrap().bins;
-    assert_eq!(listed, &want);
-    assert_eq!(manifest::load(&text).unwrap(), m);
-    assert_eq!(said.len(), 2, "{said:?}");
+    let components: Vec<(String, String, Vec<String>)> = held.values().map(|h| (h.name.clone(), h.version.clone(), h.bins.iter().cloned().collect())).collect();
+    let text = alforge::cut::manifest_text(&release, &c, "x86_64-unknown-linux-gnu", "rustc 1.100.0", &components, alforge::cut::NOT_RUN);
+    let m = alforge::cut::as_built(r.path(), &release, &text).unwrap();
+    assert_eq!(m.components.iter().find(|x| x.name == "veredas-core").unwrap().bins, names(&core.bins));
 }
 
 /// A suite for what [`wider`] leaves out: portal uses core, which uses `veredas-base`, by path;
@@ -1351,6 +1377,9 @@ fn every_road_into_a_build_charges_the_components_it_reaches() {
             "crates/veredas-base/",
             "crates/veredas-core/",
             "crates/veredas-portal/",
+            // Its `examples/` is left out (Q445); the module `src/` names there is charged alone.
+            "crates/veredas-portal/examples/",
+            "crates/veredas-portal/examples/shared.rs",
             "docs/base-build.rs",
             "docs/core-lib.rs",
             "docs/deep.txt",
@@ -1413,6 +1442,17 @@ fn every_road_into_a_build_charges_the_components_it_reaches() {
         ("a file a shipped source in `examples/` names", Box::new(|r: &Repo| r.write("docs/bench.txt", "changed\n")), vec![charged("veredas-maquinar", "2.1.0", "docs/bench.txt")]),
         ("a file a module beside that source names", Box::new(|r: &Repo| r.write("docs/helper.txt", "changed\n")), vec![charged("veredas-maquinar", "2.1.0", "docs/helper.txt")]),
         ("a file a module under `examples/` that `src/` names names", Box::new(|r: &Repo| r.write("docs/shared.txt", "changed\n")), vec![portal("docs/shared.txt")]),
+        (
+            "the module under `examples/` that `src/` names",
+            Box::new(|r: &Repo| r.write("crates/veredas-portal/examples/shared.rs", "pub const S: &str = include_str!(\"../../../docs/shared.txt\");\npub fn changed() {}\n")),
+            vec![portal("crates/veredas-portal/examples/shared.rs")],
+        ),
+        ("an example of portal's alone (Q445)", Box::new(|r: &Repo| r.write("crates/veredas-portal/examples/alone.rs", "fn main() {}\n")), vec![]),
+        (
+            "an example beside the bench's shipped source, whose `examples/` is its own",
+            Box::new(|r: &Repo| r.write("crates/veredas-maquinar/examples/other.rs", "fn main() {}\n")),
+            vec![charged("veredas-maquinar", "2.1.0", "crates/veredas-maquinar/")],
+        ),
         ("a file a Rust file without `.rs` names", Box::new(|r: &Repo| r.write("docs/frag.txt", "changed\n")), vec![portal("docs/frag.txt")]),
         ("a file a source outside the folders names", Box::new(|r: &Repo| r.write("docs/ponte.txt", "changed\n")), vec![portal("docs/ponte.txt")]),
         ("a file a fork's source names", Box::new(|r: &Repo| r.write("docs/dois.txt", "changed\n")), vec![charged("veredas-maquinar", "2.1.0", "docs/dois.txt")]),
@@ -1804,11 +1844,13 @@ fn round_twenty_one_a_path_package_the_lock_reaches_is_read_as_one_reached_by_pa
     let held = manifest::components_at(r.path(), &c1, &mut refusals).unwrap();
     assert_eq!(refusals, Vec::<String>::new());
     let (inputs, packages) = (held["veredas-a"].inputs.as_ref().unwrap(), &held["veredas-a"].packages);
-    let keys: Vec<&String> = inputs.0.keys().filter(|k| !["Cargo.toml", ".cargo/config", ".cargo/config.toml"].contains(&k.as_str())).collect();
+    let keys: Vec<&String> = inputs.0.keys().filter(|k| ![".cargo/config", ".cargo/config.toml"].contains(&k.as_str())).collect();
     assert_eq!(
         keys,
         [
             "Cargo.lock: baz 1.0.0",
+            // The workspace's `[patch]`, which cargo reads to build it (Q442).
+            "Cargo.toml: patch",
             "crates/veredas-a/",
             "docs/foo.txt",
             "forks/itoa/",
@@ -1909,7 +1951,7 @@ fn round_twenty_two_an_empty_required_features_a_blank_continued_line_and_a_lock
     );
     let c = r.commit("an empty required-features, a stale lock");
     let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
-    assert_eq!((held["veredas-a"].bins.iter().map(String::as_str).collect::<Vec<_>>(), held["veredas-a"].optional.len()), (vec!["sempre"], 0));
+    assert_eq!((held["veredas-a"].bins.iter().map(String::as_str).collect::<Vec<_>>(), held["veredas-a"].features.len()), (vec!["sempre"], 0));
     assert_eq!(held["veredas-b"].inputs, Err("its Cargo.lock's foo 1.0.0 has no source and is no member a release builds from its folder".to_string()));
 }
 
@@ -2040,4 +2082,114 @@ fn round_twenty_four_a_forks_optional_sibling_nothing_turns_on_is_not_compiled()
     let commit = r.commit("a member the lock leaves out");
     let held = manifest::components_at(r.path(), &commit, &mut Vec::new()).unwrap();
     assert_eq!(held["veredas-b"].inputs, Err("its Cargo.lock does not pin veredas-b 2.0.0: the lock file is not this workspace's".to_string()));
+}
+
+/// A version names what cargo reads of the workspace's manifest to build its component, each part
+/// by its value (docs/questions.md Q442, ruled 2026-11-26 "Only what cargo reads for it"): the
+/// resolver, every profile, and the `[workspace.package]` keys, `[workspace.dependencies]` entries
+/// and `[workspace.lints]` the component and the members it uses inherit, in their packages, their
+/// normal, build and target dependencies and their lints. A comment, the layout, the member list,
+/// the metadata, a test's own inherited dependency and what another member alone inherits charge
+/// nothing.
+#[test]
+fn a_version_names_what_cargo_reads_of_the_workspace_manifest_for_it() {
+    let r = Repo::new();
+    let reg = "registry+https://github.com/rust-lang/crates.io-index";
+    let workspace = "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-a\", \"crates/veredas-b\"]\n\n\
+                     [workspace.package]\nedition = \"2024\"\nrust-version = \"1.85\"\nauthors = [\"x\"]\n\n\
+                     [workspace.dependencies]\nitoa = \"1\"\nserde = \"1\"\ntempfile = \"3\"\nlibc = \"0.2\"\n\n\
+                     [workspace.lints.rust]\nunsafe_code = \"forbid\"\n\n[workspace.metadata.notes]\nx = 1\n\n\
+                     [profile.release]\nopt-level = 3\n\n[profile.dev]\ndebug = \"line-tables-only\"\n";
+    r.write("Cargo.toml", workspace);
+    r.write(
+        "crates/veredas-a/Cargo.toml",
+        "[package]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nedition.workspace = true\nrust-version = { workspace = true }\n\n\
+         [dependencies]\nitoa = { workspace = true }\n\n[target.'cfg(unix)'.dependencies]\nlibc.workspace = true\n\n\
+         [dev-dependencies]\ntempfile = { workspace = true }\n\n[lints]\nworkspace = true\n",
+    );
+    r.write("crates/veredas-a/src/lib.rs", "\n");
+    r.write(
+        "crates/veredas-b/Cargo.toml",
+        "[package]\nname = \"veredas-b\"\nversion = \"2.0.0\"\nedition.workspace = true\nauthors.workspace = true\n\n\
+         [dependencies]\nserde.workspace = true\nveredas-a = { path = \"../veredas-a\" }\n",
+    );
+    r.write("crates/veredas-b/src/lib.rs", "\n");
+    r.write(
+        "Cargo.lock",
+        &format!(
+            "version = 4\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.11\"\nsource = \"{reg}\"\nchecksum = \"1111\"\n\n\
+             [[package]]\nname = \"libc\"\nversion = \"0.2.170\"\nsource = \"{reg}\"\nchecksum = \"2222\"\n\n\
+             [[package]]\nname = \"serde\"\nversion = \"1.0.200\"\nsource = \"{reg}\"\nchecksum = \"3333\"\n\n\
+             [[package]]\nname = \"tempfile\"\nversion = \"3.10.0\"\nsource = \"{reg}\"\nchecksum = \"4444\"\n\n\
+             [[package]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\ndependencies = [\n \"itoa\",\n \"libc\",\n \"tempfile\",\n]\n\n\
+             [[package]]\nname = \"veredas-b\"\nversion = \"2.0.0\"\ndependencies = [\n \"serde\",\n \"veredas-a\",\n]\n"
+        ),
+    );
+    let c1 = r.commit("a workspace whose members inherit");
+    let mut refusals = Vec::new();
+    let held = manifest::components_at(r.path(), &c1, &mut refusals).unwrap();
+    assert_eq!(refusals, Vec::<String>::new());
+    let parts = |n: &str| -> Vec<String> { held[n].inputs.as_ref().unwrap().0.keys().filter(|k| k.starts_with("Cargo.toml")).cloned().collect() };
+    let a = [
+        "Cargo.toml: profile.dev",
+        "Cargo.toml: profile.release",
+        "Cargo.toml: workspace.dependencies.itoa",
+        "Cargo.toml: workspace.dependencies.libc",
+        "Cargo.toml: workspace.lints",
+        "Cargo.toml: workspace.package.edition",
+        "Cargo.toml: workspace.package.rust-version",
+        "Cargo.toml: workspace.resolver",
+    ];
+    assert_eq!(parts("veredas-a"), a);
+    // B: its own, and those of the member it uses.
+    let mut b: Vec<&str> = a.to_vec();
+    b.extend(["Cargo.toml: workspace.dependencies.serde", "Cargo.toml: workspace.package.authors"]);
+    b.sort();
+    assert_eq!(parts("veredas-b"), b);
+    // Each by its value: the TOML read, not its text.
+    assert_eq!(held["veredas-a"].inputs.as_ref().unwrap().0["Cargo.toml: profile.release"], "{\"opt-level\":3}");
+    assert_eq!(held["veredas-a"].inputs.as_ref().unwrap().0["Cargo.toml: workspace.resolver"], "\"3\"");
+
+    let pins = |release: &str, commit: &str| -> (PathBuf, Manifest) {
+        let text = format!(
+            "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
+             [[component]]\nname = \"veredas-a\"\nversion = \"2.0.0\"\n\n[[component]]\nname = \"veredas-b\"\nversion = \"2.0.0\"\n\n\
+             [tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+        );
+        (PathBuf::from(format!("{release}.toml")), manifest::load(&text).unwrap())
+    };
+    let charged = |component: &str, inputs: &str| format!("{component} 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs ({inputs}): a version names everything its build reads");
+    let both = |inputs: &str| vec![charged("veredas-a", inputs), charged("veredas-b", inputs)];
+    let edit = |from: &'static str, to: &'static str| {
+        move |r: &Repo| {
+            assert_eq!(workspace.matches(from).count(), 1, "{from}");
+            r.write("Cargo.toml", &workspace.replace(from, to));
+        }
+    };
+    type Case = (&'static str, Box<dyn FnOnce(&Repo)>, Vec<String>);
+    let cases: Vec<Case> = vec![
+        ("a comment", Box::new(edit("[workspace.package]\n", "# Shared by every member.\n[workspace.package]\n")), vec![]),
+        ("the metadata", Box::new(edit("x = 1", "x = 2")), vec![]),
+        ("the entries' order and spacing", Box::new(edit("itoa = \"1\"\nserde = \"1\"\n", "serde   =   \"1\"\nitoa = \"1\"\n")), vec![]),
+        ("a member added to the list", Box::new(|r: &Repo| {
+            r.write("Cargo.toml", &workspace.replace("\"crates/veredas-b\"]", "\"crates/veredas-b\", \"crates/veredas-c\"]"));
+            r.write("crates/veredas-c/Cargo.toml", "[package]\nname = \"veredas-c\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+            r.write("crates/veredas-c/src/lib.rs", "\n");
+        }), vec![]),
+        ("a dependency a test of A's alone inherits", Box::new(edit("tempfile = \"3\"", "tempfile = \"3.1\"")), vec![]),
+        ("a dependency B alone inherits", Box::new(edit("serde = \"1\"", "serde = \"1.0.1\"")), vec![charged("veredas-b", "Cargo.toml: workspace.dependencies.serde")]),
+        ("a key B alone inherits", Box::new(edit("authors = [\"x\"]", "authors = [\"y\"]")), vec![charged("veredas-b", "Cargo.toml: workspace.package.authors")]),
+        ("a key A inherits, which B uses", Box::new(edit("rust-version = \"1.85\"", "rust-version = \"1.86\"")), both("Cargo.toml: workspace.package.rust-version")),
+        ("a key no member inherits", Box::new(edit("authors = [\"x\"]\n", "authors = [\"x\"]\nlicense = \"MIT\"\n")), vec![]),
+        ("a target's dependency A inherits", Box::new(edit("libc = \"0.2\"", "libc = \"0.2.1\"")), both("Cargo.toml: workspace.dependencies.libc")),
+        ("the lints A inherits", Box::new(edit("unsafe_code = \"forbid\"", "unsafe_code = \"deny\"")), both("Cargo.toml: workspace.lints")),
+        ("the release profile", Box::new(edit("opt-level = 3", "opt-level = 2")), both("Cargo.toml: profile.release")),
+        ("the dev profile, one of the profiles", Box::new(edit("debug = \"line-tables-only\"", "debug = true")), both("Cargo.toml: profile.dev")),
+        ("a profile added", Box::new(edit("[profile.dev]", "[profile.bench]\ndebug = true\n\n[profile.dev]")), both("Cargo.toml: profile.bench")),
+        ("the resolver", Box::new(edit("resolver = \"3\"", "resolver = \"2\"")), both("Cargo.toml: workspace.resolver")),
+    ];
+    for (what, edit, want) in cases {
+        let c = changed(&r, &c1, what, edit);
+        assert_eq!(manifest::check_together(r.path(), &[pins("2.0.0", &c1), pins("2.0.1", &c)]).unwrap(), want, "{what}");
+    }
 }

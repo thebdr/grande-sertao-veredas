@@ -721,7 +721,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
                 name: "veredas-aranha".into(),
                 version: "2.0.0".into(),
                 bins: Default::default(),
-                optional: Default::default(),
+                features: Default::default(),
                 lib: Some("veredas_aranha".into()),
                 inputs: Ok(lib_inputs),
                 packages: alforge::inputs::Packages { names: ["veredas-aranha".to_string()].into_iter().collect(), vendored: Default::default() },
@@ -734,7 +734,7 @@ fn after_the_build_the_cut_stops_on_another_toolchain_an_executable_too_new_and_
                 name: "veredas-core".into(),
                 version: "2.0.0".into(),
                 bins: bins.iter().cloned().collect(),
-                optional: Default::default(),
+                features: Default::default(),
                 lib: Some("veredas_core".into()),
                 inputs: Ok(inputs),
                 packages: alforge::inputs::Packages { names: ["veredas-core".to_string(), "x".to_string()].into_iter().collect(), vendored: Default::default() },
@@ -858,27 +858,16 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
     assert_eq!(r.builder.cpus, 4);
     // Each component built alone, so cargo unifies features within its own inputs.
     // A component that ships no executable has its library built alone, for its dep-info.
-    let build = |p: &str, bins: &[&str], lib: &str| builder::Build { package: p.into(), bins: bins.iter().map(|b| b.to_string()).collect(), lib: Some(lib.into()), optional: vec![] };
-    let mut portal = build("veredas-portal", &["veredas-portal"], "veredas_portal");
-    portal.optional = vec!["porteiro".into()];
+    let build = |p: &str, bins: &[&str], lib: &str| builder::Build { package: p.into(), bins: bins.iter().map(|b| b.to_string()).collect(), lib: Some(lib.into()), features: vec![] };
+    // Portal's `porteiro` requires features, which its build turns on whatever its defaults are
+    // (docs/questions.md Q443), each quoted for the shell as cargo states it.
+    let mut portal = build("veredas-portal", &["veredas-portal", "porteiro"], "veredas_portal");
+    portal.features = vec!["dep/servir".into(), "it's".into()];
     let builds = vec![build("veredas-aranha", &[], "veredas_aranha"), build("veredas-maquinar", &["veredas-bancada"], "veredas_maquinar"), portal];
-    // A component whose executables all have required features: its library and its bins asked
-    // together, as portal at HEAD; with no library, its bins alone.
-    let mut lib_and_optional = build("veredas-x", &[], "veredas_x");
-    lib_and_optional.optional = vec!["xis".into()];
-    let mut only_optional = build("veredas-y", &[], "unused");
-    only_optional.lib = None;
-    only_optional.optional = vec!["ypsilon".into()];
-    let arms = builder::script(&r, &[lib_and_optional, only_optional]);
-    for line in [
-        "cargo build --release --locked --offline --jobs 4 -p veredas-x --lib --bins",
-        "cargo build --release --locked --offline --jobs 4 -p veredas-y --bins",
-        "cp target/release/libveredas_x.d /build/out/deps/",
-        "if [ -f target/release/xis ]; then cp target/release/xis /build/out/bin/; cp target/release/xis.d /build/out/deps/; fi",
-        "if [ -f target/release/ypsilon ]; then cp target/release/ypsilon /build/out/bin/; cp target/release/ypsilon.d /build/out/deps/; fi",
-    ] {
-        assert!(arms.lines().any(|l| l == line), "{line}\n{arms}");
-    }
+    // A component with neither an executable nor a library builds nothing.
+    let mut nothing = build("veredas-y", &[], "unused");
+    nothing.lib = None;
+    assert_eq!(builder::script(&r, &[nothing.clone()]), builder::script(&r, &[]));
     let script = builder::script(&r, &builds);
     let control = builder::CONTROL_CHECK;
     assert_eq!(
@@ -887,20 +876,20 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
          cd /build/src\nmkdir -p /build/out/bin /build/out/deps\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
          cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\n\
          cargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\n\
-         cargo build --release --locked --offline --jobs 4 -p veredas-portal --bins\n\
+         cargo build --release --locked --offline --jobs 4 -p veredas-portal --bins --features 'dep/servir' --features 'it'\\''s'\n\
          {control}\nmissing=\n\
          cp target/release/libveredas_aranha.d /build/out/deps/\n\
          if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; cp target/release/veredas-bancada.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-bancada\"; missing=1; fi\n\
          if [ -f target/release/veredas-portal ]; then cp target/release/veredas-portal /build/out/bin/; cp target/release/veredas-portal.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-portal\"; missing=1; fi\n\
-         if [ -f target/release/porteiro ]; then cp target/release/porteiro /build/out/bin/; cp target/release/porteiro.d /build/out/deps/; fi\n\
+         if [ -f target/release/porteiro ]; then cp target/release/porteiro /build/out/bin/; cp target/release/porteiro.d /build/out/deps/; else echo \"ALFORGE-MISSING porteiro\"; missing=1; fi\n\
          [ -z \"$missing\" ]\necho ALFORGE-BUILD-OK\n")
     );
     // The script run here as the builder runs it (its `/build` a folder of the test's, stand-ins
     // for `cargo` and `rustc` first on its PATH), once with every bin built and once with one not.
     use std::os::unix::fs::PermissionsExt;
-    // A third time cargo also builds `porteiro`, which has required features: copied out with its
-    // dep-info, shipped as cargo made it (docs/questions.md Q443).
-    for built in [vec!["veredas-bancada", "veredas-portal"], vec!["veredas-bancada"], vec!["veredas-bancada", "veredas-portal", "porteiro"]] {
+    // Every bin is required, `porteiro` with its features as much as the rest (docs/questions.md
+    // Q443): a run without it is refused by its name.
+    for built in [vec!["veredas-bancada", "veredas-portal", "porteiro"], vec!["veredas-bancada", "veredas-portal"], vec!["veredas-bancada"]] {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("build");
         let stub = d.path().join("stub");
@@ -921,7 +910,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         let log = std::fs::read_to_string(&log_path).unwrap();
         assert_eq!(
             std::fs::read_to_string(d.path().join("calls")).unwrap(),
-            "cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\ncargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\ncargo build --release --locked --offline --jobs 4 -p veredas-portal --bins\n"
+            "cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\ncargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\ncargo build --release --locked --offline --jobs 4 -p veredas-portal --bins --features dep/servir --features it's\n"
         );
         assert_eq!(std::fs::read_to_string(root.join("out/toolchain")).unwrap(), "rustc 1.100.0 (0ef1bc386 2026-11-09)\n");
         let mut shipped: Vec<String> = std::fs::read_dir(root.join("out/bin")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
@@ -936,19 +925,20 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         assert_eq!(infos, want, "each executable's dep-info beside it, and the library's of the component that ships none");
         let console = format!("ALFORGE-BUILD-EXIT {}", status.code().unwrap());
         let judged = builder::outcome(&log, &console, true, &log_path);
-        if built.contains(&"veredas-portal") {
+        let missing: Vec<&str> = ["veredas-portal", "porteiro"].into_iter().filter(|b| !built.contains(b)).collect();
+        if missing.is_empty() {
             assert!(status.success() && log.ends_with("ALFORGE-BUILD-OK\n"), "{log}");
             assert!(judged.is_ok(), "{judged:?}");
         } else {
             assert_eq!(status.code(), Some(1), "{log}");
-            assert_eq!(log, "ALFORGE-MISSING veredas-portal\n");
+            assert_eq!(log, missing.iter().map(|b| format!("ALFORGE-MISSING {b}\n")).collect::<String>());
             match judged {
                 Err(VmError::Failed { program, status, stderr }) => assert_eq!(
-                    (program.as_str(), status.as_str(), stderr.as_str()),
+                    (program.as_str(), status.as_str(), stderr),
                     (
                         "the build in the builder machine",
                         "refused",
-                        "cargo built no `veredas-portal` with the default features: the release would not ship it"
+                        missing.iter().map(|b| format!("cargo built no `{b}` with the features its executables need: the release would not ship it")).collect::<Vec<_>>().join("\n")
                     )
                 ),
                 other => panic!("not refused: {other:?}"),
@@ -1471,7 +1461,7 @@ fn a_proc_macro_component_has_its_library_built_for_its_dep_info() {
     let c = r.commit("a proc-macro component");
     let held = alforge::manifest::components_at(r.dir.path(), &c, &mut Vec::new()).unwrap();
     assert_eq!(held["veredas-macro"].lib.as_deref(), Some("veredas_macro"));
-    let b = builder::Build { package: "veredas-macro".into(), bins: vec![], lib: held["veredas-macro"].lib.clone(), optional: vec![] };
+    let b = builder::Build { package: "veredas-macro".into(), bins: vec![], lib: held["veredas-macro"].lib.clone(), features: vec![] };
     let s = builder::script(&recipe(), &[b]);
     assert!(s.lines().any(|l| l == "cargo build --release --locked --offline --jobs 4 -p veredas-macro --lib"), "{s}");
     assert!(s.lines().any(|l| l == "cp target/release/libveredas_macro.d /build/out/deps/"), "{s}");
@@ -1516,13 +1506,6 @@ fn round_fifteen_shared_names_with_required_features_crate_types_and_a_tracked_o
     for name in ["veredas-rl", "veredas-dy", "veredas-st", "veredas-cd", "veredas-pm"] {
         assert_eq!(held[name].lib.as_deref(), Some(name.replace('-', "_").as_str()), "{name}");
     }
-    // What the cut says of a bin with required features cargo did not make.
-    let mut h = held["veredas-rl"].clone();
-    h.optional = ["feito", "nao-feito"].iter().map(|b| b.to_string()).collect();
-    let one: std::collections::BTreeMap<String, alforge::manifest::Held> = [("veredas-rl".to_string(), h)].into_iter().collect();
-    let bin = tempfile::tempdir().unwrap();
-    std::fs::write(bin.path().join("feito"), "").unwrap();
-    assert_eq!(cut::not_made(&one, bin.path()), ["veredas-rl's `nao-feito` was not built with its default features: not shipped (docs/questions.md Q443)"]);
 }
 
 #[test]
@@ -1549,33 +1532,33 @@ fn round_sixteen_a_control_character_in_a_name_and_the_builders_input_beside_the
 }
 
 #[test]
-fn what_the_cut_says_of_bins_it_does_not_ship_comes_back_from_as_built() {
+fn every_bin_ships_and_the_manifest_is_checked_again_as_built() {
     let (r, _) = repo_for_cut("[workspace]\nmembers = [\"crates/veredas-core\"]\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
     r.write(
         "crates/veredas-core/Cargo.toml",
-        "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\nf = []\n\n[[bin]]\nname = \"feito\"\npath = \"src/a.rs\"\nrequired-features = [\"f\"]\n\n[[bin]]\nname = \"nao-feito\"\npath = \"src/b.rs\"\nrequired-features = [\"f\"]\n",
+        "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[features]\nf = []\ng = []\n\n[[bin]]\nname = \"um\"\npath = \"src/a.rs\"\nrequired-features = [\"f\"]\n\n[[bin]]\nname = \"dois\"\npath = \"src/b.rs\"\nrequired-features = [\"f\", \"g\"]\n",
     );
     r.write("crates/veredas-core/src/a.rs", "fn main() {}\n");
     r.write("crates/veredas-core/src/b.rs", "fn main() {}\n");
     let c = r.commit("two bins with required features");
     let held = alforge::manifest::components_at(r.dir.path(), &c, &mut Vec::new()).unwrap();
-    let bin = tempfile::tempdir().unwrap();
-    std::fs::write(bin.path().join("feito"), "").unwrap();
-    let (shipped, _, m, said) =
-        cut::as_built(r.dir.path(), &semver::Version::parse("9.9.9").unwrap(), &c, "x86_64-unknown-linux-gnu", "rustc 1.100.0", cut::NOT_RUN, &held, bin.path()).unwrap();
-    assert_eq!(said, ["veredas-core's `nao-feito` was not built with its default features: not shipped (docs/questions.md Q443)"]);
-    assert_eq!(shipped["veredas-core"].bins.iter().collect::<Vec<_>>(), ["feito"]);
-    assert_eq!(m.components[0].bins, ["feito"]);
+    // Both ship, their build turning on the union of what they require (docs/questions.md Q443).
+    assert_eq!(held["veredas-core"].bins.iter().collect::<Vec<_>>(), ["dois", "um"]);
+    assert_eq!(held["veredas-core"].features.iter().collect::<Vec<_>>(), ["f", "g"]);
+    let release = semver::Version::parse("9.9.9").unwrap();
+    let text = cut::manifest_text(&release, &c, "x86_64-unknown-linux-gnu", "rustc 1.100.0", &[("veredas-core".into(), "2.0.0".into(), vec!["dois".into(), "um".into()])], cut::NOT_RUN);
+    let m = cut::as_built(r.dir.path(), &release, &text).unwrap();
+    assert_eq!(m.components[0].bins, ["dois", "um"]);
     // The manifest checked against the repository again as built: HEAD having left the commit's
     // history while the build ran, it is refused, nothing written.
     r.git(&["checkout", "-q", "--orphan", "elsewhere"]);
     r.commit("another history");
-    match cut::as_built(r.dir.path(), &semver::Version::parse("9.9.9").unwrap(), &c, "x86_64-unknown-linux-gnu", "rustc 1.100.0", cut::NOT_RUN, &held, bin.path()) {
+    match cut::as_built(r.dir.path(), &release, &text) {
         Err(e) => assert_eq!(
             e.to_string(),
             format!("release 9.9.9 would not check as built:\ncommit {c} is not an ancestor of HEAD: a release is cut from the history it is committed in")
         ),
-        Ok((_, text, _, _)) => panic!("checked as built: {text}"),
+        Ok(m) => panic!("checked as built: {m:?}"),
     }
 }
 
