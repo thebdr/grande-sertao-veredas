@@ -1512,3 +1512,230 @@ mod round_5 {
         });
     }
 }
+
+/// C-116's sixth refute round: the critic's probes (`~/.cache/veredas/critic-c116-r6/probes`), kept
+/// as pins: no answer to a group, the all-zero MAC or an address no host has (ARP's sender, a
+/// read's IPv4 source, UDP's port 0); a priority-tagged ARP request and read answered; the answer's
+/// header the request's; an ARP request to a group and a read in a broadcast or group frame not
+/// taken; a cut datagram not taken.
+mod round_6 {
+    use std::net::{Ipv4Addr, UdpSocket};
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::profinet::record::INDEX_IM0;
+    use veredas_aranha::profinet::rpc::{self, ByteOrder, PNIO_PORT, ReadRequest, RpcPdu, Uuid};
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::ip;
+    use veredas_maquinar::profinet::*;
+
+    use super::round_2::{DEVICE, config, host_address};
+
+    const ME: Ipv4Addr = Ipv4Addr::new(192, 168, 0, 10);
+    const HOST: Ipv4Addr = Ipv4Addr::new(192, 168, 0, 1);
+    const GROUP: Mac = Mac([0x01, 0x00, 0x5E, 0x00, 0x00, 0x01]);
+    const ZERO: Mac = Mac([0; 6]);
+
+    fn all(iface: &str) -> RawLink {
+        RawLink::open_with(iface, Options { ethertype: None, promiscuous: true, outgoing: false }).unwrap()
+    }
+
+    /// Every frame heard from `src` within `ms`.
+    fn from(raw: &RawLink, src: Mac, ms: u64) -> Vec<Vec<u8>> {
+        let until = Instant::now() + Duration::from_millis(ms);
+        let mut out = Vec::new();
+        while Instant::now() < until {
+            if let Ok(Some(r)) = raw.recv(Duration::from_millis(20))
+                && r.bytes.len() >= 14
+                && r.bytes[6..12] == src.0
+            {
+                out.push(r.bytes);
+            }
+        }
+        out
+    }
+
+    fn mac(b: &[u8]) -> Mac {
+        Mac(b[..6].try_into().unwrap())
+    }
+
+    fn arp_request(dst: Mac, src: Mac, sha: Mac, spa: Ipv4Addr, tpa: Ipv4Addr) -> Vec<u8> {
+        let mut f = dst.0.to_vec();
+        f.extend_from_slice(&src.0);
+        f.extend_from_slice(&[0x08, 0x06, 0, 1, 0x08, 0, 6, 4, 0, 1]);
+        f.extend_from_slice(&sha.0);
+        f.extend_from_slice(&spa.octets());
+        f.extend_from_slice(&[0; 6]);
+        f.extend_from_slice(&tpa.octets());
+        f.resize(60, 0);
+        f
+    }
+
+    fn tagged(mut f: Vec<u8>, tci: u16) -> Vec<u8> {
+        let t = tci.to_be_bytes();
+        f.splice(12..12, [0x81, 0x00, t[0], t[1]]);
+        f
+    }
+
+    fn read_payload(seq: u16) -> Vec<u8> {
+        rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([seq as u8; 16]), u32::from(seq), &ReadRequest::implicit(seq, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap().encode().unwrap()
+    }
+
+    /// ARP replies among `frames`: (Ethernet destination, target hardware, target address).
+    fn arp_replies(frames: &[Vec<u8>]) -> Vec<(Mac, Mac, Ipv4Addr)> {
+        frames
+            .iter()
+            .filter(|f| f.len() >= 42 && f[12..14] == [0x08, 0x06] && f[20..22] == [0, 2])
+            .map(|f| (mac(&f[0..6]), mac(&f[32..38]), Ipv4Addr::new(f[38], f[39], f[40], f[41])))
+            .collect()
+    }
+
+    /// UDP frames among `frames`: (Ethernet destination, IPv4 destination, UDP port).
+    fn udp_sent(frames: &[Vec<u8>]) -> Vec<(Mac, Ipv4Addr, u16)> {
+        frames
+            .iter()
+            .filter(|f| f.len() >= 42 && f[12..14] == [0x08, 0x00] && f[23] == 17)
+            .map(|f| (mac(&f[0..6]), Ipv4Addr::new(f[30], f[31], f[32], f[33]), u16::from_be_bytes([f[36], f[37]])))
+            .collect()
+    }
+
+    /// An ARP request from a group or the all-zero MAC, with a group sender hardware address, or a
+    /// broadcast or group sender address: no reply and none counted (they were answered to that
+    /// address); an RFC 5227 probe (sender 0.0.0.0) answered and counted.
+    #[test]
+    fn an_arp_request_from_no_host_is_not_answered_and_a_probe_is() {
+        netns::isolated("round_6::an_arp_request_from_no_host_is_not_answered_and_a_probe_is", &[("a0", "b0")], || {
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = all("a0");
+            let me = raw.mac();
+            let mut got = Vec::new();
+            for (what, src, sha, spa) in [
+                ("a group's frame", GROUP, GROUP, HOST),
+                ("the zero MAC's frame", ZERO, ZERO, HOST),
+                ("a group sender hardware address", me, GROUP, HOST),
+                ("sender 255.255.255.255", me, me, Ipv4Addr::BROADCAST),
+                ("sender 224.0.0.1", me, me, Ipv4Addr::new(224, 0, 0, 1)),
+                ("an RFC 5227 probe", me, me, Ipv4Addr::UNSPECIFIED),
+            ] {
+                let before = dev.status().arp_answered;
+                raw.send(&arp_request(Mac::BROADCAST, src, sha, spa, ME)).unwrap();
+                let replies = arp_replies(&from(&raw, dev.mac, 300));
+                got.push((what, replies.len(), dev.status().arp_answered - before));
+            }
+            assert_eq!(got, [("a group's frame", 0, 0), ("the zero MAC's frame", 0, 0), ("a group sender hardware address", 0, 0), ("sender 255.255.255.255", 0, 0), ("sender 224.0.0.1", 0, 0), ("an RFC 5227 probe", 1, 1)]);
+        });
+    }
+
+    /// A read from an IPv4 source no host has (RFC 1122 3.2.1.3), from UDP port 0 (RFC 768), or
+    /// in a frame from a group or the all-zero MAC: no answer and none counted; from the host, one.
+    #[test]
+    fn a_read_from_no_host_is_not_answered() {
+        netns::isolated("round_6::a_read_from_no_host_is_not_answered", &[("a0", "b0")], || {
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = all("a0");
+            let me = raw.mac();
+            let mut answered = Vec::new();
+            let cases: Vec<(String, Mac, Ipv4Addr, u16)> = [Ipv4Addr::UNSPECIFIED, Ipv4Addr::BROADCAST, Ipv4Addr::new(224, 0, 0, 1), Ipv4Addr::new(192, 168, 0, 255), Ipv4Addr::new(127, 0, 0, 1)]
+                .into_iter()
+                .map(|src| (format!("from {src}"), me, src, 50000))
+                .chain([("from port 0".to_string(), me, HOST, 0), ("in a group's frame".into(), GROUP, HOST, 50000), ("in the broadcast's frame".into(), Mac::BROADCAST, HOST, 50000), ("in the zero MAC's frame".into(), ZERO, HOST, 50000)])
+                .collect();
+            for (n, (what, src_mac, src, port)) in cases.into_iter().enumerate() {
+                raw.send(&ip::udp_frame((dev.mac, ME, PNIO_PORT), (src_mac, src, port), 100 + n as u16, &read_payload(n as u16 + 1))).unwrap();
+                let sent = udp_sent(&from(&raw, dev.mac, 300));
+                if !sent.is_empty() {
+                    answered.push(format!("{what}: {sent:?}"));
+                }
+            }
+            assert!(answered.is_empty() && dev.status().reads == 0, "{answered:#?}, {} counted", dev.status().reads);
+            raw.send(&ip::udp_frame((dev.mac, ME, PNIO_PORT), (me, HOST, 50000), 200, &read_payload(20))).unwrap();
+            assert_eq!((udp_sent(&from(&raw, dev.mac, 500)), dev.status().reads), (vec![(me, HOST, 50000)], 1));
+        });
+    }
+
+    /// An ARP request and a read in a frame tagged VLAN 0 (priority 0 and 6), read as untagged
+    /// (IEEE 802.1Q): each answered, untagged, and counted (they went unanswered); one of VLAN 5
+    /// is not this port's.
+    #[test]
+    fn a_priority_tagged_arp_request_and_read_are_answered() {
+        netns::isolated("round_6::a_priority_tagged_arp_request_and_read_are_answered", &[("a0", "b0")], || {
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = all("a0");
+            let me = raw.mac();
+            for (n, tci) in [0x0000u16, 0xC000].into_iter().enumerate() {
+                raw.send(&tagged(arp_request(Mac::BROADCAST, me, me, HOST, ME), tci)).unwrap();
+                assert_eq!(arp_replies(&from(&raw, dev.mac, 300)), vec![(me, me, HOST)], "ARP tagged {tci:#06x}");
+                raw.send(&tagged(ip::udp_frame((dev.mac, ME, PNIO_PORT), (me, HOST, 50000), 600 + n as u16, &read_payload(n as u16 + 1)), tci)).unwrap();
+                assert_eq!(udp_sent(&from(&raw, dev.mac, 300)), vec![(me, HOST, 50000)], "a read tagged {tci:#06x}");
+            }
+            raw.send(&tagged(arp_request(Mac::BROADCAST, me, me, HOST, ME), 0x0005)).unwrap();
+            raw.send(&tagged(ip::udp_frame((dev.mac, ME, PNIO_PORT), (me, HOST, 50000), 610, &read_payload(9)), 0x0005)).unwrap();
+            assert_eq!(from(&raw, dev.mac, 300).len(), 0, "VLAN 5");
+            let s = dev.status();
+            assert_eq!((s.arp_answered, s.reads), (2, 2));
+        });
+    }
+
+    /// The answer's object, interface, operation and interface version are the request's (a nil
+    /// object, the controller's interface, operation 0 and version 0 had passed the file).
+    #[test]
+    fn the_answer_s_header_is_the_request_s() {
+        netns::isolated("round_6::the_answer_s_header_is_the_request_s", &[("a0", "b0")], || {
+            host_address();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let s = UdpSocket::bind("192.168.0.1:0").unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let req = RpcPdu::decode(&read_payload(3)).unwrap();
+            s.send_to(&read_payload(3), (ME, PNIO_PORT)).unwrap();
+            let mut buf = [0u8; 4096];
+            let (n, _) = s.recv_from(&mut buf).unwrap();
+            let a = RpcPdu::decode(&buf[..n]).unwrap();
+            assert_eq!((a.object, a.interface, a.opnum, a.interface_version), (req.object, req.interface, req.opnum, req.interface_version));
+        });
+    }
+
+    /// An ARP request to a group (not the broadcast), a read in a broadcast frame and one in a
+    /// group frame: none taken (a card takes every group here, the kernel a unicast datagram in a
+    /// broadcast frame).
+    #[test]
+    fn frames_to_a_group_are_not_taken() {
+        netns::isolated("round_6::frames_to_a_group_are_not_taken", &[("a0", "b0")], || {
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = all("a0");
+            let me = raw.mac();
+            raw.send(&arp_request(GROUP, me, me, HOST, ME)).unwrap();
+            raw.send(&ip::udp_frame((Mac::BROADCAST, ME, PNIO_PORT), (me, HOST, 50000), 700, &read_payload(1))).unwrap();
+            raw.send(&ip::udp_frame((GROUP, ME, PNIO_PORT), (me, HOST, 50000), 701, &read_payload(2))).unwrap();
+            assert_eq!(from(&raw, dev.mac, 500).len(), 0);
+            let s = dev.status();
+            assert_eq!((s.arp_answered, s.reads), (0, 0));
+        });
+    }
+
+    /// A datagram whose IPv4 total length or UDP length runs past what arrived, its checksum 0
+    /// (none): not taken.
+    #[test]
+    fn a_datagram_cut_short_is_not_taken() {
+        let mac = Mac([0x02, 0, 0, 0, 0, 0x10]);
+        let peer = (Mac([0x02, 0, 0, 0, 0, 0x01]), HOST, 50000);
+        let mut f = ip::udp_frame((mac, ME, PNIO_PORT), peer, 7, &[b'x'; 40]);
+        f[14 + 20 + 6] = 0;
+        f[14 + 20 + 7] = 0;
+        assert!(ip::udp_to(&f, ME, PNIO_PORT).is_some(), "whole, it is taken");
+        let mut ip_cut = f.clone();
+        let total = u16::from_be_bytes([ip_cut[16], ip_cut[17]]) + 8;
+        ip_cut[16..18].copy_from_slice(&total.to_be_bytes());
+        ip_cut[24] = 0;
+        ip_cut[25] = 0;
+        let mut acc: u32 = ip_cut[14..34].chunks(2).map(|c| u32::from(u16::from_be_bytes([c[0], c[1]]))).sum();
+        while acc > 0xFFFF {
+            acc = (acc & 0xFFFF) + (acc >> 16);
+        }
+        ip_cut[24..26].copy_from_slice(&(!(acc as u16)).to_be_bytes());
+        let mut udp_cut = f.clone();
+        let len = u16::from_be_bytes([udp_cut[38], udp_cut[39]]) + 8;
+        udp_cut[38..40].copy_from_slice(&len.to_be_bytes());
+        assert_eq!((ip::udp_to(&ip_cut, ME, PNIO_PORT), ip::udp_to(&udp_cut, ME, PNIO_PORT)), (None, None));
+    }
+}

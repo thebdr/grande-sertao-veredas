@@ -534,12 +534,24 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                 continue;
             }
             ip::ETHERTYPE_ARP | ip::ETHERTYPE_IPV4 => {
-                let address = shared.lock().identity.ip.as_ref().map(|s| s.ip).unwrap_or(Ipv4Addr::UNSPECIFIED);
-                if let Some(reply) = ip::arp_reply(&received.bytes, mac, address) {
+                // From one station (a group or the all-zero source is none, IEEE 802.3), and
+                // untagged or priority-tagged: a frame of VLAN 0 is read as untagged (IEEE 802.1Q),
+                // its tag taken out; one of another VLAN is not this port's (round 6: a priority-
+                // tagged ARP request or read went unanswered).
+                if frame.src.is_multicast() || frame.src == Mac([0; 6]) || frame.vlan.is_some_and(|t| t.id != 0) {
+                    continue;
+                }
+                let plain: Vec<u8> = if frame.vlan.is_some() { [&received.bytes[..12], &received.bytes[16..]].concat() } else { received.bytes.clone() };
+                let suite = shared.lock().identity.ip.clone();
+                let address = suite.as_ref().map(|s| s.ip).unwrap_or(Ipv4Addr::UNSPECIFIED);
+                // The subnet's broadcast is no host's either.
+                let subnet_broadcast = suite.as_ref().filter(|s| !s.mask.is_unspecified()).map(|s| Ipv4Addr::from(u32::from(s.ip) | !u32::from(s.mask)));
+                if let Some(reply) = ip::arp_reply(&plain, mac, address) {
                     shared.lock().status.arp_answered += 1;
                     let _ = link.send(&reply);
                 } else if frame.dst == mac
-                    && let Some((peer_mac, peer_ip, peer_port, payload)) = ip::udp_to(&received.bytes, address, PNIO_PORT)
+                    && let Some((peer_mac, peer_ip, peer_port, payload)) = ip::udp_to(&plain, address, PNIO_PORT)
+                    && Some(peer_ip) != subnet_broadcast
                 {
                     let answered = std::cell::Cell::new(false);
                     let records = |read: &ReadRequest| {

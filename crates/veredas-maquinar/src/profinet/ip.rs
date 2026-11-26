@@ -53,6 +53,13 @@ pub fn arp_reply(frame: &[u8], mac: Mac, ip: Ipv4Addr) -> Option<Vec<u8>> {
         return None;
     }
     let (sha, spa) = (mac_at(a, 8), &a[14..18]);
+    // A sender no host is (the broadcast or a group address) gets no answer, as a host's stack
+    // gives none; 0.0.0.0, an RFC 5227 probe, does. The answer goes to the sender's hardware
+    // address, so a group or the all-zero one gets none either: no answer goes to a group.
+    let sender = Ipv4Addr::new(spa[0], spa[1], spa[2], spa[3]);
+    if sender.is_broadcast() || sender.is_multicast() || sha.is_multicast() || sha == Mac([0; 6]) {
+        return None;
+    }
     let mut out = Vec::with_capacity(60);
     out.extend_from_slice(&sha.0);
     out.extend_from_slice(&mac.0);
@@ -108,9 +115,15 @@ pub fn udp_to(frame: &[u8], ip: Ipv4Addr, port: u16) -> Option<(Mac, Ipv4Addr, u
         return None;
     }
     let src = Ipv4Addr::new(p[12], p[13], p[14], p[15]);
+    // From a host (RFC 1122 3.2.1.3: a datagram from no host's address is dropped): not the
+    // unspecified address, a broadcast, a group or the loopback.
+    if src.is_unspecified() || src.is_broadcast() || src.is_multicast() || src.is_loopback() {
+        return None;
+    }
     let u = &p[ihl..total];
     let len = usize::from(be16(u, 4));
-    if be16(u, 2) != port || len < 8 || len > u.len() {
+    // A source port of 0 is no port to answer to (RFC 768).
+    if be16(u, 2) != port || be16(u, 0) == 0 || len < 8 || len > u.len() {
         return None;
     }
     let u = &u[..len];
