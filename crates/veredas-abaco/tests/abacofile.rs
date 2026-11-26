@@ -356,6 +356,9 @@ fn a_file_that_is_not_what_it_should_be_is_refused_by_its_part_and_place() {
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("B1 = { n = 6.5 }", "B1 = { n = 6.5 }\n\"$B$1\" = { n = 7 }"))), "sheets/01-Loads.toml $B$1: an address is written `B1`"),
         // a key nothing reads inside a link (an internally tagged enum, read from serde's buffer)
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("links = []", "links = [[1, 1, { type = \"External\", target = \"https://example.org\", tooltip = nan, targett = \"x\" }]]"))), "sheets/01-Loads.toml: `links.0.2.targett` is a key nothing reads"),
+        // a key replacing a tagged object's field, by its path (refute round 12)
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("links = []", "links = [[1, 1, { type = \"External\", targett = \"https://example.org\" }]]"))), "sheets/01-Loads.toml: `links.0.2.targett` is a key nothing reads"),
+        ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("links = []", "links = [[1, 1, { type = \"Internal\", locationn = \"Loads!A1\" }]]"))), "sheets/01-Loads.toml: `links.0.2.locationn` is a key nothing reads"),
         ("manifest.toml", Box::new(|t| Some(t[..t.find("[[sheets]]").unwrap()].replace("macros = [\"beam_report\"]", "macros = [\"beam_report\"]\nsheets = []"))), "manifest.toml: a workbook holds a sheet at least"),
         // a formula's last value: one number, text or boolean, finite, never beside its error
         ("sheets/01-Loads.toml", Box::new(|t| Some(t.replace("v = 63.375", "v = nan"))), "sheets/01-Loads.toml B3: `v` is NaN, no finite number"),
@@ -496,6 +499,22 @@ fn every_error_the_engine_holds_reads_back_and_a_format_s_rule_refuses_a_key_not
                 let t = String::from_utf8(b).unwrap();
                 assert!(t.contains("stop_if_true = false\ntype = \"CellIs\""));
                 (n, t.replacen("stop_if_true = false\ntype = \"CellIs\"", "stop_if_true = false\nstop_if_ture = true\ntype = \"CellIs\"", 1).into_bytes())
+            } else {
+                (n, b)
+            }
+        })
+        .collect();
+    std::fs::write(&path, abacofile::zip_of(&parts).unwrap()).unwrap();
+    let got = abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(got.contains("sheets/01-Sheet1.toml: `conditional_formatting.0.cf_rule.stop_if_ture` is a key nothing reads"), "{got}");
+    // and replacing the field it meant, which the rule then misses (refute round 12)
+    let parts: Vec<(String, Vec<u8>)> = abacofile::parts(&file)
+        .unwrap()
+        .into_iter()
+        .map(|(n, b)| {
+            if n == "sheets/01-Sheet1.toml" {
+                let t = String::from_utf8(b).unwrap();
+                (n, t.replacen("stop_if_true = false\ntype = \"CellIs\"", "stop_if_ture = false\ntype = \"CellIs\"", 1).into_bytes())
             } else {
                 (n, b)
             }
@@ -1294,6 +1313,11 @@ fn a_table_whose_range_or_sheet_the_engine_cannot_read_is_refused_at_both_ends()
         ("totals_row_count", "50", "workbook.toml: `tables.Table3.totals_row_count` 50 is none of Excel's (0 or 1)"),
         ("reference", "\"E6:A1\"", "workbook.toml: `tables.Table3.reference` `E6:A1` has its corners out of order"),
         ("reference", "\"A1:E1\"", "workbook.toml: `tables.Table3` holds no data row"),
+        // refute round 12: its sheet in another case than the sheet's, and columns other than its
+        // range's width (one past the sheet's edge)
+        ("sheet_name", "\"HIDDEN\"", "workbook.toml: `tables.Table3.sheet_name` `HIDDEN` is none of the workbook's sheets, as the sheet spells its name"),
+        ("reference", "\"A1:B6\"", "workbook.toml: `tables.Table3.columns` holds"),
+        ("reference", "\"XFB1:XFD6\"", "workbook.toml: `tables.Table3.columns` holds"),
     ] {
         for naming in [None, Some("SUM(Table3[The one])"), Some("SUM(Table3[#Data])"), Some("SUM(Table3[#All])")] {
             let parts: Vec<(String, Vec<u8>)> = good
@@ -1327,6 +1351,15 @@ fn a_table_whose_range_or_sheet_the_engine_cannot_read_is_refused_at_both_ends()
     book.model_mut().workbook.tables.get_mut("Table3").unwrap().header_row_count = 50;
     let got = abacofile::write(&mut AbacoFile::new(book), &path).err().map(|e| e.to_string()).unwrap_or_default();
     assert!(got.contains("`tables.Table3.header_row_count` 50 is none of Excel's (0 or 1)"), "{got}");
+    let mut book = open(&src);
+    let upper = book.model().workbook.tables["Table3"].sheet_name.to_uppercase();
+    book.model_mut().workbook.tables.get_mut("Table3").unwrap().sheet_name = upper;
+    let got = abacofile::write(&mut AbacoFile::new(book), &path).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(got.contains("`tables.Table3.sheet_name`") && got.contains("as the sheet spells its name"), "{got}");
+    let mut book = open(&src);
+    book.model_mut().workbook.tables.get_mut("Table3").unwrap().reference = "A1:B6".into();
+    let got = abacofile::write(&mut AbacoFile::new(book), &path).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(got.contains("`tables.Table3.columns` holds"), "{got}");
 }
 
 #[test]

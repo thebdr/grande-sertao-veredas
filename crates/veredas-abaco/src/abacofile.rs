@@ -1005,7 +1005,18 @@ impl Parts<'_> {
         if let Some(path) = unread.first() {
             return Err(self.bad(format!("{name}: `{path}` is a key nothing reads")));
         }
-        let value = read.map_err(|e| self.bad(format!("{name}: {e}")))?;
+        let value = match read {
+            Ok(value) => value,
+            Err(e) => {
+                // a field missing inside an internally tagged object (a link, a format's rule),
+                // which serde reads from a buffer `serde_ignored` never sees: a key replacing it is
+                // named by its path (refute round 12)
+                if let Some(path) = key_replacing_a_tagged_field::<T>(&json, &e.to_string()) {
+                    return Err(self.bad(format!("{name}: `{path}` is a key nothing reads")));
+                }
+                return Err(self.bad(format!("{name}: {e}")));
+            }
+        };
         // inside an internally tagged enum (an object with its `type`: a link, a format's rule)
         // serde reads from a buffer `serde_ignored` never sees; those types skip no field when
         // written, so a key the value written back lacks is one nothing read
@@ -1040,6 +1051,64 @@ fn twice_stated_external_cell(book: &toml::Table) -> Option<String> {
 /// The first key, in an object holding a `type` (an internally tagged enum) or in any object below
 /// one (all of it read from serde's buffer: a threshold of a format's rule), that `back`, the value
 /// read written out again, lacks, by its path.
+/// The key that replaced a field the deserialiser found missing (`missing field `x``) inside an
+/// internally tagged object of `json`: each such object lacking the field is given it, as each kind
+/// of JSON value in turn, until the whole reads; the object's keys the value written back lacks are
+/// then the ones nothing reads.
+fn key_replacing_a_tagged_field<T: DeserializeOwned + Serialize>(json: &serde_json::Value, error: &str) -> Option<String> {
+    use serde_json::Value as J;
+    let field = error.split_once("missing field `")?.1.split_once('`')?.0.to_string();
+    // the paths of the tagged objects (a `type` text) that lack the field
+    fn lacking(v: &J, field: &str, path: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+        match v {
+            J::Object(o) => {
+                if o.get("type").is_some_and(J::is_string) && !o.contains_key(field) {
+                    out.push(path.clone());
+                }
+                for (k, child) in o {
+                    path.push(k.clone());
+                    lacking(child, field, path, out);
+                    path.pop();
+                }
+            }
+            J::Array(a) => {
+                for (i, child) in a.iter().enumerate() {
+                    path.push(i.to_string());
+                    lacking(child, field, path, out);
+                    path.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut places = Vec::new();
+    lacking(json, &field, &mut Vec::new(), &mut places);
+    let kinds = [J::Bool(false), J::from(0), J::String(String::new()), J::Null, J::Array(Vec::new()), J::Object(Default::default())];
+    for place in places {
+        for kind in &kinds {
+            let mut filled = json.clone();
+            let mut at = &mut filled;
+            for step in &place {
+                at = match at {
+                    J::Object(o) => o.get_mut(step)?,
+                    J::Array(a) => a.get_mut(step.parse::<usize>().ok()?)?,
+                    _ => return None,
+                };
+            }
+            if let J::Object(o) = at {
+                o.insert(field.clone(), kind.clone());
+            }
+            if let Ok(value) = serde_json::from_value::<T>(filled.clone()) {
+                let back = serde_json::to_value(&value).ok()?;
+                if let Some(path) = unread_in_tagged(&filled, &back, String::new()) {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn unread_in_tagged(read: &serde_json::Value, back: &serde_json::Value, path: String) -> Option<String> {
     unread_below(read, back, path, false)
 }
@@ -1174,9 +1243,20 @@ fn check_book(ewb: &EngineWorkbook, parts: &[String]) -> Result<(), String> {
                 table.header_row_count, table.totals_row_count, table.reference
             ));
         }
-        let upper = table.sheet_name.to_uppercase();
-        if !ewb.worksheets.iter().any(|w| w.name == table.sheet_name || w.name.to_uppercase() == upper) {
-            return Err(format!("{WORKBOOK}: `tables.{key}.sheet_name` `{}` is none of the workbook's sheets", table.sheet_name));
+        // its sheet in the sheet's own spelling: the parser finds one in any case, but the engine's
+        // rename, its deletion and SUBTOTAL's filter compare it exactly (refute round 12)
+        if !ewb.worksheets.iter().any(|w| w.name == table.sheet_name) {
+            return Err(format!("{WORKBOOK}: `tables.{key}.sheet_name` `{}` is none of the workbook's sheets, as the sheet spells its name", table.sheet_name));
+        }
+        // one column for each of its range's columns: the parser places a column at the range's
+        // start and its place, past the range (or the sheet's edge) otherwise (refute round 12)
+        let width = i64::from(right) - i64::from(left) + 1;
+        if table.columns.len() as i64 != width {
+            return Err(format!(
+                "{WORKBOOK}: `tables.{key}.columns` holds {} columns, where its range `{}` is {width} wide",
+                table.columns.len(),
+                table.reference
+            ));
         }
     }
     Ok(())

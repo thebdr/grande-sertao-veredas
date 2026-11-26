@@ -257,8 +257,8 @@ or an integer no double holds, a value of the wrong type (a date-time among them
 that is a table), a formula's `v` beside its `e`, a manifest with no sheet, a sheet whose part
 names another sheet than the manifest, a sheet name or a defined name the engine refuses, a table whose
 cells are no range or a range with its corners out of order, whose header or totals rows are
-none of Excel's (0 or 1) or leave no data row, or whose sheet is none of the workbook's in any case
-(`tables.Table3.reference`), a cell's
+none of Excel's (0 or 1) or leave no data row, whose columns are not its range's width, or whose
+sheet is none of the workbook's as the sheet spells its name (`tables.Table3.reference`), a cell's
 link stated twice (`links.1`), a linked workbook's cached cell stated twice, a cell stated inside a
 legacy array's area (but a style-only cell it spills into), settings
 the engine refuses (a time zone, a locale: the workbook part named), a reference's hash or date
