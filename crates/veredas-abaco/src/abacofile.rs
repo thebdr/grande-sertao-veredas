@@ -23,7 +23,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use ironcalc_base::Model;
-use ironcalc_base::cf_types::ConditionalFormatting;
+use ironcalc_base::cf_types::{CfRule, ConditionalFormatting};
 use ironcalc_base::expressions::token::get_error_by_english_name;
 use ironcalc_base::external::ExternalBook;
 use ironcalc_base::sheet_data::SheetData;
@@ -1008,10 +1008,10 @@ impl Parts<'_> {
         let value = match read {
             Ok(value) => value,
             Err(e) => {
-                // a field missing inside an internally tagged object (a link, a format's rule),
-                // which serde reads from a buffer `serde_ignored` never sees: a key replacing it is
-                // named by its path (refute round 12)
-                if let Some(path) = key_replacing_a_field::<T>(&json, &e.to_string()) {
+                // inside an internally tagged object (a link, a format's rule) serde reads from a
+                // buffer `serde_ignored` never sees: a key nothing reads there, one replacing a
+                // field too, is named by its path (refute rounds 12 to 15)
+                if let Some(path) = key_nothing_reads_in_tagged(&json) {
                     return Err(self.bad(format!("{name}: `{path}` is a key nothing reads")));
                 }
                 return Err(self.bad(format!("{name}: {e}")));
@@ -1048,184 +1048,160 @@ fn twice_stated_external_cell(book: &toml::Table) -> Option<String> {
     None
 }
 
-/// The key that replaced a field the deserialiser found missing, found by reading again rather
-/// than guessed (refute rounds 12 to 14): objects lacking the field are given it, as each kind of
-/// JSON value and, for a tag, each variant the deserialiser names. An object holds it once a kind
-/// is taken there, the error then moving on or, a kind refused there first, staying (the same field
-/// missing in another object); an object where every kind leaves the error as it was does not read
-/// the field and is left as it came. Each new missing field is filled in its turn, 64 rounds and
-/// 1 024 readings at most, until the whole reads; the keys the value written back then lacks, as
-/// `serde_ignored` and [`unread_in_tagged`] read them, the fields put in left out, are the ones
-/// nothing reads. Of the kinds that make the whole read, the one leaving fewest such keys is taken,
-/// and its first key is named. A field deleted,
-/// no key standing for it, names none, and the deserialiser's own words stand. The objects are tried tagged ones and what they hold first,
-/// then those holding a variant-like text, each by its key nearest to the field's name, 64 a round
-/// at most.
-fn key_replacing_a_field<T: DeserializeOwned + Serialize>(json: &serde_json::Value, error: &str) -> Option<String> {
+/// The engine's internally tagged types a part holds, each by its place and its reader (the
+/// object read alone, then written back): a sheet's links (`links.N.2`, a `Link`) and its formats'
+/// rules (`conditional_formatting.N.cf_rule`, a `CfRule`). Inside one serde reads from a buffer
+/// `serde_ignored` never sees; the engine holds no other in a part (`CfRuleInput` is its API's,
+/// and `Color`, untagged, holds no key), which a test of the reader holds to the engine's source.
+fn tagged_objects(json: &serde_json::Value) -> Vec<(String, &serde_json::Value, TaggedReader)> {
+    let mut out = Vec::new();
+    for (i, link) in json.get("links").and_then(serde_json::Value::as_array).into_iter().flatten().enumerate() {
+        if let Some(obj) = link.get(2).filter(|o| o.is_object()) {
+            out.push((format!("links.{i}.2"), obj, read_back::<Link> as TaggedReader));
+        }
+    }
+    for (i, format) in json.get("conditional_formatting").and_then(serde_json::Value::as_array).into_iter().flatten().enumerate() {
+        if let Some(obj) = format.get("cf_rule").filter(|o| o.is_object()) {
+            out.push((format!("conditional_formatting.{i}.cf_rule"), obj, read_back::<CfRule> as TaggedReader));
+        }
+    }
+    out
+}
+
+/// An object read alone as one of the engine's types and written back, or the deserialiser's words.
+type TaggedReader = fn(&serde_json::Value) -> Result<serde_json::Value, String>;
+
+fn read_back<L: DeserializeOwned + Serialize>(v: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let value: L = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
+    serde_json::to_value(&value).map_err(|e| e.to_string())
+}
+
+/// The first key, in the order of the part, of a tagged object ([`tagged_objects`]) that nothing
+/// reads, by its path: in an object that reads alone, a key its value written back lacks; in one
+/// that does not, the key [`key_replacing_in`] finds.
+fn key_nothing_reads_in_tagged(json: &serde_json::Value) -> Option<String> {
+    tagged_objects(json).into_iter().find_map(|(path, obj, read)| key_replacing_in(obj, read).map(|k| format!("{path}.{k}")))
+}
+
+/// The key of a tagged object nothing reads (refute rounds 12 to 15), found by reading again rather
+/// than guessed. Read alone, an object that reads names a key its value written back lacks. One a
+/// field is missing from is given it, at each object of its own that lacks it, as each kind of JSON
+/// value and, for a tag, each variant the deserialiser names; every kind taken (the error moving
+/// on to another missing field, or, a kind refused there first, staying: the same field missing
+/// twice) is followed, each new missing field filled in its turn, so every variant is tried, not
+/// the first that moves on. Of the readings that make the object read, the ones leaving fewest
+/// keys its value written back lacks decide: none, a field deleted, names none and the
+/// deserialiser's words stand; else the first key all of them leave unread. A search past its
+/// 4 096 readings, or 16 fields deep, names none.
+fn key_replacing_in(obj: &serde_json::Value, read: TaggedReader) -> Option<String> {
+    let error = match read(obj) {
+        Ok(back) => return unread_keys(obj, &back).into_iter().next(),
+        Err(e) => e,
+    };
+    let mut outcomes = Vec::new();
+    let mut budget = 4096usize;
+    explore_from(obj, obj, &error, 0, read, &mut budget, &mut outcomes);
+    if budget == 0 {
+        return None;
+    }
+    let fewest = outcomes.iter().map(Vec::len).min()?;
+    let decide: Vec<&Vec<String>> = outcomes.iter().filter(|o| o.len() == fewest).collect();
+    decide[0].iter().find(|k| decide.iter().all(|o| o.contains(k))).cloned()
+}
+
+/// The keys of `file`, a tagged object, that `back`, its value written back, lacks, at any depth.
+fn unread_keys(file: &serde_json::Value, back: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    unread_below(file, back, String::new(), true, &mut out);
+    out
+}
+
+/// [`key_replacing_in`]'s search from `filled` (the object with the fields put in so far) and the
+/// deserialiser's `error` on it: each reading that makes the object read pushes the keys of the
+/// object as it came that its value written back lacks (the fields put in are none of its keys).
+fn explore_from(
+    file: &serde_json::Value,
+    filled: &serde_json::Value,
+    error: &str,
+    depth: usize,
+    read: TaggedReader,
+    budget: &mut usize,
+    outcomes: &mut Vec<Vec<String>>,
+) {
     use serde_json::Value as J;
     let missing = |e: &str| e.split_once("missing field `").and_then(|(_, r)| r.split_once('`')).map(|(f, _)| f.to_string());
-    // the deserialiser refusing the value put in (or, in a structure that takes no key it does not
-    // know, the key itself)
-    let rejected = |e: &str| ["invalid type", "unknown variant", "invalid value", "invalid length", "unknown field"].iter().any(|r| e.starts_with(r));
-    let dotted = |path: &[String], field: &str| path.iter().map(String::as_str).chain([field]).collect::<Vec<_>>().join(".");
-    let mut filled = json.clone();
-    let mut text = error.to_string();
-    // the fields this search put in, which are no key of the file's
-    let mut inserted: Vec<(Vec<String>, String)> = Vec::new();
-    // readings tried, all rounds together: a refused file of a large sheet stays a quick refusal
-    let mut budget = 1024usize;
-    for _ in 0..64 {
-        let field = missing(&text)?;
-        let mut moved = None;
-        for path in candidates_lacking(&filled, &field).into_iter().take(64) {
-            let mut kinds = vec![J::Bool(false), J::from(0), J::String(String::new()), J::Null, J::Array(Vec::new()), J::Object(Default::default())];
-            // a kind refused shows the field is read there; a kind then taken with the error
-            // unchanged fills it, the same field missing in another object too (two links)
-            let mut refused = false;
-            let mut taken_unchanged = None;
-            let mut best = None;
-            let mut k = 0;
-            while k < kinds.len() {
-                budget = budget.checked_sub(1)?;
-                let mut trial = filled.clone();
-                if !insert_at(&mut trial, &path, &field, kinds[k].clone()) {
-                    break;
-                }
-                match serde_json::from_value::<T>(trial.clone()) {
-                    Ok(value) => {
-                        let back = serde_json::to_value(&value).ok()?;
-                        let mut ours = inserted.clone();
-                        ours.push((path.clone(), field.clone()));
-                        let dotted_ours: Vec<String> = ours.iter().map(|(p, f)| dotted(p, f)).collect();
-                        // the file as it came, our fields out, against the value written back
-                        let mut file = trial.clone();
-                        for (p, f) in &ours {
-                            remove_at(&mut file, p, f);
-                        }
-                        let mut unread = Vec::new();
-                        let _: Result<T, _> = serde_ignored::deserialize(trial, |p| {
-                            unread.push(p.to_string().split('.').filter(|step| *step != "?").collect::<Vec<_>>().join("."));
-                        });
-                        unread.retain(|p| !dotted_ours.contains(p));
-                        unread_below(&file, &back, String::new(), false, &mut unread);
-                        // the reading that leaves fewest keys unread: none, a field deleted (no
-                        // key names it); one, the key that replaced it
-                        if unread.len() <= 1 {
-                            return unread.into_iter().next();
-                        }
-                        if best.as_ref().is_none_or(|b: &Vec<String>| unread.len() < b.len()) {
-                            best = Some(unread);
-                        }
-                        k += 1;
-                        continue;
-                    }
-                    Err(e) => {
-                        let error = e.to_string();
-                        if !rejected(&error) && error != text {
-                            moved = Some((trial, error, path.clone()));
-                            break;
-                        }
-                        if !rejected(&error) {
-                            taken_unchanged.get_or_insert(trial);
-                        } else {
-                            refused = true;
-                        }
-                        // a tag: each variant the deserialiser names (`expected `A` or `B``), one
-                        // the object holds as a text first (a tag renamed keeps its variant)
-                        if error.starts_with("unknown variant")
-                            && let Some((_, expected)) = error.split_once("expected")
-                        {
-                            let held = |v: &J| object_at(&filled, &path).is_some_and(|o| o.values().any(|x| x == v));
-                            let named: Vec<J> = expected.split('`').skip(1).step_by(2).map(|v| J::String(v.to_string())).filter(|v| !kinds.contains(v)).collect();
-                            let (first, rest): (Vec<J>, Vec<J>) = named.into_iter().partition(held);
-                            kinds.splice(k + 1..k + 1, first);
-                            kinds.extend(rest);
-                        }
-                    }
-                }
-                k += 1;
+    let Some(field) = missing(error) else { return };
+    if depth >= 16 {
+        *budget = 0;
+        return;
+    }
+    for path in candidates_lacking(filled, &field) {
+        let mut kinds = vec![J::Bool(false), J::from(0), J::String(String::new()), J::Null, J::Array(Vec::new()), J::Object(Default::default())];
+        let mut refused = false;
+        let mut taken_unchanged = None;
+        let mut k = 0;
+        while k < kinds.len() {
+            if *budget == 0 {
+                return;
             }
-            if let Some(unread) = best {
-                return unread.into_iter().next();
-            }
-            if moved.is_some() {
+            *budget -= 1;
+            let mut trial = filled.clone();
+            if !insert_at(&mut trial, &path, &field, kinds[k].clone()) {
                 break;
             }
-            // filled here, the round going on to the next object lacking it
-            if refused && let Some(trial) = taken_unchanged {
-                filled = trial;
-                inserted.push((path, field.clone()));
+            match read(&trial) {
+                Ok(back) => outcomes.push(unread_keys(file, &back)),
+                Err(e) if missing(&e).is_some() && e != error => explore_from(file, &trial, &e, depth + 1, read, budget, outcomes),
+                Err(e) if e == error => {
+                    taken_unchanged.get_or_insert(trial);
+                }
+                Err(e) => {
+                    // the value refused (an invalid type, a variant none of the enum's, an untagged
+                    // enum's no variant): a tag's variants, each tried
+                    refused = true;
+                    if e.starts_with("unknown variant")
+                        && let Some((_, expected)) = e.split_once("expected")
+                    {
+                        for v in expected.split('`').skip(1).step_by(2) {
+                            let v = J::String(v.to_string());
+                            if !kinds.contains(&v) {
+                                kinds.push(v);
+                            }
+                        }
+                    }
+                }
             }
+            // a reading with no key unread: a field deleted, nothing reads better
+            if outcomes.iter().any(Vec::is_empty) {
+                return;
+            }
+            k += 1;
         }
-        let (next, error, path) = moved?;
-        filled = next;
-        text = error;
-        inserted.push((path, field));
-    }
-    None
-}
-
-/// The object at `path` in `json`, if one stands there.
-fn object_at<'a>(json: &'a serde_json::Value, path: &[String]) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
-    use serde_json::Value as J;
-    let mut at = json;
-    for step in path {
-        at = match at {
-            J::Object(o) => o.get(step)?,
-            J::Array(a) => a.get(step.parse::<usize>().ok()?)?,
-            _ => return None,
-        };
-    }
-    at.as_object()
-}
-
-/// `field` taken out of the object at `path` in `json`, if it stands there.
-fn remove_at(json: &mut serde_json::Value, path: &[String], field: &str) {
-    use serde_json::Value as J;
-    let mut at = json;
-    for step in path {
-        at = match at {
-            J::Object(o) => match o.get_mut(step) {
-                Some(v) => v,
-                None => return,
-            },
-            J::Array(a) => match step.parse::<usize>().ok().and_then(|i| a.get_mut(i)) {
-                Some(v) => v,
-                None => return,
-            },
-            _ => return,
-        };
-    }
-    if let J::Object(o) = at {
-        o.remove(field);
+        if refused && let Some(trial) = taken_unchanged {
+            explore_from(file, &trial, error, depth + 1, read, budget, outcomes);
+        }
     }
 }
 
-/// The paths of the objects of `json` lacking `field`, the likeliest first: tagged ones (a `type`
-/// text) and the objects below them, then those holding a text that reads as a variant (`CellIs`,
-/// `External`), then the rest; among each, the one holding the key nearest to `field` first.
+/// The paths of the objects of `json` lacking `field`, in the order of the part.
 fn candidates_lacking(json: &serde_json::Value, field: &str) -> Vec<Vec<String>> {
     use serde_json::Value as J;
-    fn walk(v: &J, field: &str, path: &mut Vec<String>, below_tagged: bool, out: &mut Vec<(usize, usize, Vec<String>)>) {
+    fn walk(v: &J, field: &str, path: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
         match v {
             J::Object(o) => {
-                let tagged = o.get("type").is_some_and(J::is_string);
                 if !o.contains_key(field) {
-                    let variant_like = o.values().any(|x| x.as_str().is_some_and(|t| t.starts_with(|c: char| c.is_ascii_uppercase())));
-                    let rank = if tagged || below_tagged { 0 } else if variant_like { 1 } else { 2 };
-                    let nearest = o.keys().map(|k| edit_distance(k, field)).min().unwrap_or(usize::MAX);
-                    out.push((rank, nearest, path.clone()));
+                    out.push(path.clone());
                 }
                 for (k, child) in o {
                     path.push(k.clone());
-                    walk(child, field, path, below_tagged || tagged, out);
+                    walk(child, field, path, out);
                     path.pop();
                 }
             }
             J::Array(a) => {
                 for (i, child) in a.iter().enumerate() {
                     path.push(i.to_string());
-                    walk(child, field, path, below_tagged, out);
+                    walk(child, field, path, out);
                     path.pop();
                 }
             }
@@ -1233,9 +1209,8 @@ fn candidates_lacking(json: &serde_json::Value, field: &str) -> Vec<Vec<String>>
         }
     }
     let mut out = Vec::new();
-    walk(json, field, &mut Vec::new(), false, &mut out);
-    out.sort_by_key(|(rank, nearest, _)| (*rank, *nearest));
-    out.into_iter().map(|(_, _, path)| path).collect()
+    walk(json, field, &mut Vec::new(), &mut out);
+    out
 }
 
 /// `value` set as `field` of the object at `path` in `json`; false when no object stands there.
@@ -1262,29 +1237,6 @@ fn insert_at(json: &mut serde_json::Value, path: &[String], field: &str, value: 
         }
         _ => false,
     }
-}
-
-/// The optimal string alignment distance between two names (letters added, dropped, changed or two
-/// swapped).
-fn edit_distance(a: &str, b: &str) -> usize {
-    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-    let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
-    for (i, row) in d.iter_mut().enumerate() {
-        row[0] = i;
-    }
-    for (j, cell) in d[0].iter_mut().enumerate() {
-        *cell = j;
-    }
-    for i in 1..=a.len() {
-        for j in 1..=b.len() {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            d[i][j] = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
-            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
-            }
-        }
-    }
-    d[a.len()][b.len()]
 }
 
 /// The first key, in an object holding a `type` (an internally tagged enum, in the file or in the

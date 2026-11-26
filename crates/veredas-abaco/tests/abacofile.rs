@@ -1118,6 +1118,22 @@ fn a_field_deleted_is_refused_as_missing_and_a_key_replacing_one_by_its_path() {
         let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replace("links = []", &format!("links = {links}")));
         assert!(got.contains(want), "{links}: {got}");
     }
+    // refute round 15: a link's tag deleted, the deserialiser's words (no read key named for the
+    // first variant that moves on); beside another link holding `url`, that one named; a replacing
+    // key past 64 links that lack the field, each link read alone
+    let internal = |row: usize| format!("[{row}, 1, {{ type = \"Internal\", location = \"Loads!A1\", tooltip = nan }}]");
+    for (links, want) in [
+        ("[[1, 1, { location = \"Loads!A1\", tooltip = nan }]]".to_string(), None),
+        ("[[1, 1, { location = \"Loads!A1\", tooltip = nan }], [2, 1, { type = \"External\", url = \"a\" }]]".to_string(), Some("`links.1.2.url` is a key nothing reads")),
+        (format!("[{}, [65, 1, {{ type = \"External\", url = \"a\" }}]]", (1..=64).map(internal).collect::<Vec<_>>().join(", ")), Some("`links.64.2.url` is a key nothing reads")),
+        (format!("[{}, [201, 1, {{ type = \"External\", url = \"a\" }}]]", (1..=200).map(internal).collect::<Vec<_>>().join(", ")), Some("`links.200.2.url` is a key nothing reads")),
+    ] {
+        let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replace("links = []", &format!("links = {links}")));
+        match want {
+            Some(want) => assert!(got.contains(want), "{}: {got}", &links[..links.len().min(120)]),
+            None => assert!(got.contains("missing field `type`") && !got.contains("is a key nothing reads"), "{links}: {got}"),
+        }
+    }
     // a format's rule: two fields replaced, the tag replaced by `kind`, a threshold's field far
     // renamed, a rule's field deleted
     let rules = AbacoFile::new(open(&corpus_dir().join("conditional_formatting/cf_tests.xlsx")));
@@ -1131,6 +1147,30 @@ fn a_field_deleted_is_refused_as_missing_and_a_key_replacing_one_by_its_path() {
     assert!(got.contains(".value` is a key nothing reads"), "{got}");
     let got = refusal(&parts, "sheets/", &|t| if cellis(t) { t.replacen("formula = ", "# formula = ", 1) } else { t.to_string() });
     assert!(got.contains("missing field `formula`") && !got.contains("is a key nothing reads"), "{got}");
+    // refute round 15: a colour replaced inside a rule (an untagged `Color`, whose refusal is no
+    // missing field), by its path; a rule's tag deleted, of every kind the file holds, the
+    // deserialiser's words
+    for (from, to, want) in [
+        ("positive_color = ", "positive_colour = ", ".cf_rule.positive_colour` is a key nothing reads"),
+        ("negative_color = ", "negativecolor = ", ".cf_rule.negativecolor` is a key nothing reads"),
+        ("\ncolor = \"#", "\ncolour = \"#", ".colour` is a key nothing reads"),
+    ] {
+        assert!(parts.iter().any(|(n, b)| n.starts_with("sheets/") && std::str::from_utf8(b).unwrap().contains(from)), "{from}");
+        let got = refusal(&parts, "sheets/", &|t| t.replacen(from, to, 1));
+        assert!(got.contains(want), "{to}: {got}");
+        if from.contains("\ncolor") {
+            assert!(got.contains(".cf_rule.thresholds."), "{got}");
+        }
+    }
+    for kind in ["CellIs", "DataBar", "ColorScale", "IconSet", "Top10", "Text"] {
+        let tag = format!("type = \"{kind}\"\n");
+        if !parts.iter().any(|(n, b)| n.starts_with("sheets/") && std::str::from_utf8(b).unwrap().contains(&tag)) {
+            assert!(!["CellIs", "DataBar", "ColorScale"].contains(&kind), "{kind}");
+            continue;
+        }
+        let got = refusal(&parts, "sheets/", &|t| t.replacen(&tag, "", 1));
+        assert!(got.contains("missing field `type`") && !got.contains("is a key nothing reads"), "{kind}: {got}");
+    }
 }
 
 #[test]
@@ -1576,4 +1616,53 @@ fn an_error_in_a_formula_reads_back_as_itself() {
     assert_eq!(std::fs::read(&again).unwrap(), first);
     let sheet = String::from_utf8(abacofile::parts(&back).unwrap().into_iter().find(|(n, _)| n.starts_with("sheets/")).unwrap().1).unwrap();
     assert!(sheet.contains("f = \"IFERROR(#N/IMPL!,1)\""), "{sheet}");
+}
+
+
+#[test]
+fn the_reader_knows_every_tagged_type_of_the_engine() {
+    // refute round 15: the reader reads each internally tagged object of a part alone, at its
+    // place (`links.N.2`, a `Link`; `conditional_formatting.N.cf_rule`, a `CfRule`), since inside
+    // one serde reads from a buffer `serde_ignored` never sees; the engine's source holds no other
+    // (`CfRuleInput` is its API's input, no part's), and its one untagged type, `Color`, holds no key
+    fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.is_dir() {
+                sources(&p, out);
+            } else if p.extension().is_some_and(|e| e == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    for krate in ["base", "xlsx"] {
+        sources(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../forks/ironcalc").join(krate).join("src"), &mut files);
+    }
+    let (mut tagged, mut untagged) = (Vec::new(), Vec::new());
+    for f in &files {
+        let text = std::fs::read_to_string(f).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, l) in lines.iter().enumerate() {
+            let attr = l.trim();
+            if !(attr.starts_with("#[serde(") && (attr.contains("tag") || attr.contains("untagged"))) {
+                continue;
+            }
+            let item = lines[i + 1..].iter().map(|l| l.trim()).find(|l| !l.starts_with("#[") && !l.starts_with("//")).unwrap_or_default();
+            let name = item.split_whitespace().skip_while(|w| *w != "enum" && *w != "struct").nth(1).unwrap_or(item).trim_end_matches('{').to_string();
+            if attr.contains("untagged") {
+                untagged.push(name);
+            } else {
+                tagged.push(name);
+            }
+        }
+    }
+    tagged.sort();
+    assert_eq!(tagged, ["CfRule", "CfRuleInput", "Link"], "the engine's internally tagged types");
+    assert_eq!(untagged, ["Color"], "the engine's untagged types");
+    // `Color`'s variants are a text, a tuple and none: no key of its own
+    let types = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../forks/ironcalc/base/src/types.rs")).unwrap();
+    let body = &types[types.find("pub enum Color {").unwrap()..];
+    let body = &body[..body.find("\n}").unwrap()];
+    assert!(!body.lines().skip(1).any(|l| l.trim_end().ends_with('{')), "a variant of `Color` holds keys:\n{body}");
 }

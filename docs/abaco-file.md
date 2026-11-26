@@ -17,9 +17,11 @@ opens with `format` and `version`, read before its body by the suite's one heade
 `veredas_core::schema`, C-045), so a part of another format, or of a version this Ábaco does not
 know, is refused by name, never guessed. A key nothing reads is refused too, at any depth of a
 part, by its path (`styles.fonts.0.szz`), and so is one that replaced a field the part then lacks
-(a link's `url` for its `target`: `links.0.2.url`), found by giving the part the field and reading
-it again, never by its spelling; a field deleted, no key standing for it, is refused in the
-reader's words (``missing field `min` ``). A tool's own records and state are tables whose keys
+(a link's `url` for its `target`: `links.0.2.url`), found by reading the object that lacks it
+alone (a link, a format's rule: inside one, the reader reads from a buffer that marks no key)
+with the field given, as each kind of value and each variant of a tag, the reading that leaves
+fewest keys unread deciding, never by its spelling; a field deleted, a tag too, no key standing
+for it, is refused in the reader's words (``missing field `min` ``). A tool's own records and state are tables whose keys
 the tool chooses.
 
 ## The parts
