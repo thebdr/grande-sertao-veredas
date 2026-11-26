@@ -7,20 +7,20 @@
     "cargo test -p orcl-interp --test file && cargo clippy -p orcl-interp --all-targets -- -D warnings"
   ],
   "exitCode": 0,
-  "outputSha": "503f20b8bcec20c3ab7d88eac493cf5a0bcaa4781fc448faf868905d636ddbb2",
-  "outputTail": "test every_kind_s_bytes_are_pinned_so_no_code_of_the_format_drifts_unseen ... ok\ntest a_tag_no_program_has_is_refused_at_its_own_byte_for_every_kind_of_tag ... ok\ntest a_count_one_past_the_bytes_left_is_refused_at_the_count ... ok\ntest a_file_of_another_format_is_said_so_whatever_its_language_says_or_however_short ... ok\ntest a_count_past_the_end_and_text_that_is_not_utf_8_are_refused_where_they_stand ... ok\ntest every_kind_of_instruction_is_written_and_read_back_to_the_same_program ... ok\ntest a_program_read_from_its_file_runs_as_the_one_written ... ok\ntest every_truncated_copy_is_refused_and_bytes_past_the_end_too ... ok\ntest every_damaged_byte_is_refused_or_reads_to_a_program_that_writes_back_to_those_very_bytes ... ok\n\ntest result: ok. 14 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 7.02s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s\n     Running tests/file.rs (target/debug/build/orcl-interp/7c97453c596330f1/out/file-7c97453c596330f1)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.26s",
-  "ranAt": "2026-11-26T22:07:38.256Z",
-  "headCommit": "0089d1a794188a930b1a7d0ef5fe174a6d429d4e",
+  "outputSha": "6747d9a04122620047b87177ae6fbf34e673b32a0e7b4540a5b95deb7490b7dc",
+  "outputTail": "test write_the_every_kind_fixture ... ignored, writes the fixture; run once by hand when the format changes on purpose, with its version\ntest a_file_of_another_format_is_said_so_whatever_its_language_says_or_however_short ... ok\ntest an_integer_outside_its_type_and_a_bool_neither_0_nor_1_are_refused_at_their_bytes ... ok\ntest every_other_kind_of_tag_is_refused_at_its_own_byte ... ok\ntest every_kind_s_bytes_are_pinned_so_no_code_of_the_format_drifts_unseen ... ok\ntest every_kind_of_instruction_is_written_and_read_back_to_the_same_program ... ok\ntest a_program_read_from_its_file_runs_as_the_one_written ... ok\ntest every_truncated_copy_is_refused_and_bytes_past_the_end_too ... ok\ntest every_damaged_byte_is_refused_or_reads_to_a_program_that_writes_back_to_those_very_bytes ... ok\n\ntest result: ok. 14 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.33s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running tests/file.rs (target/debug/build/orcl-interp/7c97453c596330f1/out/file-7c97453c596330f1)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s",
+  "ranAt": "2026-11-26T23:08:05.818Z",
+  "headCommit": "8a2b43fd4f1432695480fde27def8ce7a91849b5",
   "tests": [
     {
       "name": "crates/orcl-interp/tests/file.rs",
       "file": "crates/orcl-interp/tests/file.rs",
-      "fileSha": "ed9b0cd241a7cb7269f306831971eb0c19e56d67782de2f1ea3021a76974ffeb"
+      "fileSha": "27b17768e78317b48b8727b1b8cf484cf04cfc72cf6fa1e462353d0ba53efa90"
     },
     {
       "name": "crates/orcl-interp/tests/common/mod.rs",
       "file": "crates/orcl-interp/tests/common/mod.rs",
-      "fileSha": "a7530fcd004990be0858ba1c541ae51937d30ea04d353df5bd4ef3bf21b15825"
+      "fileSha": "27ca6cb3103386d495bb1316c4484e87409b41bfbf84db1c5d88c32732e6d37e"
     }
   ]
 }
