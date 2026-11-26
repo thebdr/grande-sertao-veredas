@@ -319,7 +319,12 @@ impl Workspace<'_> {
         let rust = self.read_as_rust(&used)?;
         let mut left: Vec<String> = Vec::new();
         for m in &used {
-            left.extend(left_out(self.tree, m, &dirs, &rust));
+            // A package nested in another a build uses: the outer one's modules (`imp.rs` beside
+            // `imp/`, an inline `mod imp {}`) and build script can read its test folders.
+            let nested = dirs.iter().any(|d| *d != m.dir && m.dir.starts_with(&prefix(d)));
+            if !nested {
+                left.extend(left_out(self.tree, m, &dirs, &rust));
+            }
         }
         // A package's folder without its test folders and without the packages a build uses
         // inside it, each of which has a key of its own.
@@ -468,15 +473,22 @@ impl Workspace<'_> {
         Ok(out)
     }
 
-    /// Every file of the tree rustc may read as Rust from the packages `used`: every `.rs` file in
-    /// their folders, every file a target starts from, and every file one of them names as Rust
-    /// (`#[path]`, `include!`), in turn, wherever it lies.
-    fn read_as_rust(&self, used: &[&Member]) -> Result<BTreeSet<String>, String> {
+    /// What rustc may read as Rust from the packages `used`: every `.rs` file in their folders
+    /// (`walked`), and every file or folder their sources (but those of their top test folders)
+    /// and the files their targets start from name as Rust (`#[path]`, `include!`), in turn,
+    /// wherever it lies (`named`).
+    fn read_as_rust(&self, used: &[&Member]) -> Result<Reached, String> {
+        let mut walked: Vec<String> = Vec::new();
         let mut files: Vec<String> = Vec::new();
         for m in used {
-            walk(self.tree, &m.dir, &[], &mut files).map_err(|e| format!("{}'s sources do not read: {e}", m.dir))?;
+            let mut here = Vec::new();
+            walk(self.tree, &m.dir, &[], &mut here).map_err(|e| format!("{}'s sources do not read: {e}", m.dir))?;
+            let top = prefix(&m.dir);
+            files.extend(here.iter().filter(|f| !TEST_FOLDERS.iter().any(|t| f.starts_with(&format!("{top}{t}/")))).cloned());
+            walked.extend(here);
             files.extend(m.sources.iter().filter_map(|s| normal(Path::new(s))));
         }
+        let mut names: BTreeSet<String> = BTreeSet::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut i = 0;
         while i < files.len() {
@@ -489,11 +501,13 @@ impl Workspace<'_> {
             let from = Path::new(&file).parent().unwrap_or(Path::new(""));
             for (lit, rust) in named(&text) {
                 if let Some(path) = normal(&from.join(&lit)).filter(|_| rust) {
+                    names.insert(path.clone());
                     files.push(path);
                 }
             }
         }
-        Ok(seen)
+        names.extend(used.iter().flat_map(|m| m.sources.iter().filter_map(|s| normal(Path::new(s)))));
+        Ok(Reached { walked: walked.into_iter().collect(), named: names })
     }
 
     /// The files outside `folders`, or inside a folder `left` leaves out, that the Rust sources of
@@ -577,19 +591,27 @@ fn prefix(dir: &str) -> String {
     if dir.is_empty() { String::new() } else { format!("{dir}/") }
 }
 
+/// What rustc may read as Rust from the packages a build uses ([`Workspace::read_as_rust`]).
+struct Reached {
+    walked: BTreeSet<String>,
+    named: BTreeSet<String>,
+}
+
 /// The top folders of a package (`crates/x/tests/`) holding its tests, benches and examples alone,
 /// which its folder's identity leaves out: each that the commit holds, that no target that ships (a
-/// library, an executable, a build script) starts in, that holds no package a build uses (`dirs`),
-/// in a package without a build script and with no file rustc may read as Rust (`rust`) at its
-/// top, whose modules rustc could read from those folders: a crate root, a `mod.rs`, a file a
-/// `#[path]` or an `include!` names there (`mod examples;` in it is `examples/mod.rs`).
-fn left_out(tree: &Path, m: &Member, dirs: &BTreeSet<&str>, rust: &BTreeSet<String>) -> Vec<String> {
+/// library, an executable, a build script) starts in, that holds no package a build uses (`dirs`)
+/// and nothing a source outside the test folders names as Rust (a `#[path]` to a file or a module
+/// folder there), in a package without a build script and with no file rustc may read as Rust at
+/// its top, whose modules rustc could read from those folders: a crate root, a `mod.rs`, a file a
+/// `#[path]` or an `include!` names there (`mod examples;` in it is `examples/mod.rs`). A package
+/// nested in another a build uses leaves none out (its caller's decision).
+fn left_out(tree: &Path, m: &Member, dirs: &BTreeSet<&str>, rust: &Reached) -> Vec<String> {
     // A build script may read anything in its package's folder (IronCalc's xlsx lists its
     // `tests/` to write code), so none of it is what only the tests read.
     if m.build_script {
         return Vec::new();
     }
-    if rust.iter().any(|f| Path::new(f).parent() == Some(Path::new(&m.dir))) {
+    if rust.walked.iter().chain(&rust.named).any(|f| Path::new(f).parent() == Some(Path::new(&m.dir))) {
         return Vec::new();
     }
     let top = prefix(&m.dir);
@@ -599,6 +621,7 @@ fn left_out(tree: &Path, m: &Member, dirs: &BTreeSet<&str>, rust: &BTreeSet<Stri
         .filter(|f| tree.join(f).is_dir())
         .filter(|f| !m.sources.iter().any(|s| normal(Path::new(s)).is_some_and(|p| p.starts_with(f.as_str()))))
         .filter(|f| !dirs.iter().any(|d| format!("{d}/").starts_with(f.as_str())))
+        .filter(|f| !rust.named.iter().any(|n| format!("{n}/").starts_with(f.as_str())))
         .collect()
 }
 
