@@ -32,7 +32,9 @@ fn a(last: u8) -> Ipv4Addr {
 fn checked(frames: &[Vec<u8>], fields: &[&str]) -> Vec<Vec<String>> {
     let dir = std::env::temp_dir().join(format!("veredas-aranha-read-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join(format!("frames-{}.pcap", frames.len()));
+    // A file of its own: tests run as threads of one process under `cargo test`.
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let file = dir.join(format!("frames-{}.pcap", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     std::fs::write(&file, common::pcap(frames)).unwrap();
     let mut cmd = std::process::Command::new(common::tshark());
     cmd.args(["-n", "-o", "ip.check_checksum:TRUE", "-o", "udp.check_checksum:TRUE", "-r"]).arg(&file).args(["-T", "fields", "-E", "occurrence=a", "-E", "aggregator=,"]);
