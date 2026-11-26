@@ -804,7 +804,7 @@ pub fn prove(r: &Recipe, ova: &Path, release: &str, canvas: (u8, u8, u8), bundle
     let qmp = vm::free_port()?;
     let console = work.join("proof-console.log");
     let mut m = boot(r, &vmdk, port, Some(qmp), &console)?;
-    m.wait_for("VEREDAS-SUMS-", Duration::from_secs(300))?;
+    m.wait_until("the boot's check", Duration::from_secs(300), check_begun)?;
     let plant = crate::together::read_plant(([127, 0, 0, 1], port).into(), Duration::from_secs(300), Duration::from_secs(2));
     let screen = work.join("proof-screen.ppm");
     let (mut seen, mut share) = (0, 0.0);
@@ -875,7 +875,9 @@ pub fn rejoined(console: &str) -> String {
             Some(head) => head + line,
             None => line.to_string(),
         };
-        match stamp(&line) {
+        // agetty's prompt (`veredas login: `) ends with no newline, so what prints next lands on its
+        // line: no cut, and the prompt stays where it was said.
+        match stamp(&line).filter(|&at| !line[..at].ends_with("login: ")) {
             Some(at) => {
                 out.push_str(&line[at..]);
                 out.push('\n');
@@ -892,6 +894,17 @@ pub fn rejoined(console: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Whether the boot's check has begun on `console` (its first line said), read rejoined: a kernel
+/// record cutting the marker would otherwise hold the proof until its time runs out.
+pub fn check_begun(console: &str) -> bool {
+    rejoined(console).contains("VEREDAS-SUMS-")
+}
+
+/// Whether the boot's check has said its last line on `console`, read rejoined.
+pub fn check_finished(console: &str) -> bool {
+    rejoined(console).contains("VEREDAS-ATUALIZAR ")
 }
 
 /// Why the console does not show the root file system on a disk of the paravirtual SCSI host, as
@@ -1153,7 +1166,7 @@ pub fn prove_update(r: &Recipe, vmdk: &Path, newer: &Path, work: &Path) -> Resul
     let text = m.console();
     let again = work.join("update-reboot-console.log");
     let mut m = Vm::start(&spec(&again, vec![], false))?;
-    m.wait_for("VEREDAS-ATUALIZAR ", Duration::from_secs(300))?;
+    m.wait_until("the boot's check", Duration::from_secs(300), check_finished)?;
     let reboot_plant = crate::together::read_plant(([127, 0, 0, 1], port).into(), Duration::from_secs(300), Duration::from_secs(2));
     let reboot_console = m.console();
     m.kill();
@@ -1216,7 +1229,7 @@ pub fn update_faults(p: &UpdateProof, release: &str, newer: &str, target: &str) 
     out.extend(crate::together::plant_faults(&p.plant));
     // Booted again: the boot's own check on the new release, the plant served from the boot.
     for line in [format!("VEREDAS-SUMS-OK {newer}"), "VEREDAS-ON-PATH ok".to_string(), "VEREDAS-ATUALIZAR ok".to_string()] {
-        if !p.reboot_console.lines().any(|l| l.trim_end().ends_with(line.as_str())) {
+        if !rejoined(&p.reboot_console).lines().any(|l| l.trim_end().ends_with(line.as_str())) {
             out.push(format!("booted again, the machine's check does not say `{line}`"));
         }
     }

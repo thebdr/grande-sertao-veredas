@@ -228,16 +228,21 @@ impl Vm {
 
     /// Waits until the console holds `line`, the machine still running.
     pub fn wait_for(&mut self, line: &str, within: Duration) -> Result<(), VmError> {
+        self.wait_until(&format!("print `{line}`"), within, |c| c.contains(line))
+    }
+
+    /// Waits until `done` holds of the console, `what` naming it in a timeout.
+    pub fn wait_until(&mut self, what: &str, within: Duration, done: impl Fn(&str) -> bool) -> Result<(), VmError> {
         let start = Instant::now();
         loop {
-            if self.console().contains(line) {
+            if done(&self.console()) {
                 return Ok(());
             }
             if let Some(status) = self.child.try_wait()? {
                 return Err(VmError::Failed { program: "qemu-system-x86_64".into(), status: status.to_string(), stderr: self.stderr() + &self.tail() });
             }
             if start.elapsed() > within {
-                return Err(VmError::Timeout { what: format!("print `{line}`"), secs: within.as_secs(), tail: self.tail() });
+                return Err(VmError::Timeout { what: what.to_string(), secs: within.as_secs(), tail: self.tail() });
             }
             std::thread::sleep(Duration::from_millis(500));
         }

@@ -501,6 +501,11 @@ fn the_update_inside_the_machine_is_judged_by_what_its_console_and_the_host_say(
     let proof = |console: &str, page: u16, after: &str| full(console, page, &reboot, 200, after);
     let faults = |console: &str| maquina::update_faults(&proof(console, 200, "a"), "1.0.0", "1.1.0", TARGET);
     assert_eq!(faults(&good), Vec::<String>::new());
+    // The boot again on the new release, a line of its check cut by a kernel record (journald's way
+    // to the console lets one print inside it): read put back, no fault.
+    let cut = reboot.replacen("VEREDAS-ON-PATH ok\n", "VEREDAS-ON-[    9.200000] audit: type=1400 apparmor=\"STATUS\"\nPATH ok\n", 1);
+    assert!(!cut.contains("VEREDAS-ON-PATH ok"));
+    assert_eq!(maquina::update_faults(&full(&good, 200, &cut, 200, "a"), "1.0.0", "1.1.0", TARGET), Vec::<String>::new());
     for (from, to, want) in [
         ("ALFORGE-UPDATE-EXIT 0", "ALFORGE-UPDATE-EXIT 2", vec!["the update command did not install the bundle (it exited 2)".to_string()]),
         (&format!("ALFORGE-CURRENT {new}") as &str, &format!("ALFORGE-CURRENT {old}") as &str, vec![format!("`current` names {old}, not {new}")]),

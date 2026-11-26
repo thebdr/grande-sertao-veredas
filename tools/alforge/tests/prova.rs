@@ -263,6 +263,29 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
         "[    4.157185] audit: one\n[    4.160749] audit: two\na=\"STATUS\" comm=rest\n"
     );
     assert_eq!(maquina::rejoined("[    8.935130] veredas-verifica[600]: VEREDAS-SUMS-OK 2.0.0\n"), "[    8.935130] veredas-verifica[600]: VEREDAS-SUMS-OK 2.0.0\n", "a stamp at its line's start no cut");
+    // The check's lines as journald stamps them, and agetty's prompt as it leaves it, with no newline:
+    // what prints next lands on its line. A check said after the prompt, whole or in part, is named
+    // (the prompt never taken for a cut line); one said before it, the prompt's line holding a
+    // kernel record, is not.
+    let stamped: String = good
+        .lines()
+        .map(|l| if l.starts_with("VEREDAS-") { format!("[    9.000000] veredas-verifica[600]: {l}\n") } else { format!("{l}\n") })
+        .collect();
+    assert_eq!(maquina::proof_faults(&proof(&stamped, 0.3, "a"), "2.0.0"), Vec::<String>::new());
+    let login = "the boot's check said its lines after a login started on the serial console".to_string();
+    let all_after = stamped.replacen("[    9.000000] veredas-verifica[600]: VEREDAS-SUMS-OK", "veredas login: [    9.000000] veredas-verifica[600]: VEREDAS-SUMS-OK", 1);
+    assert_eq!(maquina::proof_faults(&proof(&all_after, 0.3, "a"), "2.0.0"), std::slice::from_ref(&login));
+    let last_after = stamped.replacen("[    9.000000] veredas-verifica[600]: VEREDAS-ATUALIZAR", "veredas login: [    9.000000] veredas-verifica[600]: VEREDAS-ATUALIZAR", 1);
+    assert_eq!(maquina::proof_faults(&proof(&last_after, 0.3, "a"), "2.0.0"), std::slice::from_ref(&login));
+    let prompt_after = format!("{stamped}veredas login: [  534.901249] systemd-ssh-generator[12084]: Binding SSH to AF_UNIX socket\n");
+    assert_eq!(maquina::proof_faults(&proof(&prompt_after, 0.3, "a"), "2.0.0"), Vec::<String>::new());
+    assert_eq!(maquina::rejoined("veredas login: [  534.901249] systemd-ssh-generator[12084]: x\nnext\n"), "veredas login: [  534.901249] systemd-ssh-generator[12084]: x\nnext\n");
+    // The proof waits on the check as it is said: its first line's marker cut by a kernel record is
+    // still seen, as its last line's is.
+    let cut_marker = "[    9.000000] veredas-verifica[600]: VEREDAS-SU[    9.000100] audit: type=1400\nMS-OK 2.0.0\n";
+    assert!(!cut_marker.contains("VEREDAS-SUMS-") && maquina::check_begun(cut_marker));
+    assert!(!maquina::check_begun("[    9.000000] veredas-verifica[600]: nothing yet\n"));
+    assert!(maquina::check_finished("VEREDAS-ATUA[    9.000100] audit: type=1400\nLIZAR ok\n") && !maquina::check_finished("VEREDAS-SUMS-OK 2.0.0\n"));
     let late = format!("{kernel}veredas login: \nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
     assert_eq!(maquina::proof_faults(&proof(&late, 0.3, "a"), "2.0.0"), ["the boot's check said its lines after a login started on the serial console"]);
     // A login between two of its lines, the check's first said before it and the rest after: named
@@ -613,6 +636,20 @@ if [ -x /usr/local/sbin/veredas-atualizar ] && python3 -c 'import tomllib, tarfi
     let ran = std::process::Command::new("sh").arg("-c").arg(&fragment).output().unwrap();
     assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
     let section = body("cat >> /home/veredas/README-veredas.md <<'GUIDE'");
+    // The update's section whole, as the tester reads it: the command, the digest to compare, what is
+    // checked and kept, and the way back.
+    assert_eq!(
+        section,
+        "\n## Updating to a newer release\n\
+         Copy the newer release's bundle (`veredas-<release>-x86_64-unknown-linux-gnu.tar.gz`) into this\n\
+         machine, then, in a terminal: `sudo veredas-atualizar <the bundle>` (the password is the user's).\n\
+         It prints the bundle's SHA-256 (compare it with the one handed over), checks every file, the\n\
+         manifest and that the release is newer, installs it beside the release here under `/opt/veredas/`,\n\
+         points `/opt/veredas/current` at it, and restarts the bench and supervisão on it. Your plant in\n\
+         `~/planta/` is left as it is; the new release's own plant is in `/opt/veredas/current/planta/`.\n\
+         Refused, it changes nothing and says why. The release before stays in `/opt/veredas/`; to go back,\n\
+         `sudo ln -sfn <its folder's name> /opt/veredas/current` and restart both services.\n"
+    );
     assert_eq!(std::fs::read_to_string(home.join("README-veredas.md")).unwrap(), format!("{sample}{section}"));
     assert_eq!(std::fs::read_link(home.join("Desktop/README-veredas.md")).unwrap(), home.join("README-veredas.md"));
     // A recipe that leaves out what it removes is refused: removal is stated, never assumed.
