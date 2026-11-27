@@ -145,6 +145,15 @@ mod names2;
 #[allow(dead_code)]
 #[path = "programs/sound2.rs"]
 mod sound2;
+#[allow(dead_code)]
+#[path = "programs/faults2.rs"]
+mod faults2;
+#[allow(dead_code)]
+#[path = "programs/refs2.rs"]
+mod refs2;
+#[allow(dead_code)]
+#[path = "programs/consts.rs"]
+mod consts;
 
 use std::fmt::Debug;
 use std::fs;
@@ -589,6 +598,12 @@ image!(sound2::Outputs {
     mode: u16, lamp: u8, step: i16, flag: u8, level: i16, band: u8, shl: u16, sar: i32, popped: u8, wide: i64,
     early: bool, held: Duration,
 });
+image!(faults2::Inputs { sel: u8, a: i32, b: i32, sh: u32 });
+image!(faults2::Outputs { v: i32, w: u16 });
+image!(refs2::Inputs { a: u8, b: u8, sel: u8 });
+image!(refs2::Outputs { x: u8, y: u16, found: bool, z: u8, area: u16, got: i16 });
+image!(consts::Inputs { sel: u8, k: u8 });
+image!(consts::Outputs { code: u8, d: Duration, i: i64, f: f32, w: u64, b: u8 });
 
 // Inputs drawn from a scan's index, the same for the native program and its lowered twin.
 
@@ -1208,6 +1223,18 @@ fn the_driver_reads_a_crate_name_given_with_an_equals_sign() {
     assert!(file.exists(), "the program named by `--crate-name=` lowered");
 }
 
+/// `--crate-name=` read before rustc runs: the program named so with no revision is the usage error before anything
+/// is compiled (no `--extern`, so a compiled crate would fail with exit 1).
+#[test]
+fn a_crate_name_with_an_equals_sign_is_read_before_rustc_runs() {
+    let source = program("lines").display().to_string();
+    let mut args = strings(&["--crate-name=lines", "--crate-type", "rlib", &source]);
+    args.extend(strings(&["--orcl-program=lines", "--orcl-out=/nonexistent/x.orclb"]));
+    let out = driver(&args);
+    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("error: orcl-front: usage: --orcl-revision names no revision"));
+}
+
 #[test]
 fn the_driver_drops_a_wrapped_rustc_exe() {
     // as `RUSTC_WRAPPER` of a compiler named `rustc.exe`, its path dropped as `/usr/bin/rustc`'s is
@@ -1437,6 +1464,24 @@ fn every_check_a_scan_fails_names_its_kind_and_place() {
             (ErrorKind::Check(check), file.as_str(), line, column),
             "{snippet}"
         );
+    }
+}
+
+/// The checks `faults` does not fail: a shift right past its width and a remainder's overflow, each by its kind and
+/// place, and the division's overflow beside them.
+#[test]
+fn every_overflow_names_its_operation() {
+    let (_, code) = lower("faults2", &program("faults2")).result.unwrap();
+    let base = faults2::Inputs { sel: 0, a: 0, b: 1, sh: 0 };
+    let cases: [(faults2::Inputs, Check, &str); 3] = [
+        (faults2::Inputs { sel: 0, sh: 16, ..base }, Check::Overflow(BinOp::Shr), "self.x >> i.sh"),
+        (faults2::Inputs { sel: 1, a: i32::MIN, b: -1, ..base }, Check::Overflow(BinOp::Rem), "i.a % i.b"),
+        (faults2::Inputs { sel: 2, a: i32::MIN, b: -1, ..base }, Check::Overflow(BinOp::Div), "i.a / i.b"),
+    ];
+    for (inputs, check, snippet) in cases {
+        let e = fault::<_, faults2::Outputs>(&code, &inputs);
+        let (line, column) = place_of(&program("faults2"), snippet);
+        assert_eq!((e.kind, e.at.line as usize, e.at.column as usize), (ErrorKind::Check(check), line, column), "{snippet}");
     }
 }
 
@@ -2529,6 +2574,30 @@ fn sound2_runs_as_natively() {
     both(&outputs, "step back", |o| o.step < -300);
 }
 
+#[test]
+fn refs2_runs_as_natively() {
+    let inputs = |k: u64| refs2::Inputs { a: (mix(k, 1) % 7) as u8, b: (mix(k, 2) % 9) as u8, sel: mix(k, 3) as u8 };
+    let (outputs, _) = conform("refs2", refs2::PRefs::default(), "PRefs", &inputs, 2_000);
+    both(&outputs, "found", |o| o.found);
+    both(&outputs, "x from a", |o| o.x > 6);
+    both(&outputs, "a negative area", |o| o.got < 0);
+}
+
+#[test]
+fn consts_run_as_natively() {
+    let inputs = |k: u64| consts::Inputs { sel: mix(k, 1) as u8, k: mix(k, 2) as u8 };
+    let (outputs, _) = conform("consts", consts::PConsts::default(), "PConsts", &inputs, 2_000);
+    for c in [1u8, 2, 3, 10, 11, 12, 20, 21] {
+        both(&outputs, &format!("code {c}"), |o| o.code == c);
+    }
+    both(&outputs, "i64::MIN", |o| o.i == i64::MIN);
+    both(&outputs, "-128", |o| o.i == -128);
+    both(&outputs, "u64::MAX", |o| o.w == u64::MAX);
+    both(&outputs, "Duration::MAX", |o| o.d == Duration::MAX);
+    both(&outputs, "infinity", |o| o.f == f32::INFINITY);
+    both(&outputs, "minus zero", |o| o.f == 0.0 && o.f.is_sign_negative());
+}
+
 /// The driver's arguments for the crate `source`, compiled in `work` with no `--crate-name` (the compiler names it),
 /// the program `lines` named and the options `options` beside.
 fn by_the_compiler_s_name(work: &Path, source: &Path, options: &[&str]) -> Vec<String> {
@@ -2602,4 +2671,22 @@ fn with_no_crate_name_the_compiler_s_name_for_the_crate_decides() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "lines");
     assert!(!file.exists(), "nothing lowered when the compiler only prints");
+}
+
+/// With no `--crate-name`, the program named by its file and no revision given: the usage error, exit 2, nothing built
+/// or written, as with `--crate-name` (`the_driver_refuses_a_program_named_with_no_revision`).
+#[test]
+fn by_the_compiler_s_name_a_missing_revision_is_refused() {
+    let work = fresh("no-crate-name-no-revision");
+    compile_std(&work, &[]);
+    let file = work.join("lines.orclb");
+    let source = work.join("lines.rs");
+    fs::copy(program("lines"), &source).unwrap();
+    let out_option = format!("--orcl-out={}", file.display());
+    let out = driver(&by_the_compiler_s_name(&work, &source, &[&out_option]));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("error: orcl-front: usage: --orcl-revision names no revision"), "{stderr}");
+    assert!(!file.exists(), "no file written");
+    assert!(!work.join("liblines.rlib").exists(), "the crate `lines` not built");
 }
