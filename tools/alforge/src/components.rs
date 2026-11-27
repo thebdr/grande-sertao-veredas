@@ -224,7 +224,10 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[(Stri
             let p = &found[*id];
             match (paren, &p.source) {
                 (None, Some(src)) => src == CRATES_IO,
-                (Some(path), None) => p.dir.as_ref().is_some_and(|d| Path::new(path) == base.join(d)),
+                (Some(path), None) => p.dir.as_ref().is_some_and(|d| {
+                    let (printed, held) = (Path::new(path), base.join(d));
+                    printed == held || printed.canonicalize().ok().is_some_and(|a| held.canonicalize().ok() == Some(a))
+                }),
                 (Some(printed), Some(src)) => match (printed.strip_prefix("registry `"), src.strip_prefix("git+")) {
                     (Some(r), _) => {
                         // A registry the configuration names is printed by its name
@@ -248,12 +251,19 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[(Stri
                 (None, None) => false,
             }
         };
-        // A package cargo's metadata does not hold (a dependency on a package with no library,
-        // which cargo ignores): no package of the build, nor anything below it.
+        // A package by path cargo's metadata does not hold (a dependency on a package with no
+        // library, which cargo ignores): no package of the build, nor anything below it. A crate it
+        // does not hold cargo resolved outside the lock (C-290 refuses such a component first):
+        // refused, never dropped.
         if ids.is_empty() {
-            return Ok(None);
+            return match paren {
+                Some(path) if path.starts_with('/') => Ok(None),
+                _ => Err(refused(format!("commit {commit}: cargo tree printed `{line}`, which the commit's lock does not pin"))),
+            };
         }
-        let picked: Vec<&String> = if ids.len() == 1 { ids.iter().collect() } else { ids.iter().filter(fits).collect() };
+        // Its source held to the package's whole, whatever the number of candidates: a crate of
+        // crates.io beside a git twin of its name and version is not that twin.
+        let picked: Vec<&String> = ids.iter().filter(fits).collect();
         match picked.as_slice() {
             [one] => Ok(Some((*one).clone())),
             _ => Err(refused(format!("commit {commit}: cargo tree printed `{line}`, which names {} of its packages", picked.len()))),

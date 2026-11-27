@@ -532,31 +532,61 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                 if lock_text.is_some() {
                     argv.push("--locked");
                 }
-                let locked: Vec<inputs::Locked> = lock_text.as_deref().and_then(|t| inputs::parse_lock(t).ok()).unwrap_or_default().into_iter().filter(|l| l.source.is_some()).collect();
+                let locked: Vec<inputs::Locked> = lock_text.as_deref().and_then(|t| inputs::parse_lock(t).ok()).unwrap_or_default();
                 let out = run(&argv)?;
                 if !out.status.success() {
                     let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
                     inputs = Err(format!("cargo cannot tree {name}'s executables with what they need offline: {}", why.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" / ")));
                 } else {
                     let mut unpinned: BTreeSet<String> = BTreeSet::new();
+                    let mut unreached: BTreeSet<String> = BTreeSet::new();
                     let mut charged: Vec<&inputs::Locked> = Vec::new();
                     for line in String::from_utf8_lossy(&out.stdout).lines() {
                         let line = line.strip_suffix(" (*)").unwrap_or(line);
                         let Some((n, rest)) = line.split_once(" v") else { continue };
                         let (v, rest) = rest.split_once(' ').unwrap_or((rest, ""));
                         let rest = rest.strip_prefix("(proc-macro)").map_or(rest, str::trim_start);
-                        // A package by path is a member's or a fork's, its folder named.
-                        if rest.starts_with("(/") {
-                            continue;
-                        }
-                        // Each lock entry of that name and version (of every source, failing safe).
-                        let entries: Vec<&inputs::Locked> = locked.iter().filter(|l| l.name == n && l.version == v).collect();
+                        // Each node held to a lock entry of its own kind: a package by path to one
+                        // without a source (an optional dependency by path of a fork the members
+                        // never turn on is in no lock), a crate of crates.io to crates.io's, any
+                        // other to one of another source (of every such source, failing safe).
+                        let by_path = rest.starts_with("(/");
+                        let entries: Vec<&inputs::Locked> = locked
+                            .iter()
+                            .filter(|l| l.name == n && l.version == v)
+                            .filter(|l| match (by_path, rest.is_empty(), l.source.as_deref()) {
+                                (true, _, source) => source.is_none(),
+                                (false, true, source) => source == Some(inputs::CRATES_IO),
+                                (false, false, source) => source.is_some_and(|s| s != inputs::CRATES_IO),
+                            })
+                            .collect();
                         if entries.is_empty() {
                             unpinned.insert(format!("{n} {v}"));
                         }
-                        charged.extend(entries);
+                        // A package by path is charged by its folder, which the version's inputs
+                        // must hold (the lock's edges reach it from the component); a crate by its
+                        // lock entry.
+                        if by_path {
+                            let printed = Path::new(rest.trim_start_matches('(').trim_end_matches(')'));
+                            let canonical = tree.canonicalize().unwrap_or_else(|_| tree.clone());
+                            let folder: Option<String> = printed.strip_prefix(&tree).or_else(|_| printed.strip_prefix(&canonical)).ok().map(|p| p.display().to_string());
+                            if !entries.is_empty()
+                                && let (Ok(named), Some(folder)) = (inputs.as_ref(), folder)
+                                && !named.covers(&format!("{folder}/Cargo.toml"))
+                            {
+                                unreached.insert(format!("{n} {v} ({folder})"));
+                            }
+                        } else {
+                            charged.extend(entries);
+                        }
                     }
-                    if unpinned.is_empty() {
+                    if !unreached.is_empty() && unpinned.is_empty() {
+                        inputs = Err(format!(
+                            "its executables need `{}`, under which cargo builds {} by path, whose folder the lock's edges do not reach from it: no version names it",
+                            dep_features.iter().map(|f| f.as_str()).collect::<Vec<_>>().join("`, `"),
+                            unreached.into_iter().collect::<Vec<_>>().join(", ")
+                        ));
+                    } else if unpinned.is_empty() {
                         if let Ok(named) = inputs.as_mut() {
                             for l in charged {
                                 named.0.entry(l.named()).or_insert_with(|| l.checksum.clone().unwrap_or_default());

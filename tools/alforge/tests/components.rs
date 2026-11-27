@@ -797,3 +797,80 @@ fn a_dependencys_feature_no_lock_pins_and_a_weak_feature_across_two_components()
     let (together, _) = cargo_builds(r.path(), &["veredas-core@2.1.0", "veredas-portal@2.0.3"], &[]);
     assert!(together.iter().any(|(n, _)| n == "serde_derive"), "{together:?}");
 }
+
+/// Round 8's forms, each a dependency's feature an executable needs reaching what the lock does not
+/// pin: an optional dependency by path of a fork (`garfo/extra`), and a crate of crates.io whose git
+/// twin of one name and version the lock pins (`hashbrown/default-hasher` reaching foldhash). Each is
+/// refused by C-290 and so by the list, never dropped nor taken for the twin.
+#[test]
+fn a_forks_optional_dependency_by_path_and_a_crates_git_twin_reached_outside_the_lock() {
+    let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let core = |deps: &str, needs: &str| {
+        format!("[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n{deps}\n\n[[bin]]\nname = \"veredas-core\"\npath = \"src/main.rs\"\nrequired-features = [\"{needs}\"]\n")
+    };
+    // A fork's optional dependency by path, which no member turns on.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\nexclude = [\"forks\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", &core("[dependencies]\ngarfo = { path = \"../../forks/garfo\" }\n\n[dev-dependencies]\nryu = \"1\"", "garfo/extra"));
+    r.write("crates/veredas-core/src/main.rs", "fn main() {}\n");
+    r.write("forks/garfo/Cargo.toml", "[workspace]\n\n[package]\nname = \"garfo\"\nversion = \"0.3.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nextra = { path = \"../extra\", optional = true }\n\n[features]\nextra = [\"dep:extra\"]\n");
+    r.write("forks/garfo/src/lib.rs", "\n");
+    r.write("forks/extra/Cargo.toml", "[workspace]\n\n[package]\nname = \"extra\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"Apache-2.0\"\n\n[dependencies]\nryu = \"1\"\n");
+    r.write("forks/extra/src/lib.rs", "\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!std::fs::read_to_string(r.path().join("Cargo.lock")).unwrap().contains("name = \"extra\""));
+    let c = r.commit("a fork's optional dependency by path");
+    let why = "veredas-core's build inputs do not read: its executables need `garfo/extra`, under which cargo builds extra 0.1.0 that its Cargo.lock does not pin: a dependency's feature no member turns on is resolved outside the lock";
+    assert_eq!(alforge::components::list(r.path(), &c, None).unwrap_err().to_string(), why);
+    // Cargo's own build compiles it, the lock as it was.
+    let (built, _) = cargo_builds(r.path(), &["veredas-core@2.1.0", "--features garfo/extra"], &[]);
+    assert!(built.contains(&("extra".to_string(), "0.1.0".to_string())), "{built:?}");
+    // The lock pinning it for another member, by path: the lock's edges then reach it from core
+    // too, and its folder and what it uses are core's inputs.
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\", \"crates/veredas-outro\"]\nexclude = [\"forks\"]\n");
+    r.write("crates/veredas-outro/Cargo.toml", "[package]\nname = \"veredas-outro\"\nversion = \"2.0.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nextra = { path = \"../../forks/extra\" }\n");
+    r.write("crates/veredas-outro/src/lib.rs", "\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let c = r.commit("extra pinned for another member");
+    let held = alforge::manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    let named = &held["veredas-core"].inputs.as_ref().unwrap().0;
+    for k in ["forks/extra/", "forks/garfo/", "Cargo.lock: ryu 1.0.23"] {
+        assert!(named.contains_key(k), "{k}: {named:?}");
+    }
+
+    // crates.io's foldhash reached by `hashbrown/default-hasher`, its git twin the lock's alone.
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("cargo-home");
+    own_cargo_home(&home, "");
+    let src = std::fs::read_dir(machine_cargo_home().join("registry/src")).unwrap().map(|e| e.unwrap().path()).find(|p| p.file_name().unwrap().to_string_lossy().starts_with("index.crates.io-")).unwrap().join("foldhash-0.1.5");
+    let twin = Repo::new();
+    assert!(Command::new("cp").arg("-r").arg(format!("{}/.", src.display())).arg(twin.path()).status().unwrap().success());
+    let _ = std::fs::remove_file(twin.path().join(".cargo-ok"));
+    let _ = std::fs::remove_file(twin.path().join(".cargo_vcs_info.json"));
+    twin.commit("foldhash 0.1.5 as crates.io ships it");
+    let url = format!("file://{}", twin.path().display());
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
+    r.write("crates/veredas-portal/Cargo.toml", &format!("[package]\nname = \"veredas-portal\"\nversion = \"2.0.3\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nfoldhash = {{ git = \"{url}\" }}\n"));
+    r.write("crates/veredas-portal/src/lib.rs", "\n");
+    r.write("crates/veredas-core/src/main.rs", "fn main() {}\n");
+    // The git twin fetched first (by `file://` alone), then crates.io's hashbrown locked offline.
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-portal\"]\n");
+    let out = cargo().args(["fetch"]).env("CARGO_HOME", &home).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", &core("[dependencies]\nhashbrown = { version = \"=0.15.5\", default-features = false }", "hashbrown/default-hasher"));
+    let out = cargo().args(["generate-lockfile", "--offline"]).env("CARGO_HOME", &home).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let lock = std::fs::read_to_string(r.path().join("Cargo.lock")).unwrap();
+    assert_eq!(lock.matches("name = \"foldhash\"").count(), 1, "the git twin alone: {lock}");
+    let c = r.commit("crates.io's foldhash beside its git twin");
+    let run = Command::new(env!("CARGO_BIN_EXE_alforge")).args(["components", &c]).env("CARGO_HOME", &home).current_dir(r.path()).output().unwrap();
+    assert_eq!(run.status.code(), Some(2), "{}", String::from_utf8_lossy(&run.stdout));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr).trim(),
+        "veredas-core's build inputs do not read: its executables need `hashbrown/default-hasher`, under which cargo builds foldhash 0.1.5 that its Cargo.lock does not pin: a dependency's feature no member turns on is resolved outside the lock"
+    );
+}
