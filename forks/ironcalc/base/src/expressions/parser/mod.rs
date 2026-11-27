@@ -128,10 +128,13 @@ pub(crate) fn strip_prefix_any_case<'n>(name: &'n str, prefix: &str) -> Option<&
 /// Whether a function's name is LAMBDA's, its `_xlfn.` and `_xlws.` prefixes passed over in any
 /// case (Veredas fork change 43).
 fn is_lambda_name(name: &str) -> bool {
+    // through `strip_prefix_any_case`, which slices on a character's boundary alone: a name holding
+    // a character of more than a byte across the prefix's length (`Variação(`) is no prefix of one
+    // (Veredas fork change 43, refined: it panicked)
     let mut rest = name;
     for prefix in ["_xlfn.", "_xlws."] {
-        if rest.len() >= prefix.len() && rest[..prefix.len()].eq_ignore_ascii_case(prefix) {
-            rest = &rest[prefix.len()..];
+        if let Some(stripped) = strip_prefix_any_case(rest, prefix) {
+            rest = stripped;
         }
     }
     rest.eq_ignore_ascii_case("LAMBDA")

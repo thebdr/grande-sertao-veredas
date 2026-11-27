@@ -380,3 +380,16 @@ fn a_lambda_is_read_in_any_spelling_the_file_s_prefixes_give_it() {
     assert!(!matches!(p.parse("_xlfn.LAMBDAX(x,x*2)", &cell()), Node::LambdaDefKind { .. }));
 }
 
+#[test]
+fn a_name_of_characters_beyond_ascii_is_read_whatever_its_bytes() {
+    // Veredas fork change 43, refined: the test of LAMBDA's name sliced the name at a prefix's
+    // length, inside a character of more than a byte (`ç`), and panicked
+    let mut p = parser();
+    for formula in ["Variação(1)", "Função(1)", "_xlfn.Função(1)", "_xlfn.Açã(1)", "A销售(1)", "Ação(x)", "ÁREA(2)"] {
+        let node = p.parse(formula, &cell());
+        assert!(matches!(node, Node::NamedFunctionKind { .. }), "{formula}: {node:?}");
+    }
+    assert!(super::super::strip_prefix_any_case("Variação", "_xlfn.").is_none());
+    assert_eq!(super::super::strip_prefix_any_case("_XLFN.Função", "_xlfn."), Some("Função"));
+}
+
