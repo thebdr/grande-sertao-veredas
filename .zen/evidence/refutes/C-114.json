@@ -1,13 +1,13 @@
 {
   "clause": "C-114",
   "verdict": "refuted",
-  "ranAt": "2026-11-26T13:11:33.097Z",
-  "headCommit": "9e9e33cbb94d020e0ec1122c9f4b1842aba7f769",
+  "ranAt": "2026-11-27T00:44:45.223Z",
+  "headCommit": "0eb754d7aa2c64dcc37f4aaceffce6a8cf5dc0e0",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/fisica.rs",
       "file": "crates/veredas-maquinar/tests/fisica.rs",
-      "symbolSha": "cf8d9cd742f8168121805b30e0c0535c6f0f246f52a4673b2a425710ed268abf"
+      "symbolSha": "e17bb6772988b9f246d6fdb153da05d32fc260480698486b23018bf1ba47e51d"
     }
   ]
 }
