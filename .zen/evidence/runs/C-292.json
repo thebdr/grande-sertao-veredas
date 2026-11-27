@@ -17,20 +17,20 @@
     "maquina"
   ],
   "exitCode": 0,
-  "outputSha": "96898f08a18e50b339fb409598b6acfa16a16766bb3663fd248b282936c3c63a",
-  "outputTail": "        SLOW [>1620.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1680.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1740.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1800.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1860.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1920.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>1980.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2040.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2100.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2160.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2220.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2280.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        PASS [2326.143s] (10/10) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n────────────\n     Summary [2326.143s] 10 tests run: 10 passed (1 slow), 0 skipped",
-  "ranAt": "2026-11-27T00:54:57.139Z",
-  "headCommit": "872436565212bbf1331618077980280e561aa801",
+  "outputSha": "928c57f90d3243d254f3e23b709c4706ddf339300122858d35ab2a6b7edb8cac",
+  "outputTail": "        SLOW [>1980.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2040.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2100.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2160.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2220.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2280.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2340.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2400.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2460.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2520.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2580.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        SLOW [>2640.000s] (─────) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n        PASS [2683.239s] (10/10) alforge::maquina the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vmwares_devices\n────────────\n     Summary [2683.241s] 10 tests run: 10 passed (1 slow), 0 skipped",
+  "ranAt": "2026-11-27T13:01:38.913Z",
+  "headCommit": "b6736cfcf9ca8691320236465593e13b89d4f09f",
   "tests": [
     {
       "name": "tools/alforge/tests/prova.rs",
       "file": "tools/alforge/tests/prova.rs",
-      "fileSha": "758ecdded5955b5c6971ba5bccff7a3ed1ec368163c8303bd92fb4c0521cb165"
+      "fileSha": "364c34cd4ffbdcd1d97fc99a5c13cae3f9b5f5c9924d71cd04ae0c5ff2b7e8a6"
     },
     {
       "name": "tools/alforge/tests/maquina.rs",
       "file": "tools/alforge/tests/maquina.rs",
-      "fileSha": "2582b9af29a6f79b86c8385b4537b9ad8f484300fddae6ae76928062a9f036dc"
+      "fileSha": "bcb0a657dddfcec71d5f8e334c64cc6bdc13e5d97f19dc6554a974c4cdfa2a15"
     }
   ]
 }
