@@ -945,9 +945,10 @@ fn every_panel_kind_is_computed_exactly_from_the_store() {
 /// one of them with the most parts (a badge, a dot), read by what paints it and every part inside
 /// it (every property of the browser's computed style whose value holds a colour by the browser's own
 /// colour syntax, each where it paints: an SVG shape's fill and stroke; a box's background, shadows,
-/// each side of its border and its outline; a text's colour, its glyphs' fill and stroke, its
-/// decoration and its shadow, its first letter and first line read alike; a filter's colours; a
-/// property holding a colour that no rule reads refused by name; each colour resolved, none of no
+/// each side of its border and its outline; a text's glyphs' fill and stroke (its colour painting
+/// through them and every property naming `currentcolor`), its decoration and its shadow, its first
+/// letter and first line read alike; a filter's colours; a paint by reference and a property holding
+/// a colour that no rule reads refused by name; each colour resolved, none of no
 /// alpha, nor a shadow of no length: a tile's badge, figure, sub-line and sparkline, a cell's
 /// text); every state painted
 /// otherwise than every other, and none in the accent's four colours (by red, green and blue) or any
@@ -959,13 +960,17 @@ const STATE_PAINT: &str = r##"((STATES) => {
   // What paints a part, read from every property of the browser's computed style whose value holds a
   // colour, each counted where it paints: an SVG shape or text its fill and stroke; a box (an HTML
   // element, an outermost SVG) its background, its shadow, each side of its border with a width and
-  // a style, its outline with both, its filters; a text of its own its colour, its glyphs' fill and
-  // their stroke with a width, its decoration with a line, its emphasis with a style, its shadow. A
-  // colour SVG keeps for a gradient's stop or a filter's flood and light, a touch's highlight and the
-  // logical sides (the physical ones read) paint nothing here, nor a custom property (it paints
-  // through a property that names it, read); any other property holding a colour is refused by name
-  // until a rule reads it. A column's rule and a row's (the gaps' decorations) with a style and a
-  // width.
+  // a style, its outline with both, its filters; a text of its own its glyphs' fill and their stroke
+  // with a width, its decoration with a line, its emphasis with a style, its shadow. A text's colour
+  // paints nothing itself: the browser fills its glyphs with their fill alone, and every property
+  // naming `currentcolor` (the glyphs' fill by default, a border, a decoration, an SVG
+  // `currentColor`) computes to the colour, read there. A colour SVG keeps for a gradient's stop or a
+  // filter's flood and light, a touch's highlight and the logical sides (the physical ones read)
+  // paint nothing here, nor a custom property (it paints through a property that names it, read); a
+  // paint by reference (a fill, a stroke, a filter or a marker naming an element by `url()`: a
+  // gradient's stops, a pattern's shapes, a filter's flood, a marker's own shapes) is refused by
+  // name, the page writing none here, and so is any other property holding a colour, until a rule
+  // reads it. A column's rule and a row's (the gaps' decorations) with a style and a width.
   const DRAWS = new Set(["rect", "circle", "ellipse", "path", "line", "polyline", "polygon", "text", "tspan"]);
   const ownText = (e) => [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim() !== "");
   const html = (e) => !(e instanceof SVGElement);
@@ -974,7 +979,6 @@ const STATE_PAINT: &str = r##"((STATES) => {
   const multicol = (c) => c.columnCount !== "auto" || c.columnWidth !== "auto";
   const side = (c, s) => parseFloat(c.getPropertyValue(`border-${s}-width`)) > 0 && !["none", "hidden"].includes(c.getPropertyValue(`border-${s}-style`));
   const PAINTS = {
-    "color": (e) => html(e) && ownText(e),
     "-webkit-text-fill-color": (e) => html(e) && ownText(e),
     "-webkit-text-stroke-color": (e, c) => html(e) && ownText(e) && parseFloat(c.getPropertyValue("-webkit-text-stroke-width")) > 0,
     // A decoration is drawn under every text inside the element that writes it, its own or its
@@ -1004,7 +1008,7 @@ const STATE_PAINT: &str = r##"((STATES) => {
     // A scrollbar's colours on a box that shows one (scrolled always, or as needed and overflowing).
     "scrollbar-color": (e, c) => box(e) && (c.overflowX === "scroll" || c.overflowY === "scroll" || (c.overflowX === "auto" && e.scrollWidth > e.clientWidth) || (c.overflowY === "auto" && e.scrollHeight > e.clientHeight)),
   };
-  const INERT = new Set(["stop-color", "flood-color", "lighting-color", "-webkit-tap-highlight-color", "border-block-start-color", "border-block-end-color", "border-inline-start-color", "border-inline-end-color"]);
+  const INERT = new Set(["color", "stop-color", "flood-color", "lighting-color", "-webkit-tap-highlight-color", "border-block-start-color", "border-block-end-color", "border-inline-start-color", "border-inline-end-color"]);
   const root = getComputedStyle(document.documentElement);
   const ctx = Object.assign(document.createElement("canvas"), { width: 1, height: 1 }).getContext("2d", { willReadFrequently: true });
   const rgb = (c) => { ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = "rgba(0, 0, 0, 0)"; ctx.fillStyle = c; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data]; };
@@ -1058,6 +1062,7 @@ const STATE_PAINT: &str = r##"((STATES) => {
     return kept.length ? kept.join(", ") : null;
   };
   const unread = new Set();
+  const REFERENCES = new Set(["fill", "stroke", "filter", "marker-start", "marker-mid", "marker-end"]);
   // A part read with its first letter and its first line, where it holds a text of its own (each
   // painted by the same rules as the part).
   const paint = (e, pseudo = null) => {
@@ -1066,6 +1071,7 @@ const STATE_PAINT: &str = r##"((STATES) => {
     for (const q of c) {
       if (q.startsWith("--") || INERT.has(q)) continue;
       const v = c.getPropertyValue(q);
+      if (REFERENCES.has(q) && /url\(/i.test(v) && (!(q in PAINTS) || PAINTS[q](e, c))) { unread.add(`${q} by reference`); continue; }
       if (!colours(v).length) continue;
       if (!(q in PAINTS)) unread.add(q);
       else if (PAINTS[q](e, c)) { const p = painting(q, v); if (p !== null) got.push([pseudo ? `${pseudo} ${q}` : q, p]); }
