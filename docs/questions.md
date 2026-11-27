@@ -4273,6 +4273,33 @@ that has replies and a narrower gate in portal. What was taken stands.
 
 ---
 
+## Q191 - How long does a marker slide between two samples?
+
+**Raised** 2026-11-27, by supervisão, from the architect's words on the orchestrator's try-out
+plant: "markers on the conveyor lines update position every 1s, make them smoother" (the
+orchestrator answered it there by polling faster). A marker on the layout slides to each new
+sample's place in 0.2 s (`.sv-show-move`, `transition: transform .2s linear`), so a series sampled
+once a second shows a marker standing still for 0.8 s, then a short slide: a jerk. The page knows
+only the places it is sent; what a parcel does between two samples is unknown.
+
+- (a) **Keep the short slide.** The marker reaches each sample's place 0.2 s after it arrives and
+  stands there: what the screen shows is at most 0.2 s behind the plant's last measured place, and
+  jerky at a slow sample rate (smooth only when the plant is sampled about five times a second or
+  faster, as the try-out now is).
+- (b) **Slide over the gap between the marker's last two samples, at most 1 s** (supervisão's
+  pick): the marker moves steadily from one measured place to the next and reaches it as the next
+  one comes. Smooth at any rate up to one sample a second, and at most one gap (1 s) behind the
+  plant's last measured place; a marker standing still, stopping or starting shows as it is
+  measured, one gap late. Above 1 s between samples it reaches each place in 1 s and waits.
+- (c) **Slide over the gap and carry on past the last sample** at the speed it last moved: smooth
+  and never behind, but the screen shows a place nobody measured (a parcel that stopped is drawn
+  moving on until the next sample says otherwise). Not supervisão's pick: a supervision screen
+  draws what was measured.
+
+Taken meanwhile: (a), the slide as it is, the most reversible; nothing is built until the answer.
+
+---
+
 ## Q48 - Which browsers does supervisão's page claim?
 
 **Raised** 2026-11-26, by the orchestrator, from the architect's exploratory testing of the page
