@@ -246,6 +246,10 @@ pub enum ServerError {
     /// OPC UA's, and every read would come back `BadNodeIdUnknown`.
     #[error("the data namespace {0} is OPC UA's own; give it a URI of its own")]
     NamespaceIsOpcUa(String),
+    /// A host the server cannot advertise in a URL a client reads: an IPv6 literal would be
+    /// written into `opc.tcp://<host>:<port>/` unbracketed, which no client parses.
+    #[error("host `{host}`: {reason}")]
+    Host { host: String, reason: String },
     /// A user the stack cannot take, refused before the bind rather than by the stack after it.
     #[error("user `{name}`: {reason}")]
     User { name: String, reason: String },
@@ -499,6 +503,14 @@ impl std::fmt::Debug for Server {
 
 /// What can be refused before anything binds.
 fn check(spec: &ServerSpec) -> Result<(), ServerError> {
+    if spec.bind.contains(':') {
+        return Err(ServerError::Host {
+            host: spec.bind.clone(),
+            reason: "an IPv6 address, which the endpoint's URL cannot carry; give an IPv4 \
+                     address or a name"
+                .to_string(),
+        });
+    }
     if spec.namespace.trim() == spec.application_uri.trim() {
         return Err(ServerError::NamespaceIsApplication(spec.namespace.clone()));
     }

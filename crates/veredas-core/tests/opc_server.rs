@@ -159,6 +159,68 @@ fn value_of(node: opcua_types::NodeId) -> opcua_types::ReadValueId {
     }
 }
 
+/// A port held at `addr` by a socket bound without SO_REUSEADDR and never listening, so a
+/// connection there is refused and no other socket can listen there while it is held; and a
+/// server started from `spec` on that same port at its own host (tried again on a port its host
+/// has taken already). A port the system chooses for one loopback address can be one another
+/// socket listens on at another, so a check that a host finds nothing holds only so.
+fn start_beside_held(mut spec: ServerSpec, addr: &str) -> (socket2::Socket, Server) {
+    for _ in 0..20 {
+        let held =
+            socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
+        let at: std::net::SocketAddr = format!("{addr}:0").parse().unwrap();
+        held.bind(&at.into()).unwrap();
+        spec.port = held.local_addr().unwrap().as_socket().unwrap().port();
+        match Server::start(&spec) {
+            Ok(server) => return (held, server),
+            Err(ServerError::Bind { source, .. })
+                if source.kind() == std::io::ErrorKind::AddrInUse =>
+            {
+                continue;
+            }
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    panic!("no port free at both hosts in twenty tries");
+}
+
+/// Every URL a server advertises, through GetEndpoints and FindServers at its endpoint: each
+/// endpoint's URL and discovery URLs, and each found application's discovery URLs.
+fn advertised(server: &Server) -> Vec<String> {
+    let endpoints = block(async {
+        raw_client()
+            .get_server_endpoints_from_url(server.endpoint_url.as_str())
+            .await
+            .unwrap()
+    });
+    let found = block(async {
+        raw_client()
+            .find_servers(server.endpoint_url.as_str(), None, None)
+            .await
+            .unwrap()
+    });
+    let mut urls = Vec::new();
+    for e in &endpoints {
+        urls.push(e.endpoint_url.as_ref().to_string());
+        urls.extend(
+            e.server
+                .discovery_urls
+                .iter()
+                .flatten()
+                .map(|u| u.as_ref().to_string()),
+        );
+    }
+    for a in &found {
+        urls.extend(
+            a.discovery_urls
+                .iter()
+                .flatten()
+                .map(|u| u.as_ref().to_string()),
+        );
+    }
+    urls
+}
+
 /// OPC UA's Hello (Part 6, 7.1.2.3): "HEL", a final chunk, its size, protocol version 0, buffers
 /// of 65536, no message or chunk limit, the endpoint's URL.
 fn hello(url: &str) -> Vec<u8> {
@@ -693,7 +755,8 @@ fn the_guard_refuses_another_wire_type_and_counts_it_and_the_access_levels_hold(
 /// What core's worker never sends, sent through the stack's own client: a write with an index
 /// range, refused `BadIndexRangeInvalid` by the guard; what the stack's own check answers
 /// `BadTypeMismatch` before the guard sees it, uncounted and no last kept (a write carrying no
-/// value, a ByteString into a text, an array of Doubles into the Int32); and what the stack lets
+/// value, a ByteString into a text, an array of Doubles into the Int32, a null ExtensionObject,
+/// which has no data type); and what the stack lets
 /// through and the guard refuses as another wire type, counted (an array of Int32 into the
 /// Int32, the Null variant). Nothing of them lands or is handed; a right write in the same call
 /// lands.
@@ -739,6 +802,13 @@ fn a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands() {
                     NumericRange::None,
                 ),
                 write(
+                    "batch",
+                    DataValue::value_only(Variant::ExtensionObject(
+                        opcua_types::ExtensionObject::null(),
+                    )),
+                    NumericRange::None,
+                ),
+                write(
                     "count",
                     DataValue::value_only(array(VariantScalarTypeId::Int32, Variant::Int32(4))),
                     NumericRange::None,
@@ -770,6 +840,7 @@ fn a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands() {
             StatusCode::BadTypeMismatch,
             StatusCode::BadTypeMismatch,
             StatusCode::BadTypeMismatch,
+            StatusCode::BadTypeMismatch,
             StatusCode::Good,
         ]
     );
@@ -784,7 +855,7 @@ fn a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands() {
     assert_eq!(server.get("count"), Some(Variant::Int32(3)));
     assert_eq!(server.get("batch"), Some(Variant::from("z")));
     let status = server.status();
-    // The Int32 array and the Null counted, the Null the last; the stack's three not at all.
+    // The Int32 array and the Null counted, the Null the last; the stack's four not at all.
     assert_eq!((status.type_mismatches, status.client_writes), (2, 1));
     assert_eq!(status.last_mismatch, Some(("count".into(), "Empty".into())));
 }
@@ -1085,6 +1156,7 @@ fn a_spec_that_cannot_be_served_is_refused_by_name_before_anything_binds() {
                     | ServerError::NamespaceIsApplication(_)
                     | ServerError::NamespaceIsOpcUa(_)
                     | ServerError::User { .. }
+                    | ServerError::Host { .. }
             ),
             "{e:?}"
         );
@@ -1101,6 +1173,13 @@ fn a_spec_that_cannot_be_served_is_refused_by_name_before_anything_binds() {
     assert_eq!(
         refused(&s),
         "the data namespace http://opcfoundation.org/UA/ is OPC UA's own; give it a URI of its own"
+    );
+    let mut s = spec();
+    s.bind = "::1".into();
+    assert_eq!(
+        refused(&s),
+        "host `::1`: an IPv6 address, which the endpoint's URL cannot carry; give an IPv4 address \
+         or a name"
     );
     for (name, why) in [
         ("", "the name is empty"),
@@ -1217,9 +1296,11 @@ fn it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clien
             server.namespace
         )
     );
-    // Bound on the host it was given alone: another loopback address finds nothing there.
+    // Bound on the host it was given alone: another loopback address finds nothing at its port
+    // (that port held there, never listening, so nothing else can be found there either).
+    let (_held, alone) = start_beside_held(spec(), "127.0.0.2");
     let elsewhere = std::net::TcpStream::connect_timeout(
-        &format!("127.0.0.2:{port}").parse().unwrap(),
+        &format!("127.0.0.2:{}", alone.port).parse().unwrap(),
         // Windows answers a refused loopback connection after its own retries, about 2 s.
         Duration::from_secs(10),
     );
@@ -1227,6 +1308,7 @@ fn it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clien
         elsewhere.map(|_| ()).map_err(|e| e.kind()),
         Err(std::io::ErrorKind::ConnectionRefused)
     );
+    drop(alone);
     let (w, rx) = worker(&server, Auth::Anonymous);
     assert_eq!(
         next_state(&rx, Duration::from_secs(15)),
@@ -1261,15 +1343,17 @@ fn it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clien
         ConnState::Retrying { .. }
     ));
     w.handle.join().unwrap();
-    // Bound on the host it is given: a spec naming 127.0.0.2 advertises it, a client reads a
-    // value there, and 127.0.0.1 at that port finds nothing.
+    // Bound on the host it is given: a spec naming 127.0.0.2 advertises it, every URL its
+    // GetEndpoints and FindServers carry naming it, a client reads a value there, and 127.0.0.1
+    // at that port (held there, never listening) finds nothing.
     let mut s = spec();
     s.bind = "127.0.0.2".into();
-    let server = Server::start(&s).unwrap();
-    assert_eq!(
-        server.endpoint_url,
-        format!("opc.tcp://127.0.0.2:{}/", server.port)
-    );
+    let (_held, server) = start_beside_held(s, "127.0.0.1");
+    let there = format!("opc.tcp://127.0.0.2:{}/", server.port);
+    assert_eq!(server.endpoint_url, there);
+    let urls = advertised(&server);
+    assert!(!urls.is_empty());
+    assert!(urls.iter().all(|u| *u == there), "{urls:?}");
     let read = block(async {
         let mut client = raw_client();
         let (session, handle) = raw_session(&mut client, &server).await;

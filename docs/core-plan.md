@@ -301,7 +301,8 @@ taken whole (`maquinar-answers-2026-11-22.md` on the shared notes folder). Into 
   read would come back `BadNodeIdUnknown`; so is OPC UA's own namespace, index 0, for the same
   reason. The folder is a FolderType. Anonymous access is always accepted, plus optionally one
   user by name and password, the password hidden in `Debug`; an empty name and `ANONYMOUS`, which
-  the stack refuses after the bind, are refused before it. `max_sessions` and
+  the stack refuses after the bind, are refused before it; so is an IPv6 literal as the host,
+  which the endpoint's URL cannot carry unbracketed. `max_sessions` and
   `max_nodes_per_read` are optional knobs.
 - **A variable:** a string id, a browse name, a type (int as Int32, float as Double, bool, text),
   an access (read, write-only, read-write) and an initial value; `parse_value`, `render_value`, and
@@ -330,6 +331,10 @@ Recorded as the port meets them.
 - **async-opcua 0.19 checks read access for every attribute.** A write-only variable's DataType
   read is refused with its Value, so core's browser lists it untyped (C-074's browse test). And a
   write with no value never reaches a write callback: the stack answers `BadTypeMismatch` first.
+- **A port the system chooses on one loopback address may be in use on another.** With
+  SO_REUSEADDR (tokio and std set it on Unix), Linux can give a port 0 bind on 127.0.0.2 a port
+  another socket listens on at 127.0.0.1. A test that a host finds nothing at a port holds that
+  port there first, bound without reuse and never listening (C-074's `start_beside_held`).
 - **A server's read limit refuses a poll whole.** With `max_nodes_per_read` below a worker's tag
   count, every poll fails and the worker drops its session; a test of the limit polls within it.
 
