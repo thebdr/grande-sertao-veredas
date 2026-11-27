@@ -105,6 +105,9 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
                 } else if id.value.len() > MAX_ID {
                     // Its runs are kept in a folder of its name, which a file system bounds.
                     out.push(at(id.span, format!("`id` is {} characters long: {MAX_ID} at most", id.value.len())));
+                } else if crate::record::device_name(&id.value) {
+                    // Nor may that folder be a device's, which Windows opens in its place.
+                    out.push(at(id.span, format!("`id` is `{}`, a name Windows keeps for a device", id.value)));
                 }
             }
             SettingKind::Use(p) => {

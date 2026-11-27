@@ -550,7 +550,8 @@ is the plant's clock on the store's axis, `YYYY-MM-DD HH:MM:SS.mmm`.
 **The evidence** (`[[evidence]]`): one table per table the test reads.
 - `table` (required): the portal table.
 - `file` (required): its CSV in the run's folder, `evidence/<table>.csv` for a plain name (ASCII
-  letters, digits, `_` and `-`, 64 at most), else `evidence/table.<n>.csv`, `n` its place among the evidence from 1,
+  letters, digits, `_` and `-`, 64 at most, no name Windows keeps for a device such as `NUL` or
+  `COM1`), else `evidence/table.<n>.csv`, `n` its place among the evidence from 1,
   which no plain name can take: a header of `time`, `arrival`, `source`, `key`, `seq` and the
   table's columns, then every row stamped in the run's window, oldest first, each cell as the
   suite shows its value and a hole empty. `time` is the row's stamp and `arrival` when it reached
@@ -738,4 +739,42 @@ fn a_plain_name_too_long_for_a_file_takes_its_place_number() {
         assert_eq!(std::fs::read_to_string(folder.join(&e.file)).unwrap(), "time,arrival,source,key,seq,x\n", "{}", e.table);
     }
     assert_eq!(record::list(dir.path(), &c).unwrap().len(), 1);
+}
+
+#[test]
+fn a_device_s_name_and_a_name_past_the_bound_take_their_place_numbers() {
+    // Refute round 6: a table named `nul`, `CON`, `aux`, `com1` or `LPT9` was a plain name, its file
+    // a device on Windows (the rows gone into `NUL`, or the run lost); and the bound was pinned at 64
+    // and 252 alone. Each takes its place number, as does a plain name of 65 characters; one of 64
+    // and a name holding a device's as a part (`console`) keep their own.
+    use veredas_comissionador::plant::{CellType, Column, Table};
+    let names = ["nul", "CON", "aux", "com1", "LPT9", "console", &"c".repeat(65), &"d".repeat(64)].map(str::to_string);
+    let table = |name: &str| Table { name: name.to_string(), columns: vec![Column { name: "x".to_string(), ty: CellType::Int }] };
+    let plant = Tables(names.iter().map(|n| table(n)).collect());
+    let c = checked(&test_of("  step a stop pass\n"));
+    let now = veredas_portal::serve::store_now_ms();
+    let r = veredas_comissionador::run::RunResult {
+        verdict: RunVerdict::Passed,
+        decided_at: Some("a".to_string()),
+        reason: "`a` passed the run".to_string(),
+        start_ms: now - 1000,
+        end_ms: now - 500,
+        steps: Vec::new(),
+        criteria: Vec::new(),
+        reported: Vec::new(),
+        writes: Vec::new(),
+        tables: names.iter().cloned().collect::<BTreeSet<_>>(),
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let folder = record::keep(dir.path(), &c, &r, &RunOptions::replay(now - 1000, now - 500).mode, &plant).unwrap();
+    let report = record::read(&folder).unwrap();
+    let files: Vec<(String, String)> = report.evidence.iter().map(|e| (e.table.clone(), e.file.clone())).collect();
+    let place = |name: &str| format!("evidence/table.{}.csv", report.evidence.iter().position(|e| e.table == name).unwrap() + 1);
+    for name in &names {
+        let own = format!("evidence/{name}.csv");
+        let want = if ["console", &"d".repeat(64)].contains(&name.as_str()) { own } else { place(name) };
+        assert!(files.contains(&(name.clone(), want.clone())), "{name}: {files:?}");
+        assert!(folder.join(&want).is_file(), "{want}");
+    }
+    assert!(record::device_name("nul.csv") && record::device_name("Com9") && !record::device_name("com10") && !record::device_name("nully"));
 }

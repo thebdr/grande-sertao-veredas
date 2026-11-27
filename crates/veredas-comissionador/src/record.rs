@@ -223,11 +223,25 @@ pub fn csv_cell(text: &str) -> String {
 /// well inside what a file system takes for one.
 pub const PLAIN_NAME: usize = 64;
 
+/// The names Windows keeps for a device whatever the case and the extension, by their stem (the
+/// suite's list, as the bench's file names judge them, `veredas-maquinar`'s `emit.rs`): a file or
+/// a folder of one of them opens the device.
+const DEVICES: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
+    "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Whether a name, by its stem before its first `.`, is one Windows keeps for a device.
+pub fn device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name);
+    DEVICES.iter().any(|d| d.eq_ignore_ascii_case(stem))
+}
+
 /// A file name for a table's evidence: its name when it is plain (ASCII letters, digits, `_`, `-`,
-/// [`PLAIN_NAME`] at most), else `table.<n>`, its place among the evidence from 1, which no plain
-/// name can take.
+/// [`PLAIN_NAME`] at most, no name Windows keeps for a device), else `table.<n>`, its place among
+/// the evidence from 1, which no plain name can take.
 fn evidence_name(i: usize, table: &str) -> String {
-    if !table.is_empty() && table.len() <= PLAIN_NAME && table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if !table.is_empty() && table.len() <= PLAIN_NAME && !device_name(table) && table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
         format!("evidence/{table}.csv")
     } else {
         format!("evidence/table.{}.csv", i + 1)
