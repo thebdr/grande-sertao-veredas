@@ -606,10 +606,8 @@ fn config_refusal(t: &toml::Table) -> Option<String> {
             return Some(format!("target.{triple}.rustflags sets a cfg"));
         }
     }
-    for (name, table) in t.get("profile").and_then(|t| t.as_table()).into_iter().flatten() {
-        if flags(table.get("rustflags")) {
-            return Some(format!("profile.{name}.rustflags sets a cfg"));
-        }
+    if let Some(at) = profile_flags_set_cfg(t) {
+        return Some(format!("{at} sets a cfg"));
     }
     // and no alias gives cargo a configuration of its own
     for (name, value) in t.get("alias").and_then(|a| a.as_table()).into_iter().flatten() {
@@ -625,6 +623,50 @@ fn config_refusal(t: &toml::Table) -> Option<String> {
         }
     }
     None
+}
+
+/// The first profile flags of a manifest or a configuration that set a `cfg`, by their place, at
+/// every depth a profile holds them: a profile's own, a package's (`profile.dev.package.<name>`, `"*"`
+/// among them) and its build scripts' (`build-override`), which a nightly cargo reads in a manifest
+/// under `cargo-features = ["profile-rustflags"]` (the round at 0a5dbfc1).
+fn profile_flags_set_cfg(t: &toml::Table) -> Option<String> {
+    let flags = |v: Option<&toml::Value>| match v {
+        Some(toml::Value::String(s)) => flags_set_cfg(s.split_whitespace()),
+        Some(toml::Value::Array(a)) => flags_set_cfg(a.iter().filter_map(|t| t.as_str())),
+        _ => false,
+    };
+    for (name, profile) in t.get("profile").and_then(|t| t.as_table()).into_iter().flatten() {
+        let mut tables: Vec<(String, &toml::Value)> = vec![(format!("profile.{name}"), profile)];
+        if let Some(b) = profile.get("build-override") {
+            tables.push((format!("profile.{name}.build-override"), b));
+        }
+        for (package, table) in profile.get("package").and_then(|p| p.as_table()).into_iter().flatten() {
+            tables.push((format!("profile.{name}.package.{package}"), table));
+            if let Some(b) = table.get("build-override") {
+                tables.push((format!("profile.{name}.package.{package}.build-override"), b));
+            }
+        }
+        if let Some((at, _)) = tables.iter().find(|(_, table)| flags(table.get("rustflags"))) {
+            return Some(format!("{at}.rustflags"));
+        }
+    }
+    None
+}
+
+/// What a manifest of the workspace, the fork's workspace or the three packages may not hold: a
+/// patch or a replacement of a crate, unstable features (`cargo-features`, which a nightly cargo
+/// reads and which let a profile carry compiler flags), or profile flags setting a `cfg` at any depth
+/// (the round at 0a5dbfc1: under a nightly cargo, which the repository pins for another member's
+/// folder, `profile.dev.package.ironcalc_base.rustflags` compiled the engine with `--cfg
+/// feature="mock_time"`, no feature showing it, and the test stayed green).
+fn manifest_refusal(m: &toml::Table) -> Option<String> {
+    if m.get("patch").is_some() || m.get("replace").is_some() {
+        return Some("patches crates".into());
+    }
+    if m.get("cargo-features").is_some() {
+        return Some("sets `cargo-features`, unstable ones a nightly cargo reads".into());
+    }
+    profile_flags_set_cfg(m).map(|at| format!("{at} sets a cfg"))
 }
 
 /// The top-level keys a cargo configuration of this machine may hold: none of them names where a
@@ -703,9 +745,11 @@ const UPSTREAM_IGNORED: [&str; 8] = [
 fn no_crate_is_patched_or_replaced_by_any_route() {
     // not in the manifests: the suite's, nor the fork's own, whose suite would then build other
     // crates than Ábaco links
-    for manifest in ["Cargo.toml", "forks/ironcalc/Cargo.toml"] {
+    for manifest in ["Cargo.toml", "forks/ironcalc/Cargo.toml", "crates/veredas-abaco/Cargo.toml", "forks/ironcalc/base/Cargo.toml", "forks/ironcalc/xlsx/Cargo.toml"] {
         let m: toml::Table = toml::from_str(&std::fs::read_to_string(root().join(manifest)).unwrap()).unwrap();
-        assert!(m.get("patch").is_none() && m.get("replace").is_none(), "{manifest} patches crates");
+        if let Some(why) = manifest_refusal(&m) {
+            panic!("{manifest}: {why}");
+        }
     }
     // nor in a cargo configuration cargo would read for either workspace or for this test: from
     // each folder up to the root of the drive, and cargo's home
@@ -802,6 +846,23 @@ fn a_configuration_s_env_and_the_loader_s_variables_are_held_to_what_was_reviewe
         assert!(config(&format!("[env]\n{key} = {{ value = \"/x\", force = true }}\n")).is_some(), "{key} as a table");
     }
     assert!(config("[build]\nrustc-wrapper = \"/x\"\n").is_some());
+    // and (the round at 0a5dbfc1) a profile's flags at every depth, in a configuration and in a
+    // manifest, which also refuses unstable features
+    for profile in [
+        "[profile.dev]\nrustflags = [\"--cfg\", \"x\"]\n",
+        "[profile.dev.package.ironcalc_base]\nrustflags = [\"--cfg\", \"feature=\\\"mock_time\\\"\"]\n",
+        "[profile.dev.package.\"*\"]\nrustflags = \"--cfg x\"\n",
+        "[profile.dev.build-override]\nrustflags = [\"--cfg\", \"x\"]\n",
+        "[profile.test.package.ironcalc_base.build-override]\nrustflags = [\"--cfg=x\"]\n",
+    ] {
+        assert!(config(profile).is_some_and(|w| w.contains("rustflags sets a cfg")), "{profile}");
+        assert!(manifest_refusal(&toml::from_str(profile).unwrap()).is_some_and(|w| w.contains("rustflags sets a cfg")), "{profile}");
+    }
+    assert_eq!(config("[profile.dev.package.ironcalc_base]\nopt-level = 3\n"), None);
+    let plant = "cargo-features = [\"profile-rustflags\"]\n[profile.dev.package.ironcalc_base]\nrustflags = [\"--cfg\", \"feature=\\\"mock_time\\\"\"]\n";
+    assert!(manifest_refusal(&toml::from_str(plant).unwrap()).is_some_and(|w| w.contains("cargo-features")));
+    assert!(manifest_refusal(&toml::from_str("cargo-features = [\"edition2024\"]\n").unwrap()).is_some());
+    assert_eq!(manifest_refusal(&toml::from_str("[profile.dev]\nopt-level = 1\n[workspace]\nmembers = []\n").unwrap()), None);
     let toolchain = Path::new("/home/a/.rustup/toolchains/stable/bin");
     let env = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
     assert_eq!(loader_refusal(&env(&[("LD_LIBRARY_PATH", "/home/a/.rustup/toolchains/stable/lib")]), toolchain, true), None);
