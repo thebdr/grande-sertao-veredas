@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(record)"
   ],
   "exitCode": 0,
-  "outputSha": "30c2cdcaf792fd1d44232468623f1f50a4d3149f3371976d5267fc65652bdeca",
-  "outputTail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 57.28s\n────────────\n Nextest run ID 03355872-e08c-470a-ab6e-0815ce80ee83 with nextest profile: default\n    Starting 9 tests across 1 binary (157 binaries skipped)\n        PASS [   0.010s] (1/9) veredas-comissionador::record a_csv_cell_is_quoted_when_it_must_be\n        PASS [   0.018s] (2/9) veredas-comissionador::record the_reference_is_the_text_this_test_holds\n        PASS [   0.018s] (3/9) veredas-comissionador::record every_table_s_evidence_is_kept_in_a_file_of_its_own_and_reads_back\n        PASS [   0.019s] (4/9) veredas-comissionador::record a_plain_name_too_long_for_a_file_takes_its_place_number\n        PASS [   0.048s] (5/9) veredas-comissionador::record the_roles_a_test_names_sign_its_report_each_once_and_it_awaits_them\n        PASS [   0.088s] (6/9) veredas-comissionador::record the_reference_s_worked_example_reads_as_a_report\n        PASS [   0.355s] (7/9) veredas-comissionador::record two_changes_of_one_report_at_once_never_cross\n        PASS [   6.816s] (8/9) veredas-comissionador::record the_evidence_s_arrival_is_on_the_store_s_axis_whatever_the_zone\n        PASS [   7.555s] (9/9) veredas-comissionador::record a_run_is_kept_whole_read_back_listed_noted_and_signed\n────────────\n     Summary [   7.556s] 9 tests run: 9 passed, 0 skipped",
-  "ranAt": "2026-11-27T07:42:54.876Z",
-  "headCommit": "6a881f40edbef40f7c0d9086498e7e087946b761",
+  "outputSha": "8c8d5346f85a93d650bf2a6687e702d772bd53b0218c7ffac56ea2ef2c30c7d8",
+  "outputTail": "────────────\n Nextest run ID 8a4bec0a-f12a-4bc6-9b76-d70cf06a8720 with nextest profile: default\n    Starting 10 tests across 1 binary (157 binaries skipped)\n        PASS [   0.013s] ( 1/10) veredas-comissionador::record the_reference_is_the_text_this_test_holds\n        PASS [   0.014s] ( 2/10) veredas-comissionador::record a_csv_cell_is_quoted_when_it_must_be\n        PASS [   0.016s] ( 3/10) veredas-comissionador::record every_table_s_evidence_is_kept_in_a_file_of_its_own_and_reads_back\n        PASS [   0.018s] ( 4/10) veredas-comissionador::record a_device_s_name_and_a_name_past_the_bound_take_their_place_numbers\n        PASS [   0.018s] ( 5/10) veredas-comissionador::record a_plain_name_too_long_for_a_file_takes_its_place_number\n        PASS [   0.033s] ( 6/10) veredas-comissionador::record the_roles_a_test_names_sign_its_report_each_once_and_it_awaits_them\n        PASS [   0.051s] ( 7/10) veredas-comissionador::record the_reference_s_worked_example_reads_as_a_report\n        PASS [   0.284s] ( 8/10) veredas-comissionador::record two_changes_of_one_report_at_once_never_cross\n        PASS [   6.738s] ( 9/10) veredas-comissionador::record the_evidence_s_arrival_is_on_the_store_s_axis_whatever_the_zone\n        PASS [   7.540s] (10/10) veredas-comissionador::record a_run_is_kept_whole_read_back_listed_noted_and_signed\n────────────\n     Summary [   7.541s] 10 tests run: 10 passed, 0 skipped",
+  "ranAt": "2026-11-27T10:31:14.625Z",
+  "headCommit": "2a46829317a2cd4163a1755ad1fc63ef9e9f6ad4",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/record.rs",
       "file": "crates/veredas-comissionador/tests/record.rs",
-      "fileSha": "55ba9a206b24e2037c56b8dc6bc5ddc361f1259e8cb578e84bc0921a93b8550f"
+      "fileSha": "5549a525fd429fc0e1fd03b1ef67e5ce3da690dd760e6ff9730621c426847bc6"
     }
   ]
 }
