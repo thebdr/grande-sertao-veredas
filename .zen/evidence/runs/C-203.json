@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(replay)"
   ],
   "exitCode": 0,
-  "outputSha": "a123f8c06c7426c049f90dc5eec4f83bb162cab1db4824edf22d98d872f6eb14",
-  "outputTail": "   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/comissionador-e490bd/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.78s\n────────────\n Nextest run ID 1f371fae-be58-43ef-90c8-48e1b2553831 with nextest profile: default\n    Starting 8 tests across 1 binary (157 binaries skipped)\n        PASS [   0.928s] (1/8) veredas-comissionador::replay a_window_before_the_store_holds_a_table_the_test_reads_is_refused\n        PASS [   1.277s] (2/8) veredas-comissionador::replay a_run_s_bound_passed_by_a_write_s_answer_replays_on_past_it\n        PASS [   1.592s] (3/8) veredas-comissionador::replay a_replay_reads_the_plant_right_after_a_write_as_it_stood_before_it\n        PASS [   1.652s] (4/8) veredas-comissionador::replay a_replay_s_write_moves_no_clock_where_the_live_one_moved_to_the_plant_s_answer\n        PASS [   1.711s] (5/8) veredas-comissionador::replay a_replay_never_writes_and_reads_the_stamps_a_write_caused\n        PASS [   2.470s] (6/8) veredas-comissionador::replay a_replay_ends_where_its_window_ends_and_times_out_on_its_own_clock\n        PASS [   3.191s] (7/8) veredas-comissionador::replay a_replay_s_clock_stays_the_write_s_lag_behind_until_a_wait_meets_a_row\n        PASS [   6.816s] (8/8) veredas-comissionador::replay a_live_run_s_own_window_replays_to_the_same_verdict_and_values\n────────────\n     Summary [   6.817s] 8 tests run: 8 passed, 0 skipped",
-  "ranAt": "2026-11-27T08:04:51.636Z",
-  "headCommit": "bc17f3a052bfc113fcd68bbe00a63be29bfdbe8c",
+  "outputSha": "de984375a7d22534d9ec4739af050cbfc2ca8cb9ccfe1af3b9b3879d61ca536f",
+  "outputTail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.75s\n────────────\n Nextest run ID f6366588-32d5-4c63-aa3b-2a2bbc5e241a with nextest profile: default\n    Starting 9 tests across 1 binary (157 binaries skipped)\n        PASS [   0.970s] (1/9) veredas-comissionador::replay a_write_that_failed_live_replays_not_sent_and_passing\n        PASS [   1.130s] (2/9) veredas-comissionador::replay a_window_before_the_store_holds_a_table_the_test_reads_is_refused\n        PASS [   1.368s] (3/9) veredas-comissionador::replay a_run_s_bound_passed_by_a_write_s_answer_replays_on_past_it\n        PASS [   1.732s] (4/9) veredas-comissionador::replay a_replay_reads_the_plant_right_after_a_write_as_it_stood_before_it\n        PASS [   1.812s] (5/9) veredas-comissionador::replay a_replay_s_write_moves_no_clock_where_the_live_one_moved_to_the_plant_s_answer\n        PASS [   1.850s] (6/9) veredas-comissionador::replay a_replay_never_writes_and_reads_the_stamps_a_write_caused\n        PASS [   2.711s] (7/9) veredas-comissionador::replay a_replay_ends_where_its_window_ends_and_times_out_on_its_own_clock\n        PASS [   3.436s] (8/9) veredas-comissionador::replay a_replay_s_clock_stays_the_write_s_lag_behind_until_a_wait_meets_a_row\n        PASS [   7.076s] (9/9) veredas-comissionador::replay a_live_run_s_own_window_replays_to_the_same_verdict_and_values\n────────────\n     Summary [   7.077s] 9 tests run: 9 passed, 0 skipped",
+  "ranAt": "2026-11-27T09:37:29.333Z",
+  "headCommit": "d8da6efe6d56396bca75091a83d9cf12a03c1f63",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/replay.rs",
       "file": "crates/veredas-comissionador/tests/replay.rs",
-      "fileSha": "50f016f1bbb6f0cbeb04b30554e2d0adf8d5ca69b6ca1115b6ff63049587a25d"
+      "fileSha": "43a9f4900f6045b9cc218e9d56577f935004a1a5180707c0b4ac9656692977c3"
     }
   ]
 }
