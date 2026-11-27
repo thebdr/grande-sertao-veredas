@@ -120,7 +120,9 @@ finished and the interpreter's loader has checked it. Beyond `rustc_public` it r
 lang and diagnostic items, names, an impl's own type, macro call sites and the kinds of crate it builds
 (`rustc_structures::CrateType`, so a bin or a test build of the program's name is compiled and not lowered), which
 `rustc_public` does not give; each
-move of the nightly runs its suite. The closed list's next members, met by the first programs and refused by name
+move of the nightly runs its suite. Under cargo it declares its three variables as environment dependencies and adds its own line
+to its `-vV` answer, which cargo fingerprints, so a new revision or output, or a switch between a plain and a wrapped
+build in one target directory, rebuilds what it must and no green build keeps a previous program's file. The closed list's next members, met by the first programs and refused by name
 until then: `<[T; N] as Default>::default`, `<&T as PartialEq>::eq` (derived on an enum with data), `PartialEq::ne` on a program's own enum (derived), a scalar's `Clone::clone` (a derived `Clone` on a structure that is not `Copy`), `PartialOrd` at an integer through a generic bound, `wrapping_neg`, `Duration::checked_sub`, a `Duration` matched against a constant pattern (rustc lowers it to a transmute inside core), `Range`, `From`
 and `TryFrom`, `Ord::clamp`, a slice's `get`, `Option::unwrap_or`.
 
