@@ -14,15 +14,16 @@ use crate::vm::VmError;
 
 /// Whether a file is one of a package's licence files or notices, by the names packages give them
 /// (`LICENSE`, `LICENSE-MIT`, `COPYING`, `NOTICE`, `UNLICENSE`, `COPYRIGHT`, `THIRD-PARTY-NOTICES.md`,
-/// `3RDPARTY.md`, with any ending but a Rust source's `.rs`; any name holding `LICENSE`, `LICENCE`,
-/// `COPYING` or `NOTICE`, as a font's `OFL-LICENSE.txt`).
+/// `3RDPARTY.md`, `ATTRIBUTION.md`, `ACKNOWLEDGMENTS`, with any ending but a Rust source's `.rs`; any
+/// name holding `LICENSE`, `LICENCE`, `COPYING`, `NOTICE` or `ATTRIBUTION`, as a font's
+/// `OFL-LICENSE.txt`).
 pub fn is_licence_file(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     // A source of Rust (`licenses.rs`) is code, never a licence's text.
     if upper.ends_with(".RS") {
         return false;
     }
-    ["COPYRIGHT", "THIRD-PARTY", "THIRD_PARTY", "THIRDPARTY", "3RDPARTY"].iter().any(|p| upper.starts_with(p)) || ["LICENSE", "LICENCE", "COPYING", "NOTICE"].iter().any(|p| upper.contains(p))
+    ["COPYRIGHT", "THIRD-PARTY", "THIRD_PARTY", "THIRDPARTY", "3RDPARTY", "ACKNOWLEDG"].iter().any(|p| upper.starts_with(p)) || ["LICENSE", "LICENCE", "COPYING", "NOTICE", "ATTRIBUTION"].iter().any(|p| upper.contains(p))
 }
 
 /// Whether a path inside a package (`src/x/LICENSE-MIT`, `LICENSES/MIT.txt`) is one of its licence
@@ -211,7 +212,7 @@ pub fn assemble(sbom: &str, root: &Path, commit: &str, vendored: &Path, kdd_doc:
         if let Some(dir) = property(c, "veredas:path") {
             // A component or a package by path: its folder's own files at the commit, a package's
             // nested in it (a folder holding a manifest with `[package]`) left to that package.
-            source = format!("this repository, {dir}");
+            source = if dir.is_empty() { "this repository, its root".to_string() } else { format!("this repository, {dir}") };
             let to = format!("components/{name}");
             let blob = |path: &str| crate::git::run(root, &["cat-file", "blob", &format!("{commit}:{path}")]).map_err(|e| io(e.to_string()));
             let from_root = |f: &str| if dir.is_empty() { f.to_string() } else { format!("{dir}/{f}") };

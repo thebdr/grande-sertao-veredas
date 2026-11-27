@@ -41,7 +41,7 @@ impl Repo {
 
 #[test]
 fn a_packages_licence_files_are_known_by_their_names() {
-    for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "license.txt", "COPYING", "COPYING.LESSER", "NOTICE", "UNLICENSE", "COPYRIGHT", "Licence.md", "THIRD-PARTY-NOTICES.md", "3RDPARTY.md", "LICENSE-UNICODE", "ThirdPartyNotices.txt", "FiraSans-LICENSE.txt", "SourceSerif4-LICENSE.md", "noto-sans-kr-v13-korean-regular-LICENSE.txt", "OFL-licence.md", "README.COPYING"] {
+    for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "license.txt", "COPYING", "COPYING.LESSER", "NOTICE", "UNLICENSE", "COPYRIGHT", "Licence.md", "THIRD-PARTY-NOTICES.md", "3RDPARTY.md", "LICENSE-UNICODE", "ThirdPartyNotices.txt", "FiraSans-LICENSE.txt", "SourceSerif4-LICENSE.md", "noto-sans-kr-v13-korean-regular-LICENSE.txt", "OFL-licence.md", "README.COPYING", "ATTRIBUTION.md", "ACKNOWLEDGEMENTS", "Acknowledgments.txt"] {
         assert!(alforge::licences::is_licence_file(name), "{name}");
     }
     // At any depth, and every file of a `LICENSES/` folder (crc-catalog's, tokio-modbus's).
@@ -314,4 +314,57 @@ fn a_bundles_licences_name_every_entry_of_its_component_list_with_its_files() {
     let none = d.path().join("none");
     let e = alforge::licences::assemble(&sbom, r.path(), &c, &vendored, Some(&kdd), &none, &docs, &d.path().join("again")).unwrap_err();
     assert!(e.to_string().contains(&format!("qt's licence text {}", none.join("LGPL-3").display())), "{e}");
+}
+
+#[test]
+fn a_vendored_crates_attribution_is_kept_as_cargo_vendor_writes_it() {
+    // glam, which veredas-maquinar's physics compiles, ships `ATTRIBUTION.md`: the MIT notices of
+    // DirectXMath, Realtime Math and GLM, whose code it carries. Vendored from the machine's own
+    // cargo as the builder vendors it, then kept.
+    let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-um\"]\n");
+    r.write("crates/veredas-um/Cargo.toml", "[package]\nname = \"veredas-um\"\nversion = \"2.0.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nglam = \"=0.33.12\"\n");
+    r.write("crates/veredas-um/src/lib.rs", "\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let d = tempfile::tempdir().unwrap();
+    let vendor = d.path().join("vendor");
+    let out = cargo().args(["vendor", "--offline", "--locked", "--versioned-dirs", "--quiet"]).arg(&vendor).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let kept = d.path().join("kept");
+    alforge::licences::keep_vendored(&vendor, &kept).unwrap();
+    let mut found: Vec<String> = std::fs::read_dir(kept.join("glam-0.33.12")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    found.sort();
+    assert_eq!(found, ["ATTRIBUTION.md", "LICENSE-APACHE", "LICENSE-MIT"]);
+    assert!(std::fs::read_to_string(kept.join("glam-0.33.12/ATTRIBUTION.md")).unwrap().contains("DirectXMath"));
+}
+
+#[test]
+fn a_package_at_the_repositorys_root_names_its_licence_file_from_there() {
+    // The root's own package, used by path by a component, its `license-file` at the root.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-um\"]\n\n[package]\nname = \"raiz\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense-file = \"LICENSE\"\n");
+    r.write("src/lib.rs", "\n");
+    r.write("LICENSE", "the root's own terms\n");
+    r.write("crates/veredas-um/Cargo.toml", "[package]\nname = \"veredas-um\"\nversion = \"2.0.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nraiz = { path = \"../..\" }\n");
+    r.write("crates/veredas-um/src/lib.rs", "\n");
+    r.write("crates/veredas-um/LICENSE-MIT", "um's MIT text\n");
+    r.git(&["add", "-A"]);
+    r.git(&["commit", "-q", "-m", "a package at the root"]);
+    let c = r.git(&["rev-parse", "HEAD"]);
+    let sbom = alforge::components::list(r.path(), &c, Some("2.0.0")).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&sbom).unwrap();
+    let raiz = doc["components"].as_array().unwrap().iter().find(|e| e["name"] == "raiz").unwrap();
+    assert_eq!(raiz["licenses"], serde_json::json!([{ "license": { "name": "the package's own file LICENSE" } }]));
+    assert_eq!(alforge::licences::missing_texts(&sbom, r.path(), &c).unwrap(), Vec::<String>::new());
+    let d = tempfile::tempdir().unwrap();
+    let dest = d.path().join("licenses");
+    alforge::licences::assemble(&sbom, r.path(), &c, &d.path().join("vendored"), None, &d.path().join("common"), &[], &dest).unwrap();
+    assert_eq!(std::fs::read_to_string(dest.join("components/raiz/LICENSE")).unwrap(), "the root's own terms\n");
+    // The component's folder, a package's own, is left to it.
+    assert!(!dest.join("components/raiz/crates").exists());
+    assert_eq!(std::fs::read_to_string(dest.join("components/veredas-um/LICENSE-MIT")).unwrap(), "um's MIT text\n");
+    let third = std::fs::read_to_string(dest.join("THIRD-PARTY.md")).unwrap();
+    assert!(third.lines().any(|l| l == "| raiz | 0.1.0 | the package's own file LICENSE | this repository, its root | components/raiz/LICENSE |"), "{third}");
 }

@@ -139,9 +139,9 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
         let stated = |k: &str| s(k).filter(|v| !v.trim().is_empty());
         let licence = match (stated("license"), stated("license_file")) {
             (Some(l), _) => Licence::Expression(l),
-            // A licence file, named from the root for a package by path.
+            // A licence file, named from the root for a package by path (the root's own as it is).
             (None, Some(f)) => Licence::File(match (&source, &dir) {
-                (None, Some(d)) if Path::new(&f).is_relative() => format!("{d}/{f}"),
+                (None, Some(d)) if Path::new(&f).is_relative() && !d.is_empty() => format!("{d}/{f}"),
                 _ => f,
             }),
             (None, None) => Licence::None,
