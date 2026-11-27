@@ -261,3 +261,66 @@ fn what_no_build_of_the_target_compiles_is_not_listed_and_an_unpinned_crate_refu
     let e = alforge::components::list(r.path(), &c, None).unwrap_err();
     assert!(e.to_string().starts_with("veredas-core's build inputs do not read: veredas-core depends on `") && e.to_string().ends_with("` and the commit holds no Cargo.lock to pin it"), "{e}");
 }
+
+/// Round 2's real forms: what `cargo tree` prints and cargo never builds (a build-dependency of a
+/// package with no build script, indoc's `rustversion`; a member's build-dependency with no
+/// `build.rs`; a dependency on a package with no library) is not listed; an in-tree proc-macro
+/// beside its crates.io namesake is told apart (`name vX (proc-macro) (path)`); a signed commit
+/// shown under `log.showSignature` gives its time alone; a lock of format 1 gives its checksums.
+#[test]
+fn what_cargo_prints_and_never_builds_a_proc_macro_twin_a_signed_commit_and_a_lock_of_format_one() {
+    let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\nexclude = [\"forks\"]\n");
+    r.write(
+        "crates/veredas-core/Cargo.toml",
+        "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n\
+         [dependencies]\nindoc = \"=2.0.8\"\nitoa = \"=1.0.19\"\nitoa_twin = { package = \"itoa\", path = \"../../forks/itoa\" }\nferramenta = { path = \"../../forks/ferramenta\" }\n\n\
+         [build-dependencies]\nryu = \"1\"\n",
+    );
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    r.write("forks/itoa/Cargo.toml", "[workspace]\n\n[package]\nname = \"itoa\"\nversion = \"1.0.19\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[lib]\nproc-macro = true\n");
+    r.write("forks/itoa/src/lib.rs", "\n");
+    r.write("forks/ferramenta/Cargo.toml", "[workspace]\n\n[package]\nname = \"ferramenta\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[[bin]]\nname = \"ferramenta\"\npath = \"src/main.rs\"\n");
+    r.write("forks/ferramenta/src/main.rs", "fn main() {}\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    // Signed, and read where `log.showSignature` is on.
+    let key = r.path().join("../signing-key");
+    let _ = std::fs::remove_file(&key);
+    let made = Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-f"]).arg(&key).output().unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    r.git(&["config", "gpg.format", "ssh"]);
+    r.git(&["config", "user.signingkey", &format!("{}.pub", key.display())]);
+    r.git(&["config", "log.showSignature", "true"]);
+    r.git(&["add", "-A"]);
+    r.git(&["-c", "commit.gpgsign=true", "commit", "-q", "-m", "a signed commit"]);
+    let c = r.git(&["rev-parse", "HEAD"]);
+    let doc: Value = serde_json::from_str(&alforge::components::list(r.path(), &c, None).unwrap()).unwrap();
+    assert_eq!(doc["metadata"]["timestamp"], "2026-11-26T11:00:00Z");
+    let entries = doc["components"].as_array().unwrap();
+    let names: Vec<&str> = entries.iter().map(|e| e["name"].as_str().unwrap()).collect();
+    for gone in ["rustversion", "ryu", "ferramenta"] {
+        assert!(!names.contains(&gone), "{gone}: {names:?}");
+    }
+    // The twin by path and the crate of the registry, each its own entry.
+    assert!(entries.iter().any(|e| e["bom-ref"] == "itoa@1.0.19") && entries.iter().any(|e| e["bom-ref"] == "pkg:cargo/itoa@1.0.19"), "{names:?}");
+    let _ = std::fs::remove_file(&key);
+    let _ = std::fs::remove_file(format!("{}.pub", key.display()));
+
+    // A lock of format 1, as cargo writes one for a `rust-version` below 1.41: its checksums kept in
+    // `[metadata]`, read as the lock's.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"2\"\nmembers = [\"crates/veredas-core\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2018\"\nrust-version = \"1.40\"\nlicense = \"MIT\"\n\n[dependencies]\nitoa = \"=1.0.19\"\n");
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let lock = std::fs::read_to_string(r.path().join("Cargo.lock")).unwrap();
+    assert!(lock.contains("[metadata]") && lock.contains("\"checksum itoa 1.0.19 (registry+"), "a lock of format 1: {lock}");
+    let c = r.commit("a lock of format 1");
+    let doc: Value = serde_json::from_str(&alforge::components::list(r.path(), &c, None).unwrap()).unwrap();
+    let itoa = doc["components"].as_array().unwrap().iter().find(|e| e["bom-ref"] == "pkg:cargo/itoa@1.0.19").unwrap();
+    let sum = lock.lines().find(|l| l.starts_with("\"checksum itoa 1.0.19")).unwrap().rsplit(" = ").next().unwrap().trim_matches('"');
+    assert_eq!(itoa["hashes"], serde_json::json!([{ "alg": "SHA-256", "content": sum }]));
+}

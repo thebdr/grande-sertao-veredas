@@ -69,6 +69,14 @@ struct Package {
     licence: Licence,
     /// Its normal and build dependencies on the target, by cargo's id.
     deps: BTreeSet<String>,
+    /// Whether it has a build script, without which cargo compiles no build-dependency of it.
+    build_script: bool,
+    /// Whether it has a library (a proc-macro's among them), without which cargo ignores a
+    /// dependency on it.
+    lib: bool,
+    /// The packages it names as normal dependencies, and as build dependencies, by name.
+    normal_deps: BTreeSet<String>,
+    build_deps: BTreeSet<String>,
 }
 
 /// `text` percent-encoded for a package URL's qualifier: every byte but the unreserved ones.
@@ -140,7 +148,24 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
             (None, None) => Licence::None,
         };
         let dir = if source.is_none() { dir } else { None };
-        found.insert(id.clone(), Package { name, version, source, dir, licence, deps: BTreeSet::new() });
+        let kinds = |t: &Value| t["kind"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect::<Vec<_>>();
+        let targets: Vec<Vec<String>> = p["targets"].as_array().into_iter().flatten().map(kinds).collect();
+        let build_script = targets.iter().any(|k| k.iter().any(|k| k == "custom-build"));
+        let lib = targets.iter().any(|k| k.iter().any(|k| ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"].contains(&k.as_str())));
+        let (mut normal_deps, mut build_deps) = (BTreeSet::new(), BTreeSet::new());
+        for d in p["dependencies"].as_array().into_iter().flatten() {
+            let n = d["name"].as_str().unwrap_or_default().to_string();
+            match d["kind"].as_str() {
+                None => {
+                    normal_deps.insert(n);
+                }
+                Some("build") => {
+                    build_deps.insert(n);
+                }
+                _ => {}
+            }
+        }
+        found.insert(id.clone(), Package { name, version, source, dir, licence, deps: BTreeSet::new(), build_script, lib, normal_deps, build_deps });
     }
     // What the components' builds compile, as cargo's own feature resolver has it (`cargo tree`
     // with normal and build edges alone, for the target, every feature of theirs on): a
@@ -165,8 +190,10 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
         m.entry((p.name.clone(), p.version.clone())).or_insert_with(Vec::new).push(id.clone());
         m
     });
-    let identify = |line: &str| -> Result<String, ListError> {
-        let line = line.trim_end_matches(" (*)").trim_end_matches(" (proc-macro)").trim_end_matches(" (*)");
+    let identify = |line: &str| -> Result<Option<String>, ListError> {
+        // Cargo's marks wherever it prints them (`name vX (proc-macro) (source)`, ` (*)` last).
+        let line = line.replace(" (proc-macro)", "").replace(" (*)", "");
+        let line = line.as_str();
         let (head, paren) = match line.split_once(" (") {
             Some((h, rest)) => (h, Some(rest.trim_end_matches(')'))),
             None => (line, None),
@@ -182,25 +209,39 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
                 (None, None) => false,
             }
         };
+        // A package cargo's metadata does not hold (a dependency on a package with no library,
+        // which cargo ignores): no package of the build, nor anything below it.
+        if ids.is_empty() {
+            return Ok(None);
+        }
         let picked: Vec<&String> = if ids.len() == 1 { ids.iter().collect() } else { ids.iter().filter(fits).collect() };
         match picked.as_slice() {
-            [one] => Ok((*one).clone()),
+            [one] => Ok(Some((*one).clone())),
             _ => Err(refused(format!("commit {commit}: cargo tree printed `{line}`, which names {} of its packages", picked.len()))),
         }
     };
-    let mut stack: Vec<String> = Vec::new();
+    let mut stack: Vec<Option<String>> = Vec::new();
     let mut edges: Vec<(String, String)> = Vec::new();
     for raw in String::from_utf8_lossy(&out.stdout).lines() {
         let digits = raw.len() - raw.trim_start_matches(|c: char| c.is_ascii_digit()).len();
         let Ok(depth) = raw[..digits].parse::<usize>() else { continue };
-        let id = identify(&raw[digits..])?;
         stack.truncate(depth);
-        if let Some(parent_id) = stack.last() {
-            edges.push((parent_id.clone(), id.clone()));
+        let parent = stack.last().cloned().flatten();
+        let id = if depth > 0 && parent.is_none() { None } else { identify(&raw[digits..])? };
+        if let (Some(p), Some(c)) = (&parent, &id) {
+            edges.push((p.clone(), c.clone()));
         }
         stack.push(id);
     }
+    // An edge cargo prints and never builds: a build-dependency of a package with no build
+    // script (pest_meta's `sha2`, indoc's `rustversion`), a dependency on a package with no library
+    // (which cargo ignores, and warns of).
     for (from, to) in edges {
+        let (Some(f), Some(t)) = (found.get(&from), found.get(&to)) else { continue };
+        let only_built_for_a_script = !f.normal_deps.contains(&t.name) && f.build_deps.contains(&t.name);
+        if !t.lib || (only_built_for_a_script && !f.build_script) {
+            continue;
+        }
         if let Some(p) = found.get_mut(&from) {
             p.deps.insert(to);
         }

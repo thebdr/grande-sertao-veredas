@@ -20,7 +20,9 @@ pub struct GitError {
 /// tool runs reads the objects and parents as committed.
 pub fn command(root: &Path) -> Command {
     let mut c = Command::new("git");
-    c.arg("-C").arg(root).env("GIT_NO_REPLACE_OBJECTS", "1").env("GIT_GRAFT_FILE", "/dev/null");
+    // A signed commit shown under `log.showSignature` would print git's verdict on its signature
+    // before what was asked (a commit's date): no reading here takes one.
+    c.arg("-C").arg(root).args(["-c", "log.showSignature=false"]).env("GIT_NO_REPLACE_OBJECTS", "1").env("GIT_GRAFT_FILE", "/dev/null");
     c
 }
 

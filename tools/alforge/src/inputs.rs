@@ -127,6 +127,9 @@ pub(crate) struct Locked {
 /// A lock file's packages, as `Cargo.lock`'s text holds them.
 pub(crate) fn parse_lock(text: &str) -> Result<Vec<Locked>, String> {
     let table: toml::Table = toml::from_str(text).map_err(|e| format!("its Cargo.lock does not read: {}", e.message()))?;
+    // A lock of format 1 (which cargo still writes for a `rust-version` below 1.41) keeps each
+    // package's checksum in `[metadata]`, as `"checksum <name> <version> (<source>)"`.
+    let metadata = table.get("metadata").and_then(|m| m.as_table());
     let mut out = Vec::new();
     for p in table.get("package").and_then(|p| p.as_array()).into_iter().flatten() {
         let s = |k: &str| p.get(k).and_then(|v| v.as_str()).map(str::to_string);
@@ -134,7 +137,12 @@ pub(crate) fn parse_lock(text: &str) -> Result<Vec<Locked>, String> {
             return Err("its Cargo.lock holds a package without a name or a version".to_string());
         };
         let dependencies = p.get("dependencies").and_then(|d| d.as_array()).into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string)).collect();
-        out.push(Locked { name, version, source: s("source"), checksum: s("checksum"), dependencies, replace: s("replace") });
+        let source = s("source");
+        let checksum = s("checksum").or_else(|| {
+            let src = source.as_deref()?;
+            metadata.and_then(|m| m.get(&format!("checksum {name} {version} ({src})"))).and_then(|v| v.as_str()).map(str::to_string)
+        });
+        out.push(Locked { name, version, source, checksum, dependencies, replace: s("replace") });
     }
     Ok(out)
 }
