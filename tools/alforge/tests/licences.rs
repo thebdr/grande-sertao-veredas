@@ -41,14 +41,14 @@ impl Repo {
 
 #[test]
 fn a_packages_licence_files_are_known_by_their_names() {
-    for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "license.txt", "COPYING", "COPYING.LESSER", "NOTICE", "UNLICENSE", "COPYRIGHT", "Licence.md", "THIRD-PARTY-NOTICES.md", "3RDPARTY.md", "LICENSE-UNICODE", "ThirdPartyNotices.txt", "FiraSans-LICENSE.txt", "SourceSerif4-LICENSE.md", "noto-sans-kr-v13-korean-regular-LICENSE.txt", "OFL-licence.md", "README.COPYING", "ATTRIBUTION.md", "ACKNOWLEDGEMENTS", "Acknowledgments.txt"] {
+    for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "license.txt", "COPYING", "COPYING.LESSER", "NOTICE", "UNLICENSE", "COPYRIGHT", "Licence.md", "THIRD-PARTY-NOTICES.md", "3RDPARTY.md", "LICENSE-UNICODE", "ThirdPartyNotices.txt", "FiraSans-LICENSE.txt", "SourceSerif4-LICENSE.md", "noto-sans-kr-v13-korean-regular-LICENSE.txt", "OFL-licence.md", "README.COPYING", "ATTRIBUTION.md", "ACKNOWLEDGEMENTS", "Acknowledgments.txt", "OFL.txt", "OFL-Inter.txt", "UFL.txt", "AUTHORS", "AUTHORS.md", "REUSE.toml"] {
         assert!(alforge::licences::is_licence_file(name), "{name}");
     }
     // At any depth, and every file of a `LICENSES/` folder (crc-catalog's, tokio-modbus's).
-    for path in ["LICENSES/MIT.txt", "LICENSES/Apache-2.0.txt", "src/polyfill/once_cell/LICENSE-MIT", "src/unicode_tables/LICENSE-UNICODE", "tz/LICENSE", "third_party/fiat/LICENSE", "docs/doc/SourceCodePro-LICENSE.txt"] {
+    for path in ["LICENSES/MIT.txt", "LICENSES/Apache-2.0.txt", "src/polyfill/once_cell/LICENSE-MIT", "src/unicode_tables/LICENSE-UNICODE", "tz/LICENSE", "third_party/fiat/LICENSE", "docs/doc/SourceCodePro-LICENSE.txt", ".reuse/dep5", "assets/fonts/geist/OFL.txt"] {
         assert!(alforge::licences::is_licence_path(path), "{path}");
     }
-    for path in ["src/lib.rs", "licenses.rs", "src/licensing/mod.rs", "src/check_license.rs"] {
+    for path in ["src/lib.rs", "licenses.rs", "src/licensing/mod.rs", "src/check_license.rs", "src/authors.rs", ".reuse/templates/header.jinja2", "OFFLINE.md", "dep5"] {
         assert!(!alforge::licences::is_licence_path(path), "{path}");
     }
     for name in ["README.md", "Cargo.toml", "src", "build.rs", "notes.md"] {
@@ -236,6 +236,8 @@ fn a_bundles_licences_name_every_entry_of_its_component_list_with_its_files() {
     r.write("crates/veredas-portal/src/main.rs", "fn main() {}\n");
     r.write("crates/veredas-portal/LICENSE-MIT", "portal's MIT text\n");
     r.write("crates/veredas-portal/LICENSE-APACHE", "portal's Apache text\n");
+    // A font the component compiles in, under Google Fonts' licence name.
+    r.write("crates/veredas-portal/assets/fonts/geist/OFL.txt", "Copyright 2024 The Geist Project Authors\nSIL Open Font License, Version 1.1\n");
     r.write("forks/garfo/Cargo.toml", "[workspace]\n\n[package]\nname = \"garfo\"\nversion = \"0.3.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n");
     r.write("forks/garfo/src/lib.rs", "\n");
     r.write("forks/garfo/LICENSE", "the fork's MIT text\n");
@@ -287,6 +289,7 @@ fn a_bundles_licences_name_every_entry_of_its_component_list_with_its_files() {
     let read = |f: &str| std::fs::read_to_string(dest.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
     assert_eq!(read("components/veredas-portal/LICENSE-MIT"), "portal's MIT text\n");
     assert_eq!(read("components/veredas-portal/LICENSE-APACHE"), "portal's Apache text\n");
+    assert!(read("components/veredas-portal/assets/fonts/geist/OFL.txt").contains("SIL Open Font License"));
     assert_eq!(read("components/garfo/LICENSE"), "the fork's MIT text\n");
     assert_eq!(read("components/garfo/THIRD-PARTY-NOTICES.md"), "the data's own terms, which must accompany it\n");
     assert_eq!(read("components/garfo/LICENSES/Unicode-3.0.txt"), "Unicode's terms\n");
@@ -300,7 +303,7 @@ fn a_bundles_licences_name_every_entry_of_its_component_list_with_its_files() {
     assert!(third.contains(&format!("Release 2.0.0, cut from commit {c}.")), "{third}");
     assert!(third.contains("Oficina (`veredas-oficina`) is GPL-3.0-or-later"), "{third}");
     for row in [
-        "| veredas-portal | 2.0.3 | MIT OR Apache-2.0 | this repository, crates/veredas-portal | components/veredas-portal/LICENSE-APACHE, components/veredas-portal/LICENSE-MIT |".to_string(),
+        "| veredas-portal | 2.0.3 | MIT OR Apache-2.0 | this repository, crates/veredas-portal | components/veredas-portal/LICENSE-APACHE, components/veredas-portal/LICENSE-MIT, components/veredas-portal/assets/fonts/geist/OFL.txt |".to_string(),
         "| garfo | 0.3.0 | MIT | this repository, forks/garfo | components/garfo/LICENSE, components/garfo/LICENSES/Unicode-3.0.txt, components/garfo/THIRD-PARTY-NOTICES.md |".to_string(),
         format!("| itoa | {itoa} | MIT OR Apache-2.0 | pkg:cargo/itoa@{itoa} | crates/itoa-{itoa}/LICENSE-MIT |"),
         "| qt | 6.12.0 | LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only | https://download.qt.io/official_releases/qt/6.12/6.12.0/single/qt-everywhere-src-6.12.0.tar.xz | qt/LGPL-3, qt/GPL-2, qt/GPL-3, qt/sbom/qtbase-6.12.0.spdx.json |".to_string(),
@@ -319,12 +322,14 @@ fn a_bundles_licences_name_every_entry_of_its_component_list_with_its_files() {
 #[test]
 fn a_vendored_crates_attribution_is_kept_as_cargo_vendor_writes_it() {
     // glam, which veredas-maquinar's physics compiles, ships `ATTRIBUTION.md`: the MIT notices of
-    // DirectXMath, Realtime Math and GLM, whose code it carries. Vendored from the machine's own
-    // cargo as the builder vendors it, then kept.
+    // DirectXMath, Realtime Math and GLM, whose code it carries. half, which portal's database
+    // compiles, names its copyright holder in REUSE's `.reuse/dep5` alone; sha1_smol's licence names
+    // its holders as its `AUTHORS` file shows them. Vendored from the machine's own cargo as the
+    // builder vendors them, then kept.
     let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     let r = Repo::new();
     r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-um\"]\n");
-    r.write("crates/veredas-um/Cargo.toml", "[package]\nname = \"veredas-um\"\nversion = \"2.0.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nglam = \"=0.33.12\"\n");
+    r.write("crates/veredas-um/Cargo.toml", "[package]\nname = \"veredas-um\"\nversion = \"2.0.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nglam = \"=0.33.12\"\nhalf = \"=2.7.1\"\nsha1_smol = \"=1.0.1\"\n# half's zerocopy at this repository's own version, whose sources the machine holds.\nzerocopy = \"=0.8.63\"\n");
     r.write("crates/veredas-um/src/lib.rs", "\n");
     let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -338,6 +343,10 @@ fn a_vendored_crates_attribution_is_kept_as_cargo_vendor_writes_it() {
     found.sort();
     assert_eq!(found, ["ATTRIBUTION.md", "LICENSE-APACHE", "LICENSE-MIT"]);
     assert!(std::fs::read_to_string(kept.join("glam-0.33.12/ATTRIBUTION.md")).unwrap().contains("DirectXMath"));
+    assert!(std::fs::read_to_string(kept.join("half-2.7.1/.reuse/dep5")).unwrap().contains("Copyright:"));
+    assert!(kept.join("half-2.7.1/LICENSE-MIT").is_file());
+    assert!(std::fs::read_to_string(kept.join("sha1_smol-1.0.1/AUTHORS")).unwrap().contains("Armin Ronacher"));
+    assert!(std::fs::read_to_string(kept.join("sha1_smol-1.0.1/LICENSE")).unwrap().contains("AUTHORS file"));
 }
 
 #[test]

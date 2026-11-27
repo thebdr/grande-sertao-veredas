@@ -14,24 +14,32 @@ use crate::vm::VmError;
 
 /// Whether a file is one of a package's licence files or notices, by the names packages give them
 /// (`LICENSE`, `LICENSE-MIT`, `COPYING`, `NOTICE`, `UNLICENSE`, `COPYRIGHT`, `THIRD-PARTY-NOTICES.md`,
-/// `3RDPARTY.md`, `ATTRIBUTION.md`, `ACKNOWLEDGMENTS`, with any ending but a Rust source's `.rs`; any
-/// name holding `LICENSE`, `LICENCE`, `COPYING`, `NOTICE` or `ATTRIBUTION`, as a font's
-/// `OFL-LICENSE.txt`).
+/// `3RDPARTY.md`, `ATTRIBUTION.md`, `ACKNOWLEDGMENTS`, `AUTHORS`, which a licence names as its
+/// copyright holders, a font's `OFL.txt`, `OFL-Inter.txt` or `UFL.txt`, REUSE's `REUSE.toml`, with
+/// any ending but a Rust source's `.rs`; any name holding `LICENSE`, `LICENCE`, `COPYING`, `NOTICE`
+/// or `ATTRIBUTION`, as a font's `OFL-LICENSE.txt`).
 pub fn is_licence_file(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     // A source of Rust (`licenses.rs`) is code, never a licence's text.
     if upper.ends_with(".RS") {
         return false;
     }
-    ["COPYRIGHT", "THIRD-PARTY", "THIRD_PARTY", "THIRDPARTY", "3RDPARTY", "ACKNOWLEDG"].iter().any(|p| upper.starts_with(p)) || ["LICENSE", "LICENCE", "COPYING", "NOTICE", "ATTRIBUTION"].iter().any(|p| upper.contains(p))
+    // A font licence's own word, alone or before a `.`, `-` or `_` (`OFL.txt`, `OFL-Inter.txt`).
+    let font = ["OFL", "UFL"].iter().any(|p| upper.strip_prefix(p).is_some_and(|rest| rest.is_empty() || rest.starts_with(['.', '-', '_'])));
+    font || upper == "REUSE.TOML"
+        || ["COPYRIGHT", "THIRD-PARTY", "THIRD_PARTY", "THIRDPARTY", "3RDPARTY", "ACKNOWLEDG", "AUTHORS"].iter().any(|p| upper.starts_with(p))
+        || ["LICENSE", "LICENCE", "COPYING", "NOTICE", "ATTRIBUTION"].iter().any(|p| upper.contains(p))
 }
 
 /// Whether a path inside a package (`src/x/LICENSE-MIT`, `LICENSES/MIT.txt`) is one of its licence
-/// files: a licence file's name at any depth, or any file of a folder named `LICENSES` or
-/// `LICENCES`.
+/// files: a licence file's name at any depth, any file of a folder named `LICENSES` or `LICENCES`,
+/// or REUSE's copyright file `.reuse/dep5` (Debian's machine-readable copyright, half's only
+/// notice of its holder).
 pub fn is_licence_path(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').collect();
-    parts.last().is_some_and(|f| is_licence_file(f)) || parts[..parts.len().saturating_sub(1)].iter().any(|d| ["LICENSES", "LICENCES"].contains(&d.to_ascii_uppercase().as_str()))
+    parts.last().is_some_and(|f| is_licence_file(f))
+        || parts[..parts.len().saturating_sub(1)].iter().any(|d| ["LICENSES", "LICENCES"].contains(&d.to_ascii_uppercase().as_str()))
+        || parts.ends_with(&[".reuse", "dep5"])
 }
 
 /// Every file under `dir` (paths from it, `/` apart, in name order).

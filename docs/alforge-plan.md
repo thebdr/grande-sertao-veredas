@@ -225,7 +225,8 @@ beside its manifest, the copyright holder thebdr; Oficina is `GPL-3.0-or-later` 
 - **The bundle carries `licenses/`**, made from the component list:
   - for each component and each package by path, its licence files and notices at any depth of its
     folder (any name holding `LICENSE`, `LICENCE`, `COPYING`, `NOTICE` or `ATTRIBUTION`,
-    `THIRD-PARTY*`, `ACKNOWLEDG*` and the like, and every file of a `LICENSES/` folder) as git stores them, in `components/<name>/`, a
+    `THIRD-PARTY*`, `ACKNOWLEDG*`, `AUTHORS*`, a font's `OFL*`, REUSE's `.reuse/dep5` and
+    `REUSE.toml` and the like, and every file of a `LICENSES/` folder) as git stores them, in `components/<name>/`, a
     package nested in its folder left to that package; and the file its `license-file` names,
     whatever its name, wherever it lies in the repository (outside its folder, by its name at
     `components/<name>/`, as `cargo package` would put it);
