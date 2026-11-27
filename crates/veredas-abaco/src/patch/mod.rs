@@ -966,77 +966,117 @@ fn spelled_as_in_the_source(
 }
 
 /// The first function a formula calls that the engine does not compute, as the engine calls one
-/// (the round at eb2a9460): a built-in of its own; a LET's or a LAMBDA's own name, the call and the
-/// binding by the engine's fold as parsed; else the defined name of its key the cell's sheet holds,
-/// else the workbook's, and only where the engine parsed it as a LAMBDA definition (a name over a
-/// cell, a formula or a LET returning a LAMBDA is none it calls, nor a local name over a global
-/// LAMBDA, nor `_xlfn.f(` for a name `f`). Such a call would be cached as `#NAME?` and spelled as
-/// the engine prints an unknown name, so an edit writing one is refused.
-fn unknown_call(node: &Node, bound: &mut Vec<String>, names: &ParsedNames, sheet: Option<u32>) -> Option<String> {
-    fn any<'n>(nodes: impl IntoIterator<Item = &'n Node>, bound: &mut Vec<String>, names: &ParsedNames, sheet: Option<u32>) -> Option<String> {
-        nodes.into_iter().find_map(|n| unknown_call(n, bound, names, sheet))
-    }
-    match node {
-        Node::NamedFunctionKind { name, args, .. } => {
-            let key = name_key(name);
-            let own = bound.iter().any(|b| bound_key(b) == key);
-            // the engine's lookup: the sheet's own name, else the workbook's, never both
-            let lambda = || {
-                sheet
-                    .and_then(|s| names.find(Some(s), &key))
-                    .or_else(|| names.find(None, &key))
-                    .is_some_and(|i| matches!(names.0[i].2, Node::LambdaDefKind { .. }))
-            };
-            if !own && !lambda() {
-                let bare = name.trim_start_matches("_xlfn._xlws.").trim_start_matches("_xlfn.").trim_start_matches("_xlpm.");
-                return Some(bare.to_uppercase());
-            }
-            any(args, bound, names, sheet)
-        }
-        Node::LambdaDefKind { parameters, body } => {
-            let depth = bound.len();
-            bound.extend(parameters.iter().map(|p| p.name().to_string()));
-            let found = unknown_call(body, bound, names, sheet);
-            bound.truncate(depth);
-            found
-        }
-        // the engine keeps its function list private: LET is told by its name
-        Node::FunctionKind { kind, args } if format!("{kind:?}") == "Let" && args.len() >= 3 && args.len() % 2 == 1 => {
-            let depth = bound.len();
-            let pairs = (args.len() - 1) / 2;
-            let mut found = None;
-            for i in 0..pairs {
-                if let Node::NamedVariableKind { name, .. } = &args[2 * i] {
-                    bound.push(name.clone());
+/// (the rounds at eb2a9460 and 01ea89f9): a built-in of its own; a LET's or a LAMBDA's own name, the
+/// call and the binding by the engine's fold as parsed (a LET's name inside its own value only
+/// within a LAMBDA, which runs after the binding); else the defined name of its key the cell's
+/// sheet holds, else the workbook's, and only where the engine parsed it as a LAMBDA definition (a
+/// name over a cell, a formula or a LET returning a LAMBDA is none it calls, nor a local name over
+/// a global LAMBDA, nor `_xlfn.f(` for a name `f`); and a defined name the formula reads, its own
+/// formula walked from the same cell's sheet, as the engine evaluates it there. Such a call would
+/// be cached as `#NAME?` and spelled as the engine prints an unknown name, so an edit writing one is
+/// refused.
+struct Calls<'a> {
+    names: &'a ParsedNames,
+    /// The sheet the formula is evaluated from (`None` for a workbook name's own formula).
+    sheet: Option<u32>,
+    /// The LET's and LAMBDA's names bound around the node.
+    bound: Vec<String>,
+    /// A LET's names inside their own values: bound only within a LAMBDA there.
+    in_lambdas: Vec<String>,
+    /// The defined names being walked, so a name read inside itself stops.
+    walking: Vec<usize>,
+}
+
+impl Calls<'_> {
+    fn first_unknown(&mut self, node: &Node) -> Option<String> {
+        match node {
+            Node::NamedFunctionKind { name, args, .. } => {
+                let key = name_key(name);
+                let own = self.bound.iter().any(|b| bound_key(b) == key);
+                // the engine's lookup: the sheet's own name, else the workbook's, never both
+                let lambda = self
+                    .sheet
+                    .and_then(|s| self.names.find(Some(s), &key))
+                    .or_else(|| self.names.find(None, &key))
+                    .is_some_and(|i| matches!(self.names.0[i].2, Node::LambdaDefKind { .. }));
+                if !own && !lambda {
+                    let bare = name.trim_start_matches("_xlfn._xlws.").trim_start_matches("_xlfn.").trim_start_matches("_xlpm.");
+                    return Some(bare.to_uppercase());
                 }
-                found = found.or_else(|| unknown_call(&args[2 * i + 1], bound, names, sheet));
+                args.iter().find_map(|a| self.first_unknown(a))
             }
-            let found = found.or_else(|| unknown_call(&args[2 * pairs], bound, names, sheet));
-            bound.truncate(depth);
-            found
+            Node::DefinedNameKind { name, scope, .. } => {
+                // a name read: its formula as the engine evaluates it, from this cell's sheet, with
+                // no binding of the cell's
+                let i = self.names.find(*scope, &name_key(name))?;
+                if self.walking.contains(&i) {
+                    return None;
+                }
+                self.walking.push(i);
+                let (bound, in_lambdas) = (std::mem::take(&mut self.bound), std::mem::take(&mut self.in_lambdas));
+                let found = self.first_unknown(&self.names.0[i].2);
+                (self.bound, self.in_lambdas) = (bound, in_lambdas);
+                self.walking.pop();
+                found
+            }
+            Node::LambdaDefKind { parameters, body } => {
+                let depth = self.bound.len();
+                self.bound.extend(parameters.iter().map(|p| p.name().to_string()));
+                // a LET's names in their own values are bound here, the LAMBDA running after them
+                let pending = std::mem::take(&mut self.in_lambdas);
+                self.bound.extend(pending.iter().cloned());
+                let found = self.first_unknown(body);
+                self.in_lambdas = pending;
+                self.bound.truncate(depth);
+                found
+            }
+            // the engine keeps its function list private: LET is told by its name
+            Node::FunctionKind { kind, args } if format!("{kind:?}") == "Let" && args.len() >= 3 && args.len() % 2 == 1 => {
+                let depth = self.bound.len();
+                let pairs = (args.len() - 1) / 2;
+                let mut found = None;
+                for i in 0..pairs {
+                    let declared = if let Node::NamedVariableKind { name, .. } = &args[2 * i] { Some(name.clone()) } else { None };
+                    // its value evaluated before the name is bound, a LAMBDA in it after
+                    if let Some(name) = &declared {
+                        self.in_lambdas.push(name.clone());
+                    }
+                    found = found.or_else(|| self.first_unknown(&args[2 * i + 1]));
+                    if declared.is_some() {
+                        self.in_lambdas.pop();
+                    }
+                    if let Some(name) = declared {
+                        self.bound.push(name);
+                    }
+                }
+                let found = found.or_else(|| self.first_unknown(&args[2 * pairs]));
+                self.bound.truncate(depth);
+                found
+            }
+            Node::FunctionKind { args, .. } => args.iter().find_map(|a| self.first_unknown(a)),
+            Node::LambdaCallKind { lambda, args } => std::iter::once(lambda.as_ref()).chain(args.iter()).find_map(|a| self.first_unknown(a)),
+            Node::OpRangeKind { left, right }
+            | Node::OpConcatenateKind { left, right }
+            | Node::OpSumKind { left, right, .. }
+            | Node::OpProductKind { left, right, .. }
+            | Node::OpPowerKind { left, right }
+            | Node::CompareKind { left, right, .. } => self.first_unknown(left).or_else(|| self.first_unknown(right)),
+            Node::UnaryKind { right, .. } => self.first_unknown(right),
+            Node::ImplicitIntersection { child, .. } | Node::SpillRangeOperator { child } => self.first_unknown(child),
+            _ => None,
         }
-        Node::FunctionKind { args, .. } => any(args, bound, names, sheet),
-        Node::LambdaCallKind { lambda, args } => any(std::iter::once(lambda.as_ref()).chain(args.iter()), bound, names, sheet),
-        Node::OpRangeKind { left, right }
-        | Node::OpConcatenateKind { left, right }
-        | Node::OpSumKind { left, right, .. }
-        | Node::OpProductKind { left, right, .. }
-        | Node::OpPowerKind { left, right }
-        | Node::CompareKind { left, right, .. } => any([left.as_ref(), right.as_ref()], bound, names, sheet),
-        Node::UnaryKind { right, .. } => unknown_call(right, bound, names, sheet),
-        Node::ImplicitIntersection { child, .. } | Node::SpillRangeOperator { child } => unknown_call(child, bound, names, sheet),
-        _ => None,
     }
 }
 
-/// [`unknown_call`] of a formula an edit writes, parsed at `a` of `sheet`, evaluated from `scope`
-/// (the cell's sheet, a name's own scope; a workbook name's formula from no sheet, so only the
-/// workbook's LAMBDA names count for it): a LAMBDA name local to another sheet is none it can call.
+/// [`Calls`]' first unknown call of a formula an edit writes, parsed at `a` of `sheet`, evaluated
+/// from `scope` (the cell's sheet, a name's own scope; a workbook name's formula from no sheet, so
+/// only the workbook's LAMBDA names count for it): a LAMBDA name local to another sheet is none it
+/// can call.
 fn calls_unknown(wb: &Workbook, sheet: u32, a: Addr, formula: &str, scope: Option<&str>) -> Option<String> {
     let node = parsed_at(wb, sheet, a, formula)?;
     let names = ParsedNames::of(wb);
     let scope = scope.and_then(|s| wb.model().workbook.get_worksheet_names().iter().position(|n| n == s)).map(|i| i as u32);
-    unknown_call(&node, &mut Vec::new(), &names, scope)
+    Calls { names: &names, sheet: scope, bound: Vec::new(), in_lambdas: Vec::new(), walking: Vec::new() }.first_unknown(&node)
 }
 
 /// The first error a formula states that no file's formula may hold: MS-XLSX's `error-constant`
@@ -1393,6 +1433,9 @@ pub fn patch(
     // the source's cells as its file spells them, read when a formula edit needs them
     let mut source_cells: Option<cached::Cells> = None;
     let mut set_names: Vec<(String, Option<String>)> = Vec::new();
+    // each name an edit sets, where its formula is parsed, the text stored and its scope: its calls
+    // judged when the edits are in
+    let mut set_name_calls: Vec<(String, u32, String, Option<String>)> = Vec::new();
     // the names an edit deleted and none set again since: gone from the file, a built-in one too
     let mut deleted_names: Vec<(String, Option<String>)> = Vec::new();
 
@@ -1647,13 +1690,13 @@ pub fn patch(
                         "name {name}: {prefix} is a 3-D reference, which the engine does not read (the patcher writes no formula it would read as another)"
                     )));
                 }
-                if let Some(called) = calls_unknown(&wb, at, Addr::new(1, 1), body, scope.as_deref()) {
-                    return Err(PatchError::Unsupported(format!(
-                        "name {name}: {called} is a function the engine does not compute (the patcher writes no formula it cannot read)"
-                    )));
-                }
-                // the engine stores user spelling; give it that
+                // the engine stores user spelling; give it that. Its calls are judged once every edit
+                // is in, the name set, against the names as the edits leave them, on the text
+                // stored: a LAMBDA calling itself or another the list sets is one the engine
+                // computes, a self-call over a LAMBDA the name replaces one it does not (the round
+                // at 01ea89f9)
                 let user = strip_file_prefixes(body);
+                set_name_calls.push((name.clone(), at, user.clone(), scope.clone()));
                 let exists = wb.names().iter().any(|n| name_key(&n.name) == name_key(name) && n.scope == scope);
                 if exists {
                     delete_every_name(&mut wb, name, scope.as_deref()).map_err(fail)?;
@@ -1787,6 +1830,22 @@ pub fn patch(
             }
         }
         report.outcomes.push(outcome);
+    }
+    // the names the edits set, the last setting of each, still standing, judged against the names
+    // the edits leave
+    let mut judged: Vec<(String, Option<String>)> = Vec::new();
+    for (name, at, user, scope) in set_name_calls.iter().rev() {
+        let key = (name_key(name), scope.clone());
+        if judged.contains(&key) {
+            continue;
+        }
+        judged.push(key);
+        let standing = wb.names().iter().any(|n| name_key(&n.name) == name_key(name) && n.scope == *scope);
+        if standing && let Some(called) = calls_unknown(&wb, *at, Addr::new(1, 1), user, scope.as_deref()) {
+            return Err(PatchError::Unsupported(format!(
+                "name {name}: {called} is a function the engine does not compute (the patcher writes no formula it cannot read)"
+            )));
+        }
     }
 
     if shifts.iter().any(|_| true) && pkg.names.iter().any(|n| n.starts_with("xl/pivotTables/")) {
@@ -2467,6 +2526,15 @@ pub fn patch(
     Ok(report)
 }
 
+/// A test's look at the new version just before it takes the destination's name.
+#[cfg(test)]
+type RenameHook = Box<dyn Fn(&Path)>;
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_RENAME: std::cell::RefCell<Option<RenameHook>> = const { std::cell::RefCell::new(None) };
+}
+
 /// Writes `bytes` as `dest`'s next version. `check` runs first on a copy of them in a folder of its
 /// own under the system's temporary folder (a short UTF-8 path, the engine's loader taking no other
 /// whatever `dest`'s folder and name); then, the source still holding `fingerprint`, the bytes go
@@ -2527,10 +2595,19 @@ fn commit(
             }
             std::fs::copy(dest, &bak).map_err(|e| io_err(&bak, e))?;
         }
-        std::fs::rename(&tmp, dest).map_err(|e| io_err(dest, e))?;
+        // the destination's permissions on the new version before it takes the name, so no moment
+        // holds it with others (a kill between the rename and a chmod after it left the umask's:
+        // the round at 01ea89f9)
         if let Some(p) = permissions {
-            std::fs::set_permissions(dest, p).map_err(|e| io_err(dest, e))?;
+            std::fs::set_permissions(&tmp, p).map_err(|e| io_err(&tmp, e))?;
         }
+        #[cfg(test)]
+        BEFORE_RENAME.with(|hook| {
+            if let Some(hook) = hook.borrow().as_ref() {
+                hook(&tmp);
+            }
+        });
+        std::fs::rename(&tmp, dest).map_err(|e| io_err(dest, e))?;
         Ok(())
     })();
     if placed.is_err() {
@@ -2732,11 +2809,15 @@ fn strip_file_prefixes(f: &str) -> String {
     let mut in_str = false;
     let mut i = 0;
     let b = f.as_bytes();
+    // a prefix opens a token alone: at the formula's start, after a character no name holds, or
+    // after a prefix (`_xlfn._xlws.`); inside a name (`Rate_xlpm.A`) it is the name's (the round at
+    // 01ea89f9)
+    let mut at_token = true;
     while i < b.len() {
         if b[i] == b'"' {
             in_str = !in_str;
         }
-        if !in_str {
+        if !in_str && at_token {
             let rest = &f[i..];
             if let Some(p) = ["_xlfn.", "_xlws.", "_xlpm."]
                 .iter()
@@ -2748,6 +2829,7 @@ fn strip_file_prefixes(f: &str) -> String {
         }
         let ch = f[i..].chars().next().unwrap_or(' ');
         out.push(ch);
+        at_token = in_str || !ironcalc_base::expressions::utils::is_name_char(ch);
         i += ch.len_utf8();
     }
     out
@@ -3227,12 +3309,20 @@ mod tests {
         let dest = dir.path().join("ro.xlsx");
         std::fs::write(&dest, b"first").unwrap();
         std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o444)).unwrap();
+        // the new version holds the destination's permissions before it takes its name (the round at
+        // 01ea89f9: a chmod after the rename left the umask's to a kill between the two)
+        let seen = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let seen_in_hook = seen.clone();
+        BEFORE_RENAME.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |tmp: &Path| seen_in_hook.set(std::fs::metadata(tmp).unwrap().permissions().mode() & 0o777)));
+        });
         for (n, bytes) in [b"second", b"third_"].iter().enumerate() {
             let before = std::fs::read(&dest).unwrap();
             commit(&dest, &before, &dest, &bytes[..], |_| Ok(())).unwrap_or_else(|e| panic!("patch {n}: {e}"));
             assert_eq!(std::fs::read(&dest).unwrap(), bytes.to_vec());
             assert_eq!(std::fs::read(dir.path().join("ro.xlsx.bak")).unwrap(), before);
             assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, 0o444);
+            assert_eq!(seen.get(), 0o444, "the new version's mode just before the rename");
         }
     }
 

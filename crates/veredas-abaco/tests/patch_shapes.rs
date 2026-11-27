@@ -3464,3 +3464,79 @@ fn a_call_a_let_or_a_lambda_binds_is_no_volatile_name_of_its_spelling() {
         }
     }
 }
+
+#[test]
+fn a_name_is_called_as_the_engine_calls_it_set_read_from_any_sheet_and_spelled_whole() {
+    // the round at 01ea89f9
+    let dir = tempfile::tempdir().unwrap();
+    let data: String = (1..=3).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
+    let t_data = r#"<row r="1"><c r="A1"><v>5</v></c></row>"#;
+    let names = concat!(
+        r#"<definedName name="Variação">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2)</definedName>"#,
+        r#"<definedName name="Função">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2)</definedName>"#,
+        r#"<definedName name="Rate_xlpm.A">S!$A$1</definedName>"#,
+        r#"<definedName name="RateA">S!$A$2</definedName>"#,
+        r#"<definedName name="Fn_xlfn.X">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2)</definedName>"#,
+        r#"<definedName name="Dobro">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2)</definedName>"#,
+        r#"<definedName name="Dobro" localSheetId="1">T!$A$1</definedName>"#,
+        r#"<definedName name="Foo">Dobro(3)</definedName>"#,
+        r#"<definedName name="Bar" localSheetId="1">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*3)</definedName>"#,
+        r#"<definedName name="Baz" localSheetId="1">Bar(3)</definedName>"#,
+    );
+    let src = dir.path().join("names.xlsx");
+    let s_data = format!(r#"{data}"#).replace("</row><row r=\"2\">", r#"<c r="B1"><f>Variação(A1)</f><v>2</v></c></row><row r="2">"#);
+    plain_book(&src, &[("S", worksheet(&s_data, "")), ("T", worksheet(t_data, ""))], names, &[]);
+    let dst = dir.path().join("out.xlsx");
+    let formula = |sheet: &str, cell: &str, f: &str| Edit::Formula { sheet: sheet.into(), cell: cell.into(), formula: f.into(), expect: None };
+    let set = |n: &str, f: &str| Edit::SetName { name: n.into(), formula: f.into(), scope: None };
+    let applied = |edits: &[Edit]| {
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let _ = std::fs::remove_file(&dst);
+            let report = patch(&src, &dst, edits, &options).unwrap_or_else(|e| panic!("{edits:?}: {e}"));
+            assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{edits:?}: {:?}", report.outcomes);
+        }
+    };
+    let refused = |edits: &[Edit], called: &str| {
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let _ = std::fs::remove_file(&dst);
+            match patch(&src, &dst, edits, &options) {
+                Err(PatchError::Unsupported(m)) => assert!(m.contains(&format!("{called} is a function the engine does not compute")), "{m}"),
+                other => panic!("{edits:?}: {other:?}"),
+            }
+            assert!(!dst.exists());
+        }
+    };
+    // a name whose characters run past a prefix's length in bytes, read and called (fork change 43,
+    // refined: the parser panicked on `Variação(`)
+    applied(&[value("S", "A1", serde_json::json!(4))]);
+    assert_eq!(read_back(&dst, "S", "B1"), Value::Number(8.0));
+    applied(&[formula("S", "D1", "=Função(A1)")]);
+    assert_eq!(read_back(&dst, "S", "D1"), Value::Number(2.0));
+    // a prefix inside a name is the name's: `Rate_xlpm.A` stored whole, not `RateA`
+    applied(&[set("N", "=Rate_xlpm.A*10"), set("M", "=Fn_xlfn.X(5)"), formula("S", "D1", "=N"), formula("S", "D2", "=M")]);
+    assert!(part(&dst, "xl/workbook.xml").contains(r#"<definedName name="N">Rate_xlpm.A*10</definedName>"#));
+    assert_eq!(read_back(&dst, "S", "D1"), Value::Number(10.0));
+    assert_eq!(read_back(&dst, "S", "D2"), Value::Number(10.0));
+    // a name calling itself, and two calling each other, set and called; a self-call over the LAMBDA
+    // it replaces refused
+    applied(&[set("Fatorial", "=LAMBDA(n,IF(n<=1,1,n*Fatorial(n-1)))"), formula("S", "D1", "=Fatorial(5)")]);
+    assert_eq!(read_back(&dst, "S", "D1"), Value::Number(120.0));
+    applied(&[
+        set("EhPar", "=LAMBDA(n,IF(n=0,TRUE,EhImpar(n-1)))"),
+        set("EhImpar", "=LAMBDA(n,IF(n=0,FALSE,EhPar(n-1)))"),
+        formula("S", "D1", "=EhPar(4)"),
+    ]);
+    assert_eq!(read_back(&dst, "S", "D1"), Value::Bool(true));
+    refused(&[set("Dobro", "=Dobro(2)+1")], "DOBRO");
+    // a name read from a cell's sheet: its calls as the engine finds them there
+    applied(&[formula("S", "D1", "=Foo")]);
+    assert_eq!(read_back(&dst, "S", "D1"), Value::Number(6.0));
+    refused(&[formula("T", "D1", "=Foo")], "DOBRO");
+    applied(&[formula("T", "D1", "=Baz")]);
+    assert_eq!(read_back(&dst, "T", "D1"), Value::Number(9.0));
+    refused(&[formula("S", "D1", "=T!Baz")], "BAR");
+    // a LET's name inside its own value: unbound there, but within a LAMBDA, which runs after
+    refused(&[formula("S", "D1", "=LET(f,f(1),f)")], "F");
+    applied(&[formula("S", "D1", "=LET(f,LAMBDA(n,IF(n<=1,1,n*f(n-1))),f(5))")]);
+    assert_eq!(read_back(&dst, "S", "D1"), Value::Number(120.0));
+}
