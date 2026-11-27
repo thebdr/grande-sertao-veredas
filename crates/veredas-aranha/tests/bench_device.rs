@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use veredas_aranha::fusion::{ConflictKind, Device};
+use veredas_aranha::fusion::{ConflictKind, Device, Field};
 use veredas_aranha::listen::{Listener, Options, Snapshot};
 use veredas_aranha::netns;
 use veredas_aranha::observe::{self, Class, Observed, Probe};
@@ -34,11 +34,14 @@ struct Stated {
     ip: (&'static str, &'static str, &'static str),
     vendor: &'static str,
     port: &'static str,
+    /// Its LLDP time to live while not leaving: four intervals of 200 ms in whole seconds, at
+    /// least 1 (C-112).
+    ttl: &'static str,
 }
 
 const STATED: [Stated; 2] = [
-    Stated { ids: ("42", "261"), ip: ("192.168.0.10", "255.255.255.0", "192.168.0.1"), vendor: "veredas bench device", port: "port-001.bomba-1" },
-    Stated { ids: ("0", "0"), ip: ("192.168.0.11", "255.255.255.0", "0.0.0.0"), vendor: "segunda bancada", port: "port-002.bomba-1" },
+    Stated { ids: ("42", "261"), ip: ("192.168.0.10", "255.255.255.0", "192.168.0.1"), vendor: "veredas bench device", port: "port-001.bomba-1", ttl: "1" },
+    Stated { ids: ("0", "0"), ip: ("192.168.0.11", "255.255.255.0", "0.0.0.0"), vendor: "segunda bancada", port: "port-002.bomba-1", ttl: "1" },
 ];
 
 /// Two devices of one station name, each on its own segment, as a plant commissioned twice.
@@ -71,6 +74,17 @@ fn device(s: &Snapshot, mac: Mac) -> &Device {
 }
 
 /// The DCP service a kept frame's observation states, and whether it answers.
+/// Every witness of a field, its first and last of every value, a frame of the device's own: kept
+/// on its interface, from its MAC, and said heard there.
+fn own_witnesses<T>(l: &Listener, field: &Field<T>, what: &str, mac: Mac, iface: &str) {
+    for c in &field.candidates {
+        for w in [&c.first, &c.last] {
+            let kept = l.frame(w.frame).unwrap_or_else(|| panic!("{mac}'s {what}: frame #{} is not kept", w.frame));
+            assert_eq!((w.iface.as_str(), kept.frame.iface.as_str(), &kept.frame.bytes[6..12]), (iface, iface, &mac.0[..]), "{mac}'s {what}: frame #{}", w.frame);
+        }
+    }
+}
+
 fn dcp_of(l: &Listener, index: u64) -> (Service, bool) {
     let kept = l.frame(index).unwrap_or_else(|| panic!("frame #{index} is not kept"));
     let decoded = observe::decode(&kept.frame, index);
@@ -112,6 +126,7 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
                 let d = device(&s, mac);
                 let (service, answers) = dcp_of(&l, d.name.candidates[0].first.frame);
                 assert_eq!((service, answers), (Service::Hello, false), "{mac}: the first name heard is the Hello's");
+                own_witnesses(&l, &d.name, "name", mac, iface);
                 assert_eq!(d.heard_on, BTreeSet::from([iface.to_string()]), "{mac}");
             }
 
@@ -155,7 +170,18 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
             assert_eq!(a.ports.keys().collect::<Vec<_>>(), ["port-001"]);
             assert_eq!(b.ports.keys().collect::<Vec<_>>(), ["port-002"]);
             for (d, iface) in [(a, "a0"), (b, "a1")] {
+                // Every value witnessed by a frame of the device's own, on its interface.
+                let mac = d.mac;
+                own_witnesses(&l, &d.name, "name", mac, iface);
+                own_witnesses(&l, &d.ip, "ip", mac, iface);
+                own_witnesses(&l, &d.ip_status, "ip_status", mac, iface);
+                own_witnesses(&l, &d.pn_id, "pn_id", mac, iface);
+                own_witnesses(&l, &d.vendor, "vendor", mac, iface);
+                own_witnesses(&l, &d.role, "role", mac, iface);
+                own_witnesses(&l, &d.chassis, "chassis", mac, iface);
+                own_witnesses(&l, &d.arp_ip, "arp_ip", mac, iface);
                 let port = d.ports.values().next().unwrap();
+                own_witnesses(&l, &port.port_mac, "port_mac", mac, iface);
                 assert_eq!(port.heard_on, BTreeSet::from([iface.to_string()]));
                 assert_eq!(port.left_ns, None);
                 assert_eq!(d.chassis.current(), Some(&"local:bomba-1".to_string()));
@@ -193,6 +219,7 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
             let mut by_class = std::collections::BTreeMap::<Class, u64>::new();
             let mut sent = std::collections::BTreeMap::<String, Vec<Class>>::new();
             let mut ttls = std::collections::BTreeMap::<String, Vec<String>>::new();
+            let mut replies = std::collections::BTreeMap::<String, u32>::new();
             for (i, (k, d)) in frames.iter().zip(&dissected).enumerate() {
                 assert_eq!(d.complaints(), Vec::<String>::new(), "#{i}");
                 let class = observe::decode(&k.frame, i as u64).class;
@@ -241,6 +268,14 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
                             other => panic!("#{i}: DCP service {other} from the bench"),
                         }
                     }
+                    // Its ARP reply: to this machine's interface and the address it asked from,
+                    // claiming the device's own.
+                    if class == Class::Arp {
+                        let asking = if k.frame.iface == "a0" { "192.168.0.2" } else { "192.168.0.3" };
+                        let reply = (d.one("arp", "arp.opcode"), d.one("arp", "arp.dst.hw_mac"), d.one("arp", "arp.dst.proto_ipv4"), d.one("arp", "arp.src.proto_ipv4"));
+                        assert_eq!(reply, ("2".to_string(), ours.to_string(), asking.to_string(), stated.ip.0.to_string()), "#{i}");
+                        *replies.entry(k.frame.iface.clone()).or_default() += 1;
+                    }
                     if class == Class::Lldp {
                         let hex: Vec<String> = "bomba-1".bytes().map(|b| format!("{b:02x}")).collect();
                         assert_eq!((d.one("lldp", "lldp.chassis.subtype"), d.one("lldp", "lldp.chassis.id")), ("7".to_string(), hex.join(":")), "#{i}");
@@ -265,8 +300,12 @@ fn the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_int
             for (iface, seen) in &ttls {
                 let (last, before) = seen.split_last().unwrap();
                 assert_eq!(last, "0", "{iface}: {seen:?}");
-                assert!(!before.is_empty() && before.iter().all(|t| t != "0"), "{iface}: {seen:?}");
+                // Every other its time to live the bench file gives (C-112's rule from its interval).
+                let stated = &STATED[usize::from(iface == "a1")];
+                assert!(!before.is_empty() && before.iter().all(|t| t == stated.ttl), "{iface}: {seen:?}");
             }
+            // One ARP reply on each interface, to the one request sent there.
+            assert_eq!(replies, std::collections::BTreeMap::from([("a0".to_string(), 1), ("a1".to_string(), 1)]));
             // Nothing of this machine's own and nothing damaged, the leaving frames among them.
             assert_eq!((s.stats.own, s.stats.damaged_frames, s.stats.damage.len()), (0, 0, 0), "{:?}", s.stats.damage);
         },
