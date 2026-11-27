@@ -21,11 +21,20 @@ mod arith;
 #[path = "programs/conveyor.rs"]
 mod conveyor;
 #[allow(dead_code)]
+#[path = "programs/edges.rs"]
+mod edges;
+#[allow(dead_code)]
+#[path = "programs/faults.rs"]
+mod faults;
+#[allow(dead_code)]
 #[path = "programs/probe.rs"]
 mod probe;
 #[allow(dead_code)]
 #[path = "programs/shapes.rs"]
 mod shapes;
+#[allow(dead_code)]
+#[path = "programs/sound.rs"]
+mod sound;
 
 use std::fmt::Debug;
 use std::fs;
@@ -36,8 +45,8 @@ use std::time::Duration;
 
 use orcl_interp::file::{self, Header};
 use orcl_interp::{
-    Arg, Check, ErrorKind, FunctionId, Int, Limits, Machine, Program as Code, ProgramError, RegionId, Scalar, Type,
-    TypeId,
+    Arg, BinOp, Check, ErrorKind, FunctionId, Int, Limits, Machine, Program as Code, ProgramError, RegionId, Scalar,
+    Terminator, Type, TypeId,
 };
 use orcl_runtime::{Image, Interpreted, Io, Regions, RunState, Task, TaskConfig, TaskProgram, VirtualClock};
 use orcl_std::Program;
@@ -104,15 +113,28 @@ fn lower(name: &str, source: &Path) -> Lowered {
     lower_in(name, name, source)
 }
 
-/// Lowers the crate `source` as the program `name`, in the folder `folder`: one test's, since tests run at once.
-fn lower_in(folder: &str, name: &str, source: &Path) -> Lowered {
-    let work = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lowering").join(folder);
+/// The folder `name` under `CARGO_TARGET_TMPDIR`, emptied: one test's, since tests run at once.
+fn fresh(name: &str) -> PathBuf {
+    let work = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lowering").join(name);
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).unwrap();
+    work
+}
+
+/// `orcl-std` compiled by the driver into `work`, the driver's environment holding `env`.
+fn compile_std(work: &Path, env: &[(&str, &str)]) {
     let w = work.display().to_string();
     let std_src = here().join("../orcl-std/src/lib.rs").display().to_string();
-    let out = driver(&strings(&["--crate-name", "orcl_std", "--crate-type", "rlib", "--edition", "2024", &std_src, "--out-dir", &w]));
+    let args = strings(&["--crate-name", "orcl_std", "--crate-type", "rlib", "--edition", "2024", &std_src, "--out-dir", &w]);
+    let out = driver_with(&args, env);
     assert!(out.status.success(), "orcl-std: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// Lowers the crate `source` as the program `name`, in the folder `folder`: one test's, since tests run at once.
+fn lower_in(folder: &str, name: &str, source: &Path) -> Lowered {
+    let work = fresh(folder);
+    compile_std(&work, &[]);
+    let w = work.display().to_string();
     let file = work.join(format!("{name}.orclb"));
     let mut args = strings(&["--crate-name", name, "--crate-type", "rlib", "--edition", "2024"]);
     args.push(source.display().to_string());
@@ -343,6 +365,18 @@ image!(shapes::Outputs {
     dur_ge: bool, dur_min: Duration, dur_max: Duration, level: u8, niche: u8, const_mode: u16, timeout: Duration,
     pair: u32, repeated: u8, levels: bool,
 });
+image!(edges::Inputs { a: i16, b: i16, n: u8, flag: bool });
+image!(edges::Outputs {
+    gt: bool, le: bool, ge: bool, lt: bool, ne: bool, eq: bool, signed_match: u8, dir_code: i8, dir_match: u8,
+    light: u8, first_last: u16, picked: u8, off_ref: u16, only: u8, sat16: i16, off_ref2: u16, off_ref3: u16,
+});
+image!(sound::Inputs { a: i8, b: u64, sel: u8, on: bool, off: bool, t_ms: u64 });
+image!(sound::Outputs {
+    tuple_match: u8, found: u8, broke: u32, nested: u16, items: u32, xor: bool, bool_ne: bool, widened: u64,
+    narrowed: i8, cleared: bool, early: u8, defaulted: u32, cloned: u16, guard: u8, labeled: u8, since_ms: bool,
+});
+image!(faults::Inputs { sel: u8, a: i32, b: i32, idx: u8, c: u8, sh: u32 });
+image!(faults::Outputs { v: i32, w: u8 });
 
 // Inputs drawn from a scan's index, the same for the native program and its lowered twin.
 
@@ -585,12 +619,59 @@ fn enums_arrays_options_tuples_references_durations_and_constants_run_lowered_as
 }
 
 #[test]
+fn comparisons_at_their_edges_signed_matches_and_constants_of_every_layout_run_lowered_as_natively() {
+    // `>`, `<=` and `!=` with their operands equal as often as not; a match on negative values; a negative
+    // discriminant cast and matched; a niche holding two variants; `[first, .., last]`; a generic function; promoted
+    // references at an offset into a constant; a constant enum of one variant
+    let inputs = |k: u64| edges::Inputs {
+        a: (mix(k, 1) % 9) as i16 - 4,
+        b: (mix(k, 2) % 9) as i16 - 4,
+        n: mix(k, 3) as u8,
+        flag: mix(k, 4) % 2 == 0,
+    };
+    let outputs = conform("edges", edges::Edges::default(), "Edges", &inputs, 2_000);
+    both(&outputs, "a > b", |o| o.gt);
+    both(&outputs, "a <= b", |o| o.le);
+    both(&outputs, "a == b", |o| o.eq);
+    for v in 1..=5 {
+        both(&outputs, &format!("the signed match's arm {v}"), |o| o.signed_match == v);
+    }
+    for v in [10, 20, 30] {
+        both(&outputs, &format!("the direction's arm {v}"), |o| o.dir_match == v);
+    }
+    for v in 1..=4 {
+        both(&outputs, &format!("the light's variant {v}"), |o| o.light == v);
+    }
+    both(&outputs, "the generic's second argument", |o| o.picked == 7);
+    assert!(outputs.iter().all(|o| o.off_ref == 600 && o.off_ref2 == 600 && o.off_ref3 == 3_333 && o.only == 42));
+}
+
+#[test]
+fn ordinary_control_code_runs_lowered_as_natively() {
+    // matches on tuples, with guards and nested; a loop's value; labeled breaks; early returns; an inherent method
+    // and a derived `Clone`; an `Option` of an enum with data; a time held since a first scan
+    let inputs = |k: u64| sound::Inputs {
+        a: mix(k, 1) as i8,
+        b: mix(k, 2),
+        sel: mix(k, 3) as u8,
+        on: mix(k, 4) % 2 == 0,
+        off: mix(k, 5) % 3 == 0,
+        t_ms: mix(k, 6) % 3_000,
+    };
+    let outputs = conform("sound", sound::Sound::default(), "Sound", &inputs, 3_000);
+    for v in 1..=4 {
+        both(&outputs, &format!("the guard's arm {v}"), |o| o.guard == v);
+        both(&outputs, &format!("the tuple's arm {v}"), |o| o.tuple_match == v);
+    }
+    both(&outputs, "the nested match's guarded arm", |o| o.nested == 1);
+    both(&outputs, "a time held past its preset", |o| o.since_ms);
+}
+
+#[test]
 fn the_driver_takes_its_options_from_the_environment_as_a_wrapper_and_lowers_no_test_build() {
     // as `RUSTC_WRAPPER` (the compiler it wraps first, then rustc's arguments), the program named by the
     // environment: the file is written as with the options
-    let work = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lowering").join("wrapper");
-    let _ = fs::remove_dir_all(&work);
-    fs::create_dir_all(&work).unwrap();
+    let work = fresh("wrapper");
     let w = work.display().to_string();
     let std_src = here().join("../orcl-std/src/lib.rs").display().to_string();
     let out = driver(&strings(&["/usr/bin/rustc", "--crate-name", "orcl_std", "--crate-type", "rlib", "--edition", "2024", &std_src, "--out-dir", &w]));
@@ -624,6 +705,34 @@ fn the_driver_takes_its_options_from_the_environment_as_a_wrapper_and_lowers_no_
     assert!(String::from_utf8_lossy(&out.stderr).contains("error: orcl-front: usage: --orcl-out names no file to write"));
 }
 
+#[test]
+fn the_environment_lowers_only_the_crate_it_names() {
+    // as `RUSTC_WRAPPER` under cargo every crate of the build sees the environment: a crate not the program is
+    // compiled, and nothing is lowered or written
+    let work = fresh("env-other");
+    let file = work.join("arith.orclb");
+    let path = file.display().to_string();
+    compile_std(&work, &[("ORCL_FRONT_PROGRAM", "arith"), ("ORCL_FRONT_OUT", path.as_str()), ("ORCL_FRONT_REVISION", "env")]);
+    assert!(work.join("liborcl_std.rlib").exists(), "orcl-std compiled");
+    assert!(!file.exists(), "no file written for a crate not the program");
+}
+
+#[test]
+fn an_option_wins_over_the_environment() {
+    let work = fresh("precedence");
+    compile_std(&work, &[]);
+    let w = work.display().to_string();
+    let file = work.join("arith.orclb");
+    let source = program("arith").display().to_string();
+    let mut args = strings(&["--crate-name", "arith", "--crate-type", "rlib", "--edition", "2024", &source]);
+    args.extend(strings(&["--extern", &format!("orcl_std={w}/liborcl_std.rlib"), "-L", &w, "--out-dir", &w]));
+    args.extend(strings(&["--orcl-program", "arith", &format!("--orcl-out={}", file.display()), "--orcl-revision=option"]));
+    let out = driver_with(&args, &[("ORCL_FRONT_REVISION", "env")]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let (header, _) = file::read(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(header.revision, "option");
+}
+
 /// The 1-based line and column where `snippet` first stands in `source`.
 fn place_of(source: &Path, snippet: &str) -> (usize, usize) {
     let text = fs::read_to_string(source).unwrap();
@@ -634,43 +743,117 @@ fn place_of(source: &Path, snippet: &str) -> (usize, usize) {
     (line, column)
 }
 
-#[test]
-fn a_scan_s_program_error_names_its_place_in_the_source_map() {
-    // a divisor of zero: the native program would panic; the lowered one fails at the division, by file, line and
-    // column, the machine standing at the assertion
-    let (_, code) = lower_in("arith-fault", "arith", &program("arith")).result.unwrap();
-    let regions = regions(&code);
-    let state = first_state(&code);
-    let mut machine = load(&code, &[regions.state, regions.scan, regions.inputs, regions.outputs]);
+/// The program error a lowered program's scan stops at, called once on a machine holding its first state, a scan at
+/// time zero, `inputs` and the outputs' default.
+fn fault<I: Image + Debug, O: Image + Default>(code: &Code, inputs: &I) -> ProgramError {
+    let regions = regions(code);
+    let state = first_state(code);
+    let mut machine = load(code, &[regions.state, regions.scan, regions.inputs, regions.outputs]);
     let mut slots = Vec::new();
     machine.set_region(RegionId(0), &state).unwrap();
     slots.extend([Scalar::Int(Int::U64, 0), Scalar::Int(Int::U32, 0), Scalar::Int(Int::U64, 0), Scalar::Int(Int::U32, 0)]);
     slots.push(Scalar::Int(Int::U64, 0));
     machine.set_region(RegionId(1), &slots).unwrap();
-    let mut zero = arith_inputs(5);
-    zero.b = 0;
     slots.clear();
-    zero.write(&mut slots);
+    inputs.write(&mut slots);
     machine.set_region(RegionId(2), &slots).unwrap();
     slots.clear();
-    arith::Outputs::default().write(&mut slots);
+    O::default().write(&mut slots);
     machine.set_region(RegionId(3), &slots).unwrap();
     let args = [0, 1, 2, 3].map(|r| Arg::Ref(RegionId(r)));
-    let error: ProgramError = match machine.call(FunctionId(0), &args) {
+    match machine.call(FunctionId(0), &args) {
         Err(orcl_interp::CallError::Program(e)) => e,
-        other => panic!("a division by zero ran: {other:?}"),
-    };
+        other => panic!("{inputs:?} ran: {other:?}"),
+    }
+}
+
+#[test]
+fn a_scan_s_program_error_names_its_place_in_the_source_map() {
+    // a divisor of zero: the native program would panic; the lowered one fails at the division, by file, line and
+    // column, the machine standing at the assertion
+    let (_, code) = lower_in("arith-fault", "arith", &program("arith")).result.unwrap();
+    let mut zero = arith_inputs(5);
+    zero.b = 0;
+    let error = fault::<_, arith::Outputs>(&code, &zero);
     assert_eq!(error.kind, ErrorKind::Check(Check::DivisionByZero));
     let (line, column) = place_of(&program("arith"), "i.a / i.b");
     assert_eq!(code.files[error.at.file as usize], program("arith").display().to_string());
     assert_eq!((error.at.line as usize, error.at.column as usize), (line, column), "the division's place");
 }
 
+#[test]
+fn every_check_a_scan_fails_names_its_kind_and_place() {
+    // each of MIR's run-time checks, failed on its own selector: the fault's kind, and the file, line and column of
+    // the operation it checks
+    let (_, code) = lower("faults", &program("faults")).result.unwrap();
+    let base = faults::Inputs { sel: 0, a: 0, b: 0, idx: 0, c: 1, sh: 0 };
+    let cases: [(faults::Inputs, Check, &str); 8] = [
+        (faults::Inputs { sel: 0, a: 5, b: 0, ..base }, Check::RemainderByZero, "i.a % i.b"),
+        (faults::Inputs { sel: 1, a: i32::MAX, b: 1, ..base }, Check::Overflow(BinOp::Add), "i.a + i.b"),
+        (faults::Inputs { sel: 2, a: i32::MIN, ..base }, Check::NegOverflow, "-i.a"),
+        (faults::Inputs { sel: 3, idx: 9, ..base }, Check::Bounds, "self.table[i.idx as usize]"),
+        (faults::Inputs { sel: 4, a: i32::MAX, b: 2, ..base }, Check::Overflow(BinOp::Mul), "i.a * i.b"),
+        (faults::Inputs { sel: 5, a: i32::MIN, b: 1, ..base }, Check::Overflow(BinOp::Sub), "i.a - i.b"),
+        (faults::Inputs { sel: 6, sh: 9, ..base }, Check::Overflow(BinOp::Shl), "i.c << i.sh"),
+        (faults::Inputs { sel: 7, a: i32::MIN, b: -1, ..base }, Check::Overflow(BinOp::Div), "i.a / i.b"),
+    ];
+    let file = program("faults").display().to_string();
+    for (inputs, check, snippet) in cases {
+        let e = fault::<_, faults::Outputs>(&code, &inputs);
+        let (line, column) = place_of(&program("faults"), snippet);
+        assert_eq!(
+            (e.kind, code.files[e.at.file as usize].as_str(), e.at.line as usize, e.at.column as usize),
+            (ErrorKind::Check(check), file.as_str(), line, column),
+            "{snippet}"
+        );
+    }
+}
+
+#[test]
+fn statements_and_calls_name_their_own_lines() {
+    // each statement and each call of a scan at the line of its own source, not its function's
+    let (_, code) = lower_in("lines-faults", "faults", &program("faults")).result.unwrap();
+    let lines: Vec<u32> = code.functions[0].blocks.iter().flat_map(|b| b.statements.iter().map(|s| s.at.line)).collect();
+    for snippet in ["o.v = i.a + i.b", "o.w = i.c << i.sh", "o.v = self.table[i.idx as usize]"] {
+        let (line, _) = place_of(&program("faults"), snippet);
+        assert!(lines.contains(&(line as u32)), "{snippet}: line {line} not among the statements' {lines:?}");
+    }
+    let (_, code) = lower_in("lines-edges", "edges", &program("edges")).result.unwrap();
+    let calls: Vec<u32> = code.functions[0]
+        .blocks
+        .iter()
+        .filter_map(|b| match &b.terminator {
+            Terminator::Call { at, .. } => Some(at.line),
+            _ => None,
+        })
+        .collect();
+    for snippet in ["o.light = code(", "o.picked = pick(", "o.off_ref = read16("] {
+        let (line, _) = place_of(&program("edges"), snippet);
+        assert!(calls.contains(&(line as u32)), "{snippet}: line {line} not among the calls' {calls:?}");
+    }
+}
+
+#[test]
+fn the_source_map_names_no_file_of_core() {
+    // every location a lowered program holds names a file of the program's crates: one inside core's macros is moved
+    // to where the program calls the macro
+    for name in ["shapes", "conveyor", "probe", "edges"] {
+        let (_, code) = lower_in(&format!("files-{name}"), name, &program(name)).result.unwrap();
+        for f in &code.files {
+            assert!(!f.contains("library/core"), "{name}: {f} in {:?}", code.files);
+        }
+    }
+}
+
+/// The program `name` of `programs/refused/`.
+fn refused_program(name: &str) -> PathBuf {
+    here().join("tests/programs/refused").join(format!("{name}.rs"))
+}
+
 /// Lowers `name` from `programs/refused/`, and asserts that the driver refused it with exactly `message` and
 /// wrote no file.
 fn refused(name: &str, message: &str) {
-    let source = here().join("tests/programs/refused").join(format!("{name}.rs"));
-    let lowered = lower(name, &source);
+    let lowered = lower(name, &refused_program(name));
     let stderr = lowered.result.err().unwrap_or_else(|| panic!("{name} was lowered"));
     let line = format!("error: orcl-front: {message}");
     assert!(stderr.lines().any(|l| l == line), "{name}: wanted\n{line}\ngot\n{stderr}");
@@ -679,7 +862,7 @@ fn refused(name: &str, message: &str) {
 
 /// A refusal's message, at the place `snippet` stands in the refused program.
 fn at(name: &str, snippet: &str, words: &str, what: &str) -> String {
-    let source = here().join("tests/programs/refused").join(format!("{name}.rs"));
+    let source = refused_program(name);
     let (line, column) = place_of(&source, snippet);
     format!("{}:{line}:{column}: {words}: `{what}`", source.display())
 }
@@ -703,7 +886,7 @@ fn a_slice_is_refused_where_the_program_holds_it() {
 
 #[test]
 fn a_closure_is_refused_where_the_program_holds_it() {
-    let source = here().join("tests/programs/refused/closure.rs");
+    let source = refused_program("closure");
     // a closure's type is named by its head, `|v: u8|`
     let (line, column) = place_of(&source, "|v: u8|");
     let closure = format!("{{closure@{}:{line}:{column}: {line}:{}}}", source.display(), column + "|v: u8|".len());
@@ -718,6 +901,31 @@ fn a_trait_object_is_refused_where_the_program_holds_it() {
 #[test]
 fn a_usize_the_program_declares_is_refused_where_it_declares_it() {
     refused("usize", &at("usize", "count: usize", TYPE, "usize"));
+}
+
+#[test]
+fn an_isize_field_is_refused_where_the_program_declares_it() {
+    refused("isize_field", &at("isize_field", "offset: isize", TYPE, "isize"));
+}
+
+#[test]
+fn a_usize_variable_is_refused_where_the_program_declares_it() {
+    refused("usize_variable", &at("usize_variable", "at: usize", TYPE, "usize"));
+}
+
+#[test]
+fn a_usize_parameter_is_refused_where_the_program_declares_it() {
+    refused("usize_param", &at("usize_param", "at: usize", TYPE, "usize"));
+}
+
+#[test]
+fn a_usize_result_is_refused_where_the_program_declares_it() {
+    refused("usize_result", &at("usize_result", "usize {", TYPE, "usize"));
+}
+
+#[test]
+fn a_usize_array_element_is_refused_where_the_program_declares_it() {
+    refused("usize_array", &at("usize_array", "counts: [usize; 2]", TYPE, "usize"));
 }
 
 #[test]
@@ -795,4 +1003,34 @@ fn a_call_out_of_the_program_s_crates_and_core_is_refused_by_name_where_it_is_ca
 #[test]
 fn a_crate_with_no_program_is_refused() {
     refused("no_program", "no program: `0 implementations of orcl_std::Program`");
+}
+
+#[test]
+fn a_crate_with_two_programs_is_refused() {
+    refused("two_programs", "no program: `2 implementations of orcl_std::Program`");
+}
+
+#[test]
+fn what_core_s_macro_holds_is_refused_where_the_program_calls_the_macro() {
+    refused("panic_macro", &at("panic_macro", "unreachable!(", TYPE, "std::fmt::Arguments<'_>"));
+}
+
+#[test]
+fn a_derived_default_s_refusal_names_the_field() {
+    let words = "a call into core outside the list";
+    refused("derive_array", &at("derive_array", "table: [u8; 4]", words, "<[u8; 4] as Default>::default"));
+}
+
+#[test]
+fn a_program_the_loader_refuses_writes_no_file() {
+    refused("huge", "the lowered program does not load: region 0: memory past the host's limit");
+}
+
+#[test]
+fn a_crate_rustc_refuses_after_its_analysis_writes_no_file() {
+    // the front end has lowered it by then; rustc's own error stops the build, and the file is never written
+    let lowered = lower("post_mono", &refused_program("post_mono"));
+    let stderr = lowered.result.err().unwrap_or_else(|| panic!("post_mono was lowered"));
+    assert!(stderr.contains("error[E0080]"), "{stderr}");
+    assert!(!lowered.file.exists(), "no file written");
 }
