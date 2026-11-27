@@ -619,7 +619,7 @@ fn writing_refuses_what_a_capture_cannot_hold() {
 fn a_replayed_capture_hands_its_frames_in_order_then_ends_and_keeps_what_is_sent() {
     let frames = frames();
     let mut replay = Replay::new("scan.pcap", frames.clone());
-    assert_eq!((replay.name(), replay.mac(), replay.remaining()), ("scan.pcap", None, 5));
+    assert_eq!((replay.name(), replay.mac(), replay.index(), replay.remaining()), ("scan.pcap", None, None, 5));
     let identify = dcp::identify_request(A, 9, 1, &Filter::All).unwrap();
     replay.send(&identify).unwrap();
     assert!(matches!(replay.send(&[0; 13]), Err(WireError::TooShort(13))));
@@ -647,6 +647,7 @@ fn the_hub_carries_each_frame_to_every_other_port_stamped_with_its_clock_and_the
     let mut c = hub.port("lan2", C);
     assert_eq!((a.name(), b.name(), c.name()), ("eth0", "eth0", "lan2"));
     assert_eq!((a.mac(), b.mac(), c.mac()), (Some(A), Some(B), Some(C)));
+    assert_eq!((a.index(), c.index()), (None, None), "a hub's port is no interface of the system's");
     assert_eq!((hub.ports(), hub.now()), (3, 0));
     let identify = dcp::identify_request(A, 1, 1, &Filter::All).unwrap();
     hub.set_now(1_700_000_000_000_000_042);
@@ -738,6 +739,14 @@ fn the_raw_link_is_a_wire_and_never_hands_back_a_frame_this_host_sent() {
         let mut b: Box<dyn Wire> = Box::new(RawLink::open_with("b0", Options { ethertype: Some(0x8892), promiscuous: false, outgoing: true }).unwrap());
         let other_on_b = RawLink::open("b0", false).unwrap();
         assert_eq!((a.name(), a.mac(), b.name(), b.mac()), ("a0", Some(A), "b0", Some(B)));
+        // Each says the system's index of the interface it was opened on, as `ip` says it (the
+        // private network's own: `/sys` is the host's).
+        let index_of = |dev: &str| -> u32 {
+            let out = std::process::Command::new("ip").args(["-o", "link", "show", "dev", dev]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).split(':').next().unwrap().trim().parse().unwrap()
+        };
+        assert_eq!((a.index(), b.index()), (Some(index_of("a0")), Some(index_of("b0"))));
+        assert_ne!(a.index(), b.index());
 
         let mine = dcp::identify_request(B, 0x0B0B, 1, &Filter::All).unwrap();
         other_on_b.send(&mine).unwrap();

@@ -162,6 +162,8 @@ struct Shared {
     state: Mutex<State>,
     stop: AtomicBool,
     own: BTreeSet<Mac>,
+    /// Each wire's interface index, where it has one.
+    indexes: BTreeMap<String, u32>,
     options: Options,
 }
 
@@ -202,6 +204,7 @@ impl Listener {
             }
         }
         let own: BTreeSet<Mac> = wires.iter().filter_map(|w| w.mac()).collect();
+        let indexes: BTreeMap<String, u32> = wires.iter().filter_map(|w| Some((w.name().to_string(), w.index()?))).collect();
         let mut stats = Stats::default();
         let mut queues = BTreeMap::new();
         for w in &wires {
@@ -212,6 +215,7 @@ impl Listener {
             state: Mutex::new(State { frames: VecDeque::new(), base: 0, fusion: Fusion::new(), stats, queues, next_id: 0, in_flight: BTreeMap::new() }),
             stop: AtomicBool::new(false),
             own,
+            indexes,
             options,
         });
         let mut workers = Vec::new();
@@ -338,6 +342,13 @@ impl Listener {
     /// This machine's own MACs: its wires', whose frames and whose subjects it leaves out of fusion.
     pub fn own(&self) -> &BTreeSet<Mac> {
         &self.shared.own
+    }
+
+    /// The system's index of the interface a wire of this name was opened on (C-139), taken at
+    /// the start: `None` for a name it does not listen on and for a wire without one (a capture,
+    /// the memory hub).
+    pub fn index(&self, iface: &str) -> Option<u32> {
+        self.shared.indexes.get(iface).copied()
     }
 
     /// The options it runs with.

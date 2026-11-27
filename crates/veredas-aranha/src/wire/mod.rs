@@ -68,6 +68,11 @@ pub trait Wire: Send {
     fn name(&self) -> &str;
     /// The interface's own MAC; a capture has none.
     fn mac(&self) -> Option<Mac>;
+    /// The system's index of the interface it was opened on, which a rename or an alternative
+    /// name does not move; a capture and the memory hub have none.
+    fn index(&self) -> Option<u32> {
+        None
+    }
     /// Send one whole frame, its Ethernet header included.
     fn send(&mut self, frame: &[u8]) -> Result<(), WireError>;
     /// The next frame that arrived, or `None` when none did within `timeout`.
@@ -93,6 +98,10 @@ impl Wire for raw::RawLink {
 
     fn mac(&self) -> Option<Mac> {
         Some(raw::RawLink::mac(self))
+    }
+
+    fn index(&self) -> Option<u32> {
+        u32::try_from(raw::RawLink::index(self)).ok()
     }
 
     fn send(&mut self, frame: &[u8]) -> Result<(), WireError> {

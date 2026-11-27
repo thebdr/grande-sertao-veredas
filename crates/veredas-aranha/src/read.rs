@@ -105,6 +105,8 @@ pub enum ReadError {
     Ended { iface: String, reason: String },
     #[error("{0:?} has no IPv4 address of its own: a device could not answer it")]
     NoAddress(String),
+    #[error("{iface:?}'s IPv4 addresses cannot be read ({source}): nothing is sent on it")]
+    Addresses { iface: String, source: std::io::Error },
     #[error("{iface:?} holds no IPv4 address on the network of {device} (mask {mask}): the device could not answer it")]
     OffNetwork { iface: String, device: Ipv4Addr, mask: Ipv4Addr },
     #[error("{iface:?} holds {device}, the device's own address, and no other on its network: the device could not answer it")]
@@ -168,25 +170,65 @@ fn next_activity() -> Uuid {
     Uuid(b)
 }
 
-/// The IPv4 addresses an interface holds, in the order the system lists them: by the interface's
-/// index, so an address under a label (`a0:plant`, as an `eth0:1` alias is) and an interface named
-/// by an alternative name are the interface's (the system's list of addresses names an IPv4 one by
-/// its label, never by an alternative name).
+/// The IPv4 addresses an interface holds, in the order the system lists them, none when the name
+/// names no interface or its list cannot be read: by the interface's index, so an address under a
+/// label (`a0:plant`, as an `eth0:1` alias is) and an interface named by an alternative name are
+/// the interface's (the system's list of addresses names an IPv4 one by its label, never by an
+/// alternative name). A read takes its own by the index its link was opened on (`addresses_heard`).
 #[cfg(target_os = "linux")]
 pub fn addresses_of(iface: &str) -> Vec<Ipv4Addr> {
-    let Ok(name) = std::ffi::CString::new(iface) else { return Vec::new() };
-    // SAFETY: if_nametoindex reads the NUL-terminated name it is given and nothing else.
-    let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
-    if index == 0 {
-        return Vec::new();
+    addresses_named(iface).unwrap_or_default()
+}
+
+/// The addresses of the interface a name names now: none when it names none, the lookup's or the
+/// list's own failure when either cannot be made.
+#[cfg(target_os = "linux")]
+fn addresses_named(iface: &str) -> std::io::Result<Vec<Ipv4Addr>> {
+    match index_named(iface)? {
+        Some(index) => addresses_at(index),
+        None => Ok(Vec::new()),
     }
-    addresses_by_index(index).unwrap_or_default()
+}
+
+/// The index of the interface a name (or an alternative name) names now, none when it names none;
+/// the lookup's own failure (its socket not opened, no descriptor left among it) said by its
+/// reason. The system's own lookup (`if_nametoindex`) says such a failure as "no such file".
+#[cfg(target_os = "linux")]
+fn index_named(iface: &str) -> std::io::Result<Option<u32>> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let name = iface.as_bytes();
+    // A name the kernel's request cannot hold names no interface it could look up.
+    if name.is_empty() || name.len() >= libc::IFNAMSIZ || name.contains(&0) {
+        return Ok(None);
+    }
+    // SAFETY: a socket call with constant arguments; the descriptor is owned at once.
+    let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
+    if raw < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `raw` is a descriptor this call just opened and nothing else owns.
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    // SAFETY: an ifreq is plain data, all zeroes a valid one.
+    let mut req: libc::ifreq = unsafe { std::mem::zeroed() };
+    for (to, from) in req.ifr_name.iter_mut().zip(name) {
+        *to = *from as libc::c_char;
+    }
+    // SAFETY: `req` is a valid ifreq naming the interface, which the kernel reads and fills.
+    if unsafe { libc::ioctl(fd.as_raw_fd(), libc::SIOCGIFINDEX, &mut req) } < 0 {
+        let e = std::io::Error::last_os_error();
+        return if e.raw_os_error() == Some(libc::ENODEV) { Ok(None) } else { Err(e) };
+    }
+    // SAFETY: the kernel filled the index of the union on success.
+    let index = unsafe { req.ifr_ifru.ifru_ifindex };
+    Ok(u32::try_from(index).ok().filter(|i| *i != 0))
 }
 
 /// Every IPv4 address of the interface at `index`, from the kernel's own dump of addresses
-/// (netlink's RTM_GETADDR), in its order.
+/// (netlink's RTM_GETADDR), in its order: an address's local end where it states one apart (a
+/// point-to-point link's, whose other is its peer's), else the address. None for an index no
+/// interface holds.
 #[cfg(target_os = "linux")]
-fn addresses_by_index(index: u32) -> std::io::Result<Vec<Ipv4Addr>> {
+pub fn addresses_at(index: u32) -> std::io::Result<Vec<Ipv4Addr>> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     const NLMSG_HDR: usize = 16;
     const NLMSG_DONE: u16 = 3;
@@ -274,6 +316,27 @@ pub fn addresses_of(_iface: &str) -> Vec<Ipv4Addr> {
     Vec::new()
 }
 
+#[cfg(not(target_os = "linux"))]
+fn addresses_named(_iface: &str) -> std::io::Result<Vec<Ipv4Addr>> {
+    Ok(Vec::new())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn addresses_at(_index: u32) -> std::io::Result<Vec<Ipv4Addr>> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
+/// The addresses of the interface a listener hears as `iface`: by the index its wire was opened on
+/// (C-139), so a rename, or an alternative name moved or dropped since, never gives another
+/// interface's or none; by its name now for a wire without one (the memory hub). The list's own
+/// failure when it cannot be read.
+pub fn addresses_heard(listener: &Listener, iface: &str) -> std::io::Result<Vec<Ipv4Addr>> {
+    match listener.index(iface) {
+        Some(index) => addresses_at(index),
+        None => addresses_named(iface),
+    }
+}
+
 /// The first IPv4 address an interface holds, if any.
 pub fn address_of(iface: &str) -> Option<Ipv4Addr> {
     addresses_of(iface).first().copied()
@@ -284,8 +347,14 @@ pub fn address_of(iface: &str) -> Option<Ipv4Addr> {
 /// itself): a device answers without a router only a source on its network; none when the
 /// interface holds none there.
 pub fn address_for(iface: &str, device: Ipv4Addr, mask: Ipv4Addr) -> Option<Ipv4Addr> {
+    address_among(&addresses_of(iface), device, mask)
+}
+
+/// Of the addresses an interface holds, in their order, the first on the network of a device at
+/// `device` with `mask` that is not the device's own.
+pub fn address_among(held: &[Ipv4Addr], device: Ipv4Addr, mask: Ipv4Addr) -> Option<Ipv4Addr> {
     let m = u32::from(mask);
-    addresses_of(iface).into_iter().find(|a| *a != device && u32::from(*a) & m == u32::from(device) & m)
+    held.iter().copied().find(|a| *a != device && u32::from(*a) & m == u32::from(device) & m)
 }
 
 /// The object a read is addressed to: the device's own (its vendor and device ids, its instance,
@@ -315,10 +384,11 @@ pub fn read(listener: &Listener, iface: &str, device: &Device, target: Target, o
     }
     let suite = device.ip.current().filter(|s| !s.ip.is_unspecified()).ok_or(ReadError::Unaddressed(device.mac))?;
     let address = suite.ip;
-    let here = match address_for(iface, address, suite.mask) {
+    // The interface's addresses, read once, by the index its link was opened on.
+    let held = addresses_heard(listener, iface).map_err(|source| ReadError::Addresses { iface: iface.to_string(), source })?;
+    let here = match address_among(&held, address, suite.mask) {
         Some(here) => here,
         None => {
-            let held = addresses_of(iface);
             return Err(if held.contains(&address) {
                 ReadError::OwnAddress { iface: iface.to_string(), device: address }
             } else if held.is_empty() {

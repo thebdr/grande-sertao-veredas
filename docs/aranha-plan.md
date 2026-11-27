@@ -423,7 +423,10 @@ is pinned by a test when its phase lands.
   none there (C-148's third refute round). The system's list of addresses (`getifaddrs`) names an
   IPv4 address by its label (`a0:plant`, as `ifconfig eth0:1` makes) and never by an interface's
   alternative name: the read lists an interface's addresses from the kernel's own dump by the
-  interface's index, and never sends from the device's own address (the fourth round).
+  interface's index, and never sends from the device's own address (the fourth round). A name is
+  not the interface either: Linux renames an interface while it is up (since 6.2) and moves or
+  drops an alternative name, while a raw link stays bound to the index it was opened on, so a read
+  looks its addresses up by that index, which the wire says (the fifth round).
 - **`Path` reads `s.toml/.` as `s.toml`**: its file name, extension and parent drop a trailing
   `.`, while the system's calls resolve it (a folder, or no such file); a check on the scan's path
   reads its last part as given. Renaming onto a mount point fails (busy): the one way a test makes

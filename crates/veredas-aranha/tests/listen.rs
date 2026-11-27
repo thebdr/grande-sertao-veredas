@@ -50,6 +50,8 @@ fn a_listener_keeps_every_frame_it_hears_and_fuses_what_it_says() {
     let hub = Hub::new();
     let mut dev = hub.port("dev", DEV);
     let listener = Listener::start(vec![Box::new(hub.port("lan0", LAN0))], Options::default()).unwrap();
+    // A hub's port has no index of the system's; a name it does not listen on none either.
+    assert_eq!((listener.index("lan0"), listener.index("lan1")), (None, None));
     hub.set_now(1_000);
     let sent = device_frames();
     for f in &sent {
@@ -1016,4 +1018,30 @@ mod round_4 {
         let total = s.stats.heard + s.stats.interfaces["lan0"].sent;
         assert_eq!((s.kept.1, s.kept.1 - s.kept.0, s.stats.let_go), (total, 7, total - 7));
     }
+}
+
+/// On raw links in a private network the listener says each wire's interface index as its link
+/// was opened (C-139): the interface renamed while up, and another given its old name, it says the
+/// index it opened, which the heard interface still holds.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_listener_says_each_wire_s_index_as_it_was_opened() {
+    use veredas_aranha::netns;
+    use veredas_aranha::wire::raw::RawLink;
+    netns::isolated("the_listener_says_each_wire_s_index_as_it_was_opened", &[("a0", "b0"), ("c0", "d0")], || {
+        let index_of = |dev: &str| -> u32 {
+            let out = std::process::Command::new("ip").args(["-o", "link", "show", "dev", dev]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).split(':').next().unwrap().trim().parse().unwrap()
+        };
+        let (a0, c0) = (index_of("a0"), index_of("c0"));
+        let wires: Vec<Box<dyn Wire>> = vec![Box::new(RawLink::open("a0", false).unwrap()), Box::new(RawLink::open("c0", false).unwrap())];
+        let l = Listener::start(wires, Options::default()).unwrap();
+        assert_eq!((l.index("a0"), l.index("c0"), l.index("b0")), (Some(a0), Some(c0), None));
+        netns::ip(&["link", "set", "dev", "a0", "name", "x0"]);
+        netns::ip(&["link", "set", "dev", "c0", "name", "a0"]);
+        assert_eq!((index_of("x0"), index_of("a0")), (a0, c0));
+        assert_eq!(l.index("a0"), Some(a0), "the index it opened, not the name's now");
+        assert_eq!(l.interface("a0").unwrap().ended, None);
+        l.stop();
+    });
 }

@@ -554,7 +554,7 @@ fn listen(args: &[OsString]) -> Result<(), Refused> {
             // An interface it was heard on that holds an address on its network (the first named),
             // else the first it was heard on, whose read then says why it cannot be.
             let heard: Vec<&String> = ifaces.iter().filter(|i| d.heard_on.contains(*i)).collect();
-            let Some(iface) = heard.iter().find(|i| read::address_for(i, suite.ip, suite.mask).is_some()).or(heard.first()) else { continue };
+            let Some(iface) = heard.iter().find(|i| read::addresses_heard(&l, i).is_ok_and(|h| read::address_among(&h, suite.ip, suite.mask).is_some())).or(heard.first()) else { continue };
             match read::ports(&l, iface, d, &read::Options::default()) {
                 Ok(p) => neighbours.extend(p.neighbours),
                 Err(cut) => {

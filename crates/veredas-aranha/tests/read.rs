@@ -2211,3 +2211,476 @@ mod round_4 {
         assert_eq!(ip::datagram(&two), None);
     }
 }
+
+/// The fifth refute round's cases: a fault or reject from anywhere but the device's MAC, address
+/// and port to the request's, or heard on another interface, passed over; the kernel's list of
+/// addresses whole and in its order past many reads, a point-to-point address its own end, the
+/// device's address held twice, a /31; and the addresses by the index the listener's link was
+/// opened on: a rename, an alternative name moved or dropped since, an interface removed, and a
+/// list the system cannot give, refused by its own reason with nothing sent.
+#[cfg(target_os = "linux")]
+mod round_5 {
+    use std::net::Ipv4Addr;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use super::bench;
+    use veredas_aranha::fusion::{Device, Fusion};
+    use veredas_aranha::ip::{self, Endpoint};
+    use veredas_aranha::listen::{Listener, Options};
+    use veredas_aranha::netns;
+    use veredas_aranha::observe::{Observation, Observed, Probe, Witness};
+    use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpSuite};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::profinet::rpc::{self, PacketType, PnioStatus, ReadRequest, ReadResponse, RequestArgs, ResponseArgs, RpcPdu};
+    use veredas_aranha::read::{self, ReadError, Target};
+    use veredas_aranha::wire::Wire;
+    use veredas_aranha::wire::raw::{Options as RawOptions, RawLink};
+
+    const HERE: Mac = Mac([0x02, 0x00, 0x5E, 0xE5, 0x00, 0xA0]);
+    const HERE1: Mac = Mac([0x02, 0x00, 0x5E, 0xE5, 0x00, 0xA1]);
+    const HERE2: Mac = Mac([0x02, 0x00, 0x5E, 0xE5, 0x00, 0xA2]);
+    const DEV: Mac = Mac([0x02, 0x00, 0x5E, 0xE5, 0x00, 0x01]);
+    const DEV1: Mac = Mac([0x02, 0x00, 0x5E, 0xE5, 0x00, 0x02]);
+    const DEV2: Mac = Mac([0x02, 0x00, 0x5E, 0xE5, 0x00, 0x03]);
+    const OTHER: Mac = Mac([0x02, 0x00, 0x5E, 0xE5, 0x00, 0x77]);
+    const MASK24: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
+    const IM0: Target = Target { slot: 0, subslot: 1, index: 0xAFF0 };
+
+    fn a(last: u8) -> Ipv4Addr {
+        Ipv4Addr::new(192, 168, 0, last)
+    }
+
+    fn device_with(iface: &str, mac: Mac, address: Ipv4Addr, mask: Ipv4Addr) -> Device {
+        let identity = DeviceIdentity { name: Some("bomba-1".into()), ip: Some(IpSuite { ip: address, mask, gateway: Ipv4Addr::UNSPECIFIED }), ..Default::default() };
+        let o = Observation { witness: Witness { probe: Probe::DcpHeard, iface: iface.into(), at_ns: 1, frame: 0 }, observed: Observed::Dcp { mac, service: dcp::Service::Hello, service_type: dcp::ServiceType::Request, identity } };
+        let mut f = Fusion::new();
+        f.apply(&o);
+        f.devices.remove(&mac).unwrap()
+    }
+
+    #[derive(Clone)]
+    struct Req {
+        from: Endpoint,
+        to: Endpoint,
+        pdu: RpcPdu,
+        args: RequestArgs,
+        read: ReadRequest,
+    }
+
+    /// What the scripted device sends for a request: (the link it goes out on, the frame); a link
+    /// of `PAUSE` is a pause of 150 ms instead.
+    const PAUSE: usize = usize::MAX;
+    type Handler = Box<dyn FnMut(&Req) -> Vec<(usize, Vec<u8>)> + Send>;
+
+    struct Scripted {
+        stop: Arc<AtomicBool>,
+        seen: Arc<Mutex<Vec<Req>>>,
+        join: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for Scripted {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            if let Some(j) = self.join.take() {
+                let _ = j.join();
+            }
+        }
+    }
+
+    /// A device hearing requests on `links[0]` to `me`, answering on any of `links`; the links
+    /// open before its thread starts.
+    fn scripted(links: &[&str], me: Endpoint, mut handler: Handler) -> Scripted {
+        let stop = Arc::new(AtomicBool::new(false));
+        let seen: Arc<Mutex<Vec<Req>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut ls: Vec<Box<dyn Wire>> = links.iter().map(|l| bench::link(l)).collect();
+        let join = {
+            let (stop, seen) = (stop.clone(), seen.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    let Ok(Some(f)) = ls[0].recv(Duration::from_millis(5)) else { continue };
+                    let Some(d) = ip::datagram(&f.bytes) else { continue };
+                    if d.dst != me {
+                        continue;
+                    }
+                    let Ok(pdu) = RpcPdu::decode(&d.payload) else { continue };
+                    let Ok(args) = RequestArgs::decode(&pdu.body, pdu.byte_order()) else { continue };
+                    let Ok(read) = ReadRequest::from_block(&rpc::read_blocks(&args.data).0[0]) else { continue };
+                    let req = Req { from: d.src, to: d.dst, pdu, args, read };
+                    seen.lock().unwrap().push(req.clone());
+                    for (link, frame) in handler(&req) {
+                        if link == PAUSE {
+                            std::thread::sleep(Duration::from_millis(150));
+                            continue;
+                        }
+                        ls[link].send(&frame).unwrap();
+                    }
+                }
+            })
+        };
+        Scripted { stop, seen, join: Some(join) }
+    }
+
+    fn answer(r: &Req, record: &[u8], status: PnioStatus) -> RpcPdu {
+        let mut data = ReadResponse::answering(&r.read, record.len() as u32).block().encode().unwrap();
+        data.extend_from_slice(record);
+        RpcPdu::pnio_response(&r.pdu, 7, &ResponseArgs::new(status, r.args.args_maximum, data))
+    }
+
+    fn frame(from: Endpoint, to: Endpoint, pdu: &RpcPdu) -> Vec<u8> {
+        ip::udp_frame(from, to, 1, &pdu.encode().unwrap()).unwrap()
+    }
+
+    /// A device answering every request with its own record, from where it was asked.
+    fn mine() -> Handler {
+        Box::new(move |r: &Req| vec![(0, frame(r.to, r.from, &answer(r, b"mine", PnioStatus::OK)))])
+    }
+
+    fn quick() -> read::Options {
+        read::Options { wait: Duration::from_millis(600) }
+    }
+
+    fn sources(p: &Scripted) -> Vec<Ipv4Addr> {
+        p.seen.lock().unwrap().iter().map(|q| q.from.ip).collect()
+    }
+
+    fn add(dev: &str, spec: &[&str]) {
+        let mut args = vec!["addr", "add"];
+        args.extend_from_slice(spec);
+        args.extend_from_slice(&["dev", dev]);
+        netns::ip(&args);
+    }
+
+    fn ip_out(args: &[&str]) -> String {
+        let out = std::process::Command::new("ip").args(args).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+
+    /// The local IPv4 addresses `ip -4 -o addr show dev <dev>` lists, in its order.
+    fn ip_show(dev: &str) -> Vec<Ipv4Addr> {
+        ip_out(&["-4", "-o", "addr", "show", "dev", dev])
+            .lines()
+            .filter_map(|l| {
+                let mut w = l.split_whitespace();
+                w.by_ref().find(|t| *t == "inet")?;
+                w.next()?.split('/').next()?.parse().ok()
+            })
+            .collect()
+    }
+
+    /// The system's index of an interface, as `ip -o link show` says it (the private network's
+    /// own: `/sys` is the host's).
+    fn index_of(dev: &str) -> u32 {
+        let out = ip_out(&["-o", "link", "show", "dev", dev]);
+        out.split(':').next().unwrap().trim().parse().unwrap_or_else(|_| panic!("{dev}: {out:?}"))
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // The answer's match.
+
+    /// A fault and a reject under the request's activity, each from another MAC, address or port,
+    /// to another port or address, and on another interface (heard promiscuously, as on a mirror
+    /// port, kept before the rest): all passed over, the device's own answer read after them.
+    #[test]
+    fn a_fault_or_reject_from_anywhere_else_is_passed_over() {
+        netns::isolated("round_5::a_fault_or_reject_from_anywhere_else_is_passed_over", &[("a0", "b0"), ("a1", "b1")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV), ("a1", HERE1), ("b1", DEV1)], &[("a0", "b0"), ("a1", "b1")]);
+            add("a0", &["192.168.0.1/24"]);
+            let me = Endpoint { mac: DEV, ip: a(10), port: 34964 };
+            let peer = scripted(
+                &["b0", "b1"],
+                me,
+                Box::new(move |r: &Req| {
+                    let good = answer(r, b"mine", PnioStatus::OK);
+                    let fault = RpcPdu { packet_type: PacketType::Fault, ..good.clone() };
+                    let reject = RpcPdu { packet_type: PacketType::Reject, ..good.clone() };
+                    // On the other interface first, then a pause: a1's worker keeps them before
+                    // a0's keeps what follows.
+                    let mut out = vec![(1, frame(me, r.from, &fault)), (1, frame(me, r.from, &reject)), (PAUSE, Vec::new())];
+                    for bad in [&fault, &reject] {
+                        out.push((0, frame(Endpoint { mac: OTHER, ..me }, r.from, bad)));
+                        out.push((0, frame(Endpoint { ip: a(99), ..me }, r.from, bad)));
+                        out.push((0, frame(Endpoint { port: 34965, ..me }, r.from, bad)));
+                        out.push((0, frame(me, Endpoint { port: r.from.port.wrapping_add(1), ..r.from }, bad)));
+                        out.push((0, frame(me, Endpoint { ip: a(2), ..r.from }, bad)));
+                    }
+                    out.push((0, frame(me, r.from, &good)));
+                    out
+                }),
+            );
+            let mirror = RawLink::open_with("a1", RawOptions { ethertype: None, promiscuous: true, outgoing: false }).unwrap();
+            let l = Listener::start(vec![bench::link("a0"), Box::new(mirror)], Options::default()).unwrap();
+            let from = l.kept().1;
+            let r = read::read(&l, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &quick());
+            assert_eq!(r.as_ref().map(|r| r.data.clone()).map_err(|e| e.to_string()), Ok(b"mine".to_vec()));
+            let r = r.unwrap();
+            // The decoys were kept before the answer: the read passed over them.
+            let act = peer.seen.lock().unwrap()[0].pdu.activity;
+            let decoys: Vec<(u64, String)> = l
+                .frames_from(from)
+                .into_iter()
+                .filter(|(i, k)| *i < r.answer && !k.sent && ip::datagram(&k.frame.bytes).is_some_and(|d| RpcPdu::decode(&d.payload).is_ok_and(|p| p.activity == act && matches!(p.packet_type, PacketType::Fault | PacketType::Reject))))
+                .map(|(i, k)| (i, k.frame.iface.clone()))
+                .collect();
+            assert_eq!(decoys.iter().filter(|(_, i)| i == "a1").count(), 2, "{decoys:?}");
+            assert_eq!(decoys.iter().filter(|(_, i)| i == "a0").count(), 10, "{decoys:?}");
+        });
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // The kernel's list of addresses.
+
+    /// The addresses are the system's list, in `ip -4 addr show`'s order, past a dump split
+    /// across many reads (400 addresses on `lo` and 406 on the interface): a secondary, a
+    /// labelled, a deprecated and a point-to-point address (its own end, never its peer's) among
+    /// them; the read goes from the device's network's address listed last, past every split.
+    #[test]
+    fn the_addresses_are_the_system_s_list_in_its_order() {
+        netns::isolated("round_5::the_addresses_are_the_system_s_list_in_its_order", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            let mut batch = String::new();
+            for i in 0..400u32 {
+                batch.push_str(&format!("addr add 127.{}.{}.{}/32 dev lo\n", 1 + i / 62500, (i / 250) % 250, i % 250 + 1));
+            }
+            batch.push_str("addr add 10.9.9.1/24 dev a0\naddr add 10.9.9.2/24 dev a0\naddr add 10.9.9.3/24 dev a0 label a0:x\n");
+            batch.push_str("addr add 172.16.0.1 peer 172.16.0.2/32 dev a0\naddr add 10.7.0.1/16 dev a0 preferred_lft 0\n");
+            for i in 0..400u32 {
+                batch.push_str(&format!("addr add 10.200.{}.{}/32 dev a0\n", i / 250, i % 250 + 1));
+            }
+            batch.push_str("addr add 192.168.0.1/24 dev a0\n");
+            let file = std::env::temp_dir().join(format!("aranha-read-round5-batch-{}", std::process::id()));
+            std::fs::write(&file, batch).unwrap();
+            netns::ip(&["-batch", file.to_str().unwrap()]);
+            let _ = std::fs::remove_file(&file);
+            let shown = ip_show("a0");
+            assert_eq!(shown.len(), 406);
+            assert!(shown.contains(&Ipv4Addr::new(172, 16, 0, 1)) && !shown.contains(&Ipv4Addr::new(172, 16, 0, 2)));
+            assert!(shown.contains(&Ipv4Addr::new(10, 7, 0, 1)), "the deprecated address is listed");
+            assert_eq!(read::addresses_of("a0"), shown);
+            assert_eq!(read::addresses_at(index_of("a0")).unwrap(), shown);
+            assert_eq!(read::addresses_of("lo").len(), 401);
+            assert_eq!(read::addresses_of("lo"), ip_show("lo"));
+            let me = Endpoint { mac: DEV, ip: a(10), port: 34964 };
+            let peer = scripted(&["b0"], me, mine());
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let r = read::read(&l, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &quick());
+            assert_eq!(r.map(|r| r.data).map_err(|e| e.to_string()), Ok(b"mine".to_vec()));
+            assert_eq!(sources(&peer), [a(1)]);
+        });
+    }
+
+    /// A point-to-point address (`192.168.0.1 peer 192.168.0.2/32`): the interface holds .1 (the
+    /// dump's local end), never its peer .2; the read goes from .1.
+    #[test]
+    fn a_point_to_point_address_is_its_own_end() {
+        netns::isolated("round_5::a_point_to_point_address_is_its_own_end", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            add("a0", &["192.168.0.1", "peer", "192.168.0.2/32"]);
+            assert_eq!(ip_show("a0"), [a(1)]);
+            assert_eq!(read::addresses_of("a0"), [a(1)]);
+            let me = Endpoint { mac: DEV, ip: a(10), port: 34964 };
+            let peer = scripted(&["b0"], me, mine());
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let r = read::read(&l, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &quick());
+            assert_eq!(r.map(|r| r.data).map_err(|e| e.to_string()), Ok(b"mine".to_vec()));
+            assert_eq!(sources(&peer), [a(1)]);
+        });
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // The address chosen.
+
+    /// The device's own address held twice (two masks) beside an office one: refused by name,
+    /// nothing sent; a /31 the device states: the interface's other end of it, past a /24 listed
+    /// first.
+    #[test]
+    fn the_device_s_address_twice_and_a_slash_31() {
+        netns::isolated("round_5::the_device_s_address_twice_and_a_slash_31", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            add("a0", &["192.168.0.10/24"]);
+            add("a0", &["192.168.0.10/16"]);
+            add("a0", &["10.9.9.1/24"]);
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let r = read::read(&l, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &quick());
+            assert!(matches!(r, Err(ReadError::OwnAddress { .. })), "{r:?}");
+            assert_eq!(l.interface("a0").unwrap().sent, 0);
+            l.stop();
+            netns::ip(&["addr", "flush", "dev", "a0"]);
+            add("a0", &["192.168.0.1/24"]);
+            add("a0", &["192.168.0.11/31"]);
+            let me = Endpoint { mac: DEV, ip: a(10), port: 34964 };
+            let peer = scripted(&["b0"], me, mine());
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let r = read::read(&l, "a0", &device_with("a0", DEV, a(10), Ipv4Addr::new(255, 255, 255, 254)), IM0, &quick());
+            assert_eq!(r.map(|r| r.data).map_err(|e| e.to_string()), Ok(b"mine".to_vec()));
+            assert_eq!(sources(&peer), [a(11)]);
+        });
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // The interface's addresses by the index its link was opened on.
+
+    /// The interface the listener hears renamed (`a0` to `x0`, while up) and another given its old name: the
+    /// listener says the index it opened, the read takes that interface's addresses, not the
+    /// other's that now bears the name, and goes from them.
+    #[test]
+    fn a_rename_since_keeps_the_interface_s_addresses() {
+        netns::isolated("round_5::a_rename_since_keeps_the_interface_s_addresses", &[("a0", "b0"), ("c0", "d0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV), ("c0", HERE2), ("d0", DEV2)], &[("a0", "b0"), ("c0", "d0")]);
+            add("a0", &["192.168.0.1/24"]);
+            add("c0", &["192.168.0.5/24"]);
+            let opened = index_of("a0");
+            let me = Endpoint { mac: DEV, ip: a(10), port: 34964 };
+            let peer = scripted(&["b0"], me, mine());
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            assert_eq!(l.index("a0"), Some(opened));
+            assert_eq!(l.index("c0"), None, "a name it does not listen on");
+            // Renamed while up (Linux renames a live interface since 6.2): no link goes down.
+            netns::ip(&["link", "set", "dev", "a0", "name", "x0"]);
+            netns::ip(&["link", "set", "dev", "c0", "name", "a0"]);
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(index_of("x0"), opened);
+            assert_eq!(read::addresses_of("a0"), [a(5)], "the name now names the other");
+            assert_eq!(l.index("a0"), Some(opened));
+            assert_eq!(l.interface("a0").unwrap().ended, None, "the listener still hears x0");
+            let r = read::read(&l, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &quick());
+            assert_eq!(r.map(|r| r.data).map_err(|e| e.to_string()), Ok(b"mine".to_vec()));
+            assert_eq!(sources(&peer), [a(1)], "the heard interface's own address, beside its MAC {HERE}");
+        });
+    }
+
+    /// A listener opened on an alternative name, the name then moved to another interface (no link
+    /// goes down: the listener hears on): the read takes the heard interface's addresses, none on
+    /// the device's network, and is refused by name with nothing sent, not sent from the other
+    /// interface's.
+    #[test]
+    fn an_alternative_name_moved_since_keeps_the_interface_s_addresses() {
+        netns::isolated("round_5::an_alternative_name_moved_since_keeps_the_interface_s_addresses", &[("a0", "b0"), ("c0", "d0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV), ("c0", HERE2), ("d0", DEV2)], &[("a0", "b0"), ("c0", "d0")]);
+            add("a0", &["10.9.9.1/24"]);
+            add("c0", &["192.168.0.1/24"]);
+            netns::ip(&["link", "property", "add", "dev", "a0", "altname", "plant0"]);
+            let me = Endpoint { mac: DEV, ip: a(10), port: 34964 };
+            let peer = scripted(&["b0"], me, mine());
+            let l = Listener::start(vec![bench::link("plant0")], Options::default()).unwrap();
+            assert_eq!(l.index("plant0"), Some(index_of("a0")));
+            netns::ip(&["link", "property", "del", "dev", "a0", "altname", "plant0"]);
+            netns::ip(&["link", "property", "add", "dev", "c0", "altname", "plant0"]);
+            assert_eq!(read::addresses_of("plant0"), [a(1)], "the name now names c0");
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(l.interface("plant0").unwrap().ended, None, "the listener still hears a0");
+            let r = read::read(&l, "plant0", &device_with("plant0", DEV, a(10), MASK24), IM0, &quick());
+            match r {
+                Err(ReadError::OffNetwork { iface, device, mask }) => assert_eq!((iface.as_str(), device, mask), ("plant0", a(10), MASK24)),
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(l.interface("plant0").unwrap().sent, 0);
+            // The name's interface emptied: the refusal is still by the heard one's addresses.
+            netns::ip(&["addr", "flush", "dev", "c0"]);
+            let r = read::read(&l, "plant0", &device_with("plant0", DEV, a(10), MASK24), IM0, &quick());
+            assert!(matches!(r, Err(ReadError::OffNetwork { .. })), "{r:?}");
+            assert_eq!(l.interface("plant0").unwrap().sent, 0);
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(sources(&peer).is_empty());
+        });
+    }
+
+    /// A listener opened on an alternative name, the name then dropped: the interface it hears
+    /// still holds its address, and the read goes from it.
+    #[test]
+    fn an_alternative_name_dropped_since_keeps_the_interface_s_addresses() {
+        netns::isolated("round_5::an_alternative_name_dropped_since_keeps_the_interface_s_addresses", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            add("a0", &["192.168.0.1/24"]);
+            netns::ip(&["link", "property", "add", "dev", "a0", "altname", "plant0"]);
+            let me = Endpoint { mac: DEV, ip: a(10), port: 34964 };
+            let peer = scripted(&["b0"], me, mine());
+            let l = Listener::start(vec![bench::link("plant0")], Options::default()).unwrap();
+            netns::ip(&["link", "property", "del", "dev", "a0", "altname", "plant0"]);
+            assert!(read::addresses_of("plant0").is_empty(), "the name names nothing now");
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(l.interface("plant0").unwrap().ended, None, "the listener still hears a0");
+            let r = read::read(&l, "plant0", &device_with("plant0", DEV, a(10), MASK24), IM0, &quick());
+            assert_eq!(r.map(|r| r.data).map_err(|e| e.to_string()), Ok(b"mine".to_vec()));
+            assert_eq!(sources(&peer), [a(1)]);
+        });
+    }
+
+    /// The interface the listener hears removed: refused at once (its index holds no address now)
+    /// and, once its worker has heard the end, as ended.
+    #[test]
+    fn an_interface_removed_is_refused() {
+        netns::isolated("round_5::an_interface_removed_is_refused", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            add("a0", &["192.168.0.1/24"]);
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            netns::ip(&["link", "del", "a0"]);
+            let r = read::read(&l, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &quick());
+            assert!(matches!(r, Err(ReadError::NoAddress(_) | ReadError::Ended { .. })), "{r:?}");
+            std::thread::sleep(Duration::from_millis(300));
+            let r = read::read(&l, "a0", &device_with("a0", DEV, a(10), MASK24), IM0, &quick());
+            assert!(matches!(r, Err(ReadError::Ended { .. })), "{r:?}");
+            assert_eq!(l.interface("a0").unwrap().sent, 0);
+        });
+    }
+
+    /// The interface's list of addresses the system cannot give (this process may open no more
+    /// descriptors): refused by that reason, with nothing sent, never said to hold no address.
+    #[test]
+    fn a_list_of_addresses_the_system_cannot_give_is_refused_by_its_reason() {
+        netns::isolated("round_5::a_list_of_addresses_the_system_cannot_give_is_refused_by_its_reason", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            add("a0", &["192.168.0.1/24"]);
+            let l = Listener::start(vec![bench::link("a0")], Options::default()).unwrap();
+            let device = device_with("a0", DEV, a(10), MASK24);
+            let mut old = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+            // SAFETY: getrlimit and setrlimit on valid structs; this child process runs this test
+            // alone (`netns::isolated`).
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut old) };
+            let none = libc::rlimit { rlim_cur: 0, rlim_max: old.rlim_max };
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &none) };
+            let r = read::read(&l, "a0", &device, IM0, &quick());
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &old) };
+            match &r {
+                Err(e @ ReadError::Addresses { iface, source }) => {
+                    assert_eq!((iface.as_str(), source.raw_os_error()), ("a0", Some(libc::EMFILE)));
+                    assert!(e.to_string().starts_with("\"a0\"'s IPv4 addresses cannot be read ("), "{e}");
+                    assert!(e.to_string().ends_with("): nothing is sent on it"), "{e}");
+                }
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(l.interface("a0").unwrap().sent, 0);
+            // With descriptors again the same read is no longer refused on its addresses.
+            assert_eq!(read::addresses_heard(&l, "a0").unwrap(), [a(1)]);
+        });
+    }
+
+    /// A wire with no index of its own (a hub's port) named as an interface of the system's: its
+    /// addresses are that name's, and a list the system cannot give is refused by its reason there
+    /// too, nothing sent.
+    #[test]
+    fn a_wire_without_an_index_takes_its_name_s_addresses_and_their_failure() {
+        netns::isolated("round_5::a_wire_without_an_index_takes_its_name_s_addresses_and_their_failure", &[("a0", "b0")], || {
+            bench::pin(&[("a0", HERE), ("b0", DEV)], &[("a0", "b0")]);
+            add("a0", &["192.168.0.1/24"]);
+            let hub = veredas_aranha::wire::hub::Hub::new();
+            let l = Listener::start(vec![Box::new(hub.port("a0", HERE))], Options::default()).unwrap();
+            assert_eq!(l.index("a0"), None);
+            assert_eq!(read::addresses_heard(&l, "a0").unwrap(), [a(1)]);
+            let device = device_with("a0", DEV, a(10), MASK24);
+            let mut old = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+            // SAFETY: as above; this child process runs this test alone.
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut old) };
+            let none = libc::rlimit { rlim_cur: 0, rlim_max: old.rlim_max };
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &none) };
+            let r = read::read(&l, "a0", &device, IM0, &quick());
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &old) };
+            match &r {
+                Err(ReadError::Addresses { iface, source }) => assert_eq!((iface.as_str(), source.raw_os_error()), ("a0", Some(libc::EMFILE))),
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(l.interface("a0").unwrap().sent, 0);
+        });
+    }
+}
