@@ -23,6 +23,9 @@ fn the_machine_is_built_by_the_recipe_and_its_shipped_disk_boots_the_plant_on_vm
     let root = repo_root();
     let release = "0.0.0-trial.292";
     let work = root.join("target/alforge").join(release);
+    // A run that stopped leaves its trial's manifest and consoles there, to be read; the next run
+    // starts from nothing (its cached disks lie in the cache, not here).
+    let _ = std::fs::remove_dir_all(&work);
     // Where `alforge cut --trial` writes a trial's manifest: the machine is built only from a cut
     // that ran to its end.
     let cut = cut::cut(&root, &Options { release: semver::Version::parse(release).unwrap(), out: work.clone(), work: work.clone(), run_suite: false })
