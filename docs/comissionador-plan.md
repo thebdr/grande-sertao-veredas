@@ -235,6 +235,9 @@ on 2026-11-26:
   switch it finds armed: by the list's fingerprint (`--arm`), and leaves it as found.
 - **Q321** what the confirmation covers, the switch being the whole session's: the test's gated
   writes and the session's own replies, listed and fingerprinted together ((a)).
+- **Q322** (open, 2026-11-27) whether a replayed write takes its live run's answer once portal
+  keeps the writes (Q318 (a)): as ruled meanwhile (not sent, the step passes), C-203's claim
+  narrowed to live runs whose every write and send was taken.
 
 Open and not asked yet, because nothing waits on them: a step in which a person enters a
 measurement or confirms what they saw (the seed's "minimal manual work"); how many ports a

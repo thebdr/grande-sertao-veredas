@@ -60,6 +60,9 @@ pub enum PlantError {
     /// A write the plant received and refused, in its words.
     #[error("{0}")]
     Answered(String),
+    /// A reading the tester's stop ended between its pages.
+    #[error("stopped by the tester")]
+    Stopped,
 }
 
 pub trait Plant {
@@ -78,6 +81,12 @@ pub trait Plant {
     }
     /// The latest value of `column` stamped at or before `at` (a hole read past), with its stamp.
     fn latest(&self, table: &Table, column: &str, at: i64) -> Result<Option<(i64, Value)>, PlantError>;
+    /// The same, `stop` looked at before each part of the reading (a page of portal's):
+    /// [`PlantError::Stopped`] once it says to stop, so a column empty over a long table is read
+    /// back no further than the tester's word.
+    fn latest_until(&self, table: &Table, column: &str, at: i64, stop: &dyn Fn() -> bool) -> Result<Option<(i64, Value)>, PlantError> {
+        if stop() { Err(PlantError::Stopped) } else { self.latest(table, column, at) }
+    }
     /// From which moment the session's store holds `table`'s rows whole, when the embedder said so
     /// (the point its sources' start read from): a replay's window opening before it is refused.
     fn rows_from(&self, _table: &str) -> Option<i64> {
@@ -280,9 +289,20 @@ impl Plant for LivePlant {
     }
 
     fn latest(&self, table: &Table, column: &str, at: i64) -> Result<Option<(i64, Value)>, PlantError> {
-        let mut offset = 0;
+        self.latest_until(table, column, at, &|| false)
+    }
+
+    fn latest_until(&self, table: &Table, column: &str, at: i64, stop: &dyn Fn() -> bool) -> Result<Option<(i64, Value)>, PlantError> {
+        // Newest first, a page of 64 rows, each next page twice the last up to portal's largest:
+        // a value near the moment found at once, a column empty over the table read back in a
+        // few pages, each page a query over the table (C-202's trap).
+        let (mut offset, mut limit) = (0, 64);
         loop {
-            let q = RowsQuery { from_ms: None, to_ms: Some(at), limit: 64, offset };
+            if stop() {
+                return Err(PlantError::Stopped);
+            }
+            let q = RowsQuery { from_ms: None, to_ms: Some(at), limit, offset };
+            limit = (limit * 2).min(PAGE);
             let (rows, total) = self.page(table, &q)?;
             for r in &rows {
                 if let Some(Some(v)) = r.field(column) {

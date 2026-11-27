@@ -937,6 +937,139 @@ fn the_session_s_replies_are_confirmed_with_the_test_s_writes() {
     assert_eq!((r.verdict, tag(&bench, "run"), s.live().writes_armed()), (RunVerdict::Passed, "Int32(1)".to_string(), false));
 }
 
+// ---- refute round 6 ------------------------------------------------------------------------
+
+/// A plant over a live one that records which tables it reads, and raises the tester's stop on its
+/// first reading of a value when told to.
+struct Watched<'a> {
+    plant: &'a LivePlant,
+    read: std::cell::RefCell<Vec<String>>,
+    stop_on_latest: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl veredas_comissionador::plant::Plant for Watched<'_> {
+    fn name(&self) -> String {
+        self.plant.name()
+    }
+    fn now_ms(&self) -> i64 {
+        self.plant.now_ms()
+    }
+    fn tables(&self) -> Result<Vec<veredas_comissionador::plant::Table>, veredas_comissionador::plant::PlantError> {
+        self.plant.tables()
+    }
+    fn rows(&self, table: &veredas_comissionador::plant::Table, after: i64, upto: i64) -> Result<Vec<veredas_comissionador::eval::Row>, veredas_comissionador::plant::PlantError> {
+        self.read.borrow_mut().push(table.name.clone());
+        self.plant.rows(table, after, upto)
+    }
+    fn rows_until(&self, table: &veredas_comissionador::plant::Table, after: i64, upto: i64, stop: &dyn Fn() -> bool) -> Result<Option<Vec<veredas_comissionador::eval::Row>>, veredas_comissionador::plant::PlantError> {
+        self.read.borrow_mut().push(table.name.clone());
+        self.plant.rows_until(table, after, upto, stop)
+    }
+    fn latest(&self, table: &veredas_comissionador::plant::Table, column: &str, at: i64) -> Result<Option<(i64, Value)>, veredas_comissionador::plant::PlantError> {
+        self.plant.latest(table, column, at)
+    }
+    fn latest_until(&self, table: &veredas_comissionador::plant::Table, column: &str, at: i64, stop: &dyn Fn() -> bool) -> Result<Option<(i64, Value)>, veredas_comissionador::plant::PlantError> {
+        if let Some(s) = &self.stop_on_latest {
+            s.store(true, Ordering::SeqCst);
+        }
+        self.plant.latest_until(table, column, at, stop)
+    }
+    fn armed(&self) -> bool {
+        self.plant.armed()
+    }
+    fn writable(&self, table: &str, column: &str) -> bool {
+        self.plant.writable(table, column)
+    }
+    fn sendable(&self, channel: &str, message: &str) -> bool {
+        self.plant.sendable(channel, message)
+    }
+    fn write(&self, table: &str, column: &str, value: &Value) -> Result<String, veredas_comissionador::plant::PlantError> {
+        self.plant.write(table, column, value)
+    }
+    fn send(&self, channel: &str, message: &str, fields: Vec<(String, String)>) -> Result<(), veredas_comissionador::plant::PlantError> {
+        self.plant.send(channel, message, fields)
+    }
+}
+
+/// The project with a rule `m` whose optional group `z` never matches the lines written here, and
+/// `n` lines `x=1 y=1` one a millisecond from `first`, the last `x=2`: their stamps.
+fn empty_column(dir: &std::path::Path, bench: &veredas_maquinar::bench::Bench, n: i64) -> (veredas_portal::session::Session, i64, i64) {
+    let rule = "\n[[rule]]\nname = \"m\"\npattern = \" x=(?P<x>[0-9]+)(?: z=(?P<z>[0-9]+))?\"\nscope = \"plant\"\ntypes = { x = \"int\", z = \"int\" }\n";
+    let s = session(dir, &(with_rules(project_text(bench, false, 4)) + rule));
+    let first = veredas_portal::serve::store_now_ms() - 600_000;
+    let mut lines = String::with_capacity(n as usize * 32);
+    for k in 0..n {
+        let at = chrono::DateTime::from_timestamp_millis(first + k).unwrap().naive_utc();
+        lines.push_str(&format!("{} x={} y=1\n", at.format("%Y-%m-%d %H:%M:%S%.3f"), if k == n - 1 { 2 } else { 1 }));
+    }
+    {
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(dir.join("plant.log")).unwrap().write_all(lines.as_bytes()).unwrap();
+    }
+    let last = first + n - 1;
+    let p = LivePlant::new(s.live()).unwrap();
+    let m = p.tables().unwrap().into_iter().find(|t| t.name == "m").unwrap();
+    assert!(wait(Duration::from_secs(120), || p.latest(&m, "x", last).unwrap().is_some_and(|(at, v)| at == last && v == Value::Int(2))), "the rows stored");
+    (s, first, last)
+}
+
+#[test]
+fn a_column_empty_over_its_table_is_read_back_in_growing_pages_the_stop_asked_before_each() {
+    // Refute round 6: a value read back through a column no row holds took a page of 64 rows at a
+    // time, 469 queries over 30 000 rows, the tester's stop never asked between them. The pages now
+    // double from 64 up to portal's largest (20 queries here), the stop asked before each.
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let (s, _, last) = empty_column(dir.path(), &bench, 30_000);
+    let p = LivePlant::new(s.live()).unwrap();
+    let m = p.tables().unwrap().into_iter().find(|t| t.name == "m").unwrap();
+    let asked = std::cell::Cell::new(0);
+    assert_eq!(p.latest_until(&m, "z", last, &|| { asked.set(asked.get() + 1); false }).unwrap(), None);
+    assert_eq!(asked.get(), 20, "pages of 64, 128, 256, 512, 1024, then 2000");
+    asked.set(0);
+    let stopped = p.latest_until(&m, "z", last, &|| { asked.set(asked.get() + 1); asked.get() > 3 });
+    assert!(matches!(stopped, Err(veredas_comissionador::plant::PlantError::Stopped)), "{stopped:?}");
+    assert_eq!(asked.get(), 4, "three pages read, the stop asked before the fourth");
+    assert_eq!(p.latest(&m, "x", last).unwrap(), Some((last, Value::Int(2))));
+}
+
+#[test]
+fn a_reading_the_tester_stops_ends_the_run_on_the_stop() {
+    // Refute round 6: a read, a check and a wait reading a value back through an empty column, the
+    // tester's stop raised while they read: each run ends on the stop, the step cut short with no
+    // outcome, live and replayed (a read ended on its own `no value yet`, the stop never named).
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let (s, first, last) = empty_column(dir.path(), &bench, 3_000);
+    let p = LivePlant::new(s.live()).unwrap();
+    for body in ["  step r read m.z -> v\n", "  step c check m.z == 1\n", "  step w wait m.z == 1 timeout 1s\n"] {
+        for opts in [RunOptions::live(), RunOptions::replay(first, last + 2_000)] {
+            let watched = Watched { plant: &p, read: Default::default(), stop_on_latest: Some(opts.stop.clone()) };
+            let r = veredas_comissionador::run::run(&checked(&test_of(body)), &watched, &opts, &mut |_| {}).unwrap();
+            assert_eq!((r.verdict, r.reason.as_str(), r.steps.last().map(|s| s.outcome)), (RunVerdict::Aborted, "stopped by the tester", Some(None)), "{body} {:?}", opts.mode);
+        }
+    }
+}
+
+#[test]
+fn a_wait_reads_each_table_it_names_once() {
+    // Refute round 6: a wait naming `m` before and after `b` read `m` twice, each of its rows then
+    // taken for a tie and read again value by value. Each table is read once, whatever the order.
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let (s, first, last) = empty_column(dir.path(), &bench, 1_000);
+    let p = LivePlant::new(s.live()).unwrap();
+    for cond in ["m.x == 3 and b.y == 1 and m.z == 1", "m.x == 3 and m.z == 1 and b.y == 1"] {
+        let watched = Watched { plant: &p, read: Default::default(), stop_on_latest: None };
+        let text = format!("{HEAD}test \"t\" {{\n  id T\n  modes replay\n  step w wait {cond} timeout 2s\n}}\n");
+        let r = veredas_comissionador::run::run(&checked(&text), &watched, &RunOptions::replay(first, last + 3_000), &mut |_| {}).unwrap();
+        assert_eq!(r.verdict, RunVerdict::Aborted, "{cond}");
+        let read = watched.read.borrow();
+        let (m, b) = (read.iter().filter(|t| *t == "m").count(), read.iter().filter(|t| *t == "b").count());
+        assert!(m > 0 && m == b, "{cond}: `m` read {m} times, `b` {b}");
+    }
+}
+
 // ---- C-200's refute round 7 -------------------------------------------------------------------
 
 #[test]

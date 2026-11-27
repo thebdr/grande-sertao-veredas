@@ -220,6 +220,24 @@ fn a_window_before_the_store_holds_a_table_the_test_reads_is_refused() {
 }
 
 #[test]
+fn a_write_that_failed_live_replays_not_sent_and_passing() {
+    // Refute round 6 (C-203): a replayed write is not sent and its step passes (Q315 (a)), so a live
+    // run whose write the plant refused replays to another verdict: the claim is narrowed to live
+    // runs whose every write and send was taken (docs/questions.md Q322 asks whether a replay should
+    // take the live answer from portal's table of writes, Q318 (a)).
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let text = project_text(&bench, true, 4).replacen("series = \"level\", type = \"float\" }", "series = \"level\", type = \"float\", writable = true }", 1);
+    let s = session(dir.path(), &text);
+    let c = checked(&test_of("  step w write plc_main.level := 1.0\n  step r report \"done\"\n"));
+    let (live, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    assert_eq!((live.verdict, live.decided_at.as_deref()), (RunVerdict::Aborted, Some("w")), "{:?}", steps(&live));
+    assert!(live.writes[0].sent && !live.writes[0].ok, "{:?}", live.writes);
+    let (r, _) = run_with(&c, s.live(), &RunOptions::replay(live.start_ms, live.end_ms)).unwrap();
+    assert_eq!((r.verdict, r.decided_at.as_deref(), r.writes[0].answer.as_str()), (RunVerdict::Passed, Some("r"), "not sent: replay"), "{:?}", steps(&r));
+}
+
+#[test]
 fn a_replay_reads_the_plant_right_after_a_write_as_it_stood_before_it() {
     // The same lag, with a loose bound: an await right after the write takes a row stamped before
     // the write in the replay, where the live one took one after the plant's answer, and a read

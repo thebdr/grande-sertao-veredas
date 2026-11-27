@@ -610,6 +610,9 @@ struct AtEnv<'a> {
     at: i64,
     /// Plant data a wait already holds, read before the store.
     cache: Option<&'a HashMap<(String, String), Option<Value>>>,
+    /// The tester's stop, looked at between the pages of a reading: a stopped reading a fault the
+    /// run then takes for the stop.
+    stop: Option<&'a AtomicBool>,
 }
 
 impl Env for AtEnv<'_> {
@@ -624,7 +627,8 @@ impl Env for AtEnv<'_> {
             return v.clone().ok_or_else(missing);
         }
         let t = self.tables.get(table).ok_or_else(|| EvalError::Fault(format!("`{table}` is no table of the session")))?;
-        match self.plant.latest(t, column, self.at) {
+        let stop = || self.stop.is_some_and(|s| s.load(Ordering::SeqCst));
+        match self.plant.latest_until(t, column, self.at, &stop) {
             Ok(Some((_, v))) => Ok(v),
             Ok(None) => Err(missing()),
             Err(e) => Err(EvalError::Fault(e.to_string())),
@@ -712,7 +716,7 @@ pub fn run(c: &Checked, plant: &dyn Plant, opts: &RunOptions, listener: &mut dyn
     // The constants, in order.
     let mut vars = Scope::new();
     for (name, e) in c.test.lets() {
-        let mut env = AtEnv { plant, tables: &tables, vars: &vars, at: start, cache: None };
+        let mut env = AtEnv { plant, tables: &tables, vars: &vars, at: start, cache: None, stop: None };
         match eval::eval(e, &mut env) {
             Ok(v) => {
                 vars.insert(name.value.clone(), v);
@@ -888,6 +892,16 @@ impl Runner<'_> {
         self.clock > self.deadline
     }
 
+    /// The latest value of `table.column` at `at`, the tester's stop looked at between its pages.
+    fn latest(&self, table: &Table, column: &str, at: i64) -> R<Option<(i64, Value)>> {
+        let stop = || self.stop.load(Ordering::SeqCst);
+        match self.plant.latest_until(table, column, at, &stop) {
+            Ok(v) => Ok(v),
+            Err(PlantError::Stopped) => Err(Halt::Stopped),
+            Err(e) => Err(Halt::Store(e.to_string())),
+        }
+    }
+
     fn check_stop(&self) -> R<()> {
         if self.stop.load(Ordering::SeqCst) { Err(Halt::Stopped) } else { Ok(()) }
     }
@@ -919,7 +933,7 @@ impl Runner<'_> {
         if has_plant(e) {
             self.settle(self.clock)?;
         }
-        let mut env = AtEnv { plant: self.plant, tables: &self.tables, vars: scope, at: self.clock, cache: None };
+        let mut env = AtEnv { plant: self.plant, tables: &self.tables, vars: scope, at: self.clock, cache: None, stop: Some(&self.stop) };
         Ok(eval::eval(e, &mut env))
     }
 
@@ -1002,13 +1016,14 @@ impl Runner<'_> {
         let mut cache: HashMap<(String, String), Option<Value>> = HashMap::new();
         for (t, c) in &refs {
             let v = match self.tables.get(t) {
-                Some(table) => self.plant.latest(table, c, t0).map_err(|e| Halt::Store(e.to_string()))?.map(|(_, v)| v),
+                Some(table) => self.latest(table, c, t0)?.map(|(_, v)| v),
                 None => None,
             };
             cache.insert((t.clone(), c.clone()), v);
         }
+        let stop_flag = self.stop.clone();
         let holds = |plant: &dyn Plant, tables: &HashMap<String, Table>, cache: &HashMap<(String, String), Option<Value>>, at: i64| {
-            let mut env = AtEnv { plant, tables, vars: scope, at, cache: Some(cache) };
+            let mut env = AtEnv { plant, tables, vars: scope, at, cache: Some(cache), stop: Some(&*stop_flag) };
             match eval::eval(cond, &mut env) {
                 Ok(Value::Bool(b)) => Ok(b),
                 Ok(other) => Err(format!("a wait takes a truth value, not {}", other.kind())),
@@ -1022,8 +1037,10 @@ impl Runner<'_> {
             Err(f) => return Ok(Waited::Fault(f)),
         }
         let names: Vec<String> = {
+            // Each table once, in the order first named: a table named again later read once.
+            let mut seen = BTreeSet::new();
             let mut v: Vec<String> = refs.iter().map(|(t, _)| t.clone()).collect();
-            v.dedup();
+            v.retain(|t| seen.insert(t.clone()));
             v
         };
         let mut cursor = t0;
@@ -1058,7 +1075,7 @@ impl Runner<'_> {
                         let Some(table) = self.tables.get(&t) else { continue };
                         for ((tt, c), slot) in cache.iter_mut() {
                             if *tt == t {
-                                *slot = self.plant.latest(table, c, row.time_ms).map_err(|e| Halt::Store(e.to_string()))?.map(|(_, v)| v);
+                                *slot = self.latest(table, c, row.time_ms)?.map(|(_, v)| v);
                             }
                         }
                     }
@@ -1111,7 +1128,7 @@ impl Runner<'_> {
                     let ok = match filter {
                         None => Ok(true),
                         Some(f) => {
-                            let mut env = AtEnv { plant: self.plant, tables: &self.tables, vars: scope, at, cache: None };
+                            let mut env = AtEnv { plant: self.plant, tables: &self.tables, vars: scope, at, cache: None, stop: Some(&self.stop) };
                             match eval::eval(f, &mut env) {
                                 Ok(Value::Bool(b)) => Ok(b),
                                 Ok(other) => Err(format!("`where` takes a truth value, not {}", other.kind())),
@@ -1208,7 +1225,10 @@ impl Runner<'_> {
         let actions = step.actions.clone();
         for a in &actions {
             // The bound judged between actions too: an action after it is not run.
-            let flow = match if self.past_bound() { Err(Halt::Bound) } else { self.action(a, &name, attempt) } {
+            // An action the tester stopped inside (a reading ended between its pages, a value
+            // that could not be read for it) is cut short with the step, its outcome not taken.
+            let acted = if self.past_bound() { Err(Halt::Bound) } else { self.action(a, &name, attempt).and_then(|f| self.check_stop().map(|_| f)) };
+            let flow = match acted {
                 Ok(f) => f,
                 Err(h) => {
                     // Cut short: what it did so far is kept, with no outcome.
@@ -1335,7 +1355,7 @@ impl Runner<'_> {
                 let mut got = Vec::new();
                 for (r, n) in refs.iter().zip(into) {
                     let t = &self.tables[&r.table.value];
-                    match self.plant.latest(t, &r.column.value, self.clock).map_err(|e| Halt::Store(e.to_string()))? {
+                    match self.latest(t, &r.column.value, self.clock)? {
                         Some((_, v)) => {
                             got.push(format!("{} = {v}", n.value));
                             self.vars.insert(n.value.clone(), v);
