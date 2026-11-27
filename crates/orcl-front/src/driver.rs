@@ -18,7 +18,7 @@
 //! changes, so a new revision or output path is written with no source changed.
 //!
 //! Asked the compiler's verbose version (`-vV`), the driver answers with rustc's lines and one of its own after them,
-//! `orcl-front: <its version> <the nightly>` ([`version_line`]), whatever the environment or the options say. Cargo
+//! `orcl-front: <its version> <the nightly> build <its executable's hash>` ([`version_line`]), whatever the environment or the options say. Cargo
 //! asks the wrapper as it asks rustc and fingerprints every crate by that answer, so in a target directory shared by
 //! plain and wrapped builds every switch between the two, either way, rebuilds every crate: a crate built plainly,
 //! without the driver's flags, is never reused by a wrapped build, nor a stale program file kept. A function of the
@@ -56,9 +56,25 @@ fn any_of(args: &[String], options: &[&str]) -> bool {
 }
 
 /// The line the driver adds to the compiler's verbose version, after rustc's own: the front end, its version and the
-/// nightly it is pinned to, `orcl-front: 2.0.0-alpha.1 nightly-2026-11-21`.
+/// nightly it is pinned to and its own build, `orcl-front: 2.0.0-alpha.1 nightly-2026-11-21 build <hash>`.
 pub fn version_line() -> String {
-    format!("orcl-front: {} {NIGHTLY}", env!("CARGO_PKG_VERSION"))
+    format!("orcl-front: {} {NIGHTLY} build {}", env!("CARGO_PKG_VERSION"), build_identity())
+}
+
+/// The driver's own build: the FNV-1a hash of its executable's bytes, so a driver rebuilt with any change answers
+/// `-vV` otherwise and cargo, which fingerprints that answer, rebuilds what an older driver lowered; `unknown` when
+/// the executable cannot be read.
+fn build_identity() -> String {
+    let bytes = std::env::current_exe().and_then(std::fs::read);
+    match bytes {
+        Ok(bytes) => format!("{:016x}", fnv1a(&bytes)),
+        Err(_) => "unknown".to_string(),
+    }
+}
+
+/// FNV-1a, 64 bits.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
 /// What the driver lowers: the program's crate, where its file goes, and the revision its header names.

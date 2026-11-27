@@ -1481,7 +1481,10 @@ fn the_driver_s_verbose_version_is_rustc_s_and_a_line_of_its_own() {
         assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).unwrap()
     };
-    let verbose = format!("{}orcl-front: {} {}\n", rustc("-vV"), env!("CARGO_PKG_VERSION"), nightly());
+    // the driver's own build: the FNV-1a hash of the executable run, so a rebuilt driver answers otherwise
+    let driver = std::fs::read(env!("CARGO_BIN_EXE_orcl-front-driver")).unwrap();
+    let build = driver.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3));
+    let verbose = format!("{}orcl-front: {} {} build {build:016x}\n", rustc("-vV"), env!("CARGO_PKG_VERSION"), nightly());
     assert_eq!(answer(&["-vV"], None), verbose, "asked directly, no variable");
     assert_eq!(answer(&["/usr/bin/rustc", "-vV"], None), verbose, "as cargo's wrapper, no variable");
     assert_eq!(answer(&["/usr/bin/rustc", "-vV"], Some("conveyor")), verbose, "as cargo's wrapper, a program named");
@@ -2787,4 +2790,206 @@ fn by_the_compiler_s_name_a_missing_revision_is_refused() {
     assert!(stderr.contains("error: orcl-front: usage: --orcl-revision names no revision"), "{stderr}");
     assert!(!file.exists(), "no file written");
     assert!(!work.join("liblines.rlib").exists(), "the crate `lines` not built");
+}
+
+// The twelfth refute round's tests: each of the driver's three variables a dependency of every crate it compiles, and
+// two programs of patterns and traits.
+
+/// The dep-info file the compiler writes for a crate the driver compiles names each of the driver's three variables,
+/// with the value the environment gives it or none where it is unset: `orcl-std` compiled with none of them set, the
+/// program's own crate with the three.
+#[test]
+fn every_crate_s_dep_info_names_each_of_the_driver_s_variables() {
+    let work = fresh("env-dep");
+    let w = work.display().to_string();
+    let file = work.join("lines.orclb");
+    let path = file.display().to_string();
+    let env = [("ORCL_FRONT_PROGRAM", "lines"), ("ORCL_FRONT_OUT", path.as_str()), ("ORCL_FRONT_REVISION", "r12")];
+    let std_src = here().join("../orcl-std/src/lib.rs").display().to_string();
+    let args = strings(&["--crate-name", "orcl_std", "--crate-type", "rlib", "--edition", "2024", "--emit=dep-info,link", &std_src, "--out-dir", &w]);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orcl-front-driver"));
+    command.env("LD_LIBRARY_PATH", library_path()).args(&args);
+    for (var, _) in env {
+        command.env_remove(var);
+    }
+    let out = command.output().unwrap();
+    assert!(out.status.success(), "orcl-std: {}", String::from_utf8_lossy(&out.stderr));
+    let source = program("lines").display().to_string();
+    let mut args = strings(&["--crate-name", "lines", "--crate-type", "rlib", "--edition", "2024", "--emit=dep-info,link", &source]);
+    args.extend(strings(&["--extern", &format!("orcl_std={w}/liborcl_std.rlib"), "-L", &w, "--out-dir", &w]));
+    let out = driver_with(&args, &env);
+    assert!(out.status.success(), "lines: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(file.exists(), "the program written");
+    for (krate, set) in [("orcl_std", false), ("lines", true)] {
+        let info = fs::read_to_string(work.join(format!("{krate}.d"))).unwrap();
+        for (var, value) in env {
+            let line = if set { format!("# env-dep:{var}={value}") } else { format!("# env-dep:{var}") };
+            assert!(info.lines().any(|l| l == line), "{krate}.d: wanted {line}\n{info}");
+        }
+    }
+}
+
+/// Under cargo, in one target directory, each variable changed alone: a new revision with the same file rewrites
+/// it, a new file with the same revision is written, and a program named after another crate was named, with the same
+/// file and revision, is lowered and written.
+#[test]
+fn under_cargo_each_variable_changed_alone_rebuilds_and_writes() {
+    let work = fresh("cargo-one-at-a-time");
+    package(&work, "lines");
+    let a = work.join("a.orclb");
+    let b = work.join("b.orclb");
+    let build = |file: &Path, revision: &str, program: &str| {
+        let mut command = Command::new(env!("CARGO"));
+        command
+            .args(["build", "--offline", "--manifest-path"])
+            .arg(work.join("lines").join("Cargo.toml"))
+            .env("CARGO_HOME", work.join("cargo-home"))
+            .env("CARGO_TARGET_DIR", work.join("target"))
+            .env("RUSTUP_TOOLCHAIN", nightly())
+            .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            .env("RUSTC_WRAPPER", env!("CARGO_BIN_EXE_orcl-front-driver"))
+            .env("LD_LIBRARY_PATH", library_path())
+            .env("ORCL_FRONT_PROGRAM", program)
+            .env("ORCL_FRONT_OUT", file)
+            .env("ORCL_FRONT_REVISION", revision);
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "{program} {revision} {}: {}", file.display(), String::from_utf8_lossy(&out.stderr));
+    };
+    let revision = |file: &Path| file::read(&fs::read(file).unwrap()).unwrap().0.revision;
+    build(&a, "r1", "lines");
+    assert_eq!(revision(&a), "r1");
+    // the revision alone
+    build(&a, "r2", "lines");
+    assert_eq!(revision(&a), "r2", "a new revision alone, the same file");
+    // the file alone
+    build(&b, "r2", "lines");
+    assert!(b.exists(), "a new file alone, the same revision");
+    assert_eq!(revision(&b), "r2");
+    // the program alone: another crate named, then the program again, the same file and revision
+    fs::remove_file(&a).unwrap();
+    build(&a, "r2", "other");
+    assert!(!a.exists(), "no program named");
+    build(&a, "r2", "lines");
+    assert!(a.exists(), "the program named again after another, the same file and revision");
+}
+
+/// Under cargo, a workspace of two programs in one target, one file and one revision: the program named first, then
+/// the other: the file holds the second program, never the first kept.
+#[test]
+fn under_cargo_a_workspace_s_second_program_replaces_the_first() {
+    let work = fresh("cargo-two-programs");
+    let root = work.join("ws");
+    fs::create_dir_all(&root).unwrap();
+    for name in ["lines", "conveyor"] {
+        let p = package(&root, name);
+        // members of the workspace above, not workspaces of their own
+        let manifest = fs::read_to_string(p.join("Cargo.toml")).unwrap().replace("\n[workspace]\n", "\n");
+        fs::write(p.join("Cargo.toml"), manifest).unwrap();
+    }
+    fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = [\"lines\", \"conveyor\"]\nresolver = \"2\"\n").unwrap();
+    let file = work.join("program.orclb");
+    let build = |program: &str| {
+        let out = Command::new(env!("CARGO"))
+            .args(["build", "--offline", "--workspace", "--manifest-path"])
+            .arg(root.join("Cargo.toml"))
+            .env("CARGO_HOME", work.join("cargo-home"))
+            .env("CARGO_TARGET_DIR", work.join("target"))
+            .env("RUSTUP_TOOLCHAIN", nightly())
+            .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            .env("RUSTC_WRAPPER", env!("CARGO_BIN_EXE_orcl-front-driver"))
+            .env("LD_LIBRARY_PATH", library_path())
+            .env("ORCL_FRONT_PROGRAM", program)
+            .env("ORCL_FRONT_OUT", &file)
+            .env("ORCL_FRONT_REVISION", "one-commit")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{program}: {}", String::from_utf8_lossy(&out.stderr));
+        file::read(&fs::read(&file).unwrap()).unwrap().1.functions[0].name.clone()
+    };
+    assert_eq!(build("lines"), "<Lines as Program>::scan");
+    assert_eq!(build("conveyor"), "<Conveyor as Program>::scan", "the second program's build keeps the first's file");
+}
+
+#[allow(dead_code)]
+#[path = "programs/patterns.rs"]
+mod patterns;
+
+image!(patterns::Inputs { a: u8, b: u8, s: i8, w: u64, sh: u8, t_ms: u64 });
+image!(patterns::Outputs {
+    swapped: u16, grid: u16, longest: Duration, labeled: i16, chain: u8, pattern: u16, twice: u16, casts: i32,
+    wide: u64, shifted: i64, acc: u16, skipped: u8, table: i16, kind: u8, filled: u8,
+});
+
+/// Round 12's probe of sound code (`probes/programs/patterns.rs`), lowered and run beside its native build.
+#[test]
+fn probe_runs_lowered_as_natively() {
+    let inputs = |k: u64| patterns::Inputs {
+        a: mix(k, 1) as u8,
+        b: mix(k, 2) as u8,
+        s: mix(k, 3) as i8,
+        w: mix(k, 4),
+        sh: mix(k, 5) as u8,
+        t_ms: mix(k, 6) % 5_000,
+    };
+    let (outputs, _) = conform("patterns", patterns::Patterns::default(), "Patterns", &inputs, 3_000);
+    both(&outputs, "a swap of equals", |o| o.swapped % 256 == o.swapped / 256);
+    both(&outputs, "a labeled break", |o| o.labeled == -1);
+    both(&outputs, "a held value", |o| o.chain > 0);
+    both(&outputs, "a row of zeros", |o| o.pattern == 1);
+    both(&outputs, "a table's negated value", |o| o.table > 0);
+    both(&outputs, "every slot filled", |o| o.filled == 15);
+}
+
+/// Under cargo, the driver the wrapper of every build in one target (as a `build.rustc-wrapper` setting makes it): a
+/// build naming no program, then one naming it with no source changed, writes the program's file.
+#[test]
+fn under_cargo_a_wrapped_build_naming_the_program_after_one_naming_none_writes_the_file() {
+    let work = fresh("cargo-unset-then-set");
+    package(&work, "lines");
+    let file = work.join("lines.orclb");
+    let build = |named: bool| {
+        let mut command = Command::new(env!("CARGO"));
+        command
+            .args(["build", "--offline", "--manifest-path"])
+            .arg(work.join("lines").join("Cargo.toml"))
+            .env("CARGO_HOME", work.join("cargo-home"))
+            .env("CARGO_TARGET_DIR", work.join("target"))
+            .env("RUSTUP_TOOLCHAIN", nightly())
+            .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            .env("RUSTC_WRAPPER", env!("CARGO_BIN_EXE_orcl-front-driver"))
+            .env("LD_LIBRARY_PATH", library_path())
+            .env_remove("ORCL_FRONT_PROGRAM")
+            .env_remove("ORCL_FRONT_OUT")
+            .env_remove("ORCL_FRONT_REVISION");
+        if named {
+            command.env("ORCL_FRONT_PROGRAM", "lines").env("ORCL_FRONT_OUT", &file).env("ORCL_FRONT_REVISION", "named");
+        }
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "named {named}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    build(false);
+    assert!(!file.exists(), "no program named, no file");
+    build(true);
+    assert!(file.exists(), "the program named after a wrapped build naming none: no file written");
+    assert_eq!(file::read(&fs::read(&file).unwrap()).unwrap().0.revision, "named");
+}
+
+#[allow(dead_code)]
+#[path = "programs/traits2.rs"]
+mod traits2;
+
+image!(traits2::Inputs { v: i16, k: u8, on: bool });
+image!(traits2::Outputs {
+    low: i16, dead: i16, chained: i16, chained2: i16, gains: i16, made: i16, same_name: u16, by_path: u16, sup: u16,
+    arr: u16, byte: u16, opt: u16, blanket: i16,
+});
+
+/// Round 12's probe of calls through traits (`probes/programs/traits2.rs`), lowered and run beside its native build.
+#[test]
+fn traits_probe_runs_lowered_as_natively() {
+    let inputs = |k: u64| traits2::Inputs { v: (mix(k, 1) % 2_001) as i16 - 1_000, k: mix(k, 2) as u8, on: mix(k, 3) % 2 == 0 };
+    let (outputs, _) = conform("traits2", traits2::Traits2::default(), "Traits2", &inputs, 2_000);
+    both(&outputs, "the deadband open", |o| o.dead != 0);
+    both(&outputs, "an option held", |o| o.opt > 0);
+    assert!(outputs.iter().all(|o| o.gains == 132), "the associated constants");
 }
