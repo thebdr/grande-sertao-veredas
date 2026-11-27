@@ -101,7 +101,8 @@ impl<'tcx> Defs<'tcx> {
         rustc_internal::internal(self.tcx, def)
     }
 
-    fn program_crate_num(&self, krate: CrateNum) -> bool {
+    /// Whether a crate, as the compiler numbers it, is one of the program's.
+    pub(crate) fn program_crate_num(&self, krate: CrateNum) -> bool {
         krate == LOCAL_CRATE || self.tcx.crate_name(krate).as_str() == STD
     }
 

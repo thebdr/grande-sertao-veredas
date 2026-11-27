@@ -115,6 +115,9 @@ mod cgen2;
 #[allow(dead_code)]
 #[path = "programs/table.rs"]
 mod table;
+#[allow(dead_code)]
+#[path = "programs/include/include.rs"]
+mod include;
 
 use std::fmt::Debug;
 use std::fs;
@@ -534,6 +537,8 @@ image!(table::Outputs { temp: i16, done: bool, phase: u8, kind: u8, limit: u16, 
 image!(large::Inputs { v: u16 });
 image!(large::Outputs { oldest: u16, at: u32 });
 
+image!(include::Inputs { a: i32, b: i32 });
+image!(include::Outputs { v: i32 });
 image!(accents::Inputs { a: i32, b: i32 });
 image!(accents::Outputs { v: i32 });
 
@@ -1909,4 +1914,176 @@ fn a_fault_after_accented_names_names_its_column_in_characters() {
     let (line, column) = place_of(&source, "razão / pressão");
     assert_eq!(e.kind, ErrorKind::Check(Check::DivisionByZero));
     assert_eq!((e.at.line as usize, e.at.column as usize), (line, column), "the division's place");
+}
+
+// The eighth refute round's tests: types outside ORCL's inside core's `Option` and a `char` refused at the program's
+// declarations, a fault in a file `include!` brings in, const arguments of every width and a generic's scalar
+// arguments by their names, items of one name in two modules and a program's own `Option` and `Duration` named
+// apart, and a program built as a staticlib lowered.
+
+#[test]
+fn types_outside_orcl_s_inside_core_s_option_are_refused_where_the_program_declares_them() {
+    refused("opt_char", &at("opt_char", "last: Option<char>", TYPE, "char"));
+    refused("opt_i128", &at("opt_i128", "wide: Option<i128>", TYPE, "i128"));
+    refused("opt_str", &at("opt_str", "tag: Option<&'static str>", TYPE, "str"));
+    refused("opt_union", &at("opt_union", "word: Option<Word>", TYPE, "Word"));
+}
+
+#[test]
+fn a_char_is_refused_where_the_program_declares_it() {
+    refused("char", &at("char", "mark: char", TYPE, "char"));
+}
+
+#[test]
+fn a_fault_in_an_included_file_names_that_file() {
+    // the scan in `include.rs` calls `ratio`, which `include!` brings in from `part.rs`, whose division by zero is the
+    // fault
+    let source = program("include");
+    let part = source.with_file_name("part.rs");
+    let (_, code) = lower_in("include-fault", "include", &source).result.unwrap_or_else(|e| panic!("{e}"));
+    let e = fault::<_, include::Outputs>(&code, &include::Inputs { a: 5, b: 0 });
+    let (line, column) = place_of(&part, "a / b");
+    assert_eq!(e.kind, ErrorKind::Check(Check::DivisionByZero));
+    assert_eq!(
+        (code.files[e.at.file as usize].as_str(), e.at.line as usize, e.at.column as usize),
+        (part.display().to_string().as_str(), line, column),
+        "files {:?}",
+        code.files
+    );
+    // and the program runs as natively, its divisor never zero
+    let inputs = |k: u64| include::Inputs { a: (mix(k, 1) % 1_000) as i32 - 500, b: (mix(k, 2) % 9) as i32 + 1 };
+    let (outputs, _) = conform("include", include::Include, "Include", &inputs, 200);
+    both(&outputs, "a negative ratio", |o| o.v < 0);
+}
+
+/// The names of a program's structures and enums, in the file's order.
+fn type_names(code: &Code) -> Vec<&str> {
+    code.types
+        .iter()
+        .filter_map(|t| match t {
+            Type::Struct { name, .. } | Type::Enum { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn function_names(code: &Code) -> Vec<&str> {
+    code.functions.iter().map(|f| f.name.as_str()).collect()
+}
+
+#[test]
+fn const_arguments_of_every_width_keep_their_names() {
+    let (_, code) = lower_in("cnames-names", "cnames", &program("cnames")).result.unwrap_or_else(|e| panic!("{e}"));
+    let names = type_names(&code);
+    for n in [
+        "M<3>", "A8<-1>", "A16<-300>", "A64<-5000000000>", "B64<18446744073709551615>", "B16<65535>", "(u8,)",
+        "(&mut u16, u16)", "Tup<Option<Option<u8>>>",
+    ] {
+        assert!(names.contains(&n), "{n} among {names:?}");
+    }
+}
+
+#[test]
+fn a_state_with_a_const_argument_names_its_entries_and_its_functions() {
+    let (_, code) = lower_in("cnames", "cnames", &program("cnames")).result.unwrap_or_else(|e| panic!("{e}"));
+    let functions = function_names(&code);
+    assert_eq!(
+        functions[..3],
+        ["<M<3> as Program>::scan", "<M<3> as Default>::default", "<M<3> as Program>::safe_outputs"],
+        "the entries"
+    );
+    for f in ["M::<3>::n", "<A8<-1> as Default>::default", "<Tup<Option<Option<u8>>> as Default>::default"] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
+    // five scalars, one in each of the five structures of one field, and an option of an option of `u8`
+    assert_eq!(first_state(&code).len(), 8, "the first state's slots");
+}
+
+#[test]
+fn a_generic_s_scalar_arguments_keep_their_names() {
+    let (_, code) = lower_in("scalar-args", "names", &program("names")).result.unwrap();
+    let names = type_names(&code);
+    for n in ["Hold<u8>", "Hold<i8>", "Hold<f32>", "Hold<Duration>", "Hold<Hold<i16>>"] {
+        assert!(names.contains(&n), "{n} among {names:?}");
+    }
+}
+
+/// The defect of the eighth round: two modules' types and functions of one name are told apart by the names the file
+/// gives them, as the source tells them apart by their paths.
+#[test]
+fn items_of_one_name_in_two_modules_are_named_apart() {
+    let (_, code) = lower_in("mods-apart", "mods", &program("mods")).result.unwrap();
+    let mut types = type_names(&code);
+    let mut functions = function_names(&code);
+    let (nt, nf) = (types.len(), functions.len());
+    types.sort_unstable();
+    types.dedup();
+    functions.sort_unstable();
+    functions.dedup();
+    assert_eq!(types.len(), nt, "the types' names, one each: {types:?}");
+    assert_eq!(functions.len(), nf, "the functions' names, one each: {functions:?}");
+}
+
+#[test]
+fn items_of_one_name_in_two_modules_are_named_by_their_paths() {
+    // the two `Timer`s and the two `step`s by their paths from the crate's root, the impls showing their types so;
+    // every other name trimmed as before
+    let (_, code) = lower_in("mods-names", "mods", &program("mods")).result.unwrap();
+    let types = type_names(&code);
+    for t in ["fast::Timer", "slow::Timer", "RMods", "Scan", "Inputs", "Outputs"] {
+        assert!(types.contains(&t), "{t} among {types:?}");
+    }
+    assert!(!types.contains(&"Timer"), "{types:?}");
+    let functions = function_names(&code);
+    for f in [
+        "<RMods as Program>::scan",
+        "fast::step",
+        "slow::step",
+        "<fast::Timer as Default>::default",
+        "<slow::Timer as Default>::default",
+        "<Outputs as Default>::default",
+    ] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
+    assert!(!functions.contains(&"step"), "{functions:?}");
+}
+
+#[test]
+fn a_program_s_own_option_and_duration_are_named_by_their_paths() {
+    // `mine::Option` beside core's, which keeps the name the interpreter looks for, and `mine::Duration` beside core's
+    let (_, code) = lower_in("pnames-names", "p_names", &program("p_names")).result.unwrap();
+    let enums: Vec<(&str, Vec<&str>)> = code
+        .types
+        .iter()
+        .filter_map(|t| match t {
+            Type::Enum { name, variants, .. } => Some((name.as_str(), variants.iter().map(|v| v.name.as_str()).collect())),
+            _ => None,
+        })
+        .collect();
+    assert!(enums.contains(&("mine::Option", vec!["Nothing", "Some", "Pair"])), "{enums:?}");
+    // core's, the program's `Option<u16>` and `Option<Duration>`
+    let core: Vec<&Vec<&str>> = enums.iter().filter(|(name, _)| *name == "Option").map(|(_, v)| v).collect();
+    assert_eq!(core, [&vec!["None", "Some"], &vec!["None", "Some"]], "{enums:?}");
+    let types = type_names(&code);
+    assert!(types.contains(&"mine::Duration") && !types.contains(&"Duration"), "{types:?}");
+    assert!(code.types.contains(&Type::Duration), "core's `Duration`");
+    let functions = function_names(&code);
+    for f in ["<PNames as Program>::scan", "<mine::Duration as Default>::default", "<mine::Option as Default>::default"] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
+}
+
+#[test]
+fn a_program_built_as_a_staticlib_is_lowered() {
+    let work = fresh("staticlib");
+    compile_std(&work, &[]);
+    let w = work.display().to_string();
+    let file = work.join("lines.orclb");
+    let source = program("lines").display().to_string();
+    let mut args = strings(&["--crate-name", "lines", "--crate-type", "staticlib", "--edition", "2024", &source]);
+    args.extend(strings(&["--extern", &format!("orcl_std={w}/liborcl_std.rlib"), "-L", &w, "--out-dir", &w]));
+    args.extend(strings(&["--orcl-program", "lines", &format!("--orcl-out={}", file.display()), "--orcl-revision", "s"]));
+    let out = driver(&args);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(file.exists(), "a staticlib is a library: lowered");
 }

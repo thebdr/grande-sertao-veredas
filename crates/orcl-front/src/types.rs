@@ -124,6 +124,27 @@ impl Lowerer<'_> {
         }
     }
 
+    /// A structure's or an enum's name: `base`, then its arguments' names (`Avg<4>`, `Hold<Option<u8>>`).
+    pub(crate) fn adt_name(&self, base: &str, args: &[ArgKey]) -> String {
+        let names: Vec<String> = args
+            .iter()
+            .map(|a| match a {
+                ArgKey::Ty(id) => self.name_of(*id),
+                ArgKey::Const(c) => const_name(c),
+            })
+            .collect();
+        if names.is_empty() { base.to_string() } else { format!("{base}<{}>", names.join(", ")) }
+    }
+
+    /// A tuple's name, its parts' names in their order: `(u8,)` for one part.
+    pub(crate) fn tuple_name(&self, parts: &[TypeId]) -> String {
+        let names: Vec<String> = parts.iter().map(|id| self.name_of(*id)).collect();
+        match names.as_slice() {
+            [one] => format!("({one},)"),
+            _ => format!("({})", names.join(", ")),
+        }
+    }
+
     fn intern(&mut self, key: Key, ty: Type, slots: u32) -> TypeId {
         if let Some(id) = self.keys.get(&key) {
             return *id;
@@ -161,11 +182,7 @@ impl Lowerer<'_> {
                 for part in parts {
                     ids.push(self.ty(part, at)?);
                 }
-                let names: Vec<String> = ids.iter().map(|id| self.name_of(*id)).collect();
-                let name = match names.as_slice() {
-                    [one] => format!("({one},)"),
-                    _ => format!("({})", names.join(", ")),
-                };
+                let name = self.tuple_name(&ids);
                 let fields: Vec<Field> =
                     ids.iter().enumerate().map(|(i, id)| Field { name: i.to_string(), ty: *id }).collect();
                 let slots = ids.iter().fold(0u32, |n, id| n.saturating_add(self.slots_of(*id)));
@@ -200,27 +217,20 @@ impl Lowerer<'_> {
             return Err(self.refuse(Refused::DropGlue, format!("{ty}"), at));
         }
         let mut keys = Vec::new();
-        let mut names = Vec::new();
         for arg in &args.0 {
             match arg {
-                GenericArgKind::Type(t) => {
-                    let id = self.ty(*t, at)?;
-                    names.push(self.name_of(id));
-                    keys.push(ArgKey::Ty(id));
-                }
-                GenericArgKind::Const(c) => {
-                    names.push(const_name(c));
-                    keys.push(ArgKey::Const(c.clone()));
-                }
+                GenericArgKind::Type(t) => keys.push(ArgKey::Ty(self.ty(*t, at)?)),
+                GenericArgKind::Const(c) => keys.push(ArgKey::Const(c.clone())),
                 GenericArgKind::Lifetime(_) => {}
             }
         }
+        // its trimmed name: once the program is lowered, `name_apart` names it by its path if another item the file
+        // holds has that name (`crate::names`)
+        let name = if option { "Option".to_string() } else { self.adt_name(&def.trimmed_name(), &keys) };
         let key = Key::Adt(def, keys);
         if let Some(id) = self.keys.get(&key) {
             return Ok(*id);
         }
-        let base = if option { "Option".to_string() } else { def.trimmed_name() };
-        let name = if option || names.is_empty() { base } else { format!("{base}<{}>", names.join(", ")) };
         // the type is numbered before its fields are lowered, so a field that refers back to it finds it
         let id = self.intern(key, Type::Struct { name: name.clone(), fields: Vec::new() }, 0);
         let mut variants = Vec::new();
@@ -274,7 +284,7 @@ impl Lowerer<'_> {
 
 /// A const generic argument's value as a type's name shows it: a `bool`, a signed or an unsigned integer read from its
 /// bytes by its type, a `usize` evaluated, `?` for what is none of these.
-fn const_name(c: &TyConst) -> String {
+pub(crate) fn const_name(c: &TyConst) -> String {
     if let TyConstKind::Value(ty, alloc) = c.kind() {
         let value = match ty.kind() {
             TyKind::RigidTy(RigidTy::Bool) => alloc.read_bool().map(|b| b.to_string()).ok(),

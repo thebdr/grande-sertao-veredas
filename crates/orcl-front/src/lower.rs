@@ -1,10 +1,11 @@
 //! The lowering: from the crate's `orcl_std::Program` implementation, every function it reaches in the program's
 //! crates, each a body of the interpreter's, with the types they hold and the source files their spans name.
 //!
-//! The program's first three functions are its entries, in this order and by these names, `P` its state's name:
-//! `<P as Program>::scan`, `<P as Default>::default` and `<P as Program>::safe_outputs`. A host computes the first
-//! state and the safe outputs by calling the last two, until the program file carries them (`docs/questions.md`
-//! Q231: computed when the program is lowered, in a format past 1).
+//! The program's first three functions are its entries, in this order and by these names, `P` its state's name as the
+//! file gives it (`crate::names`): `<P as Program>::scan`, `<P as Default>::default` and
+//! `<P as Program>::safe_outputs`. A host computes the first state and the safe outputs by calling the last two,
+//! until the program file carries them (`docs/questions.md` Q231: computed when the program is lowered, in a format
+//! past 1).
 use std::collections::{HashMap, VecDeque};
 
 use orcl_interp::{Function, FunctionId, Program, Type, TypeId};
@@ -25,8 +26,8 @@ pub(crate) struct Lowerer<'tcx> {
     pub(crate) slots: Vec<u32>,
     pub(crate) keys: HashMap<Key, TypeId>,
     pub(crate) memo: HashMap<Ty, TypeId>,
-    functions: Vec<Option<Function>>,
-    instances: HashMap<Instance, FunctionId>,
+    pub(crate) functions: Vec<Option<Function>>,
+    pub(crate) instances: HashMap<Instance, FunctionId>,
     queue: VecDeque<(FunctionId, Instance)>,
     files: Vec<String>,
     file_ids: HashMap<String, u32>,
@@ -96,8 +97,13 @@ fn no_program(name: impl Into<String>) -> Refusal {
     Refusal { what: Refused::Program, name: name.into(), at: None }
 }
 
+/// The entries' names, `p` the state's.
+pub(crate) fn entry_names(p: &str) -> [String; 3] {
+    [format!("<{p} as Program>::scan"), format!("<{p} as Default>::default"), format!("<{p} as Program>::safe_outputs")]
+}
+
 /// The crate's program: its type and its three entries, resolved.
-fn entries(lowerer: &mut Lowerer<'_>) -> Result<Vec<(Instance, String)>, Refusal> {
+fn entries(lowerer: &mut Lowerer<'_>) -> Result<(TypeId, Vec<(Instance, String)>), Refusal> {
     let impls: Vec<_> = rustc_public::local_crate()
         .trait_impls()
         .into_iter()
@@ -113,7 +119,6 @@ fn entries(lowerer: &mut Lowerer<'_>) -> Result<Vec<(Instance, String)>, Refusal
         return Err(lowerer.refuse(Refused::Program, format!("a generic program, {this}"), at));
     }
     let state = lowerer.ty(this, at)?;
-    let p = lowerer.name_of(state);
     let args = GenericArgs(vec![GenericArgKind::Type(this)]);
     let program_trait = trait_ref.def_id.def_id();
     let scan = lowerer.defs.resolve_trait_fn(program_trait, "scan", &args);
@@ -127,20 +132,18 @@ fn entries(lowerer: &mut Lowerer<'_>) -> Result<Vec<(Instance, String)>, Refusal
             return Err(lowerer.refuse(Refused::Program, instance.trimmed_name(), at));
         }
     }
-    Ok(vec![
-        (scan, format!("<{p} as Program>::scan")),
-        (default, format!("<{p} as Default>::default")),
-        (safe, format!("<{p} as Program>::safe_outputs")),
-    ])
+    let [scan_name, default_name, safe_name] = entry_names(&lowerer.name_of(state));
+    Ok((state, vec![(scan, scan_name), (default, default_name), (safe, safe_name)]))
 }
 
 /// Lowers the crate the compiler holds into the interpreter's program, or says what it refuses.
 pub(crate) fn lower(tcx: TyCtxt<'_>) -> Result<Program, Refusal> {
     let mut lowerer = Lowerer::new(tcx);
-    let names = entries(&mut lowerer)?;
+    let (state, names) = entries(&mut lowerer)?;
     for (instance, _) in &names {
         lowerer.function_of(*instance);
     }
     lowerer.walk(&names)?;
+    lowerer.name_apart(state);
     Ok(lowerer.finish())
 }

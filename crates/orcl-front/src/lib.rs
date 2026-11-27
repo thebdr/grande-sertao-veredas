@@ -48,6 +48,8 @@ mod error;
 #[cfg(feature = "driver")]
 mod lower;
 #[cfg(feature = "driver")]
+mod names;
+#[cfg(feature = "driver")]
 mod types;
 
 #[cfg(feature = "driver")]
