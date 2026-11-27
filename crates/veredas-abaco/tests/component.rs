@@ -484,6 +484,44 @@ fn flags_set_cfg<'a>(mut tokens: impl Iterator<Item = &'a str>) -> bool {
     tokens.any(|t| t == "--cfg" || t.starts_with("--cfg=") || t.starts_with('@'))
 }
 
+/// Why a cargo command line (before a `--`, past which the test binary's own arguments stand) or an
+/// alias's value would bend the build, if it would: a `--config`, a configuration of its own, or a
+/// `-Z` (`-Z x`, `-Zx`, and among short flags run together, `-vZx`), unstable settings, which on a
+/// nightly cargo (the repository pins one for another member) let `-Zadvanced-env` replace
+/// crates.io by environment keys no configuration file holds (the round at 326528f8: a vendored
+/// copy planted with a socket built into a green run).
+fn command_line_refusal<'a>(tokens: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    for t in tokens {
+        if t == "--" {
+            break;
+        }
+        if t == "--config" || t.starts_with("--config=") {
+            return Some(format!("{t}: a configuration of its own"));
+        }
+        if t.starts_with('-') && !t.starts_with("--") && t.contains('Z') {
+            return Some(format!("{t}: unstable settings"));
+        }
+    }
+    None
+}
+
+/// Why an environment cargo runs in would bend the build through its keys, if it would: an alias
+/// whose value [`command_line_refusal`] refuses, or a key of a source or a patch (`CARGO_SOURCE_`,
+/// `CARGO_PATCH_`, in any letter case), which a nightly cargo given `-Zadvanced-env` reads as a
+/// configuration's tables (the round at 326528f8).
+fn environment_keys_refusal(env: &[(String, String)]) -> Option<String> {
+    for (var, value) in env.iter().filter(|(k, _)| k.starts_with("CARGO_ALIAS_")) {
+        if let Some(why) = command_line_refusal(value.split_whitespace()) {
+            return Some(format!("{var} gives cargo {why}"));
+        }
+    }
+    let source = env.iter().find(|(k, _)| {
+        let k = k.to_ascii_uppercase();
+        k.starts_with("CARGO_SOURCE_") || k.starts_with("CARGO_PATCH_")
+    });
+    source.map(|(k, _)| format!("{k} is set: a source or a patch cargo may read in crates.io's place"))
+}
+
 /// What an environment cargo runs in may not hold: an alias handing cargo a `--config`, a rustc
 /// wrapper, a rustc that is not the toolchain's (`RUSTC`, `CARGO_BUILD_RUSTC`, else the first on
 /// `PATH`: the toolchain's own, or rustup's proxy choosing the toolchain cargo is from), compiler
@@ -492,8 +530,8 @@ fn flags_set_cfg<'a>(mut tokens: impl Iterator<Item = &'a str>) -> bool {
 /// folder of that cargo's program.
 fn check_environment(whose: &str, env: &[(String, String)], toolchain: &Path) {
     let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
-    for (var, value) in env.iter().filter(|(k, _)| k.starts_with("CARGO_ALIAS_")) {
-        assert!(!value.contains("--config"), "{whose}: {var} gives cargo a --config");
+    if let Some(why) = environment_keys_refusal(env) {
+        panic!("{whose}: {why}");
     }
     for var in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"] {
         assert!(get(var).is_none(), "{whose}: {var} is set: something compiles crates in rustc's place");
@@ -609,10 +647,18 @@ fn config_refusal(t: &toml::Table) -> Option<String> {
     if let Some(at) = profile_flags_set_cfg(t) {
         return Some(format!("{at} sets a cfg"));
     }
-    // and no alias gives cargo a configuration of its own
+    // and no alias gives cargo a configuration of its own or unstable settings
     for (name, value) in t.get("alias").and_then(|a| a.as_table()).into_iter().flatten() {
+        let tokens: Vec<&str> = match value {
+            toml::Value::String(s) => s.split_whitespace().collect(),
+            toml::Value::Array(a) => a.iter().filter_map(toml::Value::as_str).collect(),
+            _ => Vec::new(),
+        };
         if value.to_string().contains("--config") {
             return Some(format!("alias {name} gives cargo a --config"));
+        }
+        if let Some(why) = command_line_refusal(tokens) {
+            return Some(format!("alias {name} gives cargo {why}"));
         }
     }
     // and what it hands rustc's environment is reviewed
@@ -763,8 +809,9 @@ fn no_crate_is_patched_or_replaced_by_any_route() {
     let is_proxy = |c: &Invoking| c.program.canonicalize().ok().and_then(|p| p.file_stem().map(|f| f == "rustup")).unwrap_or(false);
     assert!(!cfg!(target_os = "linux") || invoking.iter().any(|c| !is_proxy(c)), "no toolchain's cargo among the processes that started this test");
     for cargo in &invoking {
-        let given: Vec<&String> = cargo.args.iter().filter(|a| *a == "--config" || a.starts_with("--config=")).collect();
-        assert!(given.is_empty(), "the cargo that runs this test ({}) was given {given:?}", cargo.program.display());
+        if let Some(why) = command_line_refusal(cargo.args.iter().map(String::as_str)) {
+            panic!("the cargo that runs this test ({}) was given {why}", cargo.program.display());
+        }
         if !is_proxy(cargo) {
             check_environment(&format!("the cargo in {}", cargo.folder.display()), &cargo.env, &cargo.toolchain);
         }
@@ -872,6 +919,23 @@ fn a_configuration_s_env_and_the_loader_s_variables_are_held_to_what_was_reviewe
         assert!(loader_refusal(&env(&[(var, "/tmp/x.so")]), toolchain, false).is_some_and(|w| w.contains(var)), "{var}");
     }
     assert_eq!(loader_refusal(&env(&[("LD_PRELOAD", "")]), toolchain, true), None, "set empty, as unset");
+    // and (the round at 326528f8) no `-Z` on a cargo's command line or in an alias, and no key of a
+    // source or a patch, which a nightly cargo's `-Zadvanced-env` reads in crates.io's place
+    let line = |args: &str| command_line_refusal(args.split(' '));
+    for refused in ["cargo -Zadvanced-env test", "cargo -Z advanced-env test", "cargo +nightly-2026-11-21 -vZadvanced-env test", "cargo --config x=1 test", "cargo test --config=x=1"] {
+        assert!(line(refused).is_some(), "{refused}");
+    }
+    for taken in ["cargo test -p veredas-abaco -p leis --test component --test real_tree", "cargo nextest run --workspace --profile no-browser -E rdeps(veredas-abaco)", "cargo test -- -Zunstable-options --exact"] {
+        assert_eq!(line(taken), None, "{taken}");
+    }
+    for key in ["CARGO_SOURCE_crates-io_REPLACE_WITH", "CARGO_SOURCE_vend_DIRECTORY", "cargo_source_x_registry", "CARGO_PATCH_crates-io_itoa_PATH"] {
+        assert!(environment_keys_refusal(&env(&[(key, "vend")])).is_some_and(|w| w.contains(key)), "{key}");
+    }
+    assert!(environment_keys_refusal(&env(&[("CARGO_ALIAS_T", "test -Zadvanced-env")])).is_some());
+    assert_eq!(environment_keys_refusal(&env(&[("CARGO_ALIAS_T", "test -p veredas-abaco"), ("CARGO_HOME", "/x")])), None);
+    assert!(config("[alias]\nt = \"test -Zadvanced-env\"\n").is_some_and(|w| w.contains("unstable settings")));
+    assert!(config("[alias]\nt = [\"test\", \"-Zadvanced-env\"]\n").is_some_and(|w| w.contains("unstable settings")));
+    assert_eq!(config("[alias]\nt = \"test -p veredas-abaco\"\n"), None);
 }
 
 /// The files a dep-info record lists, each on a line of its own ending in `:`, a space in its path
