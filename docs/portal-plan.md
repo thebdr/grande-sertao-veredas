@@ -435,6 +435,15 @@ Recorded as the port meets them.
   nothing, and the watch armed again then dropped the target's folder: the target made again was
   read a poll late. A link is followed through its text (`read_link`), its folder resolved, so the
   folder and the name stay watched while the target is gone (C-035).
+- **A folder's removal can go unreported.** inotify reports a folder removed (`IN_DELETE_SELF`,
+  then `IN_IGNORED`) only once nothing holds it: a file deleted in it and still open keeps it
+  unreported, so a watch marked dead on the event alone reads as armed until a pass checks the
+  folder's identity by a stat (the live loop at every pass; the start's rounds list the folder at
+  their poll, the stated limit) (C-036).
+- **A path's watch loses the file read.** A file watched by its path is lost when it is deleted or
+  moved away while its writer still writes (the follower still reads it). The watch is set on the
+  open file's own descriptor (`/proc/self/fd/N`), which inotify follows to the file however it is
+  named (C-036).
 - **An arm after the read misses the write between.** The family's live loop armed its watch (a
   thread spawned) after reading: a line written between the read and the arm made no event and
   waited a poll. Every loop keeps its watch before its read (C-036).

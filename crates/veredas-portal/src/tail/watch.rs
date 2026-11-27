@@ -19,6 +19,7 @@ use std::sync::mpsc::Sender;
 use std::time::{Duration, SystemTime};
 
 use crate::family::FamilySpec;
+use crate::tail::cursor::TailedFile;
 
 /// With a watcher armed, a family's folder is listed when the watcher reports a name made, removed
 /// or renamed there, and at this interval otherwise (never more often than the configured rescan):
@@ -136,9 +137,16 @@ impl Watch {
         Watch { wanted, wake, renamed: Arc::new(AtomicBool::new(false)), armed: None }
     }
 
-    /// Whether a watcher is armed: a family then lists its folder on the watcher's word.
+    /// Whether a watcher is armed and its folder still watched: a family then lists its folder on
+    /// the watcher's word. A watch whose folder is gone is no watch (it read as armed, and the
+    /// start's rounds waited their poll, C-036's fifth idle-cost round).
     pub(crate) fn alive(&self) -> bool {
-        self.armed.as_ref().is_some_and(|a| a.backend.is_some())
+        self.armed.as_ref().is_some_and(|a| a.backend.as_ref().is_some_and(|b| !b.gone()))
+    }
+
+    /// Whether the armed watch lost a folder it was set on: armed again at the next keep.
+    fn dead(&self) -> bool {
+        self.armed.as_ref().is_some_and(|a| a.backend.as_ref().is_some_and(|b| b.gone()))
     }
 
     /// Whether the watcher reported a name made, removed or renamed since the last call (or was
@@ -159,10 +167,10 @@ impl Watch {
     }
 
     /// Keep a file tail's watch: on the followed path's folder and, for a link, on its target's,
-    /// and on the file at the path for its writes. Armed once the folder is there and again when
+    /// and on the file read (`open`) for its writes. Armed once the folder is there and again when
     /// it is made anew or the link leads elsewhere. Called at every pass, before the read, so a
     /// write after it wakes the next wait.
-    pub(crate) fn keep_on_file(&mut self, path: &Path) {
+    pub(crate) fn keep_on_file(&mut self, path: &Path, open: Option<&TailedFile>) {
         if !self.wanted {
             return;
         }
@@ -170,7 +178,7 @@ impl Watch {
         let id = folder_id(&folder);
         let target = link_target(path);
         let target_folder = target.as_deref().map(folder_of).and_then(|f| folder_id(&f));
-        let same = id.is_some() && self.armed.as_ref().is_some_and(|a| a.folder == id && a.target == target && a.target_folder == target_folder);
+        let same = id.is_some() && !self.dead() && self.armed.as_ref().is_some_and(|a| a.folder == id && a.target == target && a.target_folder == target_folder);
         if !same {
             self.armed = None;
             if id.is_none() {
@@ -194,19 +202,19 @@ impl Watch {
             self.renamed.store(true, Ordering::Release);
         }
         if let Some(b) = self.armed.as_mut().and_then(|a| a.backend.as_mut()) {
-            b.keep_file(Some(path));
+            b.keep_file(open);
         }
     }
 
     /// Keep a family's watch on its folder (its tree when recursive), armed once the folder is
-    /// there and again when it is made anew, and on the file the follower reads now (`active`), for
-    /// its writes. Called before the attach and at every pass of the live loop.
-    pub(crate) fn keep_on_family(&mut self, spec: &FamilySpec, active: Option<&Path>) {
+    /// there and again when it is made anew or its watch died, and on the file the follower reads
+    /// now (`active`), for its writes. Called before the attach and at every pass of the live loop.
+    pub(crate) fn keep_on_family(&mut self, spec: &FamilySpec, active: Option<&TailedFile>) {
         if !self.wanted {
             return;
         }
         let id = folder_id(spec.dir());
-        if !(id.is_some() && self.armed.as_ref().is_some_and(|a| a.folder == id)) {
+        if !(id.is_some() && !self.dead() && self.armed.as_ref().is_some_and(|a| a.folder == id)) {
             self.armed = None;
             if id.is_none() {
                 return;
@@ -236,7 +244,7 @@ mod backend {
     use std::thread::JoinHandle;
 
     use super::Interest;
-    use crate::tail::cursor::{Identity, identity_at};
+    use crate::tail::cursor::TailedFile;
 
     /// How deep a recursive family's tree is watched: as deep as it is listed.
     const MAX_DEPTH: usize = 16;
@@ -270,14 +278,17 @@ mod backend {
         interest: Interest,
         recursive: bool,
         roles: Mutex<HashMap<i32, Role>>,
+        /// Set when a folder the watch was set on (depth 0) is removed or moved away: the watch
+        /// is no watch from then on.
+        top_gone: AtomicBool,
     }
 
     pub(crate) struct Backend {
         inner: Arc<Inner>,
         stop: OwnedFd,
         reader: Option<JoinHandle<()>>,
-        /// The file watched for its writes and its identity then.
-        file: Option<(i32, Identity)>,
+        /// The file watched for its writes: its watch and its device and inode.
+        file: Option<(i32, (u64, u64))>,
     }
 
     impl Drop for Backend {
@@ -353,8 +364,11 @@ mod backend {
                     }
                     if mask & libc::IN_IGNORED != 0 {
                         // A watch gone with what it watched: a folder removed, the file's last link.
-                        if let Some(Role::Folder(..)) = roles.remove(&wd) {
+                        if let Some(Role::Folder(_, _, depth)) = roles.remove(&wd) {
                             renamed = true;
+                            if depth == 0 {
+                                self.top_gone.store(true, Ordering::Release);
+                            }
                         }
                         wake = true;
                         continue;
@@ -368,6 +382,9 @@ mod backend {
                                 (wake, renamed) = (true, true);
                                 if mask & libc::IN_MOVE_SELF != 0 && *depth > 0 {
                                     gone.push(path.clone());
+                                }
+                                if mask & (libc::IN_MOVE_SELF | libc::IN_DELETE_SELF) != 0 && *depth == 0 {
+                                    self.top_gone.store(true, Ordering::Release);
                                 }
                                 continue;
                             }
@@ -479,7 +496,7 @@ mod backend {
             }
             // SAFETY: the two descriptors pipe2 just returned, owned by nothing else.
             let (stop_r, stop_w) = unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
-            let inner = Arc::new(Inner { fd, interest, recursive, roles: Mutex::new(HashMap::new()) });
+            let inner = Arc::new(Inner { fd, interest, recursive, roles: Mutex::new(HashMap::new()), top_gone: AtomicBool::new(false) });
             // The followed path's folder or nothing; a link's target's folder, if it can be.
             for (i, f) in folders.iter().enumerate() {
                 if !inner.add_tree(f, "", 0) && i == 0 {
@@ -494,11 +511,22 @@ mod backend {
             Some(Backend { inner, stop: stop_w, reader: Some(reader), file: None })
         }
 
-        /// Watch the file at `path` for its writes, moved to the file there now when it is another
-        /// one; tried again at every pass while it cannot be watched (not there yet, unreadable).
-        pub(crate) fn keep_file(&mut self, path: Option<&Path>) {
-            let id = path.and_then(identity_at);
-            if id.is_some() && self.file.as_ref().map(|(_, f)| *f) == id {
+        /// Whether a folder the watch was set on is gone.
+        pub(crate) fn gone(&self) -> bool {
+            self.inner.top_gone.load(Ordering::Acquire)
+        }
+
+        /// Watch the file the follower reads for its writes, through its own descriptor
+        /// (`/proc/self/fd/N`, which inotify follows to the file however it is named now, deleted
+        /// included), moved to the next file read; a watch the kernel dropped is set again. A path
+        /// watched instead lost the file once it was deleted or moved away while its writer still
+        /// wrote, every line a poll late (C-036's fifth idle-cost round).
+        pub(crate) fn keep_file(&mut self, open: Option<&TailedFile>) {
+            let key = open.map(|tf| tf.watch_key());
+            if let (Some((_, dev, ino)), Some((wd, k))) = (key, self.file)
+                && k == (dev, ino)
+                && self.inner.roles.lock().is_ok_and(|r| matches!(r.get(&wd), Some(Role::File)))
+            {
                 return;
             }
             if let Some((wd, _)) = self.file.take() {
@@ -510,13 +538,13 @@ mod backend {
                 // SAFETY: a watch descriptor of this inotify instance; one already gone is refused.
                 let _ = unsafe { libc::inotify_rm_watch(self.inner.fd.as_raw_fd(), wd) };
             }
-            let (Some(path), Some(id)) = (path, id) else { return };
-            if let Some(wd) = self.inner.add(path, FILE_MASK) {
+            let Some((fd, dev, ino)) = key else { return };
+            if let Some(wd) = self.inner.add(Path::new(&format!("/proc/self/fd/{fd}")), FILE_MASK) {
                 if let Ok(mut roles) = self.inner.roles.lock() {
                     // The same inode as a watched folder never: a file is no folder.
                     roles.entry(wd).or_insert(Role::File);
                 }
-                self.file = Some((wd, id));
+                self.file = Some((wd, (dev, ino)));
             }
         }
     }
@@ -536,6 +564,7 @@ mod backend {
     use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
     use super::Interest;
+    use crate::tail::cursor::TailedFile;
 
     pub(crate) struct Backend {
         _watcher: RecommendedWatcher,
@@ -616,7 +645,13 @@ mod backend {
         }
 
         /// The folder watch reports the file's writes already.
-        pub(crate) fn keep_file(&mut self, _path: Option<&Path>) {}
+        pub(crate) fn keep_file(&mut self, _open: Option<&TailedFile>) {}
+
+        /// notify reports a watched folder's removal as an event; the folder's identity, checked
+        /// at every keep, arms it again.
+        pub(crate) fn gone(&self) -> bool {
+            false
+        }
     }
 }
 
@@ -628,6 +663,11 @@ mod tests {
 
     use super::*;
     use crate::family::ActiveMode;
+    use crate::tail::FileStart;
+
+    fn open(path: &Path) -> TailedFile {
+        TailedFile::open(path, FileStart::End).unwrap()
+    }
 
     /// Whatever the steps before made is taken, so the next step's wakes are its own.
     fn settle(rx: &Receiver<()>) {
@@ -655,7 +695,8 @@ mod tests {
         std::fs::write(&other, "").unwrap();
         let (tx, rx) = channel();
         let mut watch = Watch::new(true, tx);
-        watch.keep_on_file(&path);
+        let read = open(&path);
+        watch.keep_on_file(&path, Some(&read));
         assert!(watch.alive());
         assert!(quiet(&rx), "nothing yet");
         settle(&rx);
@@ -684,8 +725,9 @@ mod tests {
         assert!(quiet(&rx), "a file made beside under another name");
         std::fs::rename(&aside, &path).unwrap();
         assert!(woken(&rx), "a file renamed over the name");
-        // The watch moves to the file now at the name: its writes wake.
-        watch.keep_on_file(&path);
+        // The watch moves to the file read now, renamed into place: its writes wake.
+        let read = open(&path);
+        watch.keep_on_file(&path, Some(&read));
         settle(&rx);
         append(&path);
         assert!(woken(&rx), "a write to the file renamed into place");
@@ -708,7 +750,8 @@ mod tests {
         std::fs::write(&active, "").unwrap();
         let (tx, rx) = channel();
         let mut watch = Watch::new(true, tx);
-        watch.keep_on_family(&spec, Some(&active));
+        let read = open(&active);
+        watch.keep_on_family(&spec, Some(&read));
         assert!(watch.listing_due(), "armed: a listing for what happened before");
         assert!(quiet(&rx));
         settle(&rx);
@@ -735,14 +778,15 @@ mod tests {
         assert!(watch.listing_due());
     }
 
-    /// A folder moved out of a recursive tree is watched no more: a member's name made in it
-    /// wakes nothing and asks for no listing; moved back into the tree, it is watched again.
+    /// A folder moved out of a recursive tree is watched no more, nor are the folders under it: a
+    /// member's name made in it or in its subfolder wakes nothing and asks for no listing; moved
+    /// back into the tree, it is watched again.
     #[test]
     fn a_folder_moved_out_of_the_tree_is_watched_no_more() {
         let root = tempfile::tempdir().unwrap();
         let top = root.path().join("top");
-        std::fs::create_dir_all(top.join("sub")).unwrap();
-        let spec = FamilySpec::new(&top, r"sub/app_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap().with_recursive(true);
+        std::fs::create_dir_all(top.join("sub/deeper")).unwrap();
+        let spec = FamilySpec::new(&top, r"sub/(?:deeper/)?app_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap().with_recursive(true);
         let (tx, rx) = channel();
         let mut watch = Watch::new(true, tx);
         watch.keep_on_family(&spec, None);
@@ -757,7 +801,8 @@ mod tests {
         settle(&rx);
         let _ = watch.listing_due();
         std::fs::write(archived.join("app_2.log"), "").unwrap();
-        assert!(quiet(&rx), "a member's name made in the folder moved out");
+        std::fs::write(archived.join("deeper/app_2.log"), "").unwrap();
+        assert!(quiet(&rx), "a member's name made in the folder moved out or in its subfolder");
         assert!(!watch.listing_due(), "and no listing asked for");
         std::fs::rename(&archived, top.join("sub")).unwrap();
         assert!(woken(&rx), "the folder moved back in");
@@ -766,6 +811,62 @@ mod tests {
         std::fs::write(top.join("sub/app_3.log"), "").unwrap();
         assert!(woken(&rx), "a member made in it, watched again");
         assert!(watch.listing_due());
+    }
+
+    /// A file's watch follows the file read, not its path: deleted or moved out of its folder while
+    /// a writer still writes it, or deleted before the watch was first set on it, its writes wake;
+    /// a watch whose folder is removed is no watch.
+    #[test]
+    fn a_file_watch_follows_the_file_read_and_dies_with_its_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("logs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.log");
+        std::fs::write(&path, "").unwrap();
+        let spec = FamilySpec::new(&dir, r"app\.log", None, ActiveMode::Fixed("app.log".into())).unwrap();
+        let (tx, rx) = channel();
+        let mut watch = Watch::new(true, tx);
+        let read = open(&path);
+        watch.keep_on_family(&spec, Some(&read));
+        let mut writer = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        settle(&rx);
+        std::fs::remove_file(&path).unwrap();
+        assert!(woken(&rx), "the file removed");
+        watch.keep_on_family(&spec, Some(&read));
+        settle(&rx);
+        std::io::Write::write_all(&mut writer, b"x\n").unwrap();
+        assert!(woken(&rx), "a write to the file read, deleted");
+        // The deleted file closed: an open one in the folder would pin it, its removal reported
+        // only once the last handle on it closed.
+        drop((read, writer));
+        std::fs::write(&path, "").unwrap();
+        let read = open(&path);
+        let mut writer = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        watch.keep_on_family(&spec, Some(&read));
+        settle(&rx);
+        std::fs::rename(&path, root.path().join("away.log")).unwrap();
+        assert!(woken(&rx), "the file moved out");
+        watch.keep_on_family(&spec, Some(&read));
+        settle(&rx);
+        std::io::Write::write_all(&mut writer, b"x\n").unwrap();
+        assert!(woken(&rx), "a write to the file read, moved out of its folder");
+        assert!(watch.alive());
+        // A file read, deleted before the watch was first set on it: watched through its
+        // descriptor, its path gone.
+        let late = dir.join("late.log");
+        std::fs::write(&late, "").unwrap();
+        let late_read = open(&late);
+        let mut late_writer = std::fs::OpenOptions::new().append(true).open(&late).unwrap();
+        std::fs::remove_file(&late).unwrap();
+        watch.keep_on_family(&spec, Some(&late_read));
+        settle(&rx);
+        std::io::Write::write_all(&mut late_writer, b"x\n").unwrap();
+        assert!(woken(&rx), "a write to a file deleted before its first watch");
+        drop((read, writer, late_read, late_writer));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(woken(&rx), "the folder removed");
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!watch.alive(), "a watch whose folder is gone is no watch");
     }
 
     /// With a watcher armed a family lists its folder every ten seconds at least, never sooner

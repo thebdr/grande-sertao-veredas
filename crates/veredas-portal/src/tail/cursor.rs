@@ -562,6 +562,14 @@ impl TailedFile {
         &self.path
     }
 
+    /// The open file's descriptor and its device and inode: the watch follows the file read, not
+    /// the path (a file deleted or moved away while its writer still writes is watched still).
+    #[cfg(target_os = "linux")]
+    pub(crate) fn watch_key(&self) -> (std::os::fd::RawFd, u64, u64) {
+        use std::os::fd::AsRawFd;
+        (self.handle.as_file().as_raw_fd(), self.handle.dev(), self.handle.ino())
+    }
+
     /// Whether the file held open is the one a look recorded the identity of.
     pub(crate) fn has_identity(&self, id: &Identity) -> bool {
         is_identity(&self.handle, id)

@@ -460,6 +460,16 @@ enum Unread {
     Stopped,
 }
 
+/// What stands at the active's path, a file there that will not open told from none: another file
+/// at the path that cannot be read yet (a writer holding it, its mode) is a replacement, held, not
+/// a gone path, so a newer member never sends the loop past it (C-036's fifth idle-cost round).
+fn held_aware(status: PathStatus, cursor: &TailedFile) -> PathStatus {
+    match status {
+        PathStatus::Missing if crate::tail::cursor::identity_at(cursor.path()).is_some_and(|id| !cursor.has_identity(&id)) => PathStatus::Replaced,
+        s => s,
+    }
+}
+
 /// (key, name): the rotation-order rank. The modification time is deliberately left out: it only
 /// breaks ties at the first resolve, never a live rotation decision.
 fn rank(f: &FamilyFile) -> (OrderKey, &str) {
@@ -490,6 +500,7 @@ fn retry_resolve(spec: &FamilySpec, stop: &AtomicBool) -> Option<Vec<FamilyFile>
 /// the newest is opened as the new active. Each round either opens the newest or consumes it as
 /// retired and resolves again: a rotation during the catch-up cannot outrun it. `None` means
 /// stopped.
+#[allow(clippy::too_many_arguments)]
 fn newest_catch_up(
     spec: &FamilySpec,
     cfg: &FamilyTailConfig,
@@ -497,6 +508,7 @@ fn newest_catch_up(
     read: &[Identity],
     stop: &AtomicBool,
     wake_rx: &Receiver<()>,
+    wait: Duration,
     emit: &mut dyn FnMut(String),
 ) -> Result<Option<(TailedFile, OrderKey, String)>, SourceError> {
     loop {
@@ -507,7 +519,7 @@ fn newest_catch_up(
             if stop.load(Ordering::Relaxed) {
                 return Ok(None);
             }
-            wait_tick(wake_rx, cfg.poll_interval);
+            wait_tick(wake_rx, wait);
             continue;
         };
         let pending: Vec<FamilyFile> =
@@ -516,7 +528,7 @@ fn newest_catch_up(
             // Nothing above the high-water mark right now; wait for the family to move (both
             // while attaching to a family being born and when everything newer vanished
             // mid-burst).
-            wait_tick(wake_rx, cfg.poll_interval);
+            wait_tick(wake_rx, wait);
             continue;
         }
         for f in &pending[..pending.len() - 1] {
@@ -607,6 +619,7 @@ fn sweep_unknown_retirees(
 /// meanwhile before its first line is read (invariant 2). The same identity reappearing means a
 /// transient glitch: the old cursor is handed back untouched. `None` means stopped.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn fixed_adopt(
     spec: &FamilySpec,
     fixed_name: &str,
@@ -616,6 +629,7 @@ fn fixed_adopt(
     read: &[Identity],
     stop: &AtomicBool,
     wake_rx: &Receiver<()>,
+    wait: Duration,
     emit: &mut dyn FnMut(String),
 ) -> Result<Option<TailedFile>, SourceError> {
     let fixed_path = spec.dir().join(fixed_name);
@@ -648,9 +662,9 @@ fn fixed_adopt(
                     }
                     return Ok(Some(new_cursor));
                 }
-                Err(_) => wait_tick(wake_rx, cfg.poll_interval),
+                Err(_) => wait_tick(wake_rx, wait),
             },
-            Err(_) => wait_tick(wake_rx, cfg.poll_interval),
+            Err(_) => wait_tick(wake_rx, wait),
         }
     }
 }
@@ -781,7 +795,7 @@ fn attach_backfill(
                             Whereabouts::Here | Whereabouts::Unknown => lost(),
                         }
                     }
-                    match newest_catch_up(spec, cfg, (planned.key, planned.name.clone()), &[], stop, wake_rx, emit)? {
+                    match newest_catch_up(spec, cfg, (planned.key, planned.name.clone()), &[], stop, wake_rx, cfg.poll_interval, emit)? {
                         None => Ok(BackfillAttach::Stopped),
                         Some((c, k, nm)) => Ok(BackfillAttach::Attached { cursor: Box::new(c), key: k, name: nm, known: consumed, history_to: None }),
                     }
@@ -995,8 +1009,9 @@ fn run_family(
             if stop.load(Ordering::Relaxed) || disconnected.get() {
                 return Ok(());
             }
-            // A round waits no longer than the rescan while no watcher is armed: a family not
-            // there yet or empty waited its whole poll (C-036's third idle-cost round).
+            // A round waits no longer than the rescan while no watcher is armed, a watch whose
+            // folder is gone counting as none: a family not there yet or empty waited its whole
+            // poll (C-036's third and fifth idle-cost rounds).
             let attach_wait = watch.wait_between(cfg.poll_interval, cfg.rescan_interval);
             let files = spec.resolve().ok();
             if preexisted.is_none() {
@@ -1024,7 +1039,7 @@ fn run_family(
                         // The generic convergence reads every generation from the family's first
                         // file onward and opens the newest: no birth-window generation slips past.
                         let sentinel = (OrderKey::NONE, String::new());
-                        match newest_catch_up(&spec, &cfg, sentinel, &[], &stop, &wake_rx, &mut emit)? {
+                        match newest_catch_up(&spec, &cfg, sentinel, &[], &stop, &wake_rx, attach_wait, &mut emit)? {
                             None => return Ok(()),
                             Some((c, k, n)) => break (c, k, n),
                         }
@@ -1435,7 +1450,7 @@ fn run_family(
         // after it waited a poll, C-036's third idle-cost round); with a watcher armed, the folder
         // is listed when it reports a name made, removed or renamed (and at a slow fallback), so
         // a quiet family's idle cost does not grow with its members.
-        watch.keep_on_family(&spec, Some(cursor.path()));
+        watch.keep_on_family(&spec, Some(&cursor));
         match cursor.read_new(&mut emit)? {
             ReadStep::Truncated => {
                 // An in-place truncation of the active file: the degenerate single-file case. Cut
@@ -1462,7 +1477,7 @@ fn run_family(
             ActiveMode::NewestByOrder => {
                 // The active renamed or deleted underneath is a rotation smell in this mode too:
                 // rescan at once, once a change.
-                let status = cursor.check_path();
+                let status = held_aware(cursor.check_path(), &cursor);
                 if status != PathStatus::Same && status != last_status {
                     next_rescan = Instant::now();
                 }
@@ -1477,7 +1492,7 @@ fn run_family(
                     // round). The same file back after the drain (a share's passing glitch) is
                     // kept.
                     cursor.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
-                    if cursor.check_path() == PathStatus::Replaced {
+                    if held_aware(cursor.check_path(), &cursor) == PathStatus::Replaced {
                         let path = cursor.path().to_path_buf();
                         // A held file read already (C-098) is followed from its end.
                         let start = if !read_ids.is_empty() && crate::tail::cursor::identity_at(&path).is_some_and(|id| read_ids.contains(&id)) { FileStart::End } else { FileStart::Begin };
@@ -1488,6 +1503,12 @@ fn run_family(
                             next_rescan = Instant::now();
                             continue;
                         }
+                        // A replacement there that cannot be read yet (a writer holding it, its
+                        // mode) is awaited, as a held file is (C-098): the members born after it
+                        // wait for it, or a newer one sent the loop past it and it was lost
+                        // (C-036's fifth idle-cost round).
+                        wait_tick(&wake_rx, watch.wait_between(cfg.poll_interval, cfg.rescan_interval));
+                        continue;
                     }
                 }
                 if listing_due || Instant::now() >= next_rescan {
@@ -1502,7 +1523,7 @@ fn run_family(
                         cursor.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
                         cursor.flush_pending(&mut emit);
                         let consumed = (current_key, current_name.clone());
-                        match newest_catch_up(&spec, &cfg, consumed, &read_ids, &stop, &wake_rx, &mut emit)? {
+                        match newest_catch_up(&spec, &cfg, consumed, &read_ids, &stop, &wake_rx, watch.wait_between(cfg.poll_interval, cfg.rescan_interval), &mut emit)? {
                             None => return Ok(()),
                             Some((c, k, n)) => {
                                 cursor = c;
@@ -1560,7 +1581,7 @@ fn run_family(
                         }
                     }
 
-                    match fixed_adopt(&spec, fixed_name, &cfg, cursor, &mut known, &read_ids, &stop, &wake_rx, &mut emit)? {
+                    match fixed_adopt(&spec, fixed_name, &cfg, cursor, &mut known, &read_ids, &stop, &wake_rx, watch.wait_between(cfg.poll_interval, cfg.rescan_interval), &mut emit)? {
                         None => return Ok(()),
                         Some(c) => cursor = c,
                     }

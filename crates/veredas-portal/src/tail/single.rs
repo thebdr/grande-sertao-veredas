@@ -191,7 +191,7 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     let mut watch = Watch::new(notify_wanted, wake_tx);
 
     loop {
-        watch.keep_on_file(&path);
+        watch.keep_on_file(&path, active.as_ref());
         if disconnected.get() {
             return Ok(()); // the consumer is gone: a clean end
         }
