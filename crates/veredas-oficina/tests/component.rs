@@ -467,7 +467,9 @@ fn listening(pid: u32) -> Vec<String> {
 #[test]
 fn the_driver_listens_only_on_a_port_named() {
     let platform = std::env::var("OFICINA_TEST_PLATFORM").unwrap_or_else(|_| "offscreen".to_string());
-    for value in [None, Some("0"), Some("-1"), Some("65536"), Some("70000"), Some("0x10E1"), Some("not-a-port")] {
+    // A port followed by anything (`4321x`, `4321.5`, `4321 x`) names none either: a reader that
+    // takes a decimal prefix would open 4321.
+    for value in [None, Some("0"), Some("-1"), Some("65536"), Some("70000"), Some("0x10E1"), Some("4321x"), Some("4321.5"), Some("4321 x"), Some("not-a-port")] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_veredas-oficina"));
         command.env("QT_QPA_PLATFORM", &platform).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         match value {
