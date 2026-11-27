@@ -563,16 +563,18 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                         if entries.is_empty() {
                             unpinned.insert(format!("{n} {v}"));
                         }
-                        // A package by path is charged by its folder, which the version's inputs
-                        // must hold (the lock's edges reach it from the component); a crate by its
-                        // lock entry.
+                        // A package by path is charged by its folder, as a package the version
+                        // reads by path (its own folder among the inputs, its sources and what they
+                        // name read: a fork patched in for a crate the feature reaches behind one
+                        // of the registry lies in a folder another covers, its library elsewhere);
+                        // a crate by its lock entry.
                         if by_path {
                             let printed = Path::new(rest.trim_start_matches('(').trim_end_matches(')'));
                             let canonical = tree.canonicalize().unwrap_or_else(|_| tree.clone());
                             let folder: Option<String> = printed.strip_prefix(&tree).or_else(|_| printed.strip_prefix(&canonical)).ok().map(|p| p.display().to_string());
                             if !entries.is_empty()
                                 && let (Ok(named), Some(folder)) = (inputs.as_ref(), folder)
-                                && !named.covers(&format!("{folder}/Cargo.toml"))
+                                && !named.0.contains_key(&if folder.is_empty() { String::new() } else { format!("{folder}/") })
                             {
                                 unreached.insert(format!("{n} {v} ({folder})"));
                             }
@@ -582,7 +584,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                     }
                     if !unreached.is_empty() && unpinned.is_empty() {
                         inputs = Err(format!(
-                            "its executables need `{}`, under which cargo builds {} by path, whose folder the lock's edges do not reach from it: no version names it",
+                            "its executables need `{}`, under which cargo builds {} by path, no package its version reads by path (reached behind a crate, or by no edge of the lock from it): its sources go unread",
                             dep_features.iter().map(|f| f.as_str()).collect::<Vec<_>>().join("`, `"),
                             unreached.into_iter().collect::<Vec<_>>().join(", ")
                         ));

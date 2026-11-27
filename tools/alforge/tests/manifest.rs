@@ -2978,3 +2978,32 @@ fn round_thirty_four_what_a_dependencys_feature_builds_is_charged_and_treed_with
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 }
+
+/// Round 35's real form: a fork `[patch]`ed in for a crate a bin's dependency feature reaches behind
+/// one of the registry (`hashbrown/default-hasher` reaching foldhash), lying in the folder of another
+/// fork the component uses by path, its library starting outside it: no package the version reads
+/// by path, its sources unread, so refused.
+#[test]
+fn round_thirty_five_a_patched_fork_behind_a_crate_of_the_registry_is_refused() {
+    let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\nexclude = [\"forks\"]\n\n[patch.crates-io]\nfoldhash = { path = \"forks/garfo/foldhash\" }\n");
+    r.write(
+        "crates/veredas-core/Cargo.toml",
+        "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\n\n[dependencies]\nhashbrown = { version = \"=0.15.5\", default-features = false }\ngarfo = { path = \"../../forks/garfo\" }\n\n\
+         [dev-dependencies]\nfoldhash = \"0.1\"\n\n[[bin]]\nname = \"veredas-core\"\npath = \"src/main.rs\"\nrequired-features = [\"hashbrown/default-hasher\"]\n",
+    );
+    r.write("crates/veredas-core/src/main.rs", "fn main() {}\n");
+    r.write("forks/garfo/Cargo.toml", "[workspace]\n\n[package]\nname = \"garfo\"\nversion = \"0.3.0\"\nedition = \"2024\"\n");
+    r.write("forks/garfo/src/lib.rs", "\n");
+    r.write("forks/garfo/foldhash/Cargo.toml", "[package]\nname = \"foldhash\"\nversion = \"0.1.5\"\nedition = \"2021\"\n\n[lib]\npath = \"../../../upstream/foldhash/lib.rs\"\n");
+    r.write("upstream/foldhash/lib.rs", "\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let c = r.commit("a patched fork behind hashbrown");
+    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    assert_eq!(
+        held["veredas-core"].inputs.as_ref().unwrap_err(),
+        "its executables need `hashbrown/default-hasher`, under which cargo builds foldhash 0.1.5 (forks/garfo/foldhash) by path, no package its version reads by path (reached behind a crate, or by no edge of the lock from it): its sources go unread"
+    );
+}
