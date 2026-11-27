@@ -3154,3 +3154,64 @@ fn traits_probe_runs_lowered_as_natively() {
     both(&outputs, "an option held", |o| o.opt > 0);
     assert!(outputs.iter().all(|o| o.gains == 132), "the associated constants");
 }
+
+// The fourteenth refute round's tests: a reference to a constant refused in a function whose result holds a reference,
+// which could hand it out of the frame the interpreter holds the constant in (O3), where the program takes it, no file
+// written; references to constants read in their own frames, and a reference returned derived from its parameters,
+// still lowered and run as natively; and a tuple's parts named by their positions.
+
+const CONST_REF: &str = "a reference to a constant a returned reference may hold";
+
+#[test]
+fn a_promoted_reference_to_a_constant_returned_by_a_function_is_refused_where_the_program_takes_it() {
+    // `fn one() -> &'static u8 { &1 }`, the first function the scan calls
+    refused("dangle", &at("dangle", "&1\n}", CONST_REF, "&u8"));
+}
+
+#[test]
+fn a_reference_to_a_table_s_constant_returned_by_a_function_is_refused_where_the_program_takes_it() {
+    // `fn recipe(fast: bool) -> &'static Recipe { if fast { &FAST } else { &SLOW } }`, its first branch
+    refused("dangle2", &at("dangle2", "&FAST", CONST_REF, "&Recipe"));
+}
+
+#[test]
+fn a_const_reference_in_a_function_whose_result_holds_a_reference_is_refused_where_the_program_takes_it() {
+    // `const DEFAULT: &Recipe` in `fn find(k: u8) -> Option<&'static Recipe>`
+    refused("const_ref_option", &at("const_ref_option", "DEFAULT) }", CONST_REF, "&Recipe"));
+}
+
+#[allow(dead_code)]
+#[path = "programs/const_refs.rs"]
+mod const_refs;
+
+image!(const_refs::Inputs { fast: bool, k: u8 });
+image!(const_refs::Outputs { temp: u16, mins: u8, one: u8, limit: u16, sum: u16, n: u8 });
+
+#[test]
+fn references_to_constants_read_in_their_own_frames_run_lowered_as_natively() {
+    // `&FAST`, `&1` and a `const DEFAULT: &Recipe` read in the scan and in a function returning a value, and handed to
+    // `pick`, which returns a reference derived from its parameters, read after other calls
+    let inputs = |k: u64| const_refs::Inputs { fast: mix(k, 1) % 2 == 0, k: mix(k, 2) as u8 };
+    let (outputs, _) = conform("const_refs", const_refs::ConstRefs::default(), "ConstRefs", &inputs, 600);
+    both(&outputs, "the fast recipe picked", |o| o.temp == 220);
+    both(&outputs, "the fast recipe's minutes", |o| o.mins == 15);
+    both(&outputs, "the fast recipe's limit", |o| o.limit == 400);
+    both(&outputs, "the sum of the fast recipe", |o| o.sum == 620);
+    assert!(outputs.iter().all(|o| o.one == 1), "the promoted `&1`");
+}
+
+/// A tuple's parts are named in the file by their positions from 0, as the source reaches them (`.0`, `.1`).
+#[test]
+fn a_tuple_s_parts_are_named_by_their_positions() {
+    let (_, code) = lower_in("tuple-parts", "shapes", &program("shapes")).result.unwrap();
+    let tuples: Vec<&Type> =
+        code.types.iter().filter(|t| matches!(t, Type::Struct { name, .. } if name.starts_with('('))).collect();
+    let pairs = tuples.iter().any(|t| matches!(t, Type::Struct { fields, .. } if fields.len() >= 2));
+    assert!(pairs, "a tuple of two parts or more: {tuples:?}");
+    for t in tuples {
+        let Type::Struct { name, fields } = t else { unreachable!() };
+        let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+        let wanted: Vec<String> = (0..fields.len()).map(|i| i.to_string()).collect();
+        assert_eq!(names, wanted, "{name}: its parts by position");
+    }
+}

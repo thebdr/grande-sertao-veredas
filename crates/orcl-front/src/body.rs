@@ -25,11 +25,13 @@ use crate::lower::Lowerer;
 /// operands.
 const REPEAT: usize = 1 << 16;
 
-/// A body being lowered: its locals, MIR's and the ones the lowering adds, and its blocks' new numbers.
+/// A body being lowered: its locals, MIR's and the ones the lowering adds, its blocks' new numbers, and whether its
+/// result holds a reference.
 struct Frame<'b> {
     body: &'b mir::Body,
     locals: Vec<LocalDecl>,
     blocks: Vec<Option<u32>>,
+    returns_ref: bool,
 }
 
 /// The blocks reached from the first without unwinding, in MIR's order.
@@ -116,7 +118,8 @@ impl Lowerer<'_> {
             }
             locals.push(LocalDecl { ty, name });
         }
-        let mut frame = Frame { body: &body, locals, blocks: reached(&body) };
+        let returns_ref = locals.first().is_some_and(|result| self.holds_ref(result.ty));
+        let mut frame = Frame { body: &body, locals, blocks: reached(&body), returns_ref };
         let mut blocks = Vec::new();
         for (b, block) in body.blocks.iter().enumerate() {
             if frame.blocks.get(b).copied().flatten().is_none() {
@@ -193,7 +196,9 @@ impl Lowerer<'_> {
     }
 
     /// An operand. A shared reference to a constant becomes a reference to a local holding the constant, set by the
-    /// statements `before` gains, since the interpreter keeps no constant in memory of its own.
+    /// statements `before` gains, since the interpreter keeps no constant in memory of its own: so it lives as long
+    /// as the function's frame, and is refused in a function whose result holds a reference, which could hand it out
+    /// of that frame (O3), wherever the function's code reads it.
     fn operand(
         &mut self,
         frame: &mut Frame<'_>,
@@ -206,6 +211,9 @@ impl Lowerer<'_> {
             mir::Operand::Move(p) => Ok(Operand::Move(self.place(frame, p, at)?)),
             mir::Operand::Constant(c) => match self.constant(&c.const_, c.span)? {
                 Lit::Value(value) => Ok(Operand::Const(value)),
+                Lit::RefTo(_) if frame.returns_ref => {
+                    Err(self.refuse(Refused::ConstRef, format!("{}", c.ty()), c.span))
+                }
                 Lit::RefTo(value) => {
                     let to = value.ty;
                     let reference = self.reference_to(to);

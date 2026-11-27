@@ -68,15 +68,33 @@ impl Lowerer<'_> {
     /// tuple's field, a variant's payload (an enum's discriminant is the compiler's), an array's element, a
     /// reference's pointee. A type still being lowered holds none yet; its fields are checked as they are lowered.
     fn word_in(&self, id: TypeId) -> Option<&'static str> {
+        self.first_in(id, |t| match t {
+            Type::Int(Int::Usize) => Some("usize"),
+            Type::Int(Int::Isize) => Some("isize"),
+            _ => None,
+        })
+    }
+
+    /// Whether a type holds a reference: is one, or holds one in a structure's or a tuple's field, a variant's
+    /// payload (an `Option<&T>`'s among them) or an array's element.
+    pub(crate) fn holds_ref(&self, id: TypeId) -> bool {
+        self.first_in(id, |t| matches!(t, Type::Ref { .. }).then_some(())).is_some()
+    }
+
+    /// The first type a type holds that `found` gives a value for, in its fields' declared order: the type itself, a
+    /// structure's or a tuple's field, a variant's payload, an array's element, a reference's pointee.
+    fn first_in<T>(&self, id: TypeId, found: impl Fn(&Type) -> Option<T>) -> Option<T> {
         let mut seen = HashSet::new();
         let mut todo = vec![id];
         while let Some(id) = todo.pop() {
             if !seen.insert(id) {
                 continue;
             }
-            match self.get(id) {
-                Some(Type::Int(Int::Usize)) => return Some("usize"),
-                Some(Type::Int(Int::Isize)) => return Some("isize"),
+            let ty = self.get(id);
+            if let Some(value) = ty.and_then(&found) {
+                return Some(value);
+            }
+            match ty {
                 Some(Type::Struct { fields, .. }) => todo.extend(fields.iter().rev().map(|f| f.ty)),
                 Some(Type::Enum { variants, .. }) => {
                     todo.extend(variants.iter().rev().flat_map(|v| v.fields.iter().rev().map(|f| f.ty)));

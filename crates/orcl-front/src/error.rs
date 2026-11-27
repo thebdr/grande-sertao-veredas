@@ -30,6 +30,10 @@ pub enum Refused {
     Statement,
     /// A value the interpreter does not have: an operation, a cast, a constant, a place's projection.
     Value,
+    /// A reference to a constant (a promoted `&FAST` or `&1`, a `const R: &T`) in a function whose result holds a
+    /// reference: the interpreter keeps no constant in memory of its own, so the function holds the constant in its
+    /// frame, which a reference it returned would outlive (O3: no reference in a return value).
+    ConstRef,
     /// A terminator the interpreter does not have.
     Terminator,
     /// A call into core outside the closed list (`docs/questions.md` Q227).
@@ -54,6 +58,7 @@ impl Refused {
             Refused::DropGlue => "a type with drop glue",
             Refused::Statement => "a statement the interpreter does not have",
             Refused::Value => "a value the interpreter does not have",
+            Refused::ConstRef => "a reference to a constant a returned reference may hold",
             Refused::Terminator => "a terminator the interpreter does not have",
             Refused::CoreCall => "a call into core outside the list",
             Refused::Call => "a call the interpreter cannot make",
