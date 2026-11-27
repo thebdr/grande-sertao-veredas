@@ -1,18 +1,18 @@
 {
   "clause": "C-036",
   "verdict": "refuted",
-  "ranAt": "2026-11-27T12:29:23.369Z",
-  "headCommit": "ac6e9443d3dc0162cec56516a63d3e5d0f421d9b",
+  "ranAt": "2026-11-27T13:07:13.794Z",
+  "headCommit": "8e4ae87ba66eaffa51f10cf7728bdc3ce9cf000d",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/tail_family.rs",
       "file": "crates/veredas-portal/tests/tail_family.rs",
-      "symbolSha": "dfcddd0da8dee9b74b3098a2446b449434291219d0348e4efa121cb3ac91ca19"
+      "symbolSha": "86d81ebcc5e117242d32592246853af469f2484c229def55b6228ea3f738ef4b"
     },
     {
       "name": "crates/veredas-portal/src/tail/watch.rs",
       "file": "crates/veredas-portal/src/tail/watch.rs",
-      "symbolSha": "854c35fbe04d9cb59534c12b716d68cb5cdd44ec1bf1352cadb1f6001a411818"
+      "symbolSha": "9947ec1f2177817ffe863c412ca9c9473201be0f593b24cfc5d15c34b4d09da3"
     }
   ]
 }
