@@ -1,8 +1,8 @@
 {
   "clause": "C-153",
-  "verdict": "refuted",
-  "ranAt": "2026-11-26T23:40:54.082Z",
-  "headCommit": "ba299e5fcf9331ce62a102e206ba5facb2c88247",
+  "verdict": "holds",
+  "ranAt": "2026-11-27T00:04:29.044Z",
+  "headCommit": "34f28243fd4b252ba24f65168d23cf92a7f66cfc",
   "tests": [
     {
       "name": "crates/orcl-interp/tests/ops.rs",

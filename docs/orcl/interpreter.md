@@ -78,7 +78,9 @@ Everything a program needs is sized when it is loaded, so nothing is allocated d
 A slot takes 32 bytes as built, and a program's memory is allocated whole at load, within a ceiling its host gives with
 the stack, in slots (`Limits`): the regions, the stack, the room for the largest value built and for the largest
 result, together at most that, checked before anything is allocated, so no size a program file or a setting names
-reaches the allocator past it. Both are the target's settings' (`veredas-alvo`, not built yet), handed in by the host
+reaches the allocator past it. Beside the ceiling, not counted in it, the machine keeps a record for each frame the
+stack may hold, one a stack slot (28 bytes as built): a host budgeting bytes counts the ceiling's slots and the
+stack's slots once more at that size. Both are the target's settings' (`veredas-alvo`, not built yet), handed in by the host
 meanwhile.
 
 ## Running
