@@ -1529,7 +1529,7 @@ fn five_lines_read_promptly(rx: &Receiver<LineEvent>, path: &Path, what: &str) {
 /// The watcher wakes a follower whose path is a symbolic link to a file in another folder, for
 /// the writes to that file, follows the link when it is made to lead elsewhere and watches the new
 /// target's folder for its name (the target replaced there by a rename read within a second and a
-/// half); and a folder removed and made again is watched again from the first pass that sees it
+/// half, deleted and made again 1.5 s later read within a second); and a folder removed and made again is watched again from the first pass that sees it
 /// back, at most a poll later, its names too (a replacement renamed into place read within a
 /// second and a half). Under a poll of five seconds each line is read within half a second of its
 /// write (five lines a case, so the poll alone passes with odds under one in ten thousand). Armed once, on the
@@ -1567,6 +1567,14 @@ fn the_watcher_follows_a_link_and_a_folder_made_anew() {
     let replaced = Instant::now();
     let got = rx.recv_timeout(Duration::from_millis(1500)).map(|e| e.line);
     assert_eq!(got.as_deref(), Ok("other replaced 0"), "the target replaced in its folder read within 1.5 s ({:?})", replaced.elapsed());
+    // The target deleted, the link leading nowhere for a while, then made again: the target's
+    // folder stays watched for its name, so the new file is read within a second.
+    std::fs::remove_file(real.join("other.log")).unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    std::fs::write(real.join("other.log"), "made again 0\n").unwrap();
+    let made = Instant::now();
+    let got = rx.recv_timeout(Duration::from_secs(1)).map(|e| e.line);
+    assert_eq!(got.as_deref(), Ok("made again 0"), "the target made again read within a second ({:?})", made.elapsed());
     set.stop_all();
 
     // A folder removed and made again.

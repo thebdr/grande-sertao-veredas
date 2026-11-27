@@ -428,7 +428,16 @@ Recorded as the port meets them.
   or renamed) and every ten seconds otherwise; with none, every rescan, as before.
 - **The same name ranks the same.** A newest-by-order active replaced at its own name (deleted and
   made again, a file renamed over it) never ranks newer, so the rotation never brought it and every
-  line of it was lost: it is adopted on the path's check, not the ranking (C-036).
+  line of it was lost: it is adopted on the path's check, not the ranking, and before any listing
+  for newer members, since a newer one born in the same pass sent the loop catching up from the old
+  name's rank, past the replacement (C-036).
+- **A dangling link names no target to `canonicalize`.** A link whose target is deleted resolves to
+  nothing, and the watch armed again then dropped the target's folder: the target made again was
+  read a poll late. A link is followed through its text (`read_link`), its folder resolved, so the
+  folder and the name stay watched while the target is gone (C-035).
+- **An arm after the read misses the write between.** The family's live loop armed its watch (a
+  thread spawned) after reading: a line written between the read and the arm made no event and
+  waited a poll. Every loop keeps its watch before its read (C-036).
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
   read as disconnected and the wait returned at once, every tick, a full core. The watch keeps a

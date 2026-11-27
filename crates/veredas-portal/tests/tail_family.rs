@@ -890,7 +890,7 @@ fn following_a_quiet_family_costs_almost_no_processor_time() {
         std::io::Write::write_all(&mut f, format!("{line}\n").as_bytes()).unwrap();
     };
     let cases = [
-        ("qdated", FamilySpec::new(&dated, r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d".into()), ActiveMode::NewestByOrder).unwrap(), dated.join("20261126_sorts1.log"), dated.join("noise.txt")),
+        ("qdated", FamilySpec::new(&dated, r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d"), ActiveMode::NewestByOrder).unwrap(), dated.join("20261126_sorts1.log"), dated.join("noise.txt")),
         ("qfixed", FamilySpec::new(&fixed, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap(), fixed.join("current.log"), fixed.join("noise.txt")),
     ];
     for (id, spec, active, noise) in cases {
@@ -962,7 +962,7 @@ fn a_newest_active_replaced_at_its_own_name_is_read_from_its_start() {
         let dir = tempfile::tempdir().unwrap();
         let active = dir.path().join("20261126_sorts1.log");
         std::fs::write(&active, "history\n").unwrap();
-        let spec = FamilySpec::new(dir.path(), r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d".into()), ActiveMode::NewestByOrder).unwrap();
+        let spec = FamilySpec::new(dir.path(), r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d"), ActiveMode::NewestByOrder).unwrap();
         let cfg = FamilyTailConfig { use_notify: Some(notify), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
         let (mut set, rx) = SourceSet::new();
         set.spawn(Box::new(FamilyTailSource::new("sameplace", "sameplace", spec, cfg))).unwrap();
@@ -1007,7 +1007,7 @@ fn a_newest_active_replaced_at_its_own_name_is_read_from_its_start() {
 fn with_no_watcher_a_newest_family_waits_no_longer_than_its_rescan() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("20261126_sorts1.log"), "").unwrap();
-    let spec = FamilySpec::new(dir.path(), r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d".into()), ActiveMode::NewestByOrder).unwrap();
+    let spec = FamilySpec::new(dir.path(), r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d"), ActiveMode::NewestByOrder).unwrap();
     let cfg = FamilyTailConfig {
         poll_interval: Duration::from_secs(5),
         rescan_interval: Duration::from_millis(200),
@@ -1049,7 +1049,7 @@ fn a_family_folder_made_anew_is_watched_again() {
     let dir = root.path().join("logs");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("20261126_sorts1.log"), "").unwrap();
-    let spec = FamilySpec::new(&dir, r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d".into()), ActiveMode::NewestByOrder).unwrap();
+    let spec = FamilySpec::new(&dir, r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d"), ActiveMode::NewestByOrder).unwrap();
     let cfg = FamilyTailConfig { poll_interval: Duration::from_secs(5), use_notify: Some(true), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
     let bound = cfg.rescan_interval + cfg.drain_grace + Duration::from_millis(500);
     let (mut set, rx) = SourceSet::new();
@@ -1075,5 +1075,127 @@ fn a_family_folder_made_anew_is_watched_again() {
     std::fs::write(dir.join("20261127_sorts1.log"), "back 0\n").unwrap();
     read_within("back 0", bound);
     lines(&dir.join("20261127_sorts1.log"), "after");
+    set.stop_all();
+}
+
+/// A newest-by-order active replaced at its own name and a newer member born in one burst, before
+/// the follower looks: the replacement is read whole before the newer member, with the watcher on
+/// and off, for a file renamed over the active and for the active deleted (its torn last line
+/// flushed first) and made again. Taken as a rotation from the old name's rank, the replacement,
+/// ranked the same, was never read (C-036's third idle-cost refute round).
+#[test]
+fn a_replacement_and_a_newer_member_in_one_burst_are_read_in_order() {
+    for notify in [true, false] {
+        for deleted in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let active = dir.path().join("20261126_sorts1.log");
+            std::fs::write(&active, "history\n").unwrap();
+            let spec = FamilySpec::new(dir.path(), r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d"), ActiveMode::NewestByOrder).unwrap();
+            let cfg = FamilyTailConfig { use_notify: Some(notify), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
+            let (mut set, rx) = SourceSet::new();
+            set.spawn(Box::new(FamilyTailSource::new("burst", "burst", spec, cfg))).unwrap();
+            let append = |path: &Path, text: &str| {
+                let mut f = std::fs::OpenOptions::new().append(true).create(true).open(path).unwrap();
+                std::io::Write::write_all(&mut f, text.as_bytes()).unwrap();
+            };
+            append(&active, "kept 0\n");
+            assert_eq!(rx.recv_timeout(Duration::from_secs(5)).map(|e| e.line).as_deref(), Ok("kept 0"));
+            let expected: Vec<&str> = if deleted {
+                append(&active, "torn");
+                std::thread::sleep(Duration::from_millis(300));
+                std::fs::remove_file(&active).unwrap();
+                std::fs::write(&active, "made again 0\n").unwrap();
+                vec!["torn", "made again 0", "rotated 0"]
+            } else {
+                let aside = dir.path().join("replacement.tmp");
+                std::fs::write(&aside, "renamed over 0\n").unwrap();
+                std::fs::rename(&aside, &active).unwrap();
+                vec!["renamed over 0", "rotated 0"]
+            };
+            append(&dir.path().join("20261126_sorts2.log"), "rotated 0\n");
+            let got: Vec<String> = (0..expected.len()).filter_map(|_| rx.recv_timeout(Duration::from_secs(5)).ok().map(|e| e.line)).collect();
+            assert_eq!(got, expected, "watcher {notify}, deleted {deleted}");
+            assert!(rx.recv_timeout(Duration::from_millis(500)).is_err(), "watcher {notify}, deleted {deleted}: nothing more");
+            set.stop_all();
+        }
+    }
+}
+
+/// A family not there yet, or there and empty, is looked at every rescan while no watcher is
+/// armed, whatever its poll, and watched from the round that finds its folder: under a poll of
+/// five seconds, an empty folder with the watcher off reads its first member's line within the
+/// rescan and 400 ms and the next within 400 ms; a folder absent at the start with the watcher on,
+/// made with a member, reads the member's line within the rescan and 400 ms and the next line,
+/// the watcher's, within half a second. The attach waited its whole poll, and the live loop armed
+/// the watch after its read, the next line a poll late (C-036's third idle-cost refute round).
+#[test]
+fn a_family_not_yet_there_or_empty_is_looked_at_every_rescan() {
+    for (case, notify) in [("empty", false), ("absent", true)] {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("logs");
+        if case == "empty" {
+            std::fs::create_dir_all(&dir).unwrap();
+        }
+        let spec = FamilySpec::new(&dir, r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d"), ActiveMode::NewestByOrder).unwrap();
+        let cfg = FamilyTailConfig { poll_interval: Duration::from_secs(5), rescan_interval: Duration::from_millis(200), use_notify: Some(notify), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
+        let first = cfg.rescan_interval + Duration::from_millis(400);
+        let next = if notify { Duration::from_millis(500) } else { Duration::from_millis(400) };
+        let (mut set, rx) = SourceSet::new();
+        set.spawn(Box::new(FamilyTailSource::new(case, case, spec, cfg))).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::create_dir_all(&dir).unwrap();
+        let member = dir.join("20261126_sorts1.log");
+        std::fs::write(&member, "first 0\n").unwrap();
+        let made = Instant::now();
+        let got = rx.recv_timeout(first).map(|e| e.line);
+        assert_eq!(got.as_deref(), Ok("first 0"), "{case}: the first member read within {first:?} ({:?})", made.elapsed());
+        for i in 1..4 {
+            let mut f = std::fs::OpenOptions::new().append(true).open(&member).unwrap();
+            std::io::Write::write_all(&mut f, format!("first {i}\n").as_bytes()).unwrap();
+            let written = Instant::now();
+            let got = rx.recv_timeout(next).map(|e| e.line);
+            assert_eq!(got.as_deref(), Ok(format!("first {i}").as_str()), "{case}: line {i} read within {next:?} ({:?})", written.elapsed());
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        set.stop_all();
+    }
+}
+
+/// A recursive family is watched in every folder of its tree, a folder born in it included: under
+/// a poll of five seconds, a write to a member in a subfolder read within half a second, a new
+/// member there within the drain grace and half a second, a folder made with a member in it
+/// within the same bound, and a write to that member within half a second. The tree's watch was
+/// untested: a watch on the top folder alone passed every test (C-036's third idle-cost round).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_recursive_family_is_woken_in_every_folder_of_its_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("a")).unwrap();
+    std::fs::write(dir.path().join("a/app_1.log"), "").unwrap();
+    let spec = FamilySpec::new(dir.path(), r"[a-z]/app_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap().with_recursive(true);
+    let cfg = FamilyTailConfig { poll_interval: Duration::from_secs(5), use_notify: Some(true), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
+    let rotation = cfg.drain_grace + Duration::from_millis(500);
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FamilyTailSource::new("tree", "tree", spec, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let read_within = |what: &str, within: Duration| {
+        let written = Instant::now();
+        let got = rx.recv_timeout(within).map(|e| e.line);
+        assert_eq!(got.as_deref(), Ok(what), "{what} read within {within:?} of its write ({:?})", written.elapsed());
+    };
+    let append = |rel: &str, line: &str| {
+        let mut f = std::fs::OpenOptions::new().append(true).create(true).open(dir.path().join(rel)).unwrap();
+        std::io::Write::write_all(&mut f, format!("{line}\n").as_bytes()).unwrap();
+    };
+    append("a/app_1.log", "a 1");
+    read_within("a 1", Duration::from_millis(500));
+    append("a/app_2.log", "a 2");
+    read_within("a 2", rotation);
+    std::fs::create_dir_all(dir.path().join("b")).unwrap();
+    append("b/app_3.log", "b 3");
+    read_within("b 3", rotation);
+    std::thread::sleep(Duration::from_millis(200));
+    append("b/app_3.log", "b 3 again");
+    read_within("b 3 again", Duration::from_millis(500));
     set.stop_all();
 }

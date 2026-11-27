@@ -60,14 +60,27 @@ fn absolute(path: &Path) -> PathBuf {
     }
 }
 
-/// Where a symbolic link at `path` leads, resolved whole; `None` for a file that is no link, or a
-/// link that leads nowhere for the moment.
+/// Where a symbolic link at `path` leads, followed link by link: the last link's text, its
+/// folder resolved, so a link whose target is gone for the moment still names the folder and the
+/// name it will be made at again (a target deleted and made again was read a poll late, C-035's
+/// third idle-cost round). `None` for a file that is no link.
 fn link_target(path: &Path) -> Option<PathBuf> {
-    let meta = std::fs::symlink_metadata(path).ok()?;
-    if !meta.file_type().is_symlink() {
+    let mut at = path.to_path_buf();
+    for _ in 0..40 {
+        match std::fs::symlink_metadata(&at) {
+            Ok(m) if m.file_type().is_symlink() => {
+                let text = std::fs::read_link(&at).ok()?;
+                at = if text.is_absolute() { text } else { folder_of(&at).join(text) };
+            }
+            _ => break,
+        }
+    }
+    if at == path {
         return None;
     }
-    std::fs::canonicalize(path).ok()
+    let name = at.file_name()?.to_os_string();
+    let folder = folder_of(&at);
+    Some(std::fs::canonicalize(&folder).unwrap_or(folder).join(name))
 }
 
 /// What a watch wakes its loop for, by the name an event in a watched folder carries.
@@ -129,6 +142,12 @@ impl Watch {
     /// armed anew, after a while nothing watched): the folder is to be listed.
     pub(crate) fn listing_due(&self) -> bool {
         self.renamed.swap(false, Ordering::AcqRel)
+    }
+
+    /// How long a family waits for its next look while attaching: its poll with a watcher armed
+    /// (the watcher wakes it), else no longer than its rescan.
+    pub(crate) fn wait_between(&self, poll: Duration, rescan: Duration) -> Duration {
+        if self.alive() { poll } else { poll.min(rescan) }
     }
 
     /// How long a family waits between two listings nothing asked for.
@@ -439,8 +458,9 @@ mod backend {
             // SAFETY: the two descriptors pipe2 just returned, owned by nothing else.
             let (stop_r, stop_w) = unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
             let inner = Arc::new(Inner { fd, interest, recursive, roles: Mutex::new(HashMap::new()) });
-            for f in folders {
-                if !inner.add_tree(f, "", 0) {
+            // The followed path's folder or nothing; a link's target's folder, if it can be.
+            for (i, f) in folders.iter().enumerate() {
+                if !inner.add_tree(f, "", 0) && i == 0 {
                     return None;
                 }
             }
@@ -509,16 +529,22 @@ mod backend {
         matches!(kind, EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_)) | EventKind::Any | EventKind::Other)
     }
 
-    fn may_be_folder(kind: &EventKind) -> bool {
-        use notify::event::{CreateKind, RemoveKind};
-        matches!(
-            kind,
-            EventKind::Create(CreateKind::Folder | CreateKind::Any | CreateKind::Other)
-                | EventKind::Remove(RemoveKind::Folder | RemoveKind::Any | RemoveKind::Other)
-                | EventKind::Modify(ModifyKind::Name(_))
-                | EventKind::Any
-                | EventKind::Other
-        )
+    /// Whether an event in a recursive tree is a folder's, which may bring or take members: told
+    /// by its kind, or, where the kind does not say (Windows reports every create and a rename's
+    /// new name untyped), by a folder standing at the path now. An untyped remove or a rename's old
+    /// name is never taken for one: a file made and removed beside the members woke the follower
+    /// and listed the tree each time (C-036's third idle-cost round), and a folder removed has its
+    /// members report their own removal.
+    fn folder_event(kind: &EventKind, path: &Path) -> bool {
+        use notify::event::{CreateKind, RemoveKind, RenameMode};
+        match kind {
+            EventKind::Create(CreateKind::Folder) | EventKind::Remove(RemoveKind::Folder) => true,
+            EventKind::Create(CreateKind::Any | CreateKind::Other)
+            | EventKind::Modify(ModifyKind::Name(RenameMode::To | RenameMode::Both | RenameMode::Any | RenameMode::Other))
+            | EventKind::Any
+            | EventKind::Other => path.is_dir(),
+            _ => false,
+        }
     }
 
     /// Whether an event at `path` concerns what is followed; a path this cannot place wakes.
@@ -532,7 +558,7 @@ mod backend {
                 let Some(rel) = folders.first().and_then(|root| path.strip_prefix(root).ok()) else { return true };
                 let parts: Option<Vec<&str>> = rel.components().map(|c| c.as_os_str().to_str()).collect();
                 match parts {
-                    Some(parts) => spec.names(&parts.join("/")) || may_be_folder(kind),
+                    Some(parts) => spec.names(&parts.join("/")) || folder_event(kind, path),
                     None => false,
                 }
             }
@@ -558,8 +584,11 @@ mod backend {
             })
             .ok()?;
             let mode = if recursive { RecursiveMode::Recursive } else { RecursiveMode::NonRecursive };
-            for f in folders {
-                watcher.watch(f, mode).ok()?;
+            // The followed path's folder or nothing; a link's target's folder, if it can be.
+            for (i, f) in folders.iter().enumerate() {
+                if watcher.watch(f, mode).is_err() && i == 0 {
+                    return None;
+                }
             }
             Some(Backend { _watcher: watcher })
         }

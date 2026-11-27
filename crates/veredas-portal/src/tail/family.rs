@@ -995,6 +995,9 @@ fn run_family(
             if stop.load(Ordering::Relaxed) || disconnected.get() {
                 return Ok(());
             }
+            // A round waits no longer than the rescan while no watcher is armed: a family not
+            // there yet or empty waited its whole poll (C-036's third idle-cost round).
+            let attach_wait = watch.wait_between(cfg.poll_interval, cfg.rescan_interval);
             let files = spec.resolve().ok();
             if preexisted.is_none() {
                 preexisted = Some(files.as_ref().map(|f| !f.is_empty()).unwrap_or(false));
@@ -1004,7 +1007,7 @@ fn run_family(
                 // Looked at, not there: the start may return; whatever appears is new content.
                 nothing_to_read();
                 attached(&mut attached_slot);
-                wait_tick(&wake_rx, cfg.poll_interval);
+                wait_tick(&wake_rx, attach_wait);
                 continue;
             };
 
@@ -1015,7 +1018,7 @@ fn run_family(
                 match spec.active_mode() {
                     ActiveMode::NewestByOrder => {
                         if files.is_empty() {
-                            wait_tick(&wake_rx, cfg.poll_interval);
+                            wait_tick(&wake_rx, attach_wait);
                             continue;
                         }
                         // The generic convergence reads every generation from the family's first
@@ -1060,7 +1063,7 @@ fn run_family(
                                 break (cursor, OrderKey::NONE, fixed_name.clone());
                             }
                             Err(_) => {
-                                wait_tick(&wake_rx, cfg.poll_interval);
+                                wait_tick(&wake_rx, attach_wait);
                                 continue;
                             }
                         }
@@ -1146,7 +1149,7 @@ fn run_family(
                                 if active_now.is_some_and(|a| a.path == path)
                                     || matches!(spec.active_mode(), ActiveMode::Fixed(n) if spec.dir().join(n) == path) =>
                             {
-                                wait_tick(&wake_rx, cfg.poll_interval);
+                                wait_tick(&wake_rx, attach_wait);
                                 continue;
                             }
                             crate::tail::cursor::Located::At(path) => found = Some((path, None)),
@@ -1189,7 +1192,7 @@ fn run_family(
                             }
                             // Still held, or moved again since: looked for again next round.
                             _ => {
-                                wait_tick(&wake_rx, cfg.poll_interval);
+                                wait_tick(&wake_rx, attach_wait);
                                 continue;
                             }
                         }
@@ -1226,7 +1229,7 @@ fn run_family(
                     }
                     let Some(active) = active_now.filter(|_| !awaiting) else {
                         // A generation held, or no active yet: looked at again next round.
-                        wait_tick(&wake_rx, cfg.poll_interval);
+                        wait_tick(&wake_rx, attach_wait);
                         continue;
                     };
                     // The active: the held file still there, from where it stood (from its top
@@ -1335,7 +1338,7 @@ fn run_family(
                                     _ => {}
                                 }
                             }
-                            wait_tick(&wake_rx, cfg.poll_interval);
+                            wait_tick(&wake_rx, attach_wait);
                             continue;
                         }
                     }
@@ -1349,7 +1352,7 @@ fn run_family(
                     attached(&mut attached_slot);
                     known = member_names(&files);
                     preexisted = Some(false);
-                    wait_tick(&wake_rx, cfg.poll_interval);
+                    wait_tick(&wake_rx, attach_wait);
                     continue;
                 };
                 // A start at the end skips the history: read in at once, whether or not the
@@ -1400,7 +1403,7 @@ fn run_family(
                         }
                         // Rotated between the resolve and the open, or held; the next round
                         // realigns.
-                        wait_tick(&wake_rx, cfg.poll_interval);
+                        wait_tick(&wake_rx, attach_wait);
                         continue;
                     }
                 }
@@ -1423,6 +1426,12 @@ fn run_family(
             return Ok(());
         }
 
+        // A folder made anew is watched again, and the file read now watched for its writes,
+        // before the read, so a write after it wakes the wait (one between the read and an arm
+        // after it waited a poll, C-036's third idle-cost round); with a watcher armed, the folder
+        // is listed when it reports a name made, removed or renamed (and at a slow fallback), so
+        // a quiet family's idle cost does not grow with its members.
+        watch.keep_on_family(&spec, Some(cursor.path()));
         match cursor.read_new(&mut emit)? {
             ReadStep::Truncated => {
                 // An in-place truncation of the active file: the degenerate single-file case. Cut
@@ -1444,10 +1453,6 @@ fn run_family(
             _ => crate::tail::mark_history_read(&history, sent.get()),
         }
 
-        // A folder made anew is watched again, and the file read now watched for its writes; with
-        // a watcher armed, the folder is listed when it reports a name made, removed or renamed
-        // (and at a slow fallback), so a quiet family's idle cost does not grow with its members.
-        watch.keep_on_family(&spec, Some(cursor.path()));
         let listing_due = watch.listing_due();
         match spec.active_mode() {
             ActiveMode::NewestByOrder => {
@@ -1456,6 +1461,29 @@ fn run_family(
                 let status = cursor.check_path();
                 if status != PathStatus::Same {
                     next_rescan = Instant::now();
+                }
+                if status == PathStatus::Replaced {
+                    // The active replaced at its own name (deleted and made again, a file renamed
+                    // over it): it ranks the same, never newer, so no rotation brings it. The old
+                    // file drained to a stable end (its torn last line final), the one at the name
+                    // now is read from its start, as a single tail's replacement is (C-035), and
+                    // before any newer member: one born in the same pass was caught up from the
+                    // old name's rank and the replacement never read (C-036's third idle-cost
+                    // round). The same file back after the drain (a share's passing glitch) is
+                    // kept.
+                    cursor.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
+                    if cursor.check_path() == PathStatus::Replaced {
+                        let path = cursor.path().to_path_buf();
+                        // A held file read already (C-098) is followed from its end.
+                        let start = if !read_ids.is_empty() && crate::tail::cursor::identity_at(&path).is_some_and(|id| read_ids.contains(&id)) { FileStart::End } else { FileStart::Begin };
+                        if let Ok(c) = TailedFile::open(&path, start) {
+                            cursor.flush_pending(&mut emit);
+                            cursor = c;
+                            // A newer member, born with it, is listed at the next pass.
+                            next_rescan = Instant::now();
+                            continue;
+                        }
+                    }
                 }
                 if listing_due || Instant::now() >= next_rescan {
                     next_rescan = Instant::now() + watch.rescan_every(cfg.rescan_interval);
@@ -1480,25 +1508,6 @@ fn run_family(
                         // Another generation may already be waiting.
                         next_rescan = Instant::now();
                         continue;
-                    }
-                    if status == PathStatus::Replaced {
-                        // The active replaced at its own name (deleted and made again, a file
-                        // renamed over it): it ranks the same, never newer, so no rotation brings
-                        // it. The old file drained to a stable end (its torn last line final), the
-                        // one at the name now is read from its start, as a single tail's
-                        // replacement is (C-035); the same file back after the drain (a share's
-                        // passing glitch) is kept.
-                        cursor.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
-                        if cursor.check_path() == PathStatus::Replaced {
-                            let path = cursor.path().to_path_buf();
-                            // A held file read already (C-098) is followed from its end.
-                            let start = if !read_ids.is_empty() && crate::tail::cursor::identity_at(&path).is_some_and(|id| read_ids.contains(&id)) { FileStart::End } else { FileStart::Begin };
-                            if let Ok(c) = TailedFile::open(&path, start) {
-                                cursor.flush_pending(&mut emit);
-                                cursor = c;
-                                continue;
-                            }
-                        }
                     }
                 }
             }
