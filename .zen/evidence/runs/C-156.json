@@ -7,10 +7,10 @@
     "cargo test -p orcl-front --test shell && cargo +nightly-2026-11-21 test -p orcl-front --features driver --test lowering && cargo +nightly-2026-11-21 clippy -p orcl-front --features driver --all-targets -- -D warnings"
   ],
   "exitCode": 0,
-  "outputSha": "08677fc0a21c1aeff8559540846a322321a9684a44b96275dc99b8d6c4ced88e",
-  "outputTail": "test the_driver_takes_its_options_from_the_environment_as_a_wrapper_and_lowers_no_test_build ... ok\ntest the_source_map_names_no_file_of_core ... ok\ntest arithmetic_bits_comparisons_and_casts_run_lowered_as_they_run_natively ... ok\ntest the_conveyor_runs_lowered_as_it_runs_natively ... ok\ntest enums_arrays_options_tuples_references_durations_and_constants_run_lowered_as_natively ... ok\ntest ordinary_control_code_runs_lowered_as_natively ... ok\ntest the_probe_of_every_block_of_orcl_std_runs_lowered_as_it_runs_natively ... ok\n\ntest result: ok. 65 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.73s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s\n     Running tests/shell.rs (target/debug/build/orcl-front/b84bf110bd17d9b6/out/shell-b84bf110bd17d9b6)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s\n     Running tests/lowering.rs (target/debug/build/orcl-front/69721d5d8bf7b6f8/out/lowering-69721d5d8bf7b6f8)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s",
-  "ranAt": "2026-11-27T08:58:31.806Z",
-  "headCommit": "edf5f870efadf72c0df86d1a80cf8c45805e2f50",
+  "outputSha": "4855aac61f7b9fd8456eb55b3fbd10c99fa86597730caf81a9d5292a783736db",
+  "outputTail": "test the_conveyor_runs_lowered_as_it_runs_natively ... ok\ntest the_source_map_names_no_file_of_core ... ok\ntest enums_arrays_options_tuples_references_durations_and_constants_run_lowered_as_natively ... ok\ntest ordinary_control_code_runs_lowered_as_natively ... ok\ntest the_probe_of_every_block_of_orcl_std_runs_lowered_as_it_runs_natively ... ok\n\ntest result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.65s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s\n     Running tests/shell.rs (target/debug/build/orcl-front/b84bf110bd17d9b6/out/shell-b84bf110bd17d9b6)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s\n     Running tests/lowering.rs (target/debug/build/orcl-front/69721d5d8bf7b6f8/out/lowering-69721d5d8bf7b6f8)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.29s",
+  "ranAt": "2026-11-27T09:36:27.332Z",
+  "headCommit": "6844ae84bdb63c2354847b9f231e07c2dc409993",
   "tests": [
     {
       "name": "crates/orcl-front/tests/shell.rs",
@@ -20,7 +20,7 @@
     {
       "name": "crates/orcl-front/tests/lowering.rs",
       "file": "crates/orcl-front/tests/lowering.rs",
-      "fileSha": "47c805aa9a7c0501ba4082b13b4866e0282e3d46e4aa6d86b51272ef2c2bf853"
+      "fileSha": "114012bbeb4f38b5b94e50693abdbfd2602cac40f62cf5cf0df70999f73fafcd"
     }
   ]
 }
