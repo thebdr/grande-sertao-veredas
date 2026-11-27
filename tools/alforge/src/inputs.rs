@@ -521,6 +521,11 @@ impl Workspace<'_> {
             for (lit, rust) in named(&text) {
                 if let Some(path) = normal(&from.join(&lit)).filter(|_| rust) {
                     if self.tree.join(&path).is_dir() {
+                        // A folder a `#[path]` gives an inline module: the modules rustc loads
+                        // there are read in turn, every `.rs` file of it.
+                        let mut inner = Vec::new();
+                        walk(self.tree, &path, left, &mut inner).map_err(|e| format!("{path}'s sources do not read: {e}"))?;
+                        files.extend(inner);
                         reached.insert(path);
                     } else {
                         files.push(path);
@@ -581,6 +586,11 @@ impl Workspace<'_> {
                 // (`include!("x.in")`); a file of data (`include_str!`) names nothing.
                 if rust && self.tree.join(&path).is_file() && scanned.insert(path.clone()) {
                     files.push(path);
+                } else if rust && self.tree.join(&path).is_dir() {
+                    // A folder a `#[path]` gives an inline module: every `.rs` file of it read.
+                    let mut inner = Vec::new();
+                    walk(self.tree, &path, left, &mut inner).map_err(|e| format!("{path}'s sources do not read: {e}"))?;
+                    files.extend(inner.into_iter().filter(|f| scanned.insert(f.clone())));
                 }
             }
         }

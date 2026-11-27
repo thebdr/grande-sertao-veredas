@@ -2576,3 +2576,40 @@ fn round_twenty_nine_modules_followed_into_test_folders_until_none_is_reached() 
         ["a", "b/c", "b/d/e", "f"]
     );
 }
+
+/// Round 30's real form: a `#[path]` on an inline module naming a folder outside every package
+/// folder (`mod shared { pub mod words; }` from `shared/`): every module file rustc loads there is
+/// read in turn, so the data file one includes and the test folder one names are charged.
+#[test]
+fn round_thirty_a_folder_an_inline_modules_path_names_is_read_whole() {
+    let pins = |release: &str, commit: &str| -> (PathBuf, Manifest) {
+        let text = format!(
+            "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
+             [[component]]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nbins = [\"veredas-portal\"]\n\n\
+             [tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+        );
+        (PathBuf::from(format!("{release}.toml")), manifest::load(&text).unwrap())
+    };
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-portal\"]\n");
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    r.write("crates/veredas-portal/src/main.rs", "#[path = \"../../../shared\"]\nmod shared {\n    pub mod words;\n}\nfn main() { println!(\"{} {}\", shared::words::TEXT, shared::words::common::W); }\n");
+    r.write("shared/words.rs", "pub const TEXT: &str = include_str!(\"../docs/word.txt\");\n#[path = \"../crates/veredas-portal/tests/common/mod.rs\"]\npub mod common;\n");
+    r.write("docs/word.txt", "one");
+    r.write("crates/veredas-portal/tests/common/mod.rs", "pub const W: &str = \"one\";\n");
+    r.write("crates/veredas-portal/tests/words.rs", "mod common;\n#[test]\nfn w() {}\n");
+    let c1 = r.commit("a folder an inline module's path names");
+    let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
+    let named = &held["veredas-portal"].inputs.as_ref().unwrap().0;
+    assert!(named.contains_key("shared") && named.contains_key("docs/word.txt") && !named.contains_key("crates/veredas-portal/tests/"), "{named:?}");
+    for (file, text, inputs) in [("docs/word.txt", "two", "docs/word.txt"), ("crates/veredas-portal/tests/common/mod.rs", "pub const W: &str = \"deux\";\n", "crates/veredas-portal/")] {
+        r.write(file, text);
+        let c = r.commit(file);
+        assert_eq!(
+            manifest::check_together(r.path(), &[pins("2.0.0", &c1), pins("2.0.1", &c)]).unwrap(),
+            [format!("veredas-portal 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs ({inputs}): a version names everything its build reads")],
+            "{file}"
+        );
+        r.git(&["reset", "-q", "--hard", &c1]);
+    }
+}
