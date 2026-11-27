@@ -5,15 +5,19 @@
 //! ORCL type has no drop glue, so MIR holds no cleanup block to keep out, and a crate built so links with the rest of
 //! the build as it would.
 //!
-//! The program's own crate, the one whose `--crate-name` is the program's, is lowered once the compiler has analysed
-//! it, when the compiler builds it as a library, and the program file is written once the compiler has finished it,
-//! with no error. Built as anything else, a bin of the program's name (cargo's bin target of a package beside its
-//! library), its own tests (`--test`) or a procedural macro, it is compiled and nothing is lowered or written.
+//! The program's own crate, the one whose name is the program's, is lowered once the compiler has analysed it, when
+//! the compiler builds it as a library, and the program file is written once the compiler has finished it, with no
+//! error. Its name is the one the command line's `--crate-name` gives, as cargo always passes it, or, with none, the
+//! one the compiler gives the crate itself, from its file or its own `crate_name` attribute. Built as anything else,
+//! a bin of the program's name (cargo's bin target of a package beside its library), its own tests (`--test`) or a
+//! procedural macro, it is compiled and nothing is lowered or written.
 use std::process::ExitCode;
 
 use orcl_interp::{Limits, Machine};
 use orcl_interp::file::{self, Header};
 use rustc_middle::ty::TyCtxt;
+use rustc_public::CompilerError;
+use rustc_span::def_id::LOCAL_CRATE;
 use rustc_structures::CrateType;
 
 use crate::NIGHTLY;
@@ -33,12 +37,24 @@ pub struct Job {
     pub revision: String,
 }
 
-/// An invocation, read: the arguments rustc is given and, when one of the driver's options names a program, what to
-/// lower.
+/// Which crate of an invocation the driver lowers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Lowers {
+    /// None: no program named, a crate the command line names otherwise, or the compiler's version asked for.
+    Nothing,
+    /// The crate the command line's `--crate-name` names, the program's.
+    Named(Job),
+    /// The crate the compiler names, from its file or its `crate_name` attribute, when that name is the program's:
+    /// the command line names no crate. Where its file goes and the revision are asked for once it is known to be.
+    ByCompiler { program: String, out: Option<String>, revision: Option<String> },
+}
+
+/// An invocation, read: the arguments rustc is given and, when one of the driver's options names a program, the crate
+/// to lower.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Invocation {
     pub rustc: Vec<String>,
-    pub job: Option<Job>,
+    pub lowers: Lowers,
 }
 
 fn take(args: &mut Vec<String>, name: &str) -> Result<Option<String>, Error> {
@@ -65,6 +81,13 @@ fn take(args: &mut Vec<String>, name: &str) -> Result<Option<String>, Error> {
         found = value;
     }
     Ok(found)
+}
+
+/// The program `program`'s job, its file and its revision each given, or the usage error naming the one missing.
+fn job(program: String, out: Option<String>, revision: Option<String>) -> Result<Job, Error> {
+    let out = out.ok_or_else(|| Error::Usage(format!("{} names no file to write", OUT.0)))?;
+    let revision = revision.ok_or_else(|| Error::Usage(format!("{} names no revision", REVISION.0)))?;
+    Ok(Job { program, out, revision })
 }
 
 fn crate_name(args: &[String]) -> Option<&str> {
@@ -102,16 +125,18 @@ impl Invocation {
             args.push("-Zalways-encode-mir".into());
             args.push("-Zmir-opt-level=0".into());
         }
-        // whether the program's crate is built as a library, and so lowered, the compiler says (`program_file`)
-        let job = match program {
-            Some(program) if crate_name(&args) == Some(program.as_str()) => {
-                let out = out.ok_or_else(|| Error::Usage(format!("{} names no file to write", OUT.0)))?;
-                let revision = revision.ok_or_else(|| Error::Usage(format!("{} names no revision", REVISION.0)))?;
-                Some(Job { program, out, revision })
-            }
-            _ => None,
+        // whether the program's crate is built as a library, and so lowered, the compiler says (`program_file`), and,
+        // with no `--crate-name`, whether the crate is the program's (`lowered`)
+        let lowers = match program {
+            None => Lowers::Nothing,
+            Some(program) => match crate_name(&args) {
+                Some(name) if name == program => Lowers::Named(job(program, out, revision)?),
+                Some(_) => Lowers::Nothing,
+                None if asks_version => Lowers::Nothing,
+                None => Lowers::ByCompiler { program, out, revision },
+            },
         };
-        Ok(Invocation { rustc: args, job })
+        Ok(Invocation { rustc: args, lowers })
     }
 }
 
@@ -142,18 +167,38 @@ fn program_file(tcx: TyCtxt<'_>, job: &Job) -> Result<Option<Vec<u8>>, Error> {
     Ok(Some(file::write(&header, &program)))
 }
 
-fn compile_and_lower(rustc: &[String], job: &Job) -> Result<(), Error> {
-    let result = rustc_public::run_with_tcx!(rustc, |tcx| match program_file(tcx, job) {
-        Ok(bytes) => std::ops::ControlFlow::Continue(bytes),
+/// The program file's bytes and where they go, for the crate the compiler holds when it is the program's crate and
+/// built as a library, or nothing for any other crate.
+fn lowered(tcx: TyCtxt<'_>, lowers: &Lowers) -> Result<Option<(Vec<u8>, String)>, Error> {
+    let job = match lowers {
+        Lowers::Nothing => return Ok(None),
+        Lowers::Named(job) => job.clone(),
+        // the name the compiler gives the crate, from its file or its `crate_name` attribute
+        Lowers::ByCompiler { program, out, revision } => {
+            if tcx.crate_name(LOCAL_CRATE).as_str() != program {
+                return Ok(None);
+            }
+            job(program.clone(), out.clone(), revision.clone())?
+        }
+    };
+    Ok(program_file(tcx, &job)?.map(|bytes| (bytes, job.out)))
+}
+
+fn compile_and_lower(rustc: &[String], lowers: &Lowers) -> Result<(), Error> {
+    let result = rustc_public::run_with_tcx!(rustc, |tcx| match lowered(tcx, lowers) {
+        Ok(file) => std::ops::ControlFlow::Continue(file),
         Err(e) => std::ops::ControlFlow::Break(e),
     });
-    let bytes = match result {
-        Ok(Some(bytes)) => bytes,
+    let (bytes, out) = match result {
+        Ok(Some(file)) => file,
         Ok(None) => return Ok(()),
-        Err(rustc_public::CompilerError::Interrupted(e)) => return Err(e),
+        Err(CompilerError::Interrupted(e)) => return Err(e),
+        // the command line naming no crate, the compiler ended before its analysis (a `--print`, `--emit=dep-info`
+        // alone): no crate built and none named, as with rustc alone
+        Err(CompilerError::Skipped) if matches!(lowers, Lowers::ByCompiler { .. }) => return Ok(()),
         Err(_) => return Err(Error::Compile),
     };
-    std::fs::write(&job.out, bytes).map_err(|e| Error::Write { path: job.out.clone(), error: e.to_string() })
+    std::fs::write(&out, bytes).map_err(|e| Error::Write { path: out, error: e.to_string() })
 }
 
 /// The driver's `main`.
@@ -165,19 +210,25 @@ pub fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match &invocation.job {
-        Some(job) => match compile_and_lower(&invocation.rustc, job) {
+    match &invocation.lowers {
+        Lowers::Nothing => {
+            rustc_driver::catch_with_exit_code(|| {
+                rustc_driver::compiler_entrypoint(&invocation.rustc, &mut Plain);
+            })
+        }
+        lowers => match compile_and_lower(&invocation.rustc, lowers) {
             Ok(()) => ExitCode::SUCCESS,
             Err(Error::Compile) => ExitCode::FAILURE,
+            // an option missing, found once the compiler named the crate the program's: the exit code of the usage
+            // errors found before rustc runs
+            Err(e @ Error::Usage(_)) => {
+                eprintln!("error: orcl-front: {e}");
+                ExitCode::from(2)
+            }
             Err(e) => {
                 eprintln!("error: orcl-front: {e}");
                 ExitCode::FAILURE
             }
         },
-        None => {
-            rustc_driver::catch_with_exit_code(|| {
-                rustc_driver::compiler_entrypoint(&invocation.rustc, &mut Plain);
-            })
-        }
     }
 }

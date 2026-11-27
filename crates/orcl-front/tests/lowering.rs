@@ -139,6 +139,12 @@ mod marker;
 #[allow(dead_code)]
 #[path = "programs/marker_shapes.rs"]
 mod marker_shapes;
+#[allow(dead_code)]
+#[path = "programs/names2.rs"]
+mod names2;
+#[allow(dead_code)]
+#[path = "programs/sound2.rs"]
+mod sound2;
 
 use std::fmt::Debug;
 use std::fs;
@@ -576,6 +582,13 @@ image!(marker::Inputs { a: u8 });
 image!(marker::Outputs { x: u8, y: u8 });
 image!(marker_shapes::Inputs { a: u8 });
 image!(marker_shapes::Outputs { x: u8, y: u8 });
+image!(names2::Inputs { a: u8 });
+image!(names2::Outputs { x: u8, y: u8, z: u64 });
+image!(sound2::Inputs { sel: u8, v: i16, sh: i8, on: bool });
+image!(sound2::Outputs {
+    mode: u16, lamp: u8, step: i16, flag: u8, level: i16, band: u8, shl: u16, sar: i32, popped: u8, wide: i64,
+    early: bool, held: Duration,
+});
 
 // Inputs drawn from a scan's index, the same for the native program and its lowered twin.
 
@@ -2331,4 +2344,171 @@ fn marker_shapes_run_as_natively() {
     let inputs = |k: u64| marker_shapes::Inputs { a: mix(k, 1) as u8 };
     let (outputs, _) = conform("marker_shapes", marker_shapes::QShapes::default(), "QShapes", &inputs, 200);
     both(&outputs, "x even", |o| o.x % 2 == 0);
+}
+
+// The tenth refute round's tests: the scalar names a type's arguments and a tuple's parts show, a const argument a
+// renamed function shows, paths from the crate's root deeper than one module, a trait's arguments telling two
+// functions apart, a program of `repr(C)` enums, niches beside a `bool` and signed ranges, and a program's crate
+// named by its file.
+
+#[test]
+fn scalar_names() {
+    let (_, code) = lower_in("scalar-names", "names2", &program("names2")).result.unwrap_or_else(|e| panic!("{e}"));
+    let types = type_names(&code);
+    for t in [
+        "Hold<i32>", "Hold<i64>", "Hold<u32>", "Hold<u64>", "Hold<bool>", "Hold<u8>", "Hold<u16>", "Hold<i16>",
+        "Hold<[u8; 2]>", "Hold<[u8; 4]>", "(&u8, u8)", "(&mut u8, u8)", "(usize, bool)", "(u64, bool)",
+    ] {
+        assert!(types.contains(&t), "{t} among {types:?}");
+    }
+    assert_eq!(repeated(&types), Vec::<&str>::new(), "types named alike: {types:?}");
+}
+
+#[test]
+fn const_argument_of_a_renamed_function() {
+    let (_, code) = lower_in("const-renamed", "names2", &program("names2")).result.unwrap_or_else(|e| panic!("{e}"));
+    let types = type_names(&code);
+    let functions = function_names(&code);
+    for t in ["Pack<2, fast::Timer>", "Pack<3, fast::Timer>", "Pack<2, slow::Timer>"] {
+        assert!(types.contains(&t), "{t} among {types:?}");
+    }
+    for f in ["Pack::<2, fast::Timer>::f", "Pack::<3, fast::Timer>::f", "Pack::<2, slow::Timer>::f"] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
+    assert_eq!(repeated(&functions), Vec::<&str>::new(), "functions named alike: {functions:?}");
+}
+
+#[test]
+fn paths_deeper_than_one_module() {
+    let (_, code) = lower_in("deep-paths", "names2", &program("names2")).result.unwrap_or_else(|e| panic!("{e}"));
+    let types = type_names(&code);
+    let functions = function_names(&code);
+    for t in ["l1::belt::Motor", "l2::belt::Motor"] {
+        assert!(types.contains(&t), "{t} among {types:?}");
+    }
+    for f in ["l1::belt::step", "l2::belt::step"] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
+}
+
+#[test]
+fn trait_arguments_of_one_name() {
+    let (_, code) = lower_in("trait-args", "names2", &program("names2")).result.unwrap_or_else(|e| panic!("{e}"));
+    let functions = function_names(&code);
+    for f in ["<Pick as Conv<ma::Marker>>::c", "<Pick as Conv<mb::Marker>>::c"] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
+    assert_eq!(repeated(&functions), Vec::<&str>::new(), "functions named alike: {functions:?}");
+}
+
+#[test]
+fn names2_runs_as_natively() {
+    let inputs = |k: u64| names2::Inputs { a: mix(k, 1) as u8 };
+    let (outputs, _) = conform("names2", names2::QNames::default(), "QNames", &inputs, 300);
+    both(&outputs, "x even", |o| o.x % 2 == 0);
+}
+
+#[test]
+fn sound2_runs_as_natively() {
+    let inputs = |k: u64| sound2::Inputs {
+        sel: mix(k, 1) as u8,
+        v: if mix(k, 5) % 13 == 0 { 0 } else { mix(k, 2) as i16 },
+        sh: mix(k, 3) as i8,
+        on: mix(k, 4) % 3 != 0,
+    };
+    let (outputs, _) = conform("sound2", sound2::Sound::default(), "Sound", &inputs, 3_000);
+    for m in [0u16, 8, 0xBEEF, 6] {
+        both(&outputs, &format!("mode {m}"), |o| o.mode == m);
+    }
+    for l in [1u8, 5, 9] {
+        both(&outputs, &format!("lamp {l}"), |o| o.lamp == l);
+    }
+    for f in 1..=5u8 {
+        both(&outputs, &format!("flag {f}"), |o| o.flag == f);
+    }
+    for b in 0..=4u8 {
+        both(&outputs, &format!("band {b}"), |o| o.band == b);
+    }
+    both(&outputs, "wide min", |o| o.wide == i64::MIN);
+    both(&outputs, "wide top", |o| o.wide == (u64::MAX >> 1) as i64);
+    both(&outputs, "wide -1", |o| o.wide == -1);
+    both(&outputs, "early", |o| o.early);
+    both(&outputs, "popped", |o| o.popped != 0);
+    both(&outputs, "held 1.5 s", |o| o.held == Duration::from_millis(1_500));
+    both(&outputs, "step back", |o| o.step < -300);
+}
+
+/// The driver's arguments for the crate `source`, compiled in `work` with no `--crate-name` (the compiler names it),
+/// the program `lines` named and the options `options` beside.
+fn by_the_compiler_s_name(work: &Path, source: &Path, options: &[&str]) -> Vec<String> {
+    let w = work.display().to_string();
+    let mut args = strings(&["--crate-type", "rlib", "--edition", "2024", &source.display().to_string()]);
+    args.extend(strings(&["--extern", &format!("orcl_std={w}/liborcl_std.rlib"), "-L", &w, "--out-dir", &w]));
+    args.extend(strings(&["--orcl-program", "lines"]));
+    args.extend(strings(options));
+    args
+}
+
+/// The defect of the tenth round: the program's crate as rustc names it from its file, no `--crate-name` on the
+/// command line, was compiled and not lowered, the driver succeeding with no file; it is the crate the option names
+/// all the same, so lowered, as with `--crate-name`.
+#[test]
+fn a_program_named_by_its_file_is_lowered() {
+    let work = fresh("no-crate-name");
+    compile_std(&work, &[]);
+    let file = work.join("lines.orclb");
+    let source = work.join("lines.rs");
+    fs::copy(program("lines"), &source).unwrap();
+    let out_option = format!("--orcl-out={}", file.display());
+    let out = driver(&by_the_compiler_s_name(&work, &source, &[&out_option, "--orcl-revision", "r"]));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{stderr}");
+    assert!(work.join("liblines.rlib").exists(), "rustc built the crate `lines`: {stderr}");
+    assert!(file.exists(), "the crate `lines` compiled, the driver succeeding, no file: {stderr}");
+    let (header, code) = file::read(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(header.revision, "r");
+    let named = lower_in("no-crate-name-named", "lines", &program("lines")).result.unwrap().1;
+    assert_eq!((&code.types, &code.functions), (&named.types, &named.functions), "the program, as with `--crate-name`");
+}
+
+#[test]
+fn with_no_crate_name_the_compiler_s_name_for_the_crate_decides() {
+    let work = fresh("no-crate-name-others");
+    compile_std(&work, &[]);
+    let file = work.join("lines.orclb");
+    let out_option = format!("--orcl-out={}", file.display());
+
+    // a crate the compiler names otherwise, from its file: compiled, and nothing lowered or written
+    let other = work.join("other.rs");
+    fs::copy(program("lines"), &other).unwrap();
+    let out = driver(&by_the_compiler_s_name(&work, &other, &[&out_option, "--orcl-revision", "r"]));
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(work.join("libother.rlib").exists(), "the crate `other` built");
+    assert!(!file.exists(), "a crate not the program is not lowered");
+
+    // a crate its own `crate_name` attribute names the program's, its file named otherwise: lowered
+    let attributed = work.join("attributed.rs");
+    let text = fs::read_to_string(program("lines")).unwrap();
+    fs::write(&attributed, format!("#![crate_name = \"lines\"]\n{text}")).unwrap();
+    let out = driver(&by_the_compiler_s_name(&work, &attributed, &[&out_option, "--orcl-revision", "r"]));
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(file.exists(), "the crate its attribute names `lines` lowered");
+    fs::remove_file(&file).unwrap();
+    fs::remove_file(work.join("liblines.rlib")).unwrap();
+
+    // the program named by its file with no file to write: refused as before rustc runs, nothing built or written
+    let source = work.join("lines.rs");
+    fs::copy(program("lines"), &source).unwrap();
+    let out = driver(&by_the_compiler_s_name(&work, &source, &["--orcl-revision", "r"]));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("error: orcl-front: usage: --orcl-out names no file to write"), "{stderr}");
+    assert!(!work.join("liblines.rlib").exists(), "the crate `lines` not built");
+
+    // what the compiler answers with no analysis, the crate's name printed: answered as by rustc alone
+    let print = [out_option.as_str(), "--orcl-revision", "r", "--print", "crate-name"];
+    let out = driver(&by_the_compiler_s_name(&work, &source, &print));
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "lines");
+    assert!(!file.exists(), "nothing lowered when the compiler only prints");
 }
