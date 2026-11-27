@@ -109,6 +109,8 @@ fn oficina_is_a_library_and_one_executable_its_window_behind_the_shell_feature()
     assert!(staged.starts_with("100644 ") && staged.trim_end().ends_with("\tCOPYING") && staged.lines().count() == 1, "COPYING kept by git as a regular file: {staged:?}");
     assert_eq!(sha256(&git(&["cat-file", "blob", ":./COPYING"])), GPL3, "the GPL version 3 text as git keeps it");
     assert_eq!(sha256(&git(&["cat-file", "--filters", ":./COPYING"])), GPL3, "the GPL version 3 text as a checkout writes it");
+    // And as Git for Windows' default (`core.autocrlf` true) writes it: LF kept.
+    assert_eq!(sha256(&git(&["-c", "core.autocrlf=true", "-c", "core.eol=crlf", "cat-file", "--filters", ":./COPYING"])), GPL3, "the GPL version 3 text as a checkout on Windows writes it");
     let mut targets: Vec<(String, String, Vec<String>)> = p["targets"]
         .as_array()
         .expect("targets")
@@ -436,6 +438,52 @@ fn the_window_that_ships_carries_no_test_server() {
     let _ = child.wait();
     assert!(running, "the window that ships stayed up");
     assert!(!answered, "something answered on port {port}");
+}
+
+/// The TCP sockets `pid` listens on, read from `/proc` (Linux): its sockets' inodes against the
+/// listening rows (state `0A`) of `/proc/net/tcp` and `tcp6`.
+#[cfg(target_os = "linux")]
+fn listening(pid: u32) -> Vec<String> {
+    let inodes: BTreeSet<String> = std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .expect("the process's descriptors")
+        .filter_map(|e| std::fs::read_link(e.ok()?.path()).ok())
+        .filter_map(|l| l.to_str()?.strip_prefix("socket:[")?.strip_suffix(']').map(str::to_string))
+        .collect();
+    ["/proc/net/tcp", "/proc/net/tcp6"]
+        .iter()
+        .flat_map(|t| std::fs::read_to_string(t).expect("the TCP table").lines().skip(1).map(str::to_string).collect::<Vec<_>>())
+        .filter(|row| {
+            let f: Vec<&str> = row.split_whitespace().collect();
+            f.len() > 9 && f[3] == "0A" && inodes.contains(f[9])
+        })
+        .collect()
+}
+
+/// Spix's server starts only when `OFICINA_SPIX_PORT` names a port: the driver's own executable
+/// started with the variable unset, `0` and not a number stays up and listens on no TCP port (read
+/// from `/proc` on Linux; elsewhere Spix's own default port, 9000, refuses).
+#[test]
+fn the_driver_listens_only_on_a_port_named() {
+    let platform = std::env::var("OFICINA_TEST_PLATFORM").unwrap_or_else(|_| "offscreen".to_string());
+    for value in [None, Some("0"), Some("not-a-port")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_veredas-oficina"));
+        command.env("QT_QPA_PLATFORM", &platform).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        match value {
+            None => command.env_remove("OFICINA_SPIX_PORT"),
+            Some(v) => command.env("OFICINA_SPIX_PORT", v),
+        };
+        let mut child = command.spawn().expect("the driver's executable starts");
+        std::thread::sleep(Duration::from_secs(3));
+        let running = child.try_wait().expect("its state").is_none();
+        #[cfg(target_os = "linux")]
+        let listens = listening(child.id());
+        #[cfg(not(target_os = "linux"))]
+        let listens: Vec<String> = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], 9000)), Duration::from_secs(1)).map(|_| vec!["9000".to_string()]).unwrap_or_default();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(running, "the driver's executable stayed up with OFICINA_SPIX_PORT {value:?}");
+        assert!(listens.is_empty(), "the driver listens with OFICINA_SPIX_PORT {value:?}: {listens:?}");
+    }
 }
 
 /// The whole window as it draws now: Spix's screenshot, written by Qt as a binary PPM (its pixels
