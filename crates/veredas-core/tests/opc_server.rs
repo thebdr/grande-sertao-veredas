@@ -271,9 +271,12 @@ fn the_callers_folder_and_variables_browse_and_poll_and_what_the_caller_sets_is_
     let root = children(None);
     let folder = root
         .iter()
-        .find(|n| n.browse_name.ends_with("Line"))
+        .find(|n| n.node_id == server.node_id_str("line"))
         .unwrap_or_else(|| panic!("{root:?}"));
-    assert_eq!(folder.node_id, server.node_id_str("line"));
+    assert_eq!(
+        (folder.browse_name.as_str(), folder.display_name.as_str()),
+        ("Line", "Line")
+    );
     assert!(folder.is_container && !folder.is_variable);
     let nodes = children(Some(folder.node_id.clone()));
     let seen: Vec<(String, String, String, Option<SeriesType>)> = nodes
@@ -695,7 +698,7 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
     };
     let server = Server::start(&writable_spec()).unwrap();
     let ids = ["count", "level", "start", "batch"];
-    let (folder, types, refused, right) = block(async {
+    let (folder, namespaces, types, refused, after_refused, right) = block(async {
         use opcua_types::{
             BrowseDescription, BrowseDirection, BrowseResultMask, ObjectId, ReferenceTypeId,
         };
@@ -711,14 +714,40 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
             result_mask: BrowseResultMask::All as u32,
         };
         let browsed = session.browse(&[objects], 0, None).await.unwrap();
-        let folder: Vec<(NodeId, NodeId)> = browsed[0]
+        let folder: Vec<(NodeId, NodeId, String, String)> = browsed[0]
             .references
             .clone()
             .unwrap_or_default()
             .into_iter()
             .filter(|r| r.node_id.node_id == server.node_id("line"))
-            .map(|r| (r.reference_type_id, r.type_definition.node_id))
+            .map(|r| {
+                (
+                    r.reference_type_id,
+                    r.type_definition.node_id,
+                    r.browse_name.name.as_ref().to_string(),
+                    r.display_name.text.as_ref().to_string(),
+                )
+            })
             .collect();
+        // The server's namespaces, as a client reads them: the data namespace at the index the
+        // server gives, the application's URI the server's own.
+        let namespaces = session
+            .read(
+                &[ReadValueId {
+                    node_id: opcua_types::VariableId::Server_NamespaceArray.into(),
+                    attribute_id: AttributeId::Value as u32,
+                    index_range: NumericRange::None,
+                    data_encoding: QualifiedName::null(),
+                }],
+                TimestampsToReturn::Neither,
+                0.0,
+            )
+            .await
+            .unwrap();
+        let namespaces: Vec<String> = match &namespaces[0].value {
+            Some(Variant::Array(a)) => a.values.iter().map(|v| format!("{v}")).collect(),
+            other => panic!("the namespace array: {other:?}"),
+        };
         let reads: Vec<ReadValueId> = ids
             .iter()
             .map(|id| ReadValueId {
@@ -748,6 +777,24 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
             ])
             .await
             .unwrap();
+        // Nothing of them landed: the next read, which the server serves after them, finds the
+        // initial values.
+        let values: Vec<ReadValueId> = ids
+            .iter()
+            .map(|id| ReadValueId {
+                node_id: server.node_id(id),
+                attribute_id: AttributeId::Value as u32,
+                index_range: NumericRange::None,
+                data_encoding: QualifiedName::null(),
+            })
+            .collect();
+        let after_refused: Vec<Option<Variant>> = session
+            .read(&values, TimestampsToReturn::Neither, 0.0)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|d| d.value)
+            .collect();
         let right = session
             .write(&[
                 write("count", Variant::Int32(7)),
@@ -759,15 +806,38 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
             .unwrap();
         let _ = session.disconnect().await;
         handle.abort();
-        (folder, types, refused, right)
+        (folder, namespaces, types, refused, after_refused, right)
     });
     assert_eq!(
         folder,
         vec![(
             NodeId::from(opcua_types::ReferenceTypeId::Organizes),
-            NodeId::from(opcua_types::ObjectTypeId::FolderType)
+            NodeId::from(opcua_types::ObjectTypeId::FolderType),
+            "Line".to_string(),
+            "Line".to_string()
         )],
-        "the folder, organized by Objects, a FolderType"
+        "the folder, organized by Objects, a FolderType, named as the caller named it"
+    );
+    assert_eq!(
+        namespaces
+            .get(server.namespace as usize)
+            .map(String::as_str),
+        Some(NAMESPACE),
+        "{namespaces:?}"
+    );
+    assert_eq!(
+        namespaces.get(1).map(String::as_str),
+        Some(APP),
+        "{namespaces:?}"
+    );
+    assert_eq!(
+        after_refused,
+        vec![
+            Some(Variant::Int32(3)),
+            Some(Variant::Double(1.5)),
+            Some(Variant::Boolean(false)),
+            Some(Variant::from("B-1")),
+        ]
     );
     let types: Vec<Option<Variant>> = types.into_iter().map(|d| d.value).collect();
     let want: Vec<Option<Variant>> = [
@@ -914,6 +984,39 @@ fn a_spec_that_cannot_be_served_is_refused_by_name_before_anything_binds() {
         }
         other => panic!("{other:?}"),
     }
+    // A space inside an id is no space around it: such a variable is served, read by a client.
+    let mut s = spec();
+    s.variables[0].id = "count now".into();
+    let server = Server::start(&s).unwrap();
+    assert_eq!(server.get("count now"), Some(Variant::Int32(3)));
+    assert_eq!(
+        server.node_id_str("count now"),
+        format!("ns={};s=count now", server.namespace)
+    );
+    let read = block(async {
+        use opcua_types::{
+            AttributeId, NumericRange, QualifiedName, ReadValueId, TimestampsToReturn,
+        };
+        let mut client = raw_client();
+        let (session, handle) = raw_session(&mut client, &server).await;
+        let read = session
+            .read(
+                &[ReadValueId {
+                    node_id: server.node_id("count now"),
+                    attribute_id: AttributeId::Value as u32,
+                    index_range: NumericRange::None,
+                    data_encoding: QualifiedName::null(),
+                }],
+                TimestampsToReturn::Neither,
+                0.0,
+            )
+            .await
+            .unwrap();
+        let _ = session.disconnect().await;
+        handle.abort();
+        read
+    });
+    assert_eq!(read[0].value, Some(Variant::Int32(3)));
 }
 
 #[test]
@@ -1061,14 +1164,20 @@ fn the_callers_limits_on_one_read_and_on_sessions_hold() {
     let server = Server::start(&s).unwrap();
     let (first, rx1) = worker(&server, Auth::Anonymous);
     next_poll(&rx1, Duration::from_secs(15));
+    while rx1.try_recv().is_ok() {}
     let (second, rx2) = worker(&server, Auth::Anonymous);
     assert!(matches!(
         next_state(&rx2, Duration::from_secs(15)),
         ConnState::Retrying { .. }
     ));
     second.handle.join().unwrap();
-    // A poll made after the refusal: the ones waiting from before it taken first.
-    while rx1.try_recv().is_ok() {}
+    // The first's session untouched meanwhile: no status of it at all, its polls going on; and
+    // a poll made after the refusal, the ones waiting from before it taken first.
+    let statuses = rx1
+        .try_iter()
+        .filter(|e| matches!(e, OpcEvent::Status { .. }))
+        .count();
+    assert_eq!(statuses, 0, "the first client's session moved");
     next_poll(&rx1, Duration::from_secs(5));
     first.handle.join().unwrap();
 }
@@ -1165,7 +1274,11 @@ fn values_parse_from_text_by_type_and_render_as_a_monitor_shows_them() {
             "2147483648",
             Err("`2147483648` is not an int"),
         ),
+        (VarType::Int, "2147483647", Ok(Variant::Int32(i32::MAX))),
+        (VarType::Int, "-2147483648", Ok(Variant::Int32(i32::MIN))),
         (VarType::Float, "2.5", Ok(Variant::Double(2.5))),
+        (VarType::Float, "0.1", Ok(Variant::Double(0.1))),
+        (VarType::Float, "1e300", Ok(Variant::Double(1e300))),
         (VarType::Float, "", Ok(Variant::Double(0.0))),
         (VarType::Float, "inf", Err("`inf` is not a finite float")),
         (VarType::Float, "NaN", Err("`NaN` is not a finite float")),
