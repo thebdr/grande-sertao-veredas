@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(component) | package(leis) & binary(real_tree)"
   ],
   "exitCode": 0,
-  "outputSha": "e6ef595169e5e26d8bec382cc7e3f6688af51b69318e5b43456e7942c984b85b",
-  "outputTail": "        PASS [   0.017s] ( 2/14) veredas-comissionador::component the_plant_s_arming_is_named_where_the_run_arms_and_disarms_alone\n        PASS [   0.017s] ( 3/14) veredas-comissionador::component the_rule_of_targets_refuses_what_it_should\n        PASS [   0.017s] ( 4/14) veredas-comissionador::component the_session_s_store_is_reached_by_its_readers_alone\n        PASS [   0.019s] ( 5/14) veredas-comissionador::component the_reading_finds_every_refused_form\n        PASS [   0.027s] ( 6/14) veredas-comissionador::component the_executable_starts_its_session_from_the_project_as_it_read_it\n        PASS [   0.043s] ( 7/14) veredas-comissionador::component its_normal_dependencies_are_the_reviewed_ones\n        PASS [   0.045s] ( 8/14) veredas-comissionador::component comissionador_is_one_library_and_one_executable_named_for_it\n        PASS [   0.051s] ( 9/14) veredas-comissionador::component its_library_and_executable_are_built_from_its_src_folder_alone\n        PASS [   0.052s] (10/14) veredas-comissionador::component its_members_are_core_and_portal_at_most\n        PASS [   0.118s] (11/14) veredas-comissionador::component portal_is_reached_through_what_the_engine_takes_from_it_alone\n        PASS [   0.139s] (12/14) veredas-comissionador::component files_are_reached_where_the_engine_keeps_its_own\n        PASS [   0.385s] (13/14) leis::real_tree the_real_tree_obeys_every_law\n        PASS [   0.548s] (14/14) veredas-comissionador::component its_sources_reach_the_plant_through_portal_alone_and_arm_the_switch_in_one_place\n────────────\n     Summary [   0.549s] 14 tests run: 14 passed, 0 skipped",
-  "ranAt": "2026-11-27T11:50:46.339Z",
-  "headCommit": "43749c8936321186b18dc8cc6f501b527f87e1a9",
+  "outputSha": "59c0d70aa3ae3452023ed204f78b90d36b9e76ab2a2e54f1b08796e4c651e13a",
+  "outputTail": "        PASS [   0.019s] ( 3/15) veredas-comissionador::component the_executable_hands_the_run_its_arming_as_given\n        PASS [   0.021s] ( 4/15) veredas-comissionador::component the_executable_starts_its_session_from_the_project_as_it_read_it\n        PASS [   0.021s] ( 5/15) veredas-comissionador::component the_plant_s_arming_is_named_where_the_run_arms_and_disarms_alone\n        PASS [   0.021s] ( 6/15) veredas-comissionador::component the_rule_of_targets_refuses_what_it_should\n        PASS [   0.049s] ( 7/15) veredas-comissionador::component its_members_are_core_and_portal_at_most\n        PASS [   0.049s] ( 8/15) veredas-comissionador::component its_library_and_executable_are_built_from_its_src_folder_alone\n        PASS [   0.050s] ( 9/15) veredas-comissionador::component its_normal_dependencies_are_the_reviewed_ones\n        PASS [   0.051s] (10/15) veredas-comissionador::component comissionador_is_one_library_and_one_executable_named_for_it\n        PASS [   0.136s] (11/15) veredas-comissionador::component the_executable_alone_reads_a_project_and_starts_a_session\n        PASS [   0.148s] (12/15) veredas-comissionador::component files_are_reached_where_the_engine_keeps_its_own\n        PASS [   0.156s] (13/15) veredas-comissionador::component portal_is_reached_through_what_the_engine_takes_from_it_alone\n        PASS [   0.493s] (14/15) leis::real_tree the_real_tree_obeys_every_law\n        PASS [   0.675s] (15/15) veredas-comissionador::component its_sources_reach_the_plant_through_portal_alone_and_arm_the_switch_in_one_place\n────────────\n     Summary [   0.677s] 15 tests run: 15 passed, 0 skipped",
+  "ranAt": "2026-11-27T15:16:21.423Z",
+  "headCommit": "7e62c84397306bd4a2632798068983630a4731a6",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/component.rs",
       "file": "crates/veredas-comissionador/tests/component.rs",
-      "fileSha": "661a53ed40c0100fdf6bd9a095fd618f488698ed8e33ec3354f9e63c49dffd79"
+      "fileSha": "71c3bac170420952c742b61c227a5f18d76fcc411798c76fef8ea2171bd87bf4"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",

@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(grammar)"
   ],
   "exitCode": 0,
-  "outputSha": "58f1d65e08294869f8afae6000f67563d2ec13b7a068191413b94b7ae4a8ba93",
-  "outputTail": "        PASS [   0.324s] (45/57) veredas-comissionador::grammar nesting_past_its_limits_is_named_not_a_crash\n        PASS [   0.423s] (46/57) veredas-comissionador::grammar a_duration_is_read_exactly\n        PASS [   0.424s] (47/57) veredas-comissionador::grammar the_operator_limit_holds_in_patterns_ranges_parentheses_and_strings\n        PASS [   0.703s] (48/57) veredas-comissionador::grammar the_inputs_a_call_leaves_out_are_one_problem_named_by_the_first_five\n        PASS [   1.161s] (49/57) veredas-comissionador::grammar a_duration_s_exponent_is_read_without_a_loop_over_it\n        PASS [   2.322s] (50/57) veredas-comissionador::grammar a_way_back_of_five_and_six_is_counted_right\n        PASS [   3.333s] (51/57) veredas-comissionador::grammar problems_sharing_one_line_are_placed_at_once\n        PASS [   3.461s] (52/57) veredas-comissionador::grammar a_long_call_chain_and_a_long_cycle_are_checked_at_once\n        PASS [   3.488s] (53/57) veredas-comissionador::grammar a_test_using_a_large_function_file_is_checked_at_once\n        PASS [   4.746s] (54/57) veredas-comissionador::grammar a_function_s_inputs_reads_and_calls_are_looked_up_at_once\n        PASS [   5.182s] (55/57) veredas-comissionador::grammar places_on_a_line_past_ascii_are_counted_in_any_order\n        PASS [   5.953s] (56/57) veredas-comissionador::grammar every_start_of_a_key_is_its_own_and_the_first_names_it\n        PASS [   8.973s] (57/57) veredas-comissionador::grammar many_used_files_and_many_blocks_are_checked_in_linear_time\n────────────\n     Summary [   9.022s] 57 tests run: 57 passed, 0 skipped",
-  "ranAt": "2026-11-27T11:51:22.996Z",
-  "headCommit": "43749c8936321186b18dc8cc6f501b527f87e1a9",
+  "outputSha": "a6dc5a036a184cfc62c5453e4209c2c37bcc9eca734ebe3d78d83a13d2190ce6",
+  "outputTail": "        PASS [   0.278s] (46/58) veredas-comissionador::grammar a_used_file_that_reads_without_end_or_is_swapped_for_a_pipe_ends_the_check\n        PASS [   0.284s] (47/58) veredas-comissionador::grammar nesting_past_its_limits_is_named_not_a_crash\n        PASS [   0.291s] (48/58) veredas-comissionador::grammar the_operator_limit_holds_in_patterns_ranges_parentheses_and_strings\n        PASS [   0.501s] (49/58) veredas-comissionador::grammar the_inputs_a_call_leaves_out_are_one_problem_named_by_the_first_five\n        PASS [   1.320s] (50/58) veredas-comissionador::grammar a_duration_s_exponent_is_read_without_a_loop_over_it\n        PASS [   1.463s] (51/58) veredas-comissionador::grammar a_way_back_of_five_and_six_is_counted_right\n        PASS [   4.052s] (52/58) veredas-comissionador::grammar a_long_call_chain_and_a_long_cycle_are_checked_at_once\n        PASS [   4.668s] (53/58) veredas-comissionador::grammar problems_sharing_one_line_are_placed_at_once\n        PASS [   5.126s] (54/58) veredas-comissionador::grammar a_test_using_a_large_function_file_is_checked_at_once\n        PASS [   6.211s] (55/58) veredas-comissionador::grammar a_function_s_inputs_reads_and_calls_are_looked_up_at_once\n        PASS [   9.210s] (56/58) veredas-comissionador::grammar places_on_a_line_past_ascii_are_counted_in_any_order\n        PASS [   9.984s] (57/58) veredas-comissionador::grammar every_start_of_a_key_is_its_own_and_the_first_names_it\n        PASS [  14.567s] (58/58) veredas-comissionador::grammar many_used_files_and_many_blocks_are_checked_in_linear_time\n────────────\n     Summary [  14.603s] 58 tests run: 58 passed, 0 skipped",
+  "ranAt": "2026-11-27T15:17:09.009Z",
+  "headCommit": "7e62c84397306bd4a2632798068983630a4731a6",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/grammar.rs",
       "file": "crates/veredas-comissionador/tests/grammar.rs",
-      "fileSha": "ed759a99427919c0fd04a8d0bbe9efe9969e5cfae3f782789f63d9d4ec2df073"
+      "fileSha": "c23e1bbf72eafe9cf308e0c5ff092e6c23b0f9f0075ae2d0b547e892a9d912b8"
     }
   ]
 }
