@@ -374,6 +374,12 @@ const ARMING_FILE: &str = "main.rs";
 /// trait's and `LivePlant`'s) and the run's arm and disarm, nothing else.
 const SET_ARMED: [(&str, usize); 2] = [("plant.rs", 2), ("run.rs", 2)];
 
+/// Where the arming the executable hands the plant is named (the ident `arming`), and how often:
+/// in `plant.rs` its field, its making empty, its handing in (twice) and its two reads, `can_arm`'s
+/// and `set_armed`'s; in `main.rs` its making and its handing. Nothing else, so no method of the
+/// plant and no line of the executable calls it but through `set_armed` (refute round 7).
+const ARMING_HANDLE: [(&str, usize); 2] = [("plant.rs", 7), ("main.rs", 2)];
+
 /// The session store's methods the engine reads with: the rows of a table, and the catalog.
 const STORE_READERS: [&str; 2] = ["query_rows", "list_tables"];
 
@@ -426,6 +432,9 @@ fn its_sources_reach_the_plant_through_portal_alone_and_arm_the_switch_in_one_pl
         let set_armed = read(&text).idents.iter().filter(|i| *i == "set_armed").count();
         let allowed = SET_ARMED.iter().find(|(n, _)| *n == name).map_or(0, |(_, k)| *k);
         assert_eq!(set_armed, allowed, "{}: the plant's arming named {set_armed} times, where {allowed}", f.display());
+        let handle = read(&text).idents.iter().filter(|i| *i == "arming").count();
+        let allowed = ARMING_HANDLE.iter().find(|(n, _)| *n == name).map_or(0, |(_, k)| *k);
+        assert_eq!(handle, allowed, "{}: the arming handed to the plant named {handle} times, where {allowed}", f.display());
         assert!(!fs_outside(&f, &text), "{} reaches files of its own: `fs` is the engine's own files', in {FS_FILES:?} alone", f.display());
     }
     assert_eq!(armings, [ARMING_FILE], "the switch is armed once, in {ARMING_FILE}");
@@ -627,4 +636,13 @@ fn the_plant_s_arming_is_named_where_the_run_arms_and_disarms_alone() {
     assert_eq!(count("// p.set_armed(true)\nfn f() {}"), 0);
     let at = |name: &str| SET_ARMED.iter().find(|(n, _)| *n == name).map_or(0, |(_, k)| *k);
     assert_eq!((at("record.rs"), at("eval.rs"), at("main.rs"), at("plant.rs"), at("run.rs")), (0, 0, 0, 2, 2));
+    // The arming handed to the plant called past `set_armed` (refute round 7): a method of the
+    // plant reaching its field, the executable calling its closure, each one more of its name.
+    let handle = |t: &str| read(t).idents.iter().filter(|i| *i == "arming").count();
+    assert_eq!(handle("fn now_ms(&self) -> i64 { if let Some(arm) = &self.arming { arm(true); } 0 }"), 1);
+    assert_eq!(handle("fn f(arming: Box<dyn Fn(bool)>) { arming(true); }"), 2);
+    assert_eq!(handle("fn f(p: &LivePlant) { (p.r#arming.as_ref().unwrap())(true) }"), 1);
+    assert_eq!(handle("// self.arming\nfn with_arming() {}"), 0);
+    let at = |name: &str| ARMING_HANDLE.iter().find(|(n, _)| *n == name).map_or(0, |(_, k)| *k);
+    assert_eq!((at("record.rs"), at("run.rs"), at("main.rs"), at("plant.rs")), (0, 0, 2, 7));
 }

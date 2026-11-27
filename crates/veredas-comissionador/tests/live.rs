@@ -843,6 +843,52 @@ fn a_run_arms_the_switch_for_the_writes_it_was_confirmed_for_and_disarms_it_afte
     assert_eq!(e.0, ["the test writes, and portal's write switch is off"]);
 }
 
+// ---- C-200's refute round 7 -------------------------------------------------------------------
+
+#[test]
+fn the_plant_arms_the_switch_through_set_armed_alone() {
+    // The arming handed to the plant recording its calls: every method of the plant but
+    // `set_armed`, a test that only reads run live and replayed, never call it; a confirmed run,
+    // kept, calls it to arm at its start and to disarm at its end, and nothing after.
+    use veredas_comissionador::run::{run, writes_fingerprint};
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = std::rc::Rc::new(session(dir.path(), &project_text(&bench, false, 4)));
+    let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::<bool>::new()));
+    let p = {
+        let (s, calls) = (s.clone(), calls.clone());
+        LivePlant::with_arming(
+            s.live(),
+            Box::new(move |on| {
+                calls.borrow_mut().push(on);
+                s.set_writes_armed(on)
+            }),
+            Vec::new(),
+        )
+        .unwrap()
+    };
+    let none = Vec::<bool>::new();
+    let now = p.now_ms();
+    let _ = (p.name(), p.armed(), p.can_arm(), p.also_armed(), p.writable("plc_main", "run"), p.sendable("sorter", "command"));
+    for t in p.tables().unwrap() {
+        let _ = p.rows(&t, 0, now);
+        let _ = p.latest(&t, "speed", now);
+    }
+    assert!(p.write("plc_main", "run", &Value::Int(1)).is_err() && p.send("sorter", "command", vec![("code".to_string(), "1".to_string())]).is_err(), "the switch is off");
+    assert_eq!((calls.borrow().clone(), tag(&bench, "run")), (none.clone(), "Int32(0)".to_string()));
+    let read = checked(&test_of("  step w wait plc_main.speed >= 0.0 timeout 5s\n"));
+    let r = run(&read, &p, &RunOptions::live(), &mut |_| {}).unwrap();
+    assert_eq!((r.verdict, calls.borrow().clone()), (RunVerdict::Passed, none.clone()));
+    std::thread::sleep(Duration::from_millis(300));
+    let replayed = run(&read, &p, &RunOptions::replay(r.start_ms, r.end_ms), &mut |_| {}).unwrap();
+    assert_eq!((replayed.verdict, calls.borrow().clone()), (RunVerdict::Passed, none));
+    let c = checked(&test_of("  step go write plc_main.run := 1\n"));
+    let r = run(&c, &p, &RunOptions::live().confirming(writes_fingerprint(&c, &[])), &mut |_| {}).unwrap();
+    veredas_comissionador::record::keep(&dir.path().join("runs"), &c, &r, &RunOptions::live().mode, &p).unwrap();
+    assert_eq!((r.verdict, calls.borrow().clone(), s.live().writes_armed()), (RunVerdict::Passed, vec![true, false], false));
+    assert_eq!(tag(&bench, "run"), "Int32(1)");
+}
+
 // ---- refute round 4 ------------------------------------------------------------------------
 
 #[test]

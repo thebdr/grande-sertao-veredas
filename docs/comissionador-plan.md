@@ -250,6 +250,10 @@ Recorded as the build meets them.
   (`SourceHealth::history_read`, C-096). A history that cannot be whole is never said read, so the
   replay keeps a bound of its own; a log with no stamps holds nothing of a past window and is not
   waited for then.
+- **`--test component` no longer builds across the workspace** (C-200). Oficina has a test of that
+  name that needs its `driver` feature, so `cargo test --workspace --test component` refuses to
+  build. The suite's filter (`binary(component)` in nextest) is unaffected; a critic's copy runs the
+  guard inside its probe binary (`#[path = "component.rs"] mod guard;` in `tests/probe.rs`).
 - **A session's store is fresh** (C-205). Portal refuses a database already at the store's path,
   so a session started for a replay holds only what its start reads: nothing from before the
   point the start reads from (a live start reads nothing old). A window opening before that point
