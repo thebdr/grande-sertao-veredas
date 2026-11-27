@@ -57,8 +57,10 @@ fn appended_lines_arrive_in_order_with_dense_sequence_and_arrival() {
     let path = dir.path().join("app.log");
     std::fs::write(&path, "one\n").unwrap();
 
-    let (set, rx) = tail(&path, FileStart::Begin);
+    // The clock read before the start: the worker may read the line between telling the start it
+    // looked and the test reading the clock, so a bound read after the start failed under load.
     let before = veredas_portal::now_unix_ms();
+    let (set, rx) = tail(&path, FileStart::Begin);
     let first = rx.recv_timeout(RECV_TIMEOUT).unwrap();
     assert_eq!(first.line, "one");
     assert_eq!(first.seq, 0);
@@ -1529,7 +1531,8 @@ fn five_lines_read_promptly(rx: &Receiver<LineEvent>, path: &Path, what: &str) {
 /// The watcher wakes a follower whose path is a symbolic link to a file in another folder, for
 /// the writes to that file, follows the link when it is made to lead elsewhere and watches the new
 /// target's folder for its name (the target replaced there by a rename read within a second and a
-/// half, deleted and made again 1.5 s later read within a second); and a folder removed and made again is watched again from the first pass that sees it
+/// half, deleted and made again 1.5 s later read within a second, its folder removed and made again
+/// watched again, a replacement there read within a second and a half); and a folder removed and made again is watched again from the first pass that sees it
 /// back, at most a poll later, its names too (a replacement renamed into place read within a
 /// second and a half). Under a poll of five seconds each line is read within half a second of its
 /// write (five lines a case, so the poll alone passes with odds under one in ten thousand). Armed once, on the
@@ -1575,6 +1578,20 @@ fn the_watcher_follows_a_link_and_a_folder_made_anew() {
     let made = Instant::now();
     let got = rx.recv_timeout(Duration::from_secs(1)).map(|e| e.line);
     assert_eq!(got.as_deref(), Ok("made again 0"), "the target made again read within a second ({:?})", made.elapsed());
+    // The target's folder removed and made again: its file read within a poll, then the folder
+    // watched again, a replacement renamed into place there read within a second and a half.
+    std::fs::remove_dir_all(&real).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::write(real.join("other.log"), "folder anew 0\n").unwrap();
+    let made = Instant::now();
+    let got = rx.recv_timeout(Duration::from_millis(5500)).map(|e| e.line);
+    assert_eq!(got.as_deref(), Ok("folder anew 0"), "the target in its folder made anew read within a poll ({:?})", made.elapsed());
+    std::fs::write(real.join("other.log.new"), "folder anew renamed 0\n").unwrap();
+    std::fs::rename(real.join("other.log.new"), real.join("other.log")).unwrap();
+    let renamed = Instant::now();
+    let got = rx.recv_timeout(Duration::from_millis(1500)).map(|e| e.line);
+    assert_eq!(got.as_deref(), Ok("folder anew renamed 0"), "a replacement in the target's folder made anew read within 1.5 s ({:?})", renamed.elapsed());
     set.stop_all();
 
     // A folder removed and made again.

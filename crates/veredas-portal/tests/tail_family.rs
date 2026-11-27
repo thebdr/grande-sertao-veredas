@@ -1164,7 +1164,8 @@ fn a_family_not_yet_there_or_empty_is_looked_at_every_rescan() {
 /// A recursive family is watched in every folder of its tree, a folder born in it included: under
 /// a poll of five seconds, a write to a member in a subfolder read within half a second, a new
 /// member there within the drain grace and half a second, a folder made with a member in it
-/// within the same bound, and a write to that member within half a second. The tree's watch was
+/// within the same bound, a write to that member within half a second, and a second member made
+/// in that folder later within the grace and half a second (its own watch's word). The tree's watch was
 /// untested: a watch on the top folder alone passed every test (C-036's third idle-cost round).
 #[cfg(target_os = "linux")]
 #[test]
@@ -1197,5 +1198,61 @@ fn a_recursive_family_is_woken_in_every_folder_of_its_tree() {
     std::thread::sleep(Duration::from_millis(200));
     append("b/app_3.log", "b 3 again");
     read_within("b 3 again", Duration::from_millis(500));
+    // A second member in the folder born in the tree: its birth woke by that folder's own watch.
+    std::thread::sleep(Duration::from_millis(300));
+    append("b/app_4.log", "b 4");
+    read_within("b 4", rotation);
+    set.stop_all();
+}
+
+/// A newest-by-order family whose active is deleted, or made again where it cannot be read yet,
+/// costs almost nothing while that lasts, however many members it holds: three thousand retired
+/// members, the default poll and the watcher on, the follower's thread under a tenth of a second
+/// over three seconds of each, then the held active read within a second of the change of mode
+/// that opens it. A path not the active's asked for a listing at every pass while it lasted,
+/// 1.06 s and 0.65 s of the three (C-036's fourth idle-cost refute round).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_newest_family_whose_active_is_gone_or_held_costs_almost_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("dated");
+    std::fs::create_dir_all(&dir).unwrap();
+    let day0 = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    for d in 0..300 {
+        let day = (day0 + chrono::Days::new(d)).format("%Y%m%d");
+        for i in 1..=10 {
+            std::fs::write(dir.join(format!("{day}_sorts{i}.log")), "old\n").unwrap();
+        }
+    }
+    let active = dir.join("20261126_sorts1.log");
+    std::fs::write(&active, "").unwrap();
+    let spec = FamilySpec::new(&dir, r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d"), ActiveMode::NewestByOrder).unwrap();
+    let cfg = FamilyTailConfig { use_notify: Some(true), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FamilyTailSource::new("gone", "gone", spec, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let mut f = std::fs::OpenOptions::new().append(true).open(&active).unwrap();
+    std::io::Write::write_all(&mut f, b"kept 0\n").unwrap();
+    drop(f);
+    assert_eq!(rx.recv_timeout(Duration::from_secs(5)).map(|e| e.line).as_deref(), Ok("kept 0"));
+    let costs = |what: &str| {
+        std::thread::sleep(Duration::from_millis(300));
+        let before = thread_cpu_s("family:gone").expect("the follower's thread");
+        std::thread::sleep(Duration::from_secs(3));
+        let used = thread_cpu_s("family:gone").expect("the follower's thread") - before;
+        assert!(used < 0.1, "three seconds with the active {what} used {used:.2} s of the follower's processor time");
+    };
+    std::fs::remove_file(&active).unwrap();
+    costs("deleted");
+    let aside = root.path().join("held.log");
+    std::fs::write(&aside, "held 0\n").unwrap();
+    std::fs::set_permissions(&aside, std::fs::Permissions::from_mode(0o000)).unwrap();
+    std::fs::rename(&aside, &active).unwrap();
+    costs("made again unreadable");
+    std::fs::set_permissions(&active, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let opened = Instant::now();
+    let got = rx.recv_timeout(Duration::from_secs(1)).map(|e| e.line);
+    assert_eq!(got.as_deref(), Ok("held 0"), "the held active read within a second of its chmod ({:?})", opened.elapsed());
     set.stop_all();
 }

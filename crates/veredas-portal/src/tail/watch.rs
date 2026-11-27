@@ -115,6 +115,9 @@ struct Armed {
     backend: Option<backend::Backend>,
     folder: Option<FolderId>,
     target: Option<PathBuf>,
+    /// The identity of the link's target's folder at the arm: made anew, or made at last, the
+    /// watch is armed again (C-035's fourth idle-cost round).
+    target_folder: Option<FolderId>,
 }
 
 /// A follower's watcher, kept by its loop.
@@ -166,7 +169,8 @@ impl Watch {
         let folder = folder_of(path);
         let id = folder_id(&folder);
         let target = link_target(path);
-        let same = id.is_some() && self.armed.as_ref().is_some_and(|a| a.folder == id && a.target == target);
+        let target_folder = target.as_deref().map(folder_of).and_then(|f| folder_id(&f));
+        let same = id.is_some() && self.armed.as_ref().is_some_and(|a| a.folder == id && a.target == target && a.target_folder == target_folder);
         if !same {
             self.armed = None;
             if id.is_none() {
@@ -185,7 +189,7 @@ impl Watch {
                 }
             }
             let backend = backend::Backend::arm(&folders, false, Interest::Names(names), self.wake.clone(), Arc::clone(&self.renamed));
-            self.armed = Some(Armed { backend, folder: id, target });
+            self.armed = Some(Armed { backend, folder: id, target, target_folder });
             // Whatever happened while nothing watched is listed and read at this pass.
             self.renamed.store(true, Ordering::Release);
         }
@@ -208,7 +212,7 @@ impl Watch {
                 return;
             }
             let backend = backend::Backend::arm(&[absolute(spec.dir())], spec.recursive(), Interest::Family(spec.clone()), self.wake.clone(), Arc::clone(&self.renamed));
-            self.armed = Some(Armed { backend, folder: id, target: None });
+            self.armed = Some(Armed { backend, folder: id, target: None, target_folder: None });
             self.renamed.store(true, Ordering::Release);
         }
         if let Some(b) = self.armed.as_mut().and_then(|a| a.backend.as_mut()) {
@@ -327,6 +331,10 @@ mod backend {
         fn handle(&self, bytes: &[u8]) -> (bool, bool) {
             let (mut wake, mut renamed) = (false, false);
             let mut new_dirs: Vec<(PathBuf, String, usize)> = Vec::new();
+            // Folders moved away from where their watch named them: their watches dropped, so a
+            // folder moved out of the tree is watched no more, and one moved within it is watched
+            // again under its new name (C-036's fourth idle-cost round).
+            let mut gone: Vec<PathBuf> = Vec::new();
             let mut last: Option<(i32, &[u8], bool, bool)> = None;
             {
                 let Ok(mut roles) = self.roles.lock() else { return (true, true) };
@@ -358,9 +366,15 @@ mod backend {
                             if name.is_empty() {
                                 // The folder itself, removed or renamed.
                                 (wake, renamed) = (true, true);
+                                if mask & libc::IN_MOVE_SELF != 0 && *depth > 0 {
+                                    gone.push(path.clone());
+                                }
                                 continue;
                             }
                             let is_dir = mask & libc::IN_ISDIR != 0;
+                            if is_dir && self.recursive && mask & libc::IN_MOVED_FROM != 0 {
+                                gone.push(path.join(name));
+                            }
                             if is_dir && self.recursive && mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0 && *depth < MAX_DEPTH {
                                 let sub = match name.to_str() {
                                     Some(n) if rel.is_empty() => Some(n.to_string()),
@@ -384,6 +398,14 @@ mod backend {
                                 renamed |= mask & RENAMES != 0;
                             }
                         }
+                    }
+                }
+                for top in &gone {
+                    let dropped: Vec<i32> = roles.iter().filter(|(_, r)| matches!(r, Role::Folder(p, ..) if p.starts_with(top))).map(|(wd, _)| *wd).collect();
+                    for wd in dropped {
+                        roles.remove(&wd);
+                        // SAFETY: a watch descriptor of this inotify instance.
+                        let _ = unsafe { libc::inotify_rm_watch(self.fd.as_raw_fd(), wd) };
                     }
                 }
             }
@@ -710,6 +732,39 @@ mod tests {
         settle(&rx);
         std::fs::write(&active, "").unwrap();
         assert!(woken(&rx), "the fixed active made");
+        assert!(watch.listing_due());
+    }
+
+    /// A folder moved out of a recursive tree is watched no more: a member's name made in it
+    /// wakes nothing and asks for no listing; moved back into the tree, it is watched again.
+    #[test]
+    fn a_folder_moved_out_of_the_tree_is_watched_no_more() {
+        let root = tempfile::tempdir().unwrap();
+        let top = root.path().join("top");
+        std::fs::create_dir_all(top.join("sub")).unwrap();
+        let spec = FamilySpec::new(&top, r"sub/app_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap().with_recursive(true);
+        let (tx, rx) = channel();
+        let mut watch = Watch::new(true, tx);
+        watch.keep_on_family(&spec, None);
+        settle(&rx);
+        let _ = watch.listing_due();
+        std::fs::write(top.join("sub/app_1.log"), "").unwrap();
+        assert!(woken(&rx), "a member made in the subfolder");
+        assert!(watch.listing_due());
+        let archived = root.path().join("archived");
+        std::fs::rename(top.join("sub"), &archived).unwrap();
+        assert!(woken(&rx), "the subfolder moved out");
+        settle(&rx);
+        let _ = watch.listing_due();
+        std::fs::write(archived.join("app_2.log"), "").unwrap();
+        assert!(quiet(&rx), "a member's name made in the folder moved out");
+        assert!(!watch.listing_due(), "and no listing asked for");
+        std::fs::rename(&archived, top.join("sub")).unwrap();
+        assert!(woken(&rx), "the folder moved back in");
+        settle(&rx);
+        let _ = watch.listing_due();
+        std::fs::write(top.join("sub/app_3.log"), "").unwrap();
+        assert!(woken(&rx), "a member made in it, watched again");
         assert!(watch.listing_due());
     }
 

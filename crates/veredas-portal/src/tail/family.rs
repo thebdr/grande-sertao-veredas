@@ -1416,6 +1416,10 @@ fn run_family(
 
     // ---- live loop ---------------------------------------------------------------------------
     let mut next_rescan = Instant::now();
+    // The active's path at the last pass: a change asks for a listing once, not at every pass while
+    // it lasts (a deleted or held active listed three thousand members at every poll, C-036's
+    // fourth idle-cost round).
+    let mut last_status = PathStatus::Same;
     loop {
         if disconnected.get() {
             return Ok(());
@@ -1457,11 +1461,12 @@ fn run_family(
         match spec.active_mode() {
             ActiveMode::NewestByOrder => {
                 // The active renamed or deleted underneath is a rotation smell in this mode too:
-                // rescan at once.
+                // rescan at once, once a change.
                 let status = cursor.check_path();
-                if status != PathStatus::Same {
+                if status != PathStatus::Same && status != last_status {
                     next_rescan = Instant::now();
                 }
+                last_status = status;
                 if status == PathStatus::Replaced {
                     // The active replaced at its own name (deleted and made again, a file renamed
                     // over it): it ranks the same, never newer, so no rotation brings it. The old
