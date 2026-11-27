@@ -1451,3 +1451,146 @@ fn following_a_quiet_file_costs_almost_no_processor_time() {
     assert_eq!(got.as_deref(), Ok("after"), "the held file read within a second of its chmod ({:?})", opened.elapsed());
     set.stop_all();
 }
+
+/// A writer appending to `path` flat out, one short line a write, and making and removing a file
+/// beside it every millisecond, until `stop`: the number of writes it made.
+#[cfg(target_os = "linux")]
+fn flat_out(path: &Path, stop: std::sync::Arc<std::sync::atomic::AtomicBool>) -> std::thread::JoinHandle<u64> {
+    let mut f = OpenOptions::new().append(true).create(true).open(path).unwrap();
+    let churn = path.with_extension("tmp");
+    std::thread::spawn(move || {
+        let mut writes = 0u64;
+        let mut churned = Instant::now();
+        while !stop.load(Ordering::Relaxed) {
+            f.write_all(b"noise\n").unwrap();
+            writes += 1;
+            if churned.elapsed() >= Duration::from_millis(1) {
+                File::create(&churn).unwrap();
+                std::fs::remove_file(&churn).unwrap();
+                churned = Instant::now();
+            }
+        }
+        writes
+    })
+}
+
+/// A quiet file beside a busy one costs its follower nothing: the watcher wakes the follower for
+/// what names its file (or the folder itself), never for a neighbour's writes or names, and on
+/// Linux it asks inotify for the folder's names and the file's writes alone, so the neighbour's
+/// writes make no event. A neighbour written flat out for three seconds, a file made and removed
+/// beside it a thousand times a second, the followed file gaining a line every
+/// 200 ms under a poll of five seconds: each line read within half a second of its write, the
+/// follower's thread and the watcher's each under a tenth of a second of processor time. Woken by
+/// every event in its folder, the follower spent 80 % of a core, and filtering notify's events the
+/// watcher's thread a whole one (C-035's second idle-cost refute round).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_busy_neighbour_costs_a_quiet_follower_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("quiet.log");
+    std::fs::write(&path, "").unwrap();
+    let (mut set, rx) = SourceSet::new();
+    let cfg = TailConfig { poll_interval: Duration::from_secs(5), use_notify: Some(true), ..TailConfig::default() };
+    set.spawn(Box::new(FileTailSource::new("besidebusy", "besidebusy", &path, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let before = thread_cpu_s("tail:besidebusy").expect("the follower's thread");
+    let watcher_before = thread_cpu_s("tail-watch").expect("the watcher's thread");
+    let busy = flat_out(&dir.path().join("busy.log"), stop.clone());
+    for i in 0..15 {
+        append(&path, &format!("line {i}\n"));
+        let written = Instant::now();
+        let got = rx.recv_timeout(Duration::from_millis(500)).map(|e| e.line);
+        assert_eq!(got.as_deref(), Ok(format!("line {i}").as_str()), "line {i} read within 500 ms of its write ({:?})", written.elapsed());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let used = thread_cpu_s("tail:besidebusy").expect("the follower's thread") - before;
+    let watcher_used = thread_cpu_s("tail-watch").expect("the watcher's thread") - watcher_before;
+    stop.store(true, Ordering::Relaxed);
+    let writes = busy.join().unwrap();
+    assert!(writes > 100_000, "the neighbour was busy ({writes} writes)");
+    assert!(used < 0.1, "three seconds beside a busy neighbour used {used:.2} s of the follower's processor time");
+    assert!(watcher_used < 0.1, "three seconds beside a busy neighbour used {watcher_used:.2} s of the watcher's processor time");
+    set.stop_all();
+}
+
+/// Each of five lines appended to `path` 200 ms apart read within half a second of its write.
+#[cfg(target_os = "linux")]
+fn five_lines_read_promptly(rx: &Receiver<LineEvent>, path: &Path, what: &str) {
+    for i in 0..5 {
+        append(path, &format!("{what} {i}\n"));
+        let written = Instant::now();
+        let got = rx.recv_timeout(Duration::from_millis(500)).map(|e| e.line);
+        assert_eq!(got.as_deref(), Ok(format!("{what} {i}").as_str()), "{what} {i} read within 500 ms of its write ({:?})", written.elapsed());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// The watcher wakes a follower whose path is a symbolic link to a file in another folder, for
+/// the writes to that file, follows the link when it is made to lead elsewhere and watches the new
+/// target's folder for its name (the target replaced there by a rename read within a second and a
+/// half); and a folder removed and made again is watched again from the first pass that sees it
+/// back, at most a poll later, its names too (a replacement renamed into place read within a
+/// second and a half). Under a poll of five seconds each line is read within half a second of its
+/// write (five lines a case, so the poll alone passes with odds under one in ten thousand). Armed once, on the
+/// link's folder, the watcher saw neither; armed once, it died with the folder removed, the lines
+/// read a poll late for the rest of the tail's life (C-035's second idle-cost refute round).
+#[cfg(target_os = "linux")]
+#[test]
+fn the_watcher_follows_a_link_and_a_folder_made_anew() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = TailConfig { poll_interval: Duration::from_secs(5), use_notify: Some(true), ..TailConfig::default() };
+
+    // A link to a file in another folder, then made to lead to another file.
+    let real = dir.path().join("real");
+    let links = dir.path().join("links");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::create_dir_all(&links).unwrap();
+    std::fs::write(real.join("app.log"), "").unwrap();
+    let link = links.join("app.log");
+    std::os::unix::fs::symlink(real.join("app.log"), &link).unwrap();
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FileTailSource::new("linked", "linked", &link, cfg.clone()))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    five_lines_read_promptly(&rx, &real.join("app.log"), "linked");
+    std::fs::write(real.join("other.log"), "other 0\n").unwrap();
+    let aside = links.join("app.log.new");
+    std::os::unix::fs::symlink(real.join("other.log"), &aside).unwrap();
+    std::fs::rename(&aside, &link).unwrap();
+    let led = Instant::now();
+    let got = rx.recv_timeout(Duration::from_millis(1500)).map(|e| e.line);
+    assert_eq!(got.as_deref(), Ok("other 0"), "the link's new file read whole within 1.5 s ({:?})", led.elapsed());
+    five_lines_read_promptly(&rx, &real.join("other.log"), "relinked");
+    // The new target replaced by a rename in its own folder: its folder watched, named anew.
+    std::fs::write(real.join("other.log.new"), "other replaced 0\n").unwrap();
+    std::fs::rename(real.join("other.log.new"), real.join("other.log")).unwrap();
+    let replaced = Instant::now();
+    let got = rx.recv_timeout(Duration::from_millis(1500)).map(|e| e.line);
+    assert_eq!(got.as_deref(), Ok("other replaced 0"), "the target replaced in its folder read within 1.5 s ({:?})", replaced.elapsed());
+    set.stop_all();
+
+    // A folder removed and made again.
+    let logs = dir.path().join("logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let path = logs.join("app.log");
+    std::fs::write(&path, "").unwrap();
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FileTailSource::new("remade", "remade", &path, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    five_lines_read_promptly(&rx, &path, "before");
+    std::fs::remove_dir_all(&logs).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(&path, "back 0\n").unwrap();
+    let made = Instant::now();
+    let got = rx.recv_timeout(Duration::from_millis(5500)).map(|e| e.line);
+    assert_eq!(got.as_deref(), Ok("back 0"), "the file in the folder made anew read within a poll ({:?})", made.elapsed());
+    five_lines_read_promptly(&rx, &path, "after");
+    // A replacement renamed into place in the folder made anew: the folder itself watched again.
+    std::fs::write(logs.join("app.log.new"), "renamed in 0\n").unwrap();
+    std::fs::rename(logs.join("app.log.new"), &path).unwrap();
+    let renamed = Instant::now();
+    let got = rx.recv_timeout(Duration::from_millis(1500)).map(|e| e.line);
+    assert_eq!(got.as_deref(), Ok("renamed in 0"), "a replacement in the folder made anew read within 1.5 s ({:?})", renamed.elapsed());
+    set.stop_all();
+}

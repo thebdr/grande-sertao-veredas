@@ -128,6 +128,12 @@ impl FamilySpec {
         &self.active
     }
 
+    /// Whether a name (relative and `/`-separated when recursive) is the family's: one its pattern
+    /// matches, or its fixed active's. A watcher wakes the family's follower for these (C-036).
+    pub(crate) fn names(&self, name: &str) -> bool {
+        matches!(&self.active, ActiveMode::Fixed(n) if n == name) || self.pattern.is_match(name)
+    }
+
     /// Membership and the token parse. `Some` means the name belongs to the family. A token that
     /// matches the regex but fails its chrono or integer parse degrades to `None` inside the key
     /// (the file stays a member).

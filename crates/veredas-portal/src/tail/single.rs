@@ -8,13 +8,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use same_file::Handle;
 
 use veredas_core::{SourceError, SourceHandle, SourceId};
 
 use crate::source::{Emitter, LineEvent, Source, stop_flag};
 use crate::tail::cursor::{PathStatus, ReadStep, TailedFile};
+use crate::tail::watch::Watch;
 use crate::tail::{FileStart, TailConfig};
 use crate::timestamp::TimestampSpec;
 
@@ -106,32 +106,6 @@ pub(crate) fn attached(slot: &mut Option<Sender<()>>) {
     }
 }
 
-/// Watch the file's parent folder; what a writer does there wakes the poll loop early. Failing to
-/// set the watcher up is not an error: polling covers it.
-pub(crate) fn spawn_watcher(dir: &Path, wake: Sender<()>, recursive: bool) -> Option<RecommendedWatcher> {
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if res.as_ref().is_ok_and(|e| woken_by_self(&e.kind)) {
-            return;
-        }
-        let _ = wake.send(());
-    })
-    .ok()?;
-    let mode = if recursive { RecursiveMode::Recursive } else { RecursiveMode::NonRecursive };
-    watcher.watch(dir, mode).ok()?;
-    Some(watcher)
-}
-
-/// Whether an event is one the follower makes itself: a file opened, read, or closed after
-/// reading. The loop opens its path on every pass (the path checked against the handle) and reads
-/// what it follows, and inotify reports a folder's opens (notify watches `IN_OPEN` and
-/// `IN_CLOSE_NOWRITE`): a wake on them woke the loop on its own pass, which opened the path again,
-/// a full core spent following one quiet file (2026-11-26). A writer's writes, creates, renames,
-/// deletes, attribute changes and close after writing still wake it.
-fn woken_by_self(kind: &notify::EventKind) -> bool {
-    use notify::event::{AccessKind, AccessMode};
-    matches!(kind, notify::EventKind::Access(a) if !matches!(a, AccessKind::Close(AccessMode::Write)))
-}
-
 /// Sleep until the next poll tick or a filesystem event, coalescing bursts.
 pub(crate) fn wait_tick(wake: &Receiver<()>, interval: std::time::Duration) {
     if wake.recv_timeout(interval).is_ok() {
@@ -144,11 +118,9 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     // Automatic mode arms the watcher for local paths alone: directory notifications are
     // unreliable over a share, where polling stays the one mechanism.
     let notify_wanted = cfg.use_notify.unwrap_or_else(|| crate::tail::pathkind::classify(&path).notify_useful());
-    // The loop keeps a sender of its own: with none alive the wake channel reads as
-    // disconnected and the wait returns at once, every tick, and the loop would spin where
-    // the watcher could not be set up (a parent folder not there yet, a path that cannot be
-    // watched).
-    let _wake_keep = wake_tx.clone();
+    // The watch keeps a sender of its own, armed or not: with none alive the wake channel reads
+    // as disconnected and the wait returns at once, every tick, and the loop would spin where the
+    // watcher could not be set up (a parent folder not there yet, a path that cannot be watched).
 
     let disconnected = Cell::new(false);
     let sent = Cell::new(0u64);
@@ -214,9 +186,12 @@ fn run(path: PathBuf, cfg: TailConfig, mut emitter: Emitter, stop: Arc<AtomicBoo
     if cfg.start == FileStart::End || (active.is_none() && held.is_none()) {
         crate::tail::mark_history_read(&history, 0);
     }
-    let _watcher = if notify_wanted { path.parent().and_then(|dir| spawn_watcher(dir, wake_tx, false)) } else { None };
+    // Armed at the first pass, after the signal, so a slow arm never eats the bound; kept at
+    // every pass (a folder made anew, a link leading elsewhere, arm it again).
+    let mut watch = Watch::new(notify_wanted, wake_tx);
 
     loop {
+        watch.keep_on_file(&path);
         if disconnected.get() {
             return Ok(()); // the consumer is gone: a clean end
         }

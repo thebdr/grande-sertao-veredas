@@ -12,6 +12,7 @@ pub(crate) use cursor::READ_CHUNK;
 mod family;
 mod pathkind;
 mod single;
+mod watch;
 
 /// A log's start read in (docs/questions.md Q319): the number of lines its worker had sent once
 /// it reached the end of every file as it stood when the start opened it, `u64::MAX` before. A

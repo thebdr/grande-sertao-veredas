@@ -557,6 +557,11 @@ impl TailedFile {
         self.truncations
     }
 
+    /// The path the file was opened at.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Whether the file held open is the one a look recorded the identity of.
     pub(crate) fn has_identity(&self, id: &Identity) -> bool {
         is_identity(&self.handle, id)

@@ -407,10 +407,32 @@ Recorded as the port meets them.
   quiet log since the crate's first commit (found on the reference plant, 2026-11-26). The
   watcher wakes the loop only for what a writer does; the idle cost is pinned by the follower
   thread's own processor time (C-035, C-036).
+- **A folder watch hears the whole folder.** inotify cannot sort a folder's events by name, and
+  notify asks it for every write there: a quiet log beside a busy one woke its follower at each of
+  the neighbour's writes (80 % of a core), and once notify's events were set aside by name, notify's
+  own thread still spent a core reading them. On Linux the watch is inotify's own
+  (`src/tail/watch.rs`), asked for the folder's names (made, removed, renamed, a change of mode,
+  the folder itself) and for the writes of the file read now, moved to the next file when it
+  changes, so a neighbour's writes make no event; a neighbour's names still do, read in batches
+  10 ms apart. An unreadable file cannot be watched (`inotify_add_watch` needs read access): a held
+  file is woken by the change of mode on its folder, and its file watch tried again every pass.
+  Elsewhere notify's watch stays, its events set aside by name (C-035's second idle-cost round).
+- **A watch dies with its folder.** A folder removed and made again, or a link made to lead
+  elsewhere, leaves the watch on what is gone, the lines read a poll late for the rest of the
+  tail's life. The loop checks the folder's identity and the link's target at every pass and arms
+  the watch again; a folder not there is not watched, so the first pass that sees it back arms it,
+  a poll later at most.
+- **Listing a big family grows with its members.** A newest-by-order family listed its folder every
+  rescan to find a rotation: three hundred quiet members cost little, a year of daily ones a third
+  of a core. With a watcher armed the folder is listed on its word (a member's name made, removed
+  or renamed) and every ten seconds otherwise; with none, every rescan, as before.
+- **The same name ranks the same.** A newest-by-order active replaced at its own name (deleted and
+  made again, a file renamed over it) never ranks newer, so the rotation never brought it and every
+  line of it was lost: it is adopted on the path's check, not the ranking (C-036).
 - **A wake channel with no sender spins the loop.** The watcher owned the wake channel's only
   sender; where the watcher could not be set up (a parent folder not there yet) the receiver
-  read as disconnected and the wait returned at once, every tick, a full core. The loop keeps a
-  sender of its own.
+  read as disconnected and the wait returned at once, every tick, a full core. The watch keeps a
+  sender of its own, armed or not.
 - **A same-size rewrite is not a truncation to a length check.** A rewrite in place that is back
   at or past the read offset by the next poll is read as a continuation; every poll-based tail
   shares the limit, and the clause states it rather than claim past it.

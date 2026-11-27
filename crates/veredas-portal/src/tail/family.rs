@@ -35,7 +35,8 @@ use crate::source::{Emitter, LineEvent, Source, stop_flag};
 use crate::tail::FileStart;
 use crate::tail::backfill::locate_start;
 use crate::tail::cursor::{Identity, PathStatus, ReadStep, TailedFile};
-use crate::tail::single::{ATTACH_WAIT, attached, spawn_watcher, wait_tick};
+use crate::tail::single::{ATTACH_WAIT, attached, wait_tick};
+use crate::tail::watch::Watch;
 use crate::timestamp::TimestampSpec;
 
 /// Where a family tail starts.
@@ -915,11 +916,11 @@ fn run_family(
     // unreliable over a share, where polling stays the one mechanism.
     let notify_wanted =
         cfg.use_notify.unwrap_or_else(|| crate::tail::pathkind::classify(spec.dir()).notify_useful());
-    // The loop's own sender keeps the wake channel connected when no watcher could be set up
-    // (the folder not there yet): a disconnected channel would return the wait at once and
-    // spin the loop.
-    let _wake_keep = wake_tx.clone();
-    let _watcher = if notify_wanted { spawn_watcher(spec.dir(), wake_tx, spec.recursive()) } else { None };
+    // The watch's own sender keeps the wake channel connected when no watcher could be set up
+    // (the folder not there yet): a disconnected channel would return the wait at once and spin
+    // the loop.
+    let mut watch = Watch::new(notify_wanted, wake_tx);
+    watch.keep_on_family(&spec, None);
 
     let disconnected = Cell::new(false);
     let sent = Cell::new(0u64);
@@ -1438,15 +1439,21 @@ fn run_family(
             _ => crate::tail::mark_history_read(&history, sent.get()),
         }
 
+        // A folder made anew is watched again, and the file read now watched for its writes; with
+        // a watcher armed, the folder is listed when it reports a name made, removed or renamed
+        // (and at a slow fallback), so a quiet family's idle cost does not grow with its members.
+        watch.keep_on_family(&spec, Some(cursor.path()));
+        let listing_due = watch.listing_due();
         match spec.active_mode() {
             ActiveMode::NewestByOrder => {
                 // The active renamed or deleted underneath is a rotation smell in this mode too:
                 // rescan at once.
-                if cursor.check_path() != PathStatus::Same {
+                let status = cursor.check_path();
+                if status != PathStatus::Same {
                     next_rescan = Instant::now();
                 }
-                if Instant::now() >= next_rescan {
-                    next_rescan = Instant::now() + cfg.rescan_interval;
+                if listing_due || Instant::now() >= next_rescan {
+                    next_rescan = Instant::now() + watch.rescan_every(cfg.rescan_interval);
                     let newer_exists = match spec.resolve() {
                         Ok(files) => files.iter().any(|f| rank(f) > (current_key, current_name.as_str())),
                         Err(_) => false,
@@ -1469,12 +1476,31 @@ fn run_family(
                         next_rescan = Instant::now();
                         continue;
                     }
+                    if status == PathStatus::Replaced {
+                        // The active replaced at its own name (deleted and made again, a file
+                        // renamed over it): it ranks the same, never newer, so no rotation brings
+                        // it. The old file drained to a stable end (its torn last line final), the
+                        // one at the name now is read from its start, as a single tail's
+                        // replacement is (C-035); the same file back after the drain (a share's
+                        // passing glitch) is kept.
+                        cursor.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
+                        if cursor.check_path() == PathStatus::Replaced {
+                            let path = cursor.path().to_path_buf();
+                            // A held file read already (C-098) is followed from its end.
+                            let start = if !read_ids.is_empty() && crate::tail::cursor::identity_at(&path).is_some_and(|id| read_ids.contains(&id)) { FileStart::End } else { FileStart::Begin };
+                            if let Ok(c) = TailedFile::open(&path, start) {
+                                cursor.flush_pending(&mut emit);
+                                cursor = c;
+                                continue;
+                            }
+                        }
+                    }
                 }
             }
             ActiveMode::Fixed(fixed_name) => match cursor.check_path() {
                 PathStatus::Same => {
-                    if Instant::now() >= next_rescan {
-                        next_rescan = Instant::now() + cfg.rescan_interval;
+                    if listing_due || Instant::now() >= next_rescan {
+                        next_rescan = Instant::now() + watch.rescan_every(cfg.rescan_interval);
                         // Members appearing without the fixed path changing were dropped in from
                         // outside (not a rotation); a live tail does not replay them. The path is
                         // checked again after the listing: a burst of rotations between the check
@@ -1524,9 +1550,9 @@ fn run_family(
             },
         }
 
-        // A newest-by-order family is rescanned every `rescan_interval`: the wait ends by the next
-        // rescan, so a member born while one is not yet due (a create that woke the loop early)
-        // is read then, never a whole poll later.
+        // A newest-by-order family is listed at its next rescan at the latest: the wait ends by
+        // then, so a member born while no watcher tells (none armed, an event lost) is read then,
+        // never a whole poll later.
         let wait = match spec.active_mode() {
             ActiveMode::NewestByOrder => cfg.poll_interval.min(next_rescan.saturating_duration_since(Instant::now()).max(Duration::from_millis(1))),
             ActiveMode::Fixed(_) => cfg.poll_interval,

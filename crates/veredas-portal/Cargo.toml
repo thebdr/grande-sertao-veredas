@@ -36,7 +36,9 @@ chrono = { workspace = true }
 encoding_rs = { workspace = true }
 # Newline splitting over decoded text and raw bytes.
 memchr = { workspace = true }
-# The filesystem accelerator over the poll loop, for local paths.
+# The filesystem accelerator over the poll loop, for local paths: the watcher off Linux
+# (src/tail/watch.rs). Kept on every target: dropped on Linux it moves the features cargo unifies
+# for a shared crate, and duckdb's engine builds again in every member's target.
 notify = { workspace = true }
 # Capture rules and family patterns are regexes.
 regex = { workspace = true }
@@ -64,6 +66,11 @@ axum = { workspace = true, optional = true }
 tokio-stream = { workspace = true, optional = true }
 # The write surface reads its body itself, after the switch, under its own limit; the limit's error type is http-body-util's.
 http-body-util = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The watcher on Linux is inotify's, asked for a folder's names and a file's writes alone, so a
+# busy neighbour makes no event (src/tail/watch.rs).
+libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # Whether a drive letter is a network drive, so a share is polled and never watched.
