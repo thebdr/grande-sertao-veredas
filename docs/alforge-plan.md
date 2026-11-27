@@ -287,11 +287,14 @@ It holds:
 - one entry per component at the commit: name, version, licence expression, its folder, the
   executables it ships;
 - one per package the components' builds compile for the release's target with every feature of
-  theirs on, as cargo's own feature resolver has it (`cargo tree -e normal,build --target`, offline,
-  locked): a superset of what one build compiles, and a subset of the lock entries their versions
-  name (C-290). A dependency of another platform alone, a feature only a test's dependency turns
-  on and a weak feature (`dep?/f`) nothing else turns on list nothing; `cargo metadata`'s resolve
-  would list them (C-295's first refute round). A package by path outside the components (the IronCalc
+  theirs on, as cargo's own feature resolver has it (`cargo tree -e normal,build --target
+  --no-dedupe`, offline, locked): what cargo's unit graph for the components holds, package by
+  package and edge by edge, and a subset of the lock entries their versions name (C-290). A
+  dependency of another platform alone, a feature only a test's dependency turns on and a weak
+  feature (`dep?/f`) nothing else turns on list nothing; `cargo metadata`'s resolve would list them
+  (C-295's first refute round). Nor does what `cargo tree` prints and no build compiles, and what
+  lies below it: a build-dependency of a package with no build script, a dependency on a package
+  with no library (rounds 2 and 3). A package by path outside the components (the IronCalc
   fork) by its folder; a crate by `pkg:cargo/<name>@<version>` (with `vcs_url` for a git one), the
   lock's checksum as its SHA-256, and its licence as its manifest states it;
 - with Oficina's window, Qt and KDDockWidgets at their versions, as the recipe names them (Q446);

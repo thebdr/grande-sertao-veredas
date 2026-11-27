@@ -74,9 +74,6 @@ struct Package {
     /// Whether it has a library (a proc-macro's among them), without which cargo ignores a
     /// dependency on it.
     lib: bool,
-    /// The packages it names as normal dependencies, and as build dependencies, by name.
-    normal_deps: BTreeSet<String>,
-    build_deps: BTreeSet<String>,
 }
 
 /// `text` percent-encoded for a package URL's qualifier: every byte but the unreserved ones.
@@ -154,27 +151,18 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
         let targets: Vec<Vec<String>> = p["targets"].as_array().into_iter().flatten().map(kinds).collect();
         let build_script = targets.iter().any(|k| k.iter().any(|k| k == "custom-build"));
         let lib = targets.iter().any(|k| k.iter().any(|k| ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"].contains(&k.as_str())));
-        let (mut normal_deps, mut build_deps) = (BTreeSet::new(), BTreeSet::new());
-        for d in p["dependencies"].as_array().into_iter().flatten() {
-            let n = d["name"].as_str().unwrap_or_default().to_string();
-            match d["kind"].as_str() {
-                None => {
-                    normal_deps.insert(n);
-                }
-                Some("build") => {
-                    build_deps.insert(n);
-                }
-                _ => {}
-            }
-        }
-        found.insert(id.clone(), Package { name, version, source, dir, licence, deps: BTreeSet::new(), build_script, lib, normal_deps, build_deps });
+        found.insert(id.clone(), Package { name, version, source, dir, licence, deps: BTreeSet::new(), build_script, lib });
     }
     // What the components' builds compile, as cargo's own feature resolver has it (`cargo tree`
     // with normal and build edges alone, for the target, every feature of theirs on): a
     // dependency of another platform alone, the features a test's dependency alone asks for and a
     // weak feature (`dep?/f`) nothing else turns on reach nothing, as no build compiles them.
-    // Each node by its name, version and source, as cargo prints it.
-    let mut tree_argv: Vec<String> = ["cargo", "tree", "--offline", "--all-features", "--target", target, "-e", "normal,build", "--prefix", "depth", "--format", "{p}", "--manifest-path", &manifest].iter().map(|s| s.to_string()).collect();
+    // Each node by its name, version and source, as cargo prints it; every one printed whole where
+    // it stands (`--no-dedupe`: this repository's 13 components print 156,000 lines in about a
+    // second), so what lies below a dependency no build compiles is left with it and nothing a
+    // build compiles is printed there alone; drawn in ASCII, which marks a package's
+    // build-dependencies (`[build-dependencies]`, at the depth of its children).
+    let mut tree_argv: Vec<String> = ["cargo", "tree", "--offline", "--all-features", "--target", target, "-e", "normal,build", "--no-dedupe", "--charset", "ascii", "--format", "{p}", "--manifest-path", &manifest].iter().map(|s| s.to_string()).collect();
     if argv.contains(&"--locked") {
         tree_argv.push("--locked".into());
     }
@@ -202,12 +190,26 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
         };
         let (name, version) = head.split_once(" v").ok_or_else(|| refused(format!("commit {commit}: cargo tree printed `{line}`")))?;
         let ids = by_name.get(&(name.to_string(), version.to_string())).cloned().unwrap_or_default();
+        // The source cargo prints (crates.io's none; a path; a git repository's URL, its reference
+        // and its commit's first 8 digits, `url?branch=main#8a2f5f93`; `registry `<url or name>``)
+        // against the one its metadata holds, whole.
         let fits = |id: &&String| {
             let p = &found[*id];
             match (paren, &p.source) {
                 (None, Some(src)) => src == CRATES_IO,
-                (Some(path), None) => path.starts_with('/'),
-                (Some(url), Some(src)) => !url.starts_with('/') && src.contains(url.split('#').next().unwrap_or(url)),
+                (Some(path), None) => p.dir.as_ref().is_some_and(|d| Path::new(path) == base.join(d)),
+                (Some(printed), Some(src)) => match (printed.strip_prefix("registry `"), src.strip_prefix("git+")) {
+                    (Some(r), _) => {
+                        let r = r.trim_end_matches('`');
+                        src != CRATES_IO && (src == r || src.strip_prefix("registry+") == Some(r))
+                    }
+                    (None, Some(git)) => {
+                        let (url, commit) = git.split_once('#').unwrap_or((git, ""));
+                        let (purl, short) = printed.split_once('#').unwrap_or((printed, ""));
+                        url == purl && commit.starts_with(short)
+                    }
+                    (None, None) => false,
+                },
                 (None, None) => false,
             }
         };
@@ -222,33 +224,74 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
             _ => Err(refused(format!("commit {commit}: cargo tree printed `{line}`, which names {} of its packages", picked.len()))),
         }
     };
-    let mut stack: Vec<Option<String>> = Vec::new();
+    // Each node printed, with the kind of the dependencies printed below it so far (a package's
+    // normal ones first, then its build-dependencies after their mark); `None` for a node no build
+    // compiles, and everything printed below it: a build-dependency of a package with no build
+    // script (pest_meta's `sha2`, indoc's `rustversion`), a dependency on a package with no library
+    // (which cargo ignores, and warns of), a package cargo's metadata does not hold.
+    let mut stack: Vec<(Option<String>, bool)> = Vec::new();
     let mut edges: Vec<(String, String)> = Vec::new();
     for raw in String::from_utf8_lossy(&out.stdout).lines() {
-        let digits = raw.len() - raw.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-        let Ok(depth) = raw[..digits].parse::<usize>() else { continue };
-        stack.truncate(depth);
-        let parent = stack.last().cloned().flatten();
-        let id = if depth > 0 && parent.is_none() { None } else { identify(&raw[digits..])? };
-        if let (Some(p), Some(c)) = (&parent, &id) {
-            edges.push((p.clone(), c.clone()));
-        }
-        stack.push(id);
-    }
-    // An edge cargo prints and never builds: a build-dependency of a package with no build
-    // script (pest_meta's `sha2`, indoc's `rustversion`), a dependency on a package with no library
-    // (which cargo ignores, and warns of).
-    for (from, to) in edges {
-        let (Some(f), Some(t)) = (found.get(&from), found.get(&to)) else { continue };
-        let only_built_for_a_script = !f.normal_deps.contains(&t.name) && f.build_deps.contains(&t.name);
-        if !t.lib || (only_built_for_a_script && !f.build_script) {
+        let Some((depth, text)) = drawn(raw) else { continue };
+        if let Some(mark) = text.strip_prefix('[') {
+            // A mark of the dependencies printed after it, at the depth of their parent.
+            let build = match mark {
+                "build-dependencies]" => true,
+                _ => return Err(refused(format!("commit {commit}: cargo tree printed `{text}`"))),
+            };
+            stack.truncate(depth + 1);
+            if let Some(frame) = stack.get_mut(depth) {
+                frame.1 = build;
+            }
             continue;
         }
+        stack.truncate(depth);
+        let id = match stack.last() {
+            None if depth == 0 => identify(text)?,
+            Some((Some(parent), build)) if stack.len() == depth => match identify(text)? {
+                Some(child) => {
+                    let (f, t) = (&found[parent], &found[&child]);
+                    (t.lib && (!*build || f.build_script)).then(|| {
+                        edges.push((parent.clone(), child.clone()));
+                        child
+                    })
+                }
+                None => None,
+            },
+            _ => None,
+        };
+        stack.push((id, false));
+    }
+    for (from, to) in edges {
         if let Some(p) = found.get_mut(&from) {
             p.deps.insert(to);
         }
     }
     Ok(found)
+}
+
+/// A line `cargo tree --charset ascii` printed, read as its depth and what follows the drawing: a
+/// package at depth 0 bare, below it after a group of four characters per depth, the last `|-- `
+/// or `` `-- ``; a mark of a package's dependencies (`[build-dependencies]`) after the groups of
+/// its own depth's children, `|   ` or four spaces each. `None` for a blank line between two roots.
+fn drawn(raw: &str) -> Option<(usize, &str)> {
+    if raw.trim().is_empty() {
+        return None;
+    }
+    let mut rest = raw;
+    let mut depth = 0;
+    loop {
+        if let Some(r) = rest.strip_prefix("|-- ").or_else(|| rest.strip_prefix("`-- ")) {
+            return Some((depth + 1, r));
+        }
+        match rest.strip_prefix("|   ").or_else(|| rest.strip_prefix("    ")) {
+            Some(r) => {
+                rest = r;
+                depth += 1;
+            }
+            None => return Some((depth, rest)),
+        }
+    }
 }
 
 /// The commit's time, in UTC as RFC 3339 writes it.

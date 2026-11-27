@@ -4,6 +4,7 @@
 //! it); every component with its version and licence, every package by path it uses, every crate
 //! its version names by package URL, checksum and licence, and the dependencies between them.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 
@@ -69,6 +70,72 @@ fn suite() -> (Repo, String) {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let c = r.commit("a suite to list");
     (r, c)
+}
+
+type Package = (String, String);
+
+/// What cargo's own build of `packages` in the workspace at `dir` compiles for the release's target
+/// with every feature on, as its unit graph has it (`cargo build --unit-graph`, which compiles
+/// nothing; an unstable flag, taken under `RUSTC_BOOTSTRAP` for this check alone), with `envs` set:
+/// each package by its name and version, and each edge from a package to another one of its units
+/// uses (a library's, a build script's, an executable's).
+fn cargo_builds(dir: &Path, packages: &[&str], envs: &[(&str, &Path)]) -> (BTreeSet<Package>, BTreeSet<(Package, Package)>) {
+    let target = tempfile::tempdir().unwrap();
+    let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    c.args(["build", "--unit-graph", "-Z", "unstable-options", "--offline", "--all-features", "--target", alforge::components::TARGET, "--target-dir"]).arg(target.path());
+    if dir.join("Cargo.lock").is_file() {
+        c.arg("--locked");
+    }
+    for p in packages {
+        c.args(["-p", p]);
+    }
+    for (k, v) in envs {
+        c.env(k, v);
+    }
+    let out = c.current_dir(dir).env("RUSTC_BOOTSTRAP", "1").output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let graph: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let units = graph["units"].as_array().unwrap();
+    // A package id spec, `<source URL>#<name>@<version>`, or `#<version>` where the URL's last
+    // part is the name.
+    let spec = |u: &Value| -> Package {
+        let (url, frag) = u["pkg_id"].as_str().unwrap().rsplit_once('#').unwrap();
+        match frag.split_once('@') {
+            Some((n, v)) => (n.to_string(), v.to_string()),
+            None => (url.split('?').next().unwrap().trim_end_matches('/').rsplit('/').next().unwrap().to_string(), frag.to_string()),
+        }
+    };
+    let built: BTreeSet<Package> = units.iter().map(spec).collect();
+    let mut edges = BTreeSet::new();
+    for u in units {
+        for d in u["dependencies"].as_array().unwrap() {
+            let (from, to) = (spec(u), spec(&units[d["index"].as_u64().unwrap() as usize]));
+            if from != to {
+                edges.insert((from, to));
+            }
+        }
+    }
+    (built, edges)
+}
+
+/// The cargo packages a list names (Qt and KDDockWidgets, the bundle's own, aside) and the edges
+/// between them, by name and version, to hold against [`cargo_builds`].
+fn listed(doc: &Value) -> (BTreeSet<Package>, BTreeSet<(Package, Package)>) {
+    let by_ref: std::collections::BTreeMap<&str, Package> = doc["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| !c["purl"].as_str().is_some_and(|p| p.starts_with("pkg:generic/")))
+        .map(|c| (c["bom-ref"].as_str().unwrap(), (c["name"].as_str().unwrap().to_string(), c["version"].as_str().unwrap().to_string())))
+        .collect();
+    let mut edges = BTreeSet::new();
+    for d in doc["dependencies"].as_array().unwrap() {
+        let Some(from) = by_ref.get(d["ref"].as_str().unwrap()) else { continue };
+        for to in d["dependsOn"].as_array().unwrap() {
+            edges.insert((from.clone(), by_ref[to.as_str().unwrap()].clone()));
+        }
+    }
+    (by_ref.into_values().collect(), edges)
 }
 
 fn entry<'a>(doc: &'a Value, bom_ref: &str) -> &'a Value {
@@ -227,6 +294,18 @@ fn this_repositorys_head_lists_every_component_and_every_crate_its_versions_name
     assert_eq!(release["dependsOn"], serde_json::json!([format!("pkg:generic/kddockwidgets@{}", q.kddockwidgets), format!("pkg:generic/qt@{}", q.version)]));
     // Ábaco uses the IronCalc fork kept in the tree, by path.
     assert!(listed.iter().any(|c| c["properties"].as_array().is_some_and(|p| p.iter().any(|x| x["value"] == "forks/ironcalc/base"))));
+    // Every package cargo's own build of the components compiles for the target, and every edge
+    // between them, and nothing else: the list is cargo's unit graph, package by package.
+    let tmp = alforge::cache::dir().unwrap().join("tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let tree = tempfile::Builder::new().prefix("alforge-units-").tempdir_in(&tmp).unwrap();
+    alforge::git::export_tree(&root, &head, &[], tree.path()).unwrap();
+    let names: Vec<&str> = held.values().map(|h| h.name.as_str()).collect();
+    let (built, edges) = cargo_builds(tree.path(), &names, &[]);
+    let (packages, dependencies) = self::listed(&doc);
+    assert!(built.len() > 300, "{}", built.len());
+    assert_eq!(packages.symmetric_difference(&built).collect::<Vec<_>>(), Vec::<&Package>::new(), "the list against cargo's unit graph");
+    assert_eq!(dependencies.symmetric_difference(&edges).collect::<Vec<_>>(), Vec::<&(Package, Package)>::new(), "the list's edges against cargo's unit graph");
 }
 
 /// The list follows what cargo's own builds compile (its feature resolver, normal and build edges,
@@ -323,4 +402,80 @@ fn what_cargo_prints_and_never_builds_a_proc_macro_twin_a_signed_commit_and_a_lo
     let itoa = doc["components"].as_array().unwrap().iter().find(|e| e["bom-ref"] == "pkg:cargo/itoa@1.0.19").unwrap();
     let sum = lock.lines().find(|l| l.starts_with("\"checksum itoa 1.0.19")).unwrap().rsplit(" = ").next().unwrap().trim_matches('"');
     assert_eq!(itoa["hashes"], serde_json::json!([{ "alg": "SHA-256", "content": sum }]));
+}
+
+/// What lies below a dependency no build compiles is not listed for it, and what a build does
+/// compile is listed even where `cargo tree` would print it first below such a dependency (round
+/// 3's forms): a member's build-dependency with no build script asking serde's `derive`, serde used
+/// without it; a dependency on a fork with no library that uses serde too. Two git sources of one
+/// repository (its default branch, and `branch = "main"`), at one commit, are told apart and make
+/// one entry, the same code. Each list is held to cargo's unit graph.
+#[test]
+fn what_lies_below_what_no_build_compiles_and_two_sources_of_one_repository() {
+    let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let core = |deps: &str| format!("[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n{deps}");
+    let serde = |r: &Repo| -> (Value, String) {
+        let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let c = r.commit("serde");
+        (serde_json::from_str(&alforge::components::list(r.path(), &c, None).unwrap()).unwrap(), c)
+    };
+    let names = |doc: &Value| -> Vec<String> { doc["components"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap().to_string()).collect() };
+
+    // A build-dependency of a package with no build script: none of what lies below it.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", &core("[dependencies]\nserde = { version = \"=1.0.228\", default-features = false }\n\n[build-dependencies]\nserde = { version = \"=1.0.228\", features = [\"derive\"] }\n"));
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    let (doc, _) = serde(&r);
+    assert_eq!(names(&doc), ["serde", "serde_core", "veredas-core"]);
+    assert_eq!(entry(&doc, "pkg:cargo/serde@1.0.228")["name"], "serde");
+    let serde_deps = doc["dependencies"].as_array().unwrap().iter().find(|d| d["ref"] == "pkg:cargo/serde@1.0.228").unwrap();
+    assert_eq!(serde_deps["dependsOn"], serde_json::json!(["pkg:cargo/serde_core@1.0.228"]));
+    assert_eq!(listed(&doc), cargo_builds(r.path(), &["veredas-core"], &[]));
+
+    // A dependency on a fork with no library, which shares serde with the component: serde's own
+    // dependencies listed all the same.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\nexclude = [\"forks\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", &core("[dependencies]\nferramenta = { path = \"../../forks/ferramenta\" }\nserde = \"=1.0.228\"\n"));
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    r.write("forks/ferramenta/Cargo.toml", "[workspace]\n\n[package]\nname = \"ferramenta\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nserde = \"=1.0.228\"\n");
+    r.write("forks/ferramenta/src/main.rs", "fn main() {}\n");
+    let (doc, _) = serde(&r);
+    assert_eq!(names(&doc), ["serde", "serde_core", "veredas-core"]);
+    assert_eq!(listed(&doc), cargo_builds(r.path(), &["veredas-core"], &[]));
+
+    // Two sources of one git repository at one commit, fetched from a folder of the machine into a
+    // cargo home of the test's own.
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("cargo-home");
+    let dep = Repo::new();
+    dep.write("Cargo.toml", "[package]\nname = \"gitdep\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n");
+    dep.write("src/lib.rs", "\n");
+    let at = dep.commit("a crate of git");
+    let url = format!("file://{}", dep.path().display());
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\nexclude = [\"forks\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", &core(&format!("[dependencies]\ngitdep = {{ git = \"{url}\" }}\ngarfo = {{ path = \"../../forks/garfo\" }}\n")));
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    r.write("forks/garfo/Cargo.toml", &format!("[workspace]\n\n[package]\nname = \"garfo\"\nversion = \"0.3.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\ngitdep = {{ git = \"{url}\", branch = \"main\" }}\n"));
+    r.write("forks/garfo/src/lib.rs", "\n");
+    let out = cargo().args(["generate-lockfile"]).env("CARGO_HOME", &home).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let lock = std::fs::read_to_string(r.path().join("Cargo.lock")).unwrap();
+    assert!(lock.contains(&format!("git+{url}#{at}")) && lock.contains(&format!("git+{url}?branch=main#{at}")), "{lock}");
+    let c = r.commit("two sources of one repository");
+    let run = Command::new(env!("CARGO_BIN_EXE_alforge")).args(["components", &c]).env("CARGO_HOME", &home).current_dir(r.path()).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let doc: Value = serde_json::from_slice(&run.stdout).unwrap();
+    assert_eq!(names(&doc), ["garfo", "gitdep", "veredas-core"]);
+    let purl = format!("pkg:cargo/gitdep@0.1.0?vcs_url={}", url_encoded(&format!("git+{url}@{at}")));
+    assert_eq!(entry(&doc, &purl)["purl"], purl);
+    assert_eq!(listed(&doc), cargo_builds(r.path(), &["veredas-core"], &[("CARGO_HOME", &home)]));
+}
+
+/// Every byte percent-encoded but the unreserved ones, as a package URL's qualifier.
+fn url_encoded(text: &str) -> String {
+    text.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
