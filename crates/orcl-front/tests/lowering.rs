@@ -85,6 +85,15 @@ mod zst_const;
 #[allow(dead_code)]
 #[path = "programs/zst_ref.rs"]
 mod zst_ref;
+#[allow(dead_code)]
+#[path = "programs/usize_temps.rs"]
+mod usize_temps;
+#[allow(dead_code)]
+#[path = "programs/own_macro.rs"]
+mod own_macro;
+#[allow(dead_code)]
+#[path = "programs/grid.rs"]
+mod grid;
 
 use std::fmt::Debug;
 use std::fs;
@@ -478,6 +487,12 @@ image!(refs::Inputs { a: u8, b: u8, on: bool });
 image!(refs::Outputs { counted: u8, swapped: u16, inner: u8, ret: u16, since: Duration, by_ref: u8, timers: u8, cfg: u16 });
 image!(own_trait::Inputs { a: u8 });
 image!(own_trait::Outputs { v: u8 });
+image!(usize_temps::Inputs { a: u8, b: i8 });
+image!(usize_temps::Outputs { oldest: u8, back: i8, low: u8, widest: u8 });
+image!(own_macro::Inputs { a: i32, b: i32 });
+image!(own_macro::Outputs { v: i32 });
+image!(grid::Inputs { v: u16 });
+image!(grid::Outputs { small: u16, large: u16 });
 
 // Inputs drawn from a scan's index, the same for the native program and its lowered twin.
 
@@ -1583,4 +1598,94 @@ fn a_crate_rustc_refuses_after_its_analysis_writes_no_file() {
     let stderr = lowered.result.err().unwrap_or_else(|| panic!("post_mono was lowered"));
     assert!(stderr.contains("error[E0080]"), "{stderr}");
     assert!(!lowered.file.exists(), "no file written");
+}
+
+// Round 5's probes (c156-r5).
+
+#[test]
+fn usize_temps_temporaries_through_the_list_run_lowered_as_natively() {
+    let inputs = |k: u64| usize_temps::Inputs { a: mix(k, 1) as u8, b: mix(k, 2) as i8 };
+    let (outputs, _) = conform("usize_temps", usize_temps::UsizeTemps::default(), "UsizeTemps", &inputs, 400);
+    both(&outputs, "a low value past 200", |o| o.low > 0);
+    both(&outputs, "back wrapped", |o| o.back > 100);
+}
+
+#[test]
+fn a_program_s_own_macro_faults_inside_the_macro() {
+    let source = program("own_macro");
+    let (_, code) = lower("own_macro", &source).result.unwrap_or_else(|e| panic!("{e}"));
+    let e = fault::<_, own_macro::Outputs>(&code, &own_macro::Inputs { a: 5, b: 0 });
+    let (line, column) = place_of(&source, "top / bottom");
+    assert_eq!(e.kind, ErrorKind::Check(Check::DivisionByZero));
+    assert_eq!((e.at.line as usize, e.at.column as usize), (line, column), "inside the program's own macro");
+    let inputs = |k: u64| own_macro::Inputs { a: (mix(k, 1) % 1_000) as i32 - 500, b: (mix(k, 2) % 9) as i32 + 1 };
+    let (outputs, _) = conform("own_macro", own_macro::OwnMacro, "OwnMacro", &inputs, 200);
+    both(&outputs, "negative", |o| o.v < 0);
+}
+
+#[test]
+fn two_const_arguments_run_lowered_as_natively() {
+    let inputs = |k: u64| grid::Inputs { v: (mix(k, 1) % 1_000) as u16 };
+    let (outputs, _) = conform("grid", grid::Grids::default(), "Grids", &inputs, 400);
+    both(&outputs, "the two grids apart", |o| o.small != o.large);
+}
+
+const OUTSIDE_THE_LIST: &str = "a call into core outside the list";
+
+#[test]
+fn an_inherent_integer_operation_outside_the_list_is_refused_by_name() {
+    refused("abs", &at("abs", "(*i).wrapping_neg()", OUTSIDE_THE_LIST, "core::num::<impl i8>::wrapping_neg"));
+}
+
+#[test]
+fn an_inherent_option_operation_outside_the_list_is_refused_by_name() {
+    refused("unwrap_or", &at("unwrap_or", "self.last.unwrap_or(7)", OUTSIDE_THE_LIST, "std::option::Option::<u8>::unwrap_or"));
+}
+
+#[test]
+fn an_inherent_duration_operation_outside_the_list_is_refused_by_name() {
+    refused("checked_sub", &at("checked_sub", "self.left.checked_sub", OUTSIDE_THE_LIST, "orcl_std::Duration::checked_sub"));
+}
+
+#[test]
+fn a_scalar_s_clone_is_refused_at_the_derive_s_field() {
+    refused("clone", &at("clone", "v: u8", OUTSIDE_THE_LIST, "<u8 as Clone>::clone"));
+}
+
+#[test]
+fn a_generic_comparison_at_u8_is_refused_by_name() {
+    refused("generic_cmp", &at("generic_cmp", "a > b", OUTSIDE_THE_LIST, "<u8 as PartialOrd<u8>>::gt"));
+}
+
+#[test]
+fn a_union_is_refused_where_the_program_declares_it() {
+    refused("union_type", &at("union_type", "word: Word", TYPE, "Word"));
+}
+
+#[test]
+fn a_usize_behind_a_mutable_reference_is_refused_at_the_parameter() {
+    refused("mut_usize", &at("mut_usize", "at: &mut usize", TYPE, "usize"));
+}
+
+#[test]
+fn a_file_that_cannot_be_written_fails_the_driver() {
+    let work = fresh("unwritable");
+    compile_std(&work, &[]);
+    let w = work.display().to_string();
+    let file = work.join("no-such-folder").join("lines.orclb");
+    let source = program("lines").display().to_string();
+    let mut args = strings(&["--crate-name", "lines", "--crate-type", "rlib", "--edition", "2024", &source]);
+    args.extend(strings(&["--extern", &format!("orcl_std={w}/liborcl_std.rlib"), "-L", &w, "--out-dir", &w]));
+    args.extend(strings(&["--orcl-program", "lines", &format!("--orcl-out={}", file.display()), "--orcl-revision", "x"]));
+    let out = driver(&args);
+    assert!(!out.status.success(), "a file not written reported as written");
+    assert!(String::from_utf8_lossy(&out.stderr).contains(&format!("error: orcl-front: {}", file.display())));
+}
+
+#[test]
+fn locals_keep_the_source_s_names() {
+    // the scan's parameters and a variable the program names, by the source's names (interpreter.md, "The functions")
+    let (_, code) = lower_in("locals-names", "faults", &program("faults")).result.unwrap();
+    let names: Vec<Option<&str>> = code.functions[0].locals.iter().map(|l| l.name.as_deref()).collect();
+    assert_eq!(names.get(1..=4), Some(&[Some("self"), Some("_scan"), Some("i"), Some("o")][..]), "{names:?}");
 }
