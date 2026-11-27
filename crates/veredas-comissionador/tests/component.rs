@@ -695,6 +695,16 @@ fn project_breaches(text: &str) -> Vec<String> {
                         if !from {
                             out.push("`loaded` bound to anything but `load_file`'s project".to_string());
                         }
+                        // The project as `load_file` returned it, from the executable's own
+                        // `project`: its arm `Ok(p) => p`, nothing done to it in between (round 10).
+                        let as_returned = paren(i + 11, "project")
+                            && matches!(trees.get(i + 12), Some(T::Group(g)) if g.delimiter() == Delimiter::Brace && {
+                                let arm: Vec<String> = g.stream().into_iter().take(6).map(|t| t.to_string()).collect();
+                                arm == ["Ok", "(p)", "=", ">", "p", ","]
+                            });
+                        if from && !as_returned {
+                            out.push("`loaded` is not `load_file(project)`'s project as returned (`Ok(p) => p`)".to_string());
+                        }
                     }
                     "let" if ident(i + 1).as_deref() == Some("config") => {
                         seen.config += 1;
@@ -727,13 +737,50 @@ fn project_breaches(text: &str) -> Vec<String> {
     out
 }
 
+/// How often a source reads a project (`load_file`), configures a session from it
+/// (`session_config`) and starts one (`Session::start`): the executable's once each, every other
+/// file's none (refute round 10: the library could start a session of its own with views added).
+fn session_makers(text: &str) -> (usize, usize, usize) {
+    use proc_macro2::TokenTree as T;
+    fn walk(stream: proc_macro2::TokenStream, n: &mut (usize, usize, usize)) {
+        let trees: Vec<T> = stream.into_iter().collect();
+        let punct = |k: usize, c: char| matches!(trees.get(k), Some(T::Punct(p)) if p.as_char() == c);
+        for (i, t) in trees.iter().enumerate() {
+            match t {
+                T::Ident(id) => match id.to_string().trim_start_matches("r#") {
+                    "load_file" => n.0 += 1,
+                    "session_config" => n.1 += 1,
+                    "start" if i >= 3 && punct(i - 1, ':') && punct(i - 2, ':') && matches!(trees.get(i - 3), Some(T::Ident(s)) if s.to_string() == "Session") => n.2 += 1,
+                    _ => {}
+                },
+                T::Group(g) => walk(g.stream(), n),
+                _ => {}
+            }
+        }
+    }
+    let mut n = (0, 0, 0);
+    walk(text.parse().unwrap_or_else(|e| panic!("a source that does not lex: {e:?}")), &mut n);
+    n
+}
+
+#[test]
+fn the_executable_alone_reads_a_project_and_starts_a_session() {
+    for f in files_under(&crate_dir().join("src")) {
+        let name = f.file_name().unwrap().to_string_lossy().into_owned();
+        let want = if name == ARMING_FILE { (1, 1, 1) } else { (0, 0, 0) };
+        assert_eq!(session_makers(&std::fs::read_to_string(&f).unwrap()), want, "{}: projects read, configured and sessions started", f.display());
+    }
+    let library = "pub fn session_of(p: &Path, t: N) -> Option<Session> { let mut p = veredas_portal::project::load_file(p).ok()?; p.tables.push(v); veredas_portal::session::Session::start(p.session_config(t)).ok() }";
+    assert_eq!(session_makers(library), (1, 1, 1));
+}
+
 #[test]
 fn the_executable_starts_its_session_from_the_project_as_it_read_it() {
     // Refute round 9: the executable could push a view of its own SQL into the project it read
     // (`loaded.tables`), which the store makes a view reading any file, every guard green.
     let text = std::fs::read_to_string(crate_dir().join("src").join(ARMING_FILE)).unwrap();
     assert_eq!(project_breaches(&text), Vec::<String>::new(), "{ARMING_FILE}");
-    let good = "let loaded = match veredas_portal::project::load_file(p) { Ok(p) => p, Err(_) => return };\nlet config = loaded.session_config(t);\nlet s = Session::start(config);";
+    let good = "let loaded = match veredas_portal::project::load_file(project) { Ok(p) => p, Err(_) => return };\nlet config = loaded.session_config(t);\nlet s = Session::start(config);";
     assert_eq!(project_breaches(good), Vec::<String>::new());
     let mutable = good.replace("let loaded", "let mut loaded") + "\nloaded.tables.push(v);";
     assert!(project_breaches(&mutable).contains(&"`mut loaded`: the project handed on as it was read".to_string()));
@@ -743,6 +790,16 @@ fn the_executable_starts_its_session_from_the_project_as_it_read_it() {
     assert!(project_breaches(&good.replace("Session::start(config)", "Session::start(other)")).contains(&"`Session::start` given anything but `config`".to_string()));
     let two = good.to_string() + "\nlet more = loaded.session_config(t);";
     assert!(project_breaches(&two).contains(&"`session_config` called past `let config = loaded.session_config(..)`".to_string()));
+    // Refute round 10: the project changed in its `Ok` arm, or on its way out of `load_file`.
+    let as_returned = "`loaded` is not `load_file(project)`'s project as returned (`Ok(p) => p`)".to_string();
+    let arm = "let loaded = match veredas_portal::project::load_file(project) { Ok(mut p) => { p.tables.push(v); p } Err(_) => return };\nlet config = loaded.session_config(t);\nlet s = Session::start(config);";
+    assert_eq!(project_breaches(arm), [as_returned.clone()]);
+    let mapped = "let loaded = match veredas_portal::project::load_file(project).map(|mut p| { p.tables.push(v); p }) { Ok(p) => p, Err(_) => return };\nlet config = loaded.session_config(t);\nlet s = Session::start(config);";
+    assert_eq!(project_breaches(mapped), [as_returned.clone()]);
+    let other = "let loaded = match veredas_portal::project::load_file(&written) { Ok(p) => p, Err(_) => return };\nlet config = loaded.session_config(t);\nlet s = Session::start(config);";
+    assert_eq!(project_breaches(other), [as_returned]);
+    let good = "let loaded = match veredas_portal::project::load_file(project) { Ok(p) => p, Err(_) => return };\nlet config = loaded.session_config(t);\nlet s = Session::start(config);";
+    assert_eq!(project_breaches(good), Vec::<String>::new());
 }
 
 #[test]
