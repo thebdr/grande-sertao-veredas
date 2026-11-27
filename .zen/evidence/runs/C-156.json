@@ -7,10 +7,10 @@
     "cargo test -p orcl-front --test shell && cargo +nightly-2026-11-21 test -p orcl-front --features driver --test lowering && cargo +nightly-2026-11-21 clippy -p orcl-front --features driver --all-targets -- -D warnings"
   ],
   "exitCode": 0,
-  "outputSha": "c23f4791e2a93815aa3d1f4236da21995c8a5aae1820dd13cd2851ad5a1c8119",
-  "outputTail": "test the_driver_takes_its_options_from_the_environment_as_a_wrapper_and_lowers_no_test_build ... ok\ntest the_source_map_names_no_file_of_core ... ok\ntest arithmetic_bits_comparisons_and_casts_run_lowered_as_they_run_natively ... ok\ntest the_conveyor_runs_lowered_as_it_runs_natively ... ok\ntest enums_arrays_options_tuples_references_durations_and_constants_run_lowered_as_natively ... ok\ntest ordinary_control_code_runs_lowered_as_natively ... ok\ntest the_probe_of_every_block_of_orcl_std_runs_lowered_as_it_runs_natively ... ok\n\ntest result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.68s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running tests/shell.rs (target/debug/build/orcl-front/b84bf110bd17d9b6/out/shell-b84bf110bd17d9b6)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running tests/lowering.rs (target/debug/build/orcl-front/69721d5d8bf7b6f8/out/lowering-69721d5d8bf7b6f8)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s",
-  "ranAt": "2026-11-27T07:18:56.533Z",
-  "headCommit": "0c9a7b096b8ceb3f1748458bfe812223681a46fd",
+  "outputSha": "4ff7e5ad068ca42725aea04c4ae6716bc9c0f554735653b444afba6d6dd57852",
+  "outputTail": "test under_cargo_a_bin_of_the_program_s_name_is_compiled_and_the_library_alone_lowered ... ok\ntest the_source_map_names_no_file_of_core ... ok\ntest arithmetic_bits_comparisons_and_casts_run_lowered_as_they_run_natively ... ok\ntest the_conveyor_runs_lowered_as_it_runs_natively ... ok\ntest enums_arrays_options_tuples_references_durations_and_constants_run_lowered_as_natively ... ok\ntest ordinary_control_code_runs_lowered_as_natively ... ok\ntest the_probe_of_every_block_of_orcl_std_runs_lowered_as_it_runs_natively ... ok\n\ntest result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.99s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running tests/shell.rs (target/debug/build/orcl-front/b84bf110bd17d9b6/out/shell-b84bf110bd17d9b6)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running tests/lowering.rs (target/debug/build/orcl-front/69721d5d8bf7b6f8/out/lowering-69721d5d8bf7b6f8)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s",
+  "ranAt": "2026-11-27T08:17:14.586Z",
+  "headCommit": "77c34728d2fe1f05ac162507af37a6089768d19d",
   "tests": [
     {
       "name": "crates/orcl-front/tests/shell.rs",
@@ -20,7 +20,7 @@
     {
       "name": "crates/orcl-front/tests/lowering.rs",
       "file": "crates/orcl-front/tests/lowering.rs",
-      "fileSha": "b5c75873d3acc4c40dfdd9548fc9f78758e1c5132f2cce31ea908c2e584e5bd0"
+      "fileSha": "1d169a01f4e2652f2cecb22181e1ac5e1b0ebe9286f0d84e119bcdfa8f4fe20e"
     }
   ]
 }
