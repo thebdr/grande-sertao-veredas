@@ -118,9 +118,7 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
     if tree.join("Cargo.lock").is_file() {
         argv.push("--locked");
     }
-    let out = crate::cut::suite_command(&tree, &parent, &argv, std::env::vars_os())
-    .stdin(std::process::Stdio::null())
-    .output()?;
+    let out = list_cargo(&tree, &parent, &argv).stdin(std::process::Stdio::null()).output()?;
     if !out.status.success() {
         let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
         let reason: Vec<&str> = why.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
@@ -170,7 +168,7 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
         tree_argv.extend(["-p".to_string(), c.to_string()]);
     }
     let words: Vec<&str> = tree_argv.iter().map(String::as_str).collect();
-    let out = crate::cut::suite_command(&tree, &parent, &words, std::env::vars_os()).stdin(std::process::Stdio::null()).output()?;
+    let out = list_cargo(&tree, &parent, &words).stdin(std::process::Stdio::null()).output()?;
     if !out.status.success() {
         let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
         let reason: Vec<&str> = why.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
@@ -181,14 +179,18 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
         m
     });
     let identify = |line: &str| -> Result<Option<String>, ListError> {
-        // Cargo's marks wherever it prints them (`name vX (proc-macro) (source)`, ` (*)` last).
-        let line = line.replace(" (proc-macro)", "").replace(" (*)", "");
-        let line = line.as_str();
-        let (head, paren) = match line.split_once(" (") {
-            Some((h, rest)) => (h, Some(rest.trim_end_matches(')'))),
-            None => (line, None),
+        // `name vX`, then cargo's marks and the source as it prints them (`(proc-macro)` first,
+        // `(<source>)` its parentheses alone taken off, a folder's own kept; ` (*)` last): a name
+        // and a version hold no space.
+        let unread = || refused(format!("commit {commit}: cargo tree printed `{line}`"));
+        let rest = line.strip_suffix(" (*)").unwrap_or(line);
+        let (name, rest) = rest.split_once(" v").ok_or_else(unread)?;
+        let (version, rest) = rest.split_once(' ').unwrap_or((rest, ""));
+        let rest = rest.strip_prefix("(proc-macro)").map_or(rest, str::trim_start);
+        let paren = match rest {
+            "" => None,
+            _ => Some(rest.strip_prefix('(').and_then(|r| r.strip_suffix(')')).ok_or_else(unread)?),
         };
-        let (name, version) = head.split_once(" v").ok_or_else(|| refused(format!("commit {commit}: cargo tree printed `{line}`")))?;
         let ids = by_name.get(&(name.to_string(), version.to_string())).cloned().unwrap_or_default();
         // The source cargo prints (crates.io's none; a path; a git repository's URL, its reference
         // and its commit's first 8 digits, `url?branch=main#8a2f5f93`; `registry `<url or name>``)
@@ -204,9 +206,15 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
                         src != CRATES_IO && (src == r || src.strip_prefix("registry+") == Some(r))
                     }
                     (None, Some(git)) => {
-                        let (url, commit) = git.split_once('#').unwrap_or((git, ""));
-                        let (purl, short) = printed.split_once('#').unwrap_or((printed, ""));
-                        url == purl && commit.starts_with(short)
+                        // Its reference as cargo prints it, URL-encoded (`branch=fix%2Fx`), where
+                        // its metadata holds it as it is (`branch=fix/x`).
+                        let (at, commit) = git.rsplit_once('#').unwrap_or((git, ""));
+                        let printed_as = match at.split_once('?').and_then(|(u, q)| q.split_once('=').map(|(k, v)| (u, k, v))) {
+                            Some((u, k, v)) => format!("{u}?{k}={}", form_encoded(v)),
+                            None => at.to_string(),
+                        };
+                        let (pat, short) = printed.rsplit_once('#').unwrap_or((printed, ""));
+                        printed_as == pat && commit.starts_with(short)
                     }
                     (None, None) => false,
                 },
@@ -268,6 +276,32 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
         }
     }
     Ok(found)
+}
+
+/// A git reference's value as cargo prints it in a source (the `application/x-www-form-urlencoded`
+/// bytes: letters, digits and `*-._` as they are, a space as `+`, any other byte `%XX`).
+fn form_encoded(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'*' | b'-' | b'.' | b'_' => (b as char).to_string(),
+            b' ' => "+".to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// Cargo as the list runs it: in the suite's own environment (crate::cut::suite_command), so no
+/// variable of the caller's steers it, and with what a configuration of the caller's would steer
+/// the graph by set aside (`build.rustflags` and `target.*.rustflags`, whose `--cfg` turns a
+/// platform's dependencies on; `build.rustc` and its wrappers, which answer what the target is), as
+/// the builder's build runs with none (crate::builder writes it the vendored sources alone). A
+/// `links` override reaches no `cargo tree`, which prints the build script's dependencies the
+/// builder compiles.
+fn list_cargo(cwd: &Path, tmp: &Path, argv: &[&str]) -> std::process::Command {
+    let mut c = crate::cut::suite_command(cwd, tmp, argv, std::env::vars_os());
+    c.env("CARGO_ENCODED_RUSTFLAGS", "").env("RUSTC", "rustc").env("RUSTC_WRAPPER", "").env("RUSTC_WORKSPACE_WRAPPER", "");
+    c
 }
 
 /// A line `cargo tree --charset ascii` printed, read as its depth and what follows the drawing: a

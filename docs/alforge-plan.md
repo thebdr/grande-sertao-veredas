@@ -294,7 +294,8 @@ It holds:
   feature (`dep?/f`) nothing else turns on list nothing; `cargo metadata`'s resolve would list them
   (C-295's first refute round). Nor does what `cargo tree` prints and no build compiles, and what
   lies below it: a build-dependency of a package with no build script, a dependency on a package
-  with no library (rounds 2 and 3). A package by path outside the components (the IronCalc
+  with no library (rounds 2 and 3). The caller's cargo configuration steers it in nothing: its
+  rustflags and its rustc are set aside, as the builder's build has none (round 4). A package by path outside the components (the IronCalc
   fork) by its folder; a crate by `pkg:cargo/<name>@<version>` (with `vcs_url` for a git one), the
   lock's checksum as its SHA-256, and its licence as its manifest states it;
 - with Oficina's window, Qt and KDDockWidgets at their versions, as the recipe names them (Q446);

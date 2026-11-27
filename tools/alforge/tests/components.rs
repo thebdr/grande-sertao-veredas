@@ -354,12 +354,13 @@ fn what_cargo_prints_and_never_builds_a_proc_macro_twin_a_signed_commit_and_a_lo
     r.write(
         "crates/veredas-core/Cargo.toml",
         "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n\
-         [dependencies]\nindoc = \"=2.0.8\"\nitoa = \"=1.0.19\"\nitoa_twin = { package = \"itoa\", path = \"../../forks/itoa\" }\nferramenta = { path = \"../../forks/ferramenta\" }\n\n\
+         [dependencies]\nindoc = \"=2.0.8\"\nitoa = \"=1.0.19\"\nitoa_twin = { package = \"itoa\", path = \"../../forks/itoa (twin)\" }\nferramenta = { path = \"../../forks/ferramenta\" }\n\n\
          [build-dependencies]\nryu = \"1\"\n",
     );
     r.write("crates/veredas-core/src/lib.rs", "\n");
-    r.write("forks/itoa/Cargo.toml", "[workspace]\n\n[package]\nname = \"itoa\"\nversion = \"1.0.19\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[lib]\nproc-macro = true\n");
-    r.write("forks/itoa/src/lib.rs", "\n");
+    // The twin's folder named with parentheses of its own (round 4's form).
+    r.write("forks/itoa (twin)/Cargo.toml", "[workspace]\n\n[package]\nname = \"itoa\"\nversion = \"1.0.19\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[lib]\nproc-macro = true\n");
+    r.write("forks/itoa (twin)/src/lib.rs", "\n");
     r.write("forks/ferramenta/Cargo.toml", "[workspace]\n\n[package]\nname = \"ferramenta\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[[bin]]\nname = \"ferramenta\"\npath = \"src/main.rs\"\n");
     r.write("forks/ferramenta/src/main.rs", "fn main() {}\n");
     let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
@@ -454,22 +455,26 @@ fn what_lies_below_what_no_build_compiles_and_two_sources_of_one_repository() {
     dep.write("Cargo.toml", "[package]\nname = \"gitdep\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n");
     dep.write("src/lib.rs", "\n");
     let at = dep.commit("a crate of git");
+    // A branch whose name cargo prints URL-encoded (`branch=fix%2Fx`), at the same commit.
+    dep.git(&["branch", "fix/x"]);
     let url = format!("file://{}", dep.path().display());
     let r = Repo::new();
     r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\nexclude = [\"forks\"]\n");
-    r.write("crates/veredas-core/Cargo.toml", &core(&format!("[dependencies]\ngitdep = {{ git = \"{url}\" }}\ngarfo = {{ path = \"../../forks/garfo\" }}\n")));
+    r.write("crates/veredas-core/Cargo.toml", &core(&format!("[dependencies]\ngitdep = {{ git = \"{url}\" }}\ngarfo = {{ path = \"../../forks/garfo\" }}\nforquilha = {{ path = \"../../forks/forquilha\" }}\n")));
     r.write("crates/veredas-core/src/lib.rs", "\n");
     r.write("forks/garfo/Cargo.toml", &format!("[workspace]\n\n[package]\nname = \"garfo\"\nversion = \"0.3.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\ngitdep = {{ git = \"{url}\", branch = \"main\" }}\n"));
     r.write("forks/garfo/src/lib.rs", "\n");
+    r.write("forks/forquilha/Cargo.toml", &format!("[workspace]\n\n[package]\nname = \"forquilha\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\ngitdep = {{ git = \"{url}\", branch = \"fix/x\" }}\n"));
+    r.write("forks/forquilha/src/lib.rs", "\n");
     let out = cargo().args(["generate-lockfile"]).env("CARGO_HOME", &home).current_dir(r.path()).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let lock = std::fs::read_to_string(r.path().join("Cargo.lock")).unwrap();
-    assert!(lock.contains(&format!("git+{url}#{at}")) && lock.contains(&format!("git+{url}?branch=main#{at}")), "{lock}");
+    assert!(lock.contains(&format!("git+{url}#{at}")) && lock.contains(&format!("git+{url}?branch=main#{at}")) && lock.contains(&format!("git+{url}?branch=fix%2Fx#{at}")), "{lock}");
     let c = r.commit("two sources of one repository");
     let run = Command::new(env!("CARGO_BIN_EXE_alforge")).args(["components", &c]).env("CARGO_HOME", &home).current_dir(r.path()).output().unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let doc: Value = serde_json::from_slice(&run.stdout).unwrap();
-    assert_eq!(names(&doc), ["garfo", "gitdep", "veredas-core"]);
+    assert_eq!(names(&doc), ["forquilha", "garfo", "gitdep", "veredas-core"]);
     let purl = format!("pkg:cargo/gitdep@0.1.0?vcs_url={}", url_encoded(&format!("git+{url}@{at}")));
     assert_eq!(entry(&doc, &purl)["purl"], purl);
     assert_eq!(listed(&doc), cargo_builds(r.path(), &["veredas-core"], &[("CARGO_HOME", &home)]));
@@ -478,4 +483,49 @@ fn what_lies_below_what_no_build_compiles_and_two_sources_of_one_repository() {
 /// Every byte percent-encoded but the unreserved ones, as a package URL's qualifier.
 fn url_encoded(text: &str) -> String {
     text.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// A cargo configuration of the caller's that would steer the graph (`build.rustflags` holding a
+/// `--cfg`, as rustix documents `rustix_use_libc`) steers no list (round 4's form): the builder's
+/// build runs with none. The configuration does steer cargo's own tree, so the check can fail.
+#[test]
+fn the_callers_cargo_configuration_steers_no_list() {
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nrustix = { version = \"=0.38.44\", features = [\"fs\"] }\n");
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into())).args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    r.commit("rustix");
+    // A cargo home of the test's own: the machine's registry, and the setting.
+    let real = std::env::var_os("CARGO_HOME").map(std::path::PathBuf::from).unwrap_or_else(|| Path::new(&std::env::var("HOME").unwrap()).join(".cargo"));
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("cargo-home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::os::unix::fs::symlink(real.join("registry"), home.join("registry")).unwrap();
+    std::fs::write(home.join("config.toml"), "[build]\nrustflags = [\"--cfg\", \"rustix_use_libc\"]\n").unwrap();
+    let list = |home: Option<&Path>| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_alforge"));
+        c.args(["components", "HEAD", "--release", "2.0.0"]).current_dir(r.path());
+        if let Some(h) = home {
+            c.env("CARGO_HOME", h);
+        }
+        let out = c.output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        out.stdout
+    };
+    let plain = list(None);
+    assert_eq!(String::from_utf8(list(Some(&home))).unwrap(), String::from_utf8(plain.clone()).unwrap());
+    let doc: Value = serde_json::from_slice(&plain).unwrap();
+    let names: Vec<&str> = doc["components"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"linux-raw-sys") && !names.contains(&"errno"), "{names:?}");
+    // The setting steers cargo's own tree: rustix over libc, through errno.
+    let tree = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+        .args(["tree", "--offline", "--locked", "--target", alforge::components::TARGET, "-e", "normal", "--prefix", "none", "--format", "{p}"])
+        .env("CARGO_HOME", &home)
+        .current_dir(r.path())
+        .output()
+        .unwrap();
+    assert!(tree.status.success(), "{}", String::from_utf8_lossy(&tree.stderr));
+    assert!(String::from_utf8_lossy(&tree.stdout).lines().any(|l| l.starts_with("errno ")), "{}", String::from_utf8_lossy(&tree.stdout));
 }
