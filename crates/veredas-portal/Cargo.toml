@@ -37,8 +37,10 @@ encoding_rs = { workspace = true }
 # Newline splitting over decoded text and raw bytes.
 memchr = { workspace = true }
 # The filesystem accelerator over the poll loop, for local paths: the watcher off Linux
-# (src/tail/watch.rs). Kept on every target: dropped on Linux it moves the features cargo unifies
-# for a shared crate, and duckdb's engine builds again in every member's target.
+# (src/tail/watch.rs). Kept on every target, though Linux uses none of it (the lint allowed in
+# `[lints.cargo]` below): dropped on Linux it takes mio's `log` and `os-ext` features away, and
+# mio sits under reqwest, a build dependency of duckdb's, so duckdb's engine builds again in every
+# member's target with no Cargo.lock move to send it behind the engine's lock.
 notify = { workspace = true }
 # Capture rules and family patterns are regexes.
 regex = { workspace = true }
@@ -76,6 +78,10 @@ libc = { workspace = true }
 # Whether a drive letter is a network drive, so a share is polled and never watched.
 windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_Foundation"] }
 
+
+[lints.cargo]
+# notify, unused on Linux and kept there on purpose (its entry above says why).
+unused_dependencies = "allow"
 
 [[bin]]
 name = "veredas-portal"

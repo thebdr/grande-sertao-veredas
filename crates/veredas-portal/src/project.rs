@@ -12,7 +12,9 @@
 //! The declarations the session reads (a log source, a timestamp rule, a capture rule) live
 //! here too, so the light build, which has no session, still reads the project.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+#[cfg(feature = "store")]
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 

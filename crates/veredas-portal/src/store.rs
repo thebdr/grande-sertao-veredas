@@ -278,7 +278,7 @@ impl DuckStore {
                 }
                 match block {
                     None => Connection::open(path),
-                    Some(b) => duckdb::Config::default().with("default_block_size", &b.to_string()).and_then(|c| Connection::open_with_flags(path, c)),
+                    Some(b) => duckdb::Config::default().with("default_block_size", b.to_string()).and_then(|c| Connection::open_with_flags(path, c)),
                 }
                 .map_err(|e| StoreError::Open(format!("open {}: {e}", path.display())))?
             }

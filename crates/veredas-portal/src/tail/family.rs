@@ -354,12 +354,16 @@ fn sweep_after_held_open(
     }
 }
 
+/// A test's hooks by path: what a rotation or a stop between a look and an open does there.
+#[cfg(test)]
+pub(crate) type Hooks = std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>>;
+
 /// A test's hooks, each run before the backfill opens its path (the fixed sweep's open of its
 /// fixed path, a replay's open of a member) or a held active's branch opens the active or the
 /// held file where it was found: what a
 /// rotation or a stop between a listing and an open does there (C-096, C-098).
 #[cfg(test)]
-pub(crate) static BEFORE_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
+pub(crate) static BEFORE_OPEN: Hooks = std::sync::Mutex::new(Vec::new());
 
 use crate::tail::cursor::Whereabouts;
 
@@ -373,7 +377,7 @@ fn whereabouts(spec: &FamilySpec, identity: Option<&crate::tail::cursor::Identit
 /// its entries are looked at, keyed by the folder: a rename landing in the walk (C-096's sixteenth
 /// refute round).
 #[cfg(test)]
-pub(crate) static DURING_WALK: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
+pub(crate) static DURING_WALK: Hooks = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
 pub(crate) fn during_walk(dir: &Path) {
@@ -389,13 +393,13 @@ pub(crate) fn during_walk(dir: &Path) {
 /// A test's hooks, each run inside a file's look (between its length and its bytes), keyed by
 /// path: what a cut landing within the look does (C-096's thirteenth refute round).
 #[cfg(test)]
-pub(crate) static DURING_LOOK: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
+pub(crate) static DURING_LOOK: Hooks = std::sync::Mutex::new(Vec::new());
 
 /// A test's hooks, each run after a held active's open found the held file where it stood and
 /// before the family is listed again, keyed by the active's path: a burst of rotations landing in
 /// that window (C-098's sixth refute round).
 #[cfg(test)]
-pub(crate) static AFTER_HELD_OPEN: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
+pub(crate) static AFTER_HELD_OPEN: Hooks = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
 pub(crate) fn after_held_open(path: &Path) {
@@ -422,7 +426,7 @@ pub(crate) fn during_look(path: &Path) {
 /// A test's hooks, each run right after a file's start has returned, keyed by path: what a cut
 /// landing just after the start does (C-096's fourteenth refute round).
 #[cfg(test)]
-pub(crate) static AFTER_START: std::sync::Mutex<Vec<(std::path::PathBuf, Box<dyn FnMut() + Send>)>> = std::sync::Mutex::new(Vec::new());
+pub(crate) static AFTER_START: Hooks = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
 pub(crate) fn after_start(path: &Path) {
@@ -559,6 +563,7 @@ fn newest_catch_up(
 /// for the cursor to read its file first and the order holds (a second rotation inside the sweep
 /// inverted two generations once). Returns whether anything fresh was found; loop until it
 /// reports false. `None` means stopped.
+#[allow(clippy::too_many_arguments)]
 fn sweep_unknown_retirees(
     spec: &FamilySpec,
     known: &mut HashSet<String>,
