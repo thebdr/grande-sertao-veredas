@@ -3538,6 +3538,38 @@ driver by naming it.
 
 ---
 
+## Q450 - Which texts does a bundle carry for the third-party code inside the Qt it ships?
+
+**Raised** 2026-11-27, by the release member, from C-294's first refute round.
+
+The bundle's `lib/qt/` (Q446) carries Qt's libraries and what they hold of others' code. Qt's own
+SBOM (`sbom/*.spdx.json` beside the install) names that code: PCRE2, double-conversion, libpng,
+libjpeg, HarfBuzz, md4c and more, under BSD-3-Clause, BSD-2-Clause, MIT, IJG, Libpng and other
+licences. It also has ICU 73, whose terms are ICU's own, and which Qt's SBOM does not name. Most of
+those licences ask that their text accompany a binary. The install carries Qt's SBOM, with the texts
+of its custom licences (`LicenseRef-*`) inside it, but not the texts of the standard ones, nor ICU's.
+This machine holds Debian's LGPL-3, GPL-2 and GPL-3, and ICU 78's terms (`/usr/share/doc/libicu78`),
+not ICU 73's.
+
+Options:
+- (a) The bundle carries Qt's own SPDX documents for the modules it ships (each component named with
+  its licence identifier, the custom licences' texts inside) and Debian's LGPL and GPL texts; the
+  standard texts are named by their SPDX identifiers alone.
+- (b) As (a), with the text of every licence those documents name, from Qt's own source: the
+  `LICENSES/` folders of the `qtbase` and `qtdeclarative` source archives at download.qt.io (about 50
+  MB each, downloaded once into the cache), and ICU 73's terms from ICU's own release.
+- (c) Oficina's window ships with a Qt built from source for the release, its third-party code named
+  and its texts gathered by that build.
+
+**Recommended**: (b): it carries what those licences ask, at the cost of a one-off download.
+
+**Taken meanwhile** (most reversible): (a). Nothing is published (Q436), and a bundle handed out
+before the answer would carry less than (b), never anything wrong.
+
+**Reversible?** Yes: `licenses/qt/` is the bundle's, made at each cut.
+
+---
+
 ## Q229 - A pulse that comes back with no new edge, and which preset a timer is judged against
 
 **Raised** 2026-11-23, by the controlador session, from C-150's refute rounds 11 and 12.
