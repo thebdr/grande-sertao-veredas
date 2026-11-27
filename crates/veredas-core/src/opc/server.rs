@@ -677,8 +677,11 @@ fn guard_writes(shared: &Arc<Shared>, spec: &ServerSpec, writes: SyncSender<Clie
                     if landed.is_err() {
                         return;
                     }
+                    // Counted and handed under the status's lock, so a caller handed this write
+                    // and asking the status next finds it counted.
+                    let mut status = shared.status.lock().ok();
                     let kept = writes.try_send(ClientWrite { id, value: variant });
-                    if let Ok(mut s) = shared.status.lock() {
+                    if let Some(s) = status.as_mut() {
                         s.client_writes += 1;
                         if let Err(TrySendError::Full(_)) = kept {
                             s.writes_dropped += 1;

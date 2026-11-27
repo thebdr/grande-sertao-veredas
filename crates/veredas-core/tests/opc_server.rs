@@ -80,6 +80,57 @@ fn spec() -> ServerSpec {
     }
 }
 
+/// The same four variables, every one read-write, so a client reads each one's DataType and
+/// writes each one.
+fn writable_spec() -> ServerSpec {
+    let mut s = spec();
+    for v in &mut s.variables {
+        v.access = Access::ReadWrite;
+    }
+    s
+}
+
+/// The stack's own client, for what core's worker never sends; configured as the worker's is.
+fn raw_client() -> opcua_client::Client {
+    opcua_client::ClientBuilder::new()
+        .application_name("veredas test client")
+        .application_uri("urn:veredas:test:client")
+        .product_uri("urn:veredas:test:client")
+        .create_sample_keypair(false)
+        .trust_server_certs(true)
+        .session_retry_limit(1)
+        .client()
+        .unwrap()
+}
+
+/// An anonymous session of the stack's own client on the server, connected.
+async fn raw_session(
+    client: &mut opcua_client::Client,
+    server: &Server,
+) -> (
+    Arc<opcua_client::Session>,
+    tokio::task::JoinHandle<StatusCode>,
+) {
+    use opcua_types::{MessageSecurityMode, UserTokenPolicy};
+    let endpoint = (
+        server.endpoint_url.as_str(),
+        "None",
+        MessageSecurityMode::None,
+        UserTokenPolicy::anonymous(),
+    );
+    let (session, event_loop) = client
+        .connect_to_matching_endpoint(endpoint, opcua_client::IdentityToken::Anonymous)
+        .await
+        .unwrap();
+    let handle = event_loop.spawn();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(15), session.wait_for_connection())
+            .await
+            .unwrap()
+    );
+    (session, handle)
+}
+
 fn block<F: std::future::Future>(f: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -182,7 +233,7 @@ fn write(w: &OpcWorker, server: &Server, writes: &[(&str, Variant)]) -> Vec<Stat
 fn the_callers_folder_and_variables_browse_and_poll_and_what_the_caller_sets_is_read() {
     let server = Server::start(&spec()).unwrap();
     // The browser finds the folder under Objects by the caller's browse name, and in it each
-    // variable by its name (the id when it has none), typed, in the browser's order (by display
+    // variable by its node id, display and browse name (the id when it has none), typed, in the browser's order (by display
     // name, byte for byte). A write-only variable browses untyped: async-opcua 0.19 checks a
     // node's read access for every attribute, its DataType included (`validate_node_read`), so
     // the browser's read of that type is refused.
@@ -210,9 +261,16 @@ fn the_callers_folder_and_variables_browse_and_poll_and_what_the_caller_sets_is_
     assert_eq!(folder.node_id, server.node_id_str("line"));
     assert!(folder.is_container && !folder.is_variable);
     let nodes = children(Some(folder.node_id.clone()));
-    let seen: Vec<(String, String, Option<SeriesType>)> = nodes
+    let seen: Vec<(String, String, String, Option<SeriesType>)> = nodes
         .iter()
-        .map(|n| (n.node_id.clone(), n.display_name.clone(), n.series_type))
+        .map(|n| {
+            (
+                n.node_id.clone(),
+                n.display_name.clone(),
+                n.browse_name.clone(),
+                n.series_type,
+            )
+        })
         .collect();
     assert_eq!(
         seen,
@@ -220,16 +278,24 @@ fn the_callers_folder_and_variables_browse_and_poll_and_what_the_caller_sets_is_
             (
                 server.node_id_str("batch"),
                 "Batch".into(),
+                "Batch".into(),
                 Some(SeriesType::Text)
             ),
             (
                 server.node_id_str("count"),
                 "Count".into(),
+                "Count".into(),
                 Some(SeriesType::Int)
             ),
-            (server.node_id_str("start"), "Start".into(), None),
+            (
+                server.node_id_str("start"),
+                "Start".into(),
+                "Start".into(),
+                None
+            ),
             (
                 server.node_id_str("level"),
+                "level".into(),
                 "level".into(),
                 Some(SeriesType::Float)
             ),
@@ -357,6 +423,94 @@ fn a_clients_writes_land_and_are_handed_to_the_caller_in_the_order_they_landed()
     w.handle.join().unwrap();
 }
 
+/// A write answered `Good` has landed before the server serves the client's next request: the
+/// stack runs each Write and each Read in a task of its own on the server's one thread, the
+/// guard's landing task is spawned while the Write's runs, and a request read after the Write's
+/// answer has left is spawned after it, so the landing runs first. So the client's next read,
+/// made at once with no wait, sees each of twenty values, and the caller's get after that read
+/// sees it too. (The caller's get at the instant of the answer is not ordered: the session's own
+/// task may already be due, woken by another request, and send the answer before the landing
+/// runs. What the caller is handed has landed, the next test holds.)
+#[test]
+fn a_write_answered_good_has_landed_before_the_clients_next_request() {
+    let server = Server::start(&spec()).unwrap();
+    let (w, rx) = worker_of(
+        &server,
+        Auth::Anonymous,
+        vec![tag(&server, "count", SeriesType::Int, true)],
+    );
+    next_poll(&rx, Duration::from_secs(15));
+    let node = parse_node_id(&server.node_id_str("count")).unwrap();
+    for i in 100..120 {
+        assert_eq!(
+            write(&w, &server, &[("count", Variant::Int32(i))]),
+            vec![StatusCode::Good]
+        );
+        let read = block(w.writer.read(vec![node.clone()])).unwrap();
+        assert_eq!(read[0].value, Some(Variant::Int32(i)), "the client's read");
+        assert_eq!(
+            server.get("count"),
+            Some(Variant::Int32(i)),
+            "the caller's get"
+        );
+    }
+    w.handle.join().unwrap();
+}
+
+/// A write handed to the caller has landed: through a burst of 4000 rising values, the caller
+/// takes each write as it comes and its get at once reads that value or a later one, never an
+/// earlier one.
+#[test]
+fn a_write_handed_to_the_caller_has_landed_already() {
+    let server = Server::start(&spec()).unwrap();
+    let (w, rx) = worker_of(
+        &server,
+        Auth::Anonymous,
+        vec![tag(&server, "count", SeriesType::Int, true)],
+    );
+    next_poll(&rx, Duration::from_secs(15));
+    let total = 4000;
+    let (earlier, taken) = std::thread::scope(|scope| {
+        let server = &server;
+        let caller = scope.spawn(move || {
+            let (mut earlier, mut taken) = (Vec::new(), 0);
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while taken < total && Instant::now() < deadline {
+                for cw in server.writes() {
+                    let Variant::Int32(v) = cw.value else {
+                        panic!("{cw:?}")
+                    };
+                    match server.get("count") {
+                        Some(Variant::Int32(now)) if now >= v => {}
+                        other => earlier.push((v, other)),
+                    }
+                    taken += 1;
+                }
+            }
+            (earlier, taken)
+        });
+        let batch: Vec<(String, Variant)> = (10..10 + total)
+            .map(|i| (server.node_id_str("count"), Variant::Int32(i)))
+            .collect();
+        for chunk in batch.chunks(800) {
+            assert!(
+                block(w.writer.write_tags(chunk.to_vec()))
+                    .unwrap()
+                    .iter()
+                    .all(|s| *s == StatusCode::Good)
+            );
+        }
+        caller.join().unwrap()
+    });
+    assert_eq!(
+        (taken, earlier.len()),
+        (total, 0),
+        "{:?}",
+        &earlier[..earlier.len().min(5)]
+    );
+    w.handle.join().unwrap();
+}
+
 #[test]
 fn the_guard_refuses_another_wire_type_and_counts_it_and_the_access_levels_hold() {
     let server = Server::start(&spec()).unwrap();
@@ -435,37 +589,11 @@ fn the_guard_refuses_another_wire_type_and_counts_it_and_the_access_levels_hold(
 /// is counted; a right write in the same call lands.
 #[test]
 fn a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands() {
-    use opcua_client::{ClientBuilder, IdentityToken};
-    use opcua_types::{
-        AttributeId, DataValue, MessageSecurityMode, NumericRange, UserTokenPolicy, WriteValue,
-    };
+    use opcua_types::{AttributeId, DataValue, NumericRange, WriteValue};
     let server = Server::start(&spec()).unwrap();
     let results = block(async {
-        let mut client = ClientBuilder::new()
-            .application_name("veredas test")
-            .application_uri("urn:veredas:test:client")
-            .product_uri("urn:veredas:test:client")
-            .create_sample_keypair(false)
-            .trust_server_certs(true)
-            .session_retry_limit(1)
-            .client()
-            .unwrap();
-        let endpoint = (
-            server.endpoint_url.as_str(),
-            "None",
-            MessageSecurityMode::None,
-            UserTokenPolicy::anonymous(),
-        );
-        let (session, event_loop) = client
-            .connect_to_matching_endpoint(endpoint, IdentityToken::Anonymous)
-            .await
-            .unwrap();
-        let handle = event_loop.spawn();
-        assert!(
-            tokio::time::timeout(Duration::from_secs(15), session.wait_for_connection())
-                .await
-                .unwrap()
-        );
+        let mut client = raw_client();
+        let (session, handle) = raw_session(&mut client, &server).await;
         let write = |id: &str, value: DataValue, range: NumericRange| WriteValue {
             node_id: server.node_id(id),
             attribute_id: AttributeId::Value as u32,
@@ -521,9 +649,141 @@ fn a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands() {
     assert_eq!(status.last_mismatch, None);
 }
 
+/// Each type is its wire type: the DataType a client reads of each variable is Int32 (i=6),
+/// Double (i=11), Boolean (i=1) and String (i=12). A neighbouring type is refused like any
+/// other: an Int64, a UInt32 and an Int16 into the Int32, a Float into the Double, a Byte into
+/// the Boolean, each `BadTypeMismatch`, counted, nothing landed or handed; then a right write of
+/// each lands. And discovery shows the caller's application: its URI, its name and the endpoint.
+#[test]
+fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_callers_application() {
+    use opcua_types::{
+        AttributeId, DataTypeId, DataValue, NodeId, NumericRange, QualifiedName, ReadValueId,
+        TimestampsToReturn, WriteValue,
+    };
+    let server = Server::start(&writable_spec()).unwrap();
+    let ids = ["count", "level", "start", "batch"];
+    let (types, refused, right) = block(async {
+        let mut client = raw_client();
+        let (session, handle) = raw_session(&mut client, &server).await;
+        let reads: Vec<ReadValueId> = ids
+            .iter()
+            .map(|id| ReadValueId {
+                node_id: server.node_id(id),
+                attribute_id: AttributeId::DataType as u32,
+                index_range: NumericRange::None,
+                data_encoding: QualifiedName::null(),
+            })
+            .collect();
+        let types = session
+            .read(&reads, TimestampsToReturn::Neither, 0.0)
+            .await
+            .unwrap();
+        let write = |id: &str, v: Variant| WriteValue {
+            node_id: server.node_id(id),
+            attribute_id: AttributeId::Value as u32,
+            index_range: NumericRange::None,
+            value: DataValue::value_only(v),
+        };
+        let refused = session
+            .write(&[
+                write("count", Variant::Int64(7)),
+                write("count", Variant::UInt32(7)),
+                write("count", Variant::Int16(7)),
+                write("level", Variant::Float(2.5)),
+                write("start", Variant::Byte(1)),
+            ])
+            .await
+            .unwrap();
+        let right = session
+            .write(&[
+                write("count", Variant::Int32(7)),
+                write("level", Variant::Double(2.5)),
+                write("start", Variant::Boolean(true)),
+                write("batch", Variant::from("B-7")),
+            ])
+            .await
+            .unwrap();
+        let _ = session.disconnect().await;
+        handle.abort();
+        (types, refused, right)
+    });
+    let types: Vec<Option<Variant>> = types.into_iter().map(|d| d.value).collect();
+    let want: Vec<Option<Variant>> = [
+        DataTypeId::Int32,
+        DataTypeId::Double,
+        DataTypeId::Boolean,
+        DataTypeId::String,
+    ]
+    .into_iter()
+    .map(|t| Some(Variant::from(NodeId::from(t))))
+    .collect();
+    assert_eq!(types, want);
+    assert_eq!(refused, vec![StatusCode::BadTypeMismatch; 5]);
+    assert_eq!(right, vec![StatusCode::Good; 4]);
+    let mut handed = Vec::new();
+    while let Some(w) = server.next_write(Duration::from_secs(5)) {
+        handed.push(w);
+        if handed.len() == 4 {
+            break;
+        }
+    }
+    let w_ = |id: &str, value: Variant| ClientWrite {
+        id: id.into(),
+        value,
+    };
+    assert_eq!(
+        handed,
+        vec![
+            w_("count", Variant::Int32(7)),
+            w_("level", Variant::Double(2.5)),
+            w_("start", Variant::Boolean(true)),
+            w_("batch", Variant::from("B-7")),
+        ]
+    );
+    assert_eq!(server.next_write(Duration::from_millis(200)), None);
+    // Counted by the time they are handed.
+    let status = server.status();
+    assert_eq!((status.type_mismatches, status.client_writes), (5, 4));
+    assert_eq!(
+        status.last_mismatch,
+        Some(("start".into(), "Byte(1)".into()))
+    );
+
+    // Discovery, as a client finds a server: every endpoint the server's own URL, the
+    // application the caller's.
+    let endpoints = block(async {
+        raw_client()
+            .get_server_endpoints_from_url(server.endpoint_url.as_str())
+            .await
+            .unwrap()
+    });
+    assert!(!endpoints.is_empty());
+    for e in &endpoints {
+        assert_eq!(e.endpoint_url.as_ref(), server.endpoint_url);
+        assert_eq!(e.server.application_uri.as_ref(), APP);
+        assert_eq!(e.server.application_name.text.as_ref(), "veredas test");
+    }
+}
+
 #[test]
 fn a_spec_that_cannot_be_served_is_refused_by_name_before_anything_binds() {
-    let refused = |s: &ServerSpec| Server::start(s).unwrap_err().to_string();
+    // Every refused spec asks for a port already taken: a refusal that came after the bind would
+    // be the bind's error instead.
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let taken_port = taken.local_addr().unwrap().port();
+    let refused = |s: &ServerSpec| {
+        let mut s = s.clone();
+        s.port = taken_port;
+        let e = Server::start(&s).unwrap_err();
+        assert!(
+            matches!(
+                e,
+                ServerError::Variable { .. } | ServerError::NamespaceIsApplication(_)
+            ),
+            "{e:?}"
+        );
+        e.to_string()
+    };
     let mut s = spec();
     s.namespace = APP.into();
     assert_eq!(
@@ -548,19 +808,20 @@ fn a_spec_that_cannot_be_served_is_refused_by_name_before_anything_binds() {
     let mut s = spec();
     s.variables[0].id = "line".into();
     assert_eq!(refused(&s), "variable `line`: the folder's id");
-    let mut s = spec();
-    s.variables[0].id = " count".into();
-    assert_eq!(
-        refused(&s),
-        "variable ` count`: an id is not empty and has no spaces around it"
-    );
+    for id in [" count", "count ", "", " "] {
+        let mut s = spec();
+        s.variables[0].id = id.into();
+        assert_eq!(
+            refused(&s),
+            format!("variable `{id}`: an id is not empty and has no spaces around it")
+        );
+    }
     let mut s = spec();
     s.folder.id = String::new();
     assert_eq!(refused(&s), "variable ``: the folder's id is empty");
-    // A port already taken: the bind's own error, naming the address.
-    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    // A good spec on the port already taken: the bind's own error, naming the address.
     let mut s = spec();
-    s.port = taken.local_addr().unwrap().port();
+    s.port = taken_port;
     match Server::start(&s) {
         Err(ServerError::Bind { addr, source }) => {
             assert_eq!(addr, format!("127.0.0.1:{}", s.port));
@@ -593,9 +854,22 @@ fn it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clien
         ConnState::Connected
     );
     next_poll(&rx, Duration::from_secs(5));
+    // A plain TCP connection the server has accepted, beside the worker's session.
+    let mut plain = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
     server.stop();
-    // The port is free at once, and the client has lost its server.
+    // The port is free at once, the plain connection closed by the server before the stop
+    // returned (its end of file at once, not a wait), and the client has lost its server.
     std::net::TcpListener::bind(("127.0.0.1", port)).expect("the port is free after stop");
+    plain
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    let mut buf = [0u8; 64];
+    match std::io::Read::read(&mut plain, &mut buf) {
+        Ok(0) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+        other => panic!("the connection outlived the stop: {other:?}"),
+    }
     assert!(matches!(
         next_state(&rx, Duration::from_secs(15)),
         ConnState::Retrying { .. }
@@ -741,10 +1015,17 @@ fn writes_past_those_kept_land_and_are_counted_not_kept() {
         .status()
         .client_writes
         == 4500));
+    assert_eq!(WRITES_KEPT, 4096);
     let status = server.status();
-    assert_eq!(status.writes_dropped, 4500 - WRITES_KEPT as u64);
+    assert_eq!(status.writes_dropped, 404);
     let kept = server.writes();
-    assert_eq!(kept.len(), WRITES_KEPT);
+    assert_eq!(kept.len(), 4096);
+    assert!(
+        kept.iter()
+            .enumerate()
+            .all(|(i, w)| w.value == Variant::Int32((i % 900) as i32)),
+        "kept in the order they landed"
+    );
     assert_eq!(
         kept[0],
         ClientWrite {
@@ -753,6 +1034,19 @@ fn writes_past_those_kept_land_and_are_counted_not_kept() {
         }
     );
     assert_eq!(server.get("count"), Some(Variant::Int32(899)));
+    // The cap is on writes waiting: once the caller has taken them, the next is kept again.
+    assert_eq!(
+        write(&w, &server, &[("count", Variant::Int32(-1))]),
+        vec![StatusCode::Good]
+    );
+    assert_eq!(
+        server.next_write(Duration::from_secs(5)),
+        Some(ClientWrite {
+            id: "count".into(),
+            value: Variant::Int32(-1)
+        })
+    );
+    assert_eq!(server.status().writes_dropped, 404);
     w.handle.join().unwrap();
 }
 
@@ -774,6 +1068,17 @@ fn values_parse_from_text_by_type_and_render_as_a_monitor_shows_them() {
         (VarType::Float, "NaN", Err("`NaN` is not a finite float")),
         (VarType::Float, "x", Err("`x` is not a float")),
         (VarType::Bool, "ON", Ok(Variant::Boolean(true))),
+        (VarType::Bool, "true", Ok(Variant::Boolean(true))),
+        (VarType::Bool, "TRUE", Ok(Variant::Boolean(true))),
+        (VarType::Bool, "Yes", Ok(Variant::Boolean(true))),
+        (VarType::Bool, "On", Ok(Variant::Boolean(true))),
+        (VarType::Bool, "false", Ok(Variant::Boolean(false))),
+        (VarType::Bool, "False", Ok(Variant::Boolean(false))),
+        (VarType::Bool, "0", Ok(Variant::Boolean(false))),
+        (VarType::Bool, "No", Ok(Variant::Boolean(false))),
+        (VarType::Bool, "OFF", Ok(Variant::Boolean(false))),
+        (VarType::Bool, " no ", Ok(Variant::Boolean(false))),
+        (VarType::Bool, "2", Err("`2` is not a bool")),
         (VarType::Bool, "yes", Ok(Variant::Boolean(true))),
         (VarType::Bool, "1", Ok(Variant::Boolean(true))),
         (VarType::Bool, "off", Ok(Variant::Boolean(false))),
