@@ -15,15 +15,15 @@
     "bundle"
   ],
   "exitCode": 0,
-  "outputSha": "3c729f1a5d3b15e8a64893056b0d200d8f16a14ef2de915c349f68ca34b65073",
-  "outputTail": "        PASS [   0.015s] (34/46) alforge::bundle the_run_together_is_refused_for_every_way_the_plant_is_not_running_each_named\n        PASS [   0.006s] (35/46) alforge::bundle the_suite_runs_the_default_profile_whatever_the_shell_holds\n        PASS [   0.047s] (36/46) alforge::bundle the_toolchain_named_is_the_one_the_suite_runs_with\n        PASS [   0.975s] (37/46) alforge::bundle the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_did_not_build\n        PASS [   1.208s] (38/46) alforge::bundle the_cut_refuses_a_tree_that_differs_from_head_and_a_release_already_cut\n        PASS [   1.760s] (39/46) alforge::bundle the_cut_refuses_an_untracked_file_and_a_release_already_in_releases\n        PASS [   0.007s] (40/46) alforge::licences a_packages_licence_files_are_known_by_their_names\n        PASS [   0.007s] (41/46) alforge::licences an_entry_stating_no_licence_is_named\n        PASS [   1.984s] (42/46) alforge::bundle the_tree_is_hers_only_when_git_looks_at_every_file\n        PASS [   0.011s] (43/46) alforge::licences the_vendored_crates_licence_files_are_kept_and_nothing_else\n        PASS [  13.031s] (44/46) alforge::licences a_bundles_licences_name_every_entry_of_its_component_list_with_its_files\n        PASS [  12.401s] (45/46) alforge::licences a_manifest_stating_an_empty_licence_states_none\n        PASS [  12.730s] (46/46) alforge::licences the_file_a_license_file_names_ships_wherever_it_lies\n────────────\n     Summary [  21.587s] 46 tests run: 46 passed, 0 skipped",
-  "ranAt": "2026-11-27T09:18:37.646Z",
-  "headCommit": "32d9aafd68016580782703991df69d20cf6a299c",
+  "outputSha": "b7492c0eb694a837362471d97bc14032d3c3a02b0b591f1d0341164cbe149537",
+  "outputTail": "        PASS [   0.043s] (36/48) alforge::bundle the_toolchain_named_is_the_one_the_suite_runs_with\n        PASS [   3.976s] (37/48) alforge::bundle every_refusal_before_the_build_stops_the_cut_with_nothing_built\n        PASS [   0.389s] (38/48) alforge::licences a_bundles_licences_name_every_entry_of_its_component_list_with_its_files\n        PASS [   1.610s] (39/48) alforge::bundle the_cut_refuses_a_tree_that_differs_from_head_and_a_release_already_cut\n        PASS [   0.319s] (40/48) alforge::licences a_manifest_stating_an_empty_licence_states_none\n        PASS [   0.275s] (41/48) alforge::licences a_package_at_the_repositorys_root_names_its_licence_file_from_there\n        PASS [   0.009s] (42/48) alforge::licences a_packages_licence_files_are_known_by_their_names\n        PASS [   0.009s] (43/48) alforge::licences an_entry_stating_no_licence_is_named\n        PASS [   0.181s] (44/48) alforge::licences a_vendored_crates_attribution_is_kept_as_cargo_vendor_writes_it\n        PASS [   0.011s] (45/48) alforge::licences the_vendored_crates_licence_files_are_kept_and_nothing_else\n        PASS [   1.877s] (46/48) alforge::bundle the_cut_refuses_an_untracked_file_and_a_release_already_in_releases\n        PASS [   0.924s] (47/48) alforge::licences the_file_a_license_file_names_ships_wherever_it_lies\n        PASS [   2.011s] (48/48) alforge::bundle the_tree_is_hers_only_when_git_looks_at_every_file\n────────────\n     Summary [   8.274s] 48 tests run: 48 passed, 0 skipped",
+  "ranAt": "2026-11-27T09:40:10.500Z",
+  "headCommit": "588681797ec4df2da2e245ff44dcbc686f418ddc",
   "tests": [
     {
       "name": "tools/alforge/tests/licences.rs",
       "file": "tools/alforge/tests/licences.rs",
-      "fileSha": "e44a22aec8d3547f2340a97ca9410dfb4dce42726712d8fe576f39524d91f1a2"
+      "fileSha": "ef0458749371cac2792c7f1428db40ad35967e9b5074a6c724f25184d5a112ef"
     },
     {
       "name": "tools/alforge/tests/bundle.rs",
