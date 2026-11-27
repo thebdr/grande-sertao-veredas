@@ -111,6 +111,21 @@ async fn raw_session(
     Arc<opcua_client::Session>,
     tokio::task::JoinHandle<StatusCode>,
 ) {
+    try_raw_session(client, server).await.unwrap()
+}
+
+/// The same, or why the session never became usable: the event loop's end (a refused session
+/// ends it, and the connection's wait alone would never resolve) raced against the wait.
+async fn try_raw_session(
+    client: &mut opcua_client::Client,
+    server: &Server,
+) -> Result<
+    (
+        Arc<opcua_client::Session>,
+        tokio::task::JoinHandle<StatusCode>,
+    ),
+    String,
+> {
     use opcua_types::{MessageSecurityMode, UserTokenPolicy};
     let endpoint = (
         server.endpoint_url.as_str(),
@@ -121,14 +136,27 @@ async fn raw_session(
     let (session, event_loop) = client
         .connect_to_matching_endpoint(endpoint, opcua_client::IdentityToken::Anonymous)
         .await
-        .unwrap();
-    let handle = event_loop.spawn();
-    assert!(
-        tokio::time::timeout(Duration::from_secs(15), session.wait_for_connection())
-            .await
-            .unwrap()
-    );
-    (session, handle)
+        .map_err(|e| format!("connect: {e}"))?;
+    let mut handle = event_loop.spawn();
+    tokio::select! {
+        status = &mut handle => Err(format!("the event loop ended: {status:?}")),
+        ok = tokio::time::timeout(Duration::from_secs(15), session.wait_for_connection()) => {
+            match ok {
+                Ok(true) => Ok((session, handle)),
+                other => Err(format!("never usable: {other:?}")),
+            }
+        }
+    }
+}
+
+fn value_of(node: opcua_types::NodeId) -> opcua_types::ReadValueId {
+    use opcua_types::{AttributeId, NumericRange, QualifiedName, ReadValueId};
+    ReadValueId {
+        node_id: node,
+        attribute_id: AttributeId::Value as u32,
+        index_range: NumericRange::None,
+        data_encoding: QualifiedName::null(),
+    }
 }
 
 /// OPC UA's Hello (Part 6, 7.1.2.3): "HEL", a final chunk, its size, protocol version 0, buffers
@@ -1254,9 +1282,91 @@ fn a_user_by_name_and_password_is_accepted_and_the_password_never_shows() {
 
 #[test]
 fn the_callers_limits_on_one_read_and_on_sessions_hold() {
+    use opcua_types::{TimestampsToReturn, VariableId};
+    let max_nodes_per_read = VariableId::Server_ServerCapabilities_OperationLimits_MaxNodesPerRead;
+    // No limit given: the stack's own (async-opcua 0.19), advertised as 10000 nodes per read, a
+    // read of 900 answered whole; twenty sessions at once, each reading, and a 21st refused.
+    let server = Server::start(&spec()).unwrap();
+    let (advertised, nine_hundred, sessions, twenty_first) = block(async {
+        let mut held = Vec::new();
+        let mut sessions = 0;
+        let mut advertised = None;
+        let mut nine_hundred = 0;
+        for k in 0..20 {
+            let mut client = raw_client();
+            let (session, handle) = raw_session(&mut client, &server).await;
+            if k == 0 {
+                advertised = session
+                    .read(
+                        &[value_of(max_nodes_per_read.into())],
+                        TimestampsToReturn::Neither,
+                        0.0,
+                    )
+                    .await
+                    .unwrap()[0]
+                    .value
+                    .clone();
+                let many: Vec<_> = (0..900)
+                    .map(|_| value_of(server.node_id("count")))
+                    .collect();
+                nine_hundred = session
+                    .read(&many, TimestampsToReturn::Neither, 0.0)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .filter(|d| d.value == Some(Variant::Int32(3)))
+                    .count();
+            }
+            let read = session
+                .read(
+                    &[value_of(server.node_id("count"))],
+                    TimestampsToReturn::Neither,
+                    0.0,
+                )
+                .await
+                .unwrap();
+            if read[0].value == Some(Variant::Int32(3)) {
+                sessions += 1;
+            }
+            held.push((client, session, handle));
+        }
+        let mut client = raw_client();
+        let twenty_first = try_raw_session(&mut client, &server)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.contains("BadTooManySessions"));
+        for (_client, session, handle) in held {
+            let _ = session.disconnect().await;
+            handle.abort();
+        }
+        (advertised, nine_hundred, sessions, twenty_first)
+    });
+    assert_eq!(advertised, Some(Variant::UInt32(10000)));
+    assert_eq!(nine_hundred, 900);
+    assert_eq!(sessions, 20);
+    assert_eq!(twenty_first, Err(true), "the 21st session");
+    drop(server);
+
+    // A limit given: two nodes per read, advertised so.
     let mut s = spec();
     s.max_nodes_per_read = Some(2);
     let server = Server::start(&s).unwrap();
+    let advertised = block(async {
+        let mut client = raw_client();
+        let (session, handle) = raw_session(&mut client, &server).await;
+        let read = session
+            .read(
+                &[value_of(max_nodes_per_read.into())],
+                TimestampsToReturn::Neither,
+                0.0,
+            )
+            .await
+            .unwrap();
+        let _ = session.disconnect().await;
+        handle.abort();
+        read[0].value.clone()
+    });
+    assert_eq!(advertised, Some(Variant::UInt32(2)));
     // The worker polls two tags, within the limit: a poll of four would be refused whole and
     // the worker would drop its session before the reads below.
     let two_tags = vec![
