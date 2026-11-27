@@ -774,3 +774,212 @@ fn a_port_keeps_its_frames_on_each_interface_and_what_was_heard_since_it_left() 
     let f = fused(&[obs[0].clone(), obs[3].clone()]);
     assert_eq!(f.devices[&DEV].ports["port-001"].heard_since_leaving(), BTreeSet::from(["eth1".to_string(), "eth2".to_string()]));
 }
+
+/// The fourth refute round's cases: an empty LLDP system name no label and a renamed one the
+/// later; a management address of 0.0.0.0 none, sharing nothing; what was heard since the last
+/// leaving and the place of the last on an interface by stamp then index, within one stamp and
+/// across interfaces (a lower index with a later stamp); a take-in within one stamp in every
+/// order; a flagged conflict naming the DCP address; a time to live of 1 no leaving.
+mod round_4 {
+    use std::collections::BTreeSet;
+    use std::net::Ipv4Addr;
+
+    use veredas_aranha::fusion::Fusion;
+    use veredas_aranha::observe::{self, Observation};
+    use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpSuite};
+    use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, MgmtAddr, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::wire::Frame;
+
+    const A: Mac = Mac([0x02, 0, 0, 0, 0, 0x01]);
+    const B: Mac = Mac([0x02, 0, 0, 0, 0, 0x03]);
+    const PA: Mac = Mac([0x02, 0, 0, 0, 0, 0x02]);
+    const PB: Mac = Mac([0x02, 0, 0, 0, 0, 0x04]);
+
+    fn heard(bytes: Vec<u8>, iface: &str, at_ns: u64, index: u64) -> Vec<Observation> {
+        observe::decode(&Frame::new(at_ns, iface, bytes), index).observations
+    }
+
+    fn pdu(chassis: Mac, station: &str) -> LldpPdu {
+        let mut p = LldpPdu::new(ChassisId::Local { id: station.into() }, PortId::Local { id: format!("port-001.{station}") }, 20);
+        p.pn.chassis_mac = Some(chassis);
+        p
+    }
+
+    /// "Its label is its station name, else its LLDP system name, else its MAC, an empty name none":
+    /// an LLDP system name TLV of no bytes (from the wire) is no label.
+    #[test]
+    fn an_empty_system_name_is_no_label() {
+        let mut p = pdu(A, "io-a");
+        p.sys_name = Some(String::new());
+        let mut f = Fusion::new();
+        for o in heard(lldp::frame(PA, &p).unwrap(), "eth1", 100, 0) {
+            f.apply(&o);
+        }
+        assert_eq!(f.devices[&A].sys_name.current().map(String::as_str), Some(""), "decoded as an empty name");
+        assert_eq!(f.devices[&A].label(), A.to_string());
+    }
+
+    /// "its addresses are its current DCP, ARP and management addresses, 0.0.0.0 none": two devices
+    /// whose LLDP states a management address of 0.0.0.0 (an unaddressed PROFINET device) hold none,
+    /// and share none.
+    #[test]
+    fn a_management_address_of_0_0_0_0_is_none() {
+        let zero = MgmtAddr { subtype: 1, addr: vec![0, 0, 0, 0], if_subtype: 2, if_number: 1, oid: vec![] };
+        let mut f = Fusion::new();
+        for (src, chassis, at, idx) in [(PA, A, 100, 0), (PB, B, 110, 1)] {
+            let mut p = pdu(chassis, "io");
+            p.mgmt_addrs = vec![zero.clone()];
+            for o in heard(lldp::frame(src, &p).unwrap(), "eth1", at, idx) {
+                f.apply(&o);
+            }
+        }
+        assert_eq!(f.devices[&A].mgmt_ips.current(), Some(&BTreeSet::from([Ipv4Addr::UNSPECIFIED])), "decoded as 0.0.0.0");
+        assert!(f.devices[&A].addresses().is_empty() && f.devices[&B].addresses().is_empty());
+        assert!(f.conflicts().is_empty(), "{:?}", f.conflicts());
+        // And beside a DCP address of its own.
+        let suite = IpSuite { ip: Ipv4Addr::new(10, 0, 0, 9), mask: Ipv4Addr::new(255, 0, 0, 0), gateway: Ipv4Addr::UNSPECIFIED };
+        for o in heard(dcp::hello(A, 1, &DeviceIdentity { ip: Some(suite), ..Default::default() }).unwrap(), "eth1", 120, 2) {
+            f.apply(&o);
+        }
+        assert_eq!(f.devices[&A].addresses(), BTreeSet::from([Ipv4Addr::new(10, 0, 0, 9)]));
+    }
+
+    /// The label's LLDP system name is the current one: renamed, the later name.
+    #[test]
+    fn the_label_is_the_current_system_name() {
+        let mut f = Fusion::new();
+        for (name, at, idx) in [("plc-old", 100, 0), ("plc-new", 200, 1)] {
+            let mut p = pdu(A, "io-a");
+            p.sys_name = Some(name.into());
+            for o in heard(lldp::frame(PA, &p).unwrap(), "eth1", at, idx) {
+                f.apply(&o);
+            }
+        }
+        assert_eq!(f.devices[&A].label(), "plc-new");
+    }
+
+    /// "the place of the last (so what was heard since it last said it was leaving is known)", by stamp
+    /// then index: a frame on a second interface in the leaving's own stamp, a later index, is heard
+    /// since; the port is back.
+    #[test]
+    fn heard_since_leaving_within_one_stamp() {
+        let f = fuse_frames(&[(PA, named(20), "eth1", 10, 0), (PA, named(0), "eth1", 30, 5), (PA, named(20), "eth2", 30, 6)]);
+        let port = &f.devices[&A].ports["port-001"];
+        assert_eq!(port.left_ns, None);
+        assert_eq!(port.heard_since_leaving(), BTreeSet::from(["eth2".to_string()]));
+    }
+
+    /// "when it said it was leaving, a time to live of 0": a time to live of 1 is no leaving.
+    #[test]
+    fn a_time_to_live_of_1_is_no_leaving() {
+        let mut f = Fusion::new();
+        let mut short = pdu(A, "io-a");
+        short.ttl = 1;
+        for o in heard(lldp::frame(PA, &short).unwrap(), "eth1", 10, 0) {
+            f.apply(&o);
+        }
+        let port = &f.devices[&A].ports["port-001"];
+        assert_eq!((port.left_ns, port.leaving), (None, None));
+    }
+
+    fn perms<T: Clone>(xs: &[T]) -> Vec<Vec<T>> {
+        if xs.len() <= 1 {
+            return vec![xs.to_vec()];
+        }
+        let mut out = Vec::new();
+        for i in 0..xs.len() {
+            let mut rest = xs.to_vec();
+            let x = rest.remove(i);
+            for mut p in perms(&rest) {
+                p.insert(0, x.clone());
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// Observations built as the listener gives them (a shutdown PDU naming a chassis MAC is no frame
+    /// this crate's encoder writes, as the linked test's own `lldp_at` does not either).
+    fn fuse_frames(frames: &[(Mac, LldpPdu, &str, u64, u64)]) -> Fusion {
+        let mut f = Fusion::new();
+        for (src, p, iface, at, idx) in frames {
+            let o = Observation {
+                witness: veredas_aranha::observe::Witness { probe: veredas_aranha::observe::Probe::LldpHeard, iface: iface.to_string(), at_ns: *at, frame: *idx },
+                observed: veredas_aranha::observe::Observed::Lldp { src: *src, pdu: p.clone() },
+            };
+            f.apply(&o);
+        }
+        f
+    }
+
+    fn nameless(ttl: u16) -> LldpPdu {
+        LldpPdu::new(ChassisId::Local { id: "io-a".into() }, PortId::Local { id: "port-001.io-a".into() }, ttl)
+    }
+
+    fn named(ttl: u16) -> LldpPdu {
+        let mut p = pdu(A, "io-a");
+        p.ttl = ttl;
+        p
+    }
+
+    /// Two frames of one stamp on one interface: the place of the last is the later index, in either
+    /// order applied.
+    #[test]
+    fn the_last_place_on_an_interface_within_one_stamp() {
+        let frames = [(PA, named(20), "eth1", 30, 5), (PA, named(20), "eth1", 30, 3)];
+        for order in perms(&frames) {
+            let f = fuse_frames(&order);
+            assert_eq!(f.devices[&A].ports["port-001"].on["eth1"].last, (30, 5));
+        }
+    }
+
+    /// The raw wire's case: a lower index carrying a later stamp, on another interface. By stamp then
+    /// index it came after the leaving: the port is back, and heard since on that interface.
+    #[test]
+    fn heard_since_leaving_by_stamp_before_index() {
+        let f = fuse_frames(&[(PA, named(20), "eth1", 10, 0), (PA, named(0), "eth1", 30, 5), (PA, named(20), "eth2", 40, 4)]);
+        let port = &f.devices[&A].ports["port-001"];
+        assert_eq!(port.left_ns, None);
+        assert_eq!(port.heard_since_leaving(), BTreeSet::from(["eth2".to_string()]));
+    }
+
+    /// A take-in within one stamp: the port not yet known returned then left, its naming PDU (a lower
+    /// index of the same stamp) left too; or the mirror. Every order gives the time order's leaving.
+    #[test]
+    fn a_take_in_within_one_stamp() {
+        let left = [(PA, nameless(20), "eth1", 200, 5), (PA, nameless(0), "eth1", 200, 6), (PA, named(0), "eth1", 200, 4)];
+        for order in perms(&left) {
+            let p = &fuse_frames(&order).devices[&A].ports["port-001"];
+            assert_eq!((p.left_ns, p.leaving, p.spoke), (Some(200), Some((200, 6)), Some((200, 5))), "{:?}", order.iter().map(|o| o.4).collect::<Vec<_>>());
+        }
+        let back = [(PA, nameless(0), "eth1", 200, 5), (PA, nameless(20), "eth1", 200, 6), (PA, named(20), "eth1", 200, 4)];
+        for order in perms(&back) {
+            let p = &fuse_frames(&order).devices[&A].ports["port-001"];
+            assert_eq!((p.left_ns, p.leaving, p.spoke), (None, Some((200, 5)), Some((200, 6))), "{:?}", order.iter().map(|o| o.4).collect::<Vec<_>>());
+        }
+        // The place of the last on the interface through the take-in.
+        let on = [(PA, nameless(20), "eth1", 200, 6), (PA, named(20), "eth1", 200, 4)];
+        for order in perms(&on) {
+            let p = &fuse_frames(&order).devices[&A].ports["port-001"];
+            assert_eq!(p.on["eth1"].last, (200, 6));
+        }
+    }
+
+    /// "a device whose current word flags its own address in conflict (with its address)": its DCP
+    /// address, though its ARP claims another.
+    #[test]
+    fn a_flagged_conflict_names_the_dcp_address() {
+        let suite = IpSuite { ip: Ipv4Addr::new(192, 168, 0, 10), mask: Ipv4Addr::new(255, 255, 255, 0), gateway: Ipv4Addr::UNSPECIFIED };
+        let flagging = DeviceIdentity { ip: Some(suite), ip_status: Some(dcp::IpStatus { set: 1, conflict: true }), ..Default::default() };
+        let mut f = Fusion::new();
+        for o in heard(dcp::hello(A, 1, &flagging).unwrap(), "eth1", 100, 0) {
+            f.apply(&o);
+        }
+        for o in heard(observe::arp_frame(A, Ipv4Addr::new(192, 168, 0, 5), Mac::BROADCAST, Ipv4Addr::new(192, 168, 0, 1), false).unwrap(), "eth1", 110, 1) {
+            f.apply(&o);
+        }
+        let reported: Vec<String> = f.conflicts().into_iter().filter(|c| c.kind == veredas_aranha::fusion::ConflictKind::ReportsIpConflict).map(|c| c.value).collect();
+        assert_eq!(reported, ["192.168.0.10"]);
+    }
+}
