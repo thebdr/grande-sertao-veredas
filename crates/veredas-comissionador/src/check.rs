@@ -65,23 +65,46 @@ pub fn load_test(path: &Path) -> Result<Checked, Vec<Problem>> {
     check_test(&text, &file, &|p| read_used(&dir, p))
 }
 
-/// A used function file's text: a path relative to the test file's folder, through no name Windows
-/// keeps for a device, to a file of its own. A pipe, a device or a folder is refused before it is
-/// opened (a pipe's open waits for a writer, a device reads without end), so the check always ends.
+/// `O_NONBLOCK`, the same on every Linux architecture the suite builds for: a pipe opened with it
+/// does not wait for a writer.
+#[cfg(target_os = "linux")]
+const OPEN_NOT_WAITING: i32 = 0o4000;
+
+/// A used function file's text: a path relative to the test file's folder (no root, no drive),
+/// through no name Windows keeps for a device, to a file of its own. A pipe, a device or a folder
+/// is refused (a pipe's open waits for a writer, a device reads without end): looked at by its name,
+/// then opened without waiting and judged by what was opened, so nothing swapped in between is
+/// read; and read to its length, a file that reads past it (a file of the system's, one written
+/// while it is read) refused. So the check always ends.
 fn read_used(dir: &Path, used: &str) -> Result<String, String> {
+    use std::io::Read;
     let rel = Path::new(used);
-    if rel.is_absolute() || rel.has_root() {
+    if rel.is_absolute() || rel.has_root() || rel.components().any(|c| matches!(c, std::path::Component::Prefix(_))) {
         return Err("a path relative to the test file's folder, not from the root".to_string());
     }
     if rel.components().any(|c| matches!(c, std::path::Component::Normal(n) if crate::record::device_name(&n.to_string_lossy()))) {
         return Err("a name Windows keeps for a device is in its path".to_string());
     }
     let full = dir.join(rel);
-    match std::fs::metadata(&full) {
-        Ok(m) if m.is_file() => std::fs::read_to_string(&full).map_err(|e| e.to_string()),
-        Ok(_) => Err("not a file (a folder, a pipe or a device)".to_string()),
-        Err(e) => Err(e.to_string()),
+    let not_a_file = || "not a file (a folder, a pipe or a device)".to_string();
+    if !std::fs::metadata(&full).map_err(|e| e.to_string())?.is_file() {
+        return Err(not_a_file());
     }
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true);
+    #[cfg(target_os = "linux")]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut open, OPEN_NOT_WAITING);
+    let file = open.open(&full).map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err(not_a_file());
+    }
+    let mut text = String::new();
+    file.take(meta.len().saturating_add(1)).read_to_string(&mut text).map_err(|e| e.to_string())?;
+    if text.len() as u64 > meta.len() {
+        return Err("not a file of its own: it reads past its length".to_string());
+    }
+    Ok(text)
 }
 
 /// Read and check a function file on disk, alone.

@@ -228,12 +228,14 @@ pub const PLAIN_NAME: usize = 64;
 /// a folder of one of them opens the device.
 const DEVICES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
-    "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "COM\u{b9}", "COM\u{b2}", "COM\u{b3}", "LPT\u{b9}", "LPT\u{b2}",
+    "LPT\u{b3}",
 ];
 
-/// Whether a name, by its stem before its first `.`, is one Windows keeps for a device.
+/// Whether a name, by its stem before its first `.` and with the blanks Windows drops from its end,
+/// is one Windows keeps for a device.
 pub fn device_name(name: &str) -> bool {
-    let stem = name.split('.').next().unwrap_or(name);
+    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
     DEVICES.iter().any(|d| d.eq_ignore_ascii_case(stem))
 }
 

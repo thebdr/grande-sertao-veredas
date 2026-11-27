@@ -172,8 +172,10 @@ pair of quotes removed.
   of the run's own window reproduces, never the machine's work), judged at each step and between
   its actions. A wait with no timeout of its own is bounded by what is left of it.
 - `use` (none; once per file): a function file, its path relative to the test file's folder; a
-  path from the root, one through a name Windows keeps for a device, or one to no file of its own
-  (a folder, a pipe, a device) is a used file that cannot be read.
+  path from the root or a drive, one through a name Windows keeps for a device (those above, and
+  `COM¹` to `COM³`, `LPT¹` to `LPT³`, a stem's trailing blanks dropped as Windows drops them), or
+  one to no file of its own (a folder, a pipe, a device, a file that reads past its length) is a
+  used file that cannot be read.
 - `sign` (none): the roles that must sign each run's report, `tester`, `witness` or both
   (`docs/questions.md` Q312 (e)): the report awaits each until it has signed.
 - `let` (none; once per name): `let <name> = <expression>`, a constant, the expression made of

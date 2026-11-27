@@ -1705,6 +1705,7 @@ fn every_start_of_a_key_is_its_own_and_the_first_names_it() {
 // ---- refute round 12 -----------------------------------------------------------------------
 
 #[test]
+#[cfg(unix)]
 fn a_used_path_to_no_file_of_its_own_is_refused_before_it_is_opened() {
     // A `use` naming a pipe waited for a writer forever, `/dev/null` from the root was read, and a
     // device reads without end: a used path is relative to the test's folder, through no device's
@@ -1723,6 +1724,11 @@ fn a_used_path_to_no_file_of_its_own_is_refused_before_it_is_opened() {
         ("/dev/null", "a path relative to the test file's folder, not from the root".to_string()),
         ("functions/nul.fn", "a name Windows keeps for a device is in its path".to_string()),
         ("CON/x.fn", "a name Windows keeps for a device is in its path".to_string()),
+        // Refute round 13: a device's name with the blanks Windows drops, and its superscripts; a
+        // file of the system's whose metadata says it is empty, read past its length.
+        ("nul .fn", "a name Windows keeps for a device is in its path".to_string()),
+        ("COM\u{b9}.fn", "a name Windows keeps for a device is in its path".to_string()),
+        (&format!("{up}proc/self/status"), "not a file of its own: it reads past its length".to_string()),
     ];
     for (used, reason) in cases {
         let file = dir.path().join("t.test");
@@ -1734,6 +1740,68 @@ fn a_used_path_to_no_file_of_its_own_is_refused_before_it_is_opened() {
         let got = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap_or_else(|_| panic!("`use {used}` still read after 5 s"));
         assert_eq!(got, Err(vec![format!("`{used}` cannot be read: {reason}")]), "{used}");
     }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_used_file_that_reads_without_end_or_is_swapped_for_a_pipe_ends_the_check() {
+    // Refute round 13: `/proc/self/pagemap` says by its metadata it is an empty file and reads
+    // 256 GiB; a file swapped for a pipe between the look and the open held the open. Each load
+    // ends within seconds, the swapped file read or refused.
+    let dir = tempfile::tempdir().unwrap();
+    let load = |file: std::path::PathBuf| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(veredas_comissionador::load_test(&file).map(|_| ()).map_err(|ps| ps.iter().map(|p| p.message.clone()).collect::<Vec<_>>()));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+    };
+    let pagemap = format!("{}proc/self/pagemap", "../".repeat(32));
+    let file = dir.path().join("t.test");
+    std::fs::write(&file, test_of(&format!("  use {pagemap}\n  step a stop pass\n"))).unwrap();
+    let got = load(file).expect("`pagemap` still read after 5 s");
+    assert!(matches!(&got, Err(ps) if ps.len() == 1 && ps[0].starts_with(&format!("`{pagemap}` cannot be read: "))), "{got:?}");
+    // A swapper renames a link to a pipe and a file of its own over `x.fn` by turns, while the test
+    // is loaded 300 times.
+    let fifo = dir.path().join("pipe");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    std::fs::write(dir.path().join("real.fn"), blocks("function").remove(0)).unwrap();
+    let file = dir.path().join("x.test");
+    std::fs::write(&file, test_of("  use x.fn\n  step a stop pass\n")).unwrap();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let swapper = {
+        let (stop, d) = (stop.clone(), dir.path().to_path_buf());
+        std::thread::spawn(move || {
+            let mut k = 0u64;
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                let tmp = d.join(format!("next{k}"));
+                if k % 2 == 0 {
+                    let _ = std::os::unix::fs::symlink(d.join("pipe"), &tmp);
+                } else {
+                    let _ = std::fs::copy(d.join("real.fn"), &tmp);
+                }
+                let _ = std::fs::rename(&tmp, d.join("x.fn"));
+                k += 1;
+            }
+        })
+    };
+    for i in 0..300 {
+        assert!(load(file.clone()).is_ok(), "load {i} of the swapped file still waiting after 5 s");
+    }
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    swapper.join().unwrap();
+}
+
+#[test]
+#[cfg(windows)]
+fn a_used_path_on_a_drive_is_refused_as_from_the_root() {
+    // Refute round 13: `C:f.fn` has a drive and no root, and joined to the test's folder it replaced
+    // the folder with the drive's own: refused as no path relative to the test's folder.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("t.test");
+    std::fs::write(&file, test_of("  use C:f.fn\n  step a stop pass\n")).unwrap();
+    let got = veredas_comissionador::load_test(&file).map(|_| ()).map_err(|ps| ps.iter().map(|p| p.message.clone()).collect::<Vec<_>>());
+    assert_eq!(got, Err(vec!["`C:f.fn` cannot be read: a path relative to the test file's folder, not from the root".to_string()]));
 }
 
 #[test]
@@ -2035,8 +2103,10 @@ pair of quotes removed.
   of the run's own window reproduces, never the machine's work), judged at each step and between
   its actions. A wait with no timeout of its own is bounded by what is left of it.
 - `use` (none; once per file): a function file, its path relative to the test file's folder; a
-  path from the root, one through a name Windows keeps for a device, or one to no file of its own
-  (a folder, a pipe, a device) is a used file that cannot be read.
+  path from the root or a drive, one through a name Windows keeps for a device (those above, and
+  `COM¹` to `COM³`, `LPT¹` to `LPT³`, a stem's trailing blanks dropped as Windows drops them), or
+  one to no file of its own (a folder, a pipe, a device, a file that reads past its length) is a
+  used file that cannot be read.
 - `sign` (none): the roles that must sign each run's report, `tester`, `witness` or both
   (`docs/questions.md` Q312 (e)): the report awaits each until it has signed.
 - `let` (none; once per name): `let <name> = <expression>`, a constant, the expression made of
