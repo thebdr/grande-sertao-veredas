@@ -88,13 +88,17 @@ fn driver(args: &[String]) -> Output {
     driver_with(args, &[])
 }
 
-fn driver_with(args: &[String], env: &[(&str, &str)]) -> Output {
-    let lib = match std::env::var("LD_LIBRARY_PATH") {
+/// The search path the driver's process is given: the nightly's libraries first.
+fn library_path() -> String {
+    match std::env::var("LD_LIBRARY_PATH") {
         Ok(p) if !p.is_empty() => format!("{}:{p}", sysroot_lib()),
         _ => sysroot_lib().to_string(),
-    };
+    }
+}
+
+fn driver_with(args: &[String], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_orcl-front-driver"));
-    command.env("LD_LIBRARY_PATH", lib).args(args);
+    command.env("LD_LIBRARY_PATH", library_path()).args(args);
     for (k, v) in env {
         command.env(k, v);
     }
@@ -779,6 +783,46 @@ fn an_option_wins_over_the_environment() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let (header, _) = file::read(&fs::read(&file).unwrap()).unwrap();
     assert_eq!(header.revision, "option");
+}
+
+#[test]
+fn under_cargo_a_bin_of_the_program_s_name_is_compiled_and_the_library_alone_lowered() {
+    // cargo, the driver its `RUSTC_WRAPPER` and the environment naming the program, builds a package whose library is
+    // the program and whose bin, of the same crate name, uses it: the library is lowered and its file written, the bin
+    // compiled and not lowered, and the build succeeds
+    let work = fresh("package");
+    let package = work.join("lines");
+    fs::create_dir_all(package.join("src")).unwrap();
+    fs::copy(program("lines"), package.join("src/lib.rs")).unwrap();
+    fs::write(package.join("src/main.rs"), "fn main() {\n    let _ = lines::Lines::default();\n}\n").unwrap();
+    let orcl_std = here().join("../orcl-std").display().to_string();
+    let manifest = format!(
+        "[package]\nname = \"lines\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n\
+         [dependencies]\norcl-std = {{ path = {orcl_std:?} }}\n\n[workspace]\n"
+    );
+    fs::write(package.join("Cargo.toml"), manifest).unwrap();
+    let file = work.join("lines.orclb");
+    let out = Command::new(env!("CARGO"))
+        .args(["build", "--offline", "--manifest-path"])
+        .arg(package.join("Cargo.toml"))
+        // a cargo home and a target of the package's own: no other build's lock, cache or configuration
+        .env("CARGO_HOME", work.join("cargo-home"))
+        .env("CARGO_TARGET_DIR", work.join("target"))
+        .env("RUSTUP_TOOLCHAIN", nightly())
+        .env("RUSTC_WRAPPER", env!("CARGO_BIN_EXE_orcl-front-driver"))
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env("LD_LIBRARY_PATH", library_path())
+        .env("ORCL_FRONT_PROGRAM", "lines")
+        .env("ORCL_FRONT_OUT", &file)
+        .env("ORCL_FRONT_REVISION", "cargo")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "the package's build: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(work.join("target/debug/lines").exists(), "the bin built");
+    let (header, code) = file::read(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(header.revision, "cargo");
+    let alone = lower_in("package-alone", "lines", &program("lines")).result.unwrap().1;
+    assert_eq!((&code.types, &code.functions), (&alone.types, &alone.functions), "the program, as lowered alone");
 }
 
 /// The 1-based line and column where `snippet` first stands in `source`.

@@ -5,13 +5,16 @@
 //! ORCL type has no drop glue, so MIR holds no cleanup block to keep out, and a crate built so links with the rest of
 //! the build as it would.
 //!
-//! The program's own crate, the one whose `--crate-name` is the program's (built as a library, not as its own tests),
-//! is lowered once the compiler has analysed it, and the program file is written once the compiler has finished it,
-//! with no error.
+//! The program's own crate, the one whose `--crate-name` is the program's, is lowered once the compiler has analysed
+//! it, when the compiler builds it as a library, and the program file is written once the compiler has finished it,
+//! with no error. Built as anything else, a bin of the program's name (cargo's bin target of a package beside its
+//! library), its own tests (`--test`) or a procedural macro, it is compiled and nothing is lowered or written.
 use std::process::ExitCode;
 
 use orcl_interp::{Limits, Machine};
 use orcl_interp::file::{self, Header};
+use rustc_middle::ty::TyCtxt;
+use rustc_structures::CrateType;
 
 use crate::NIGHTLY;
 use crate::error::Error;
@@ -99,10 +102,9 @@ impl Invocation {
             args.push("-Zalways-encode-mir".into());
             args.push("-Zmir-opt-level=0".into());
         }
-        // the program's crate built as its own tests (`--test`) is compiled, never lowered
-        let testing = args.iter().any(|a| a == "--test");
+        // whether the program's crate is built as a library, and so lowered, the compiler says (`program_file`)
         let job = match program {
-            Some(program) if crate_name(&args) == Some(program.as_str()) && !testing => {
+            Some(program) if crate_name(&args) == Some(program.as_str()) => {
                 let out = out.ok_or_else(|| Error::Usage(format!("{} names no file to write", OUT.0)))?;
                 let revision = revision.ok_or_else(|| Error::Usage(format!("{} names no revision", REVISION.0)))?;
                 Some(Job { program, out, revision })
@@ -122,12 +124,22 @@ impl rustc_driver::Callbacks for Plain {}
 /// ORCL program holds and short of what would hurt the machine the driver runs on.
 const CHECK: Limits = Limits { stack: 0, memory: 1 << 24 };
 
-/// The program file's bytes, lowered from the crate the compiler holds and checked by the interpreter's own loader.
-fn program_file(tcx: rustc_middle::ty::TyCtxt<'_>, job: &Job) -> Result<Vec<u8>, Error> {
+/// Whether the compiler builds the crate as a library, as a program's crate is built, whatever its options or its
+/// own `crate_type` attribute say: a bin, a test build (an executable too) or a procedural macro is not one.
+fn builds_library(tcx: TyCtxt<'_>) -> bool {
+    tcx.crate_types().iter().any(|t| !matches!(t, CrateType::Executable | CrateType::ProcMacro))
+}
+
+/// The program file's bytes, lowered from the crate the compiler holds and checked by the interpreter's own loader,
+/// or nothing for a crate of the program's name the compiler builds as no library.
+fn program_file(tcx: TyCtxt<'_>, job: &Job) -> Result<Option<Vec<u8>>, Error> {
+    if !builds_library(tcx) {
+        return Ok(None);
+    }
     let program = crate::lower::lower(tcx)?;
     Machine::load(program.clone(), &[], CHECK).map_err(|e| Error::Lowering(e.to_string()))?;
     let header = Header { language: orcl_std::LANGUAGE, nightly: NIGHTLY.into(), revision: job.revision.clone() };
-    Ok(file::write(&header, &program))
+    Ok(Some(file::write(&header, &program)))
 }
 
 fn compile_and_lower(rustc: &[String], job: &Job) -> Result<(), Error> {
@@ -136,7 +148,8 @@ fn compile_and_lower(rustc: &[String], job: &Job) -> Result<(), Error> {
         Err(e) => std::ops::ControlFlow::Break(e),
     });
     let bytes = match result {
-        Ok(bytes) => bytes,
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Ok(()),
         Err(rustc_public::CompilerError::Interrupted(e)) => return Err(e),
         Err(_) => return Err(Error::Compile),
     };

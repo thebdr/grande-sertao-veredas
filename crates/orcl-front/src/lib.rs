@@ -9,11 +9,11 @@
 //!
 //! Behind the feature `driver`, which only that nightly builds, the binary `orcl-front-driver` is run as the compiler
 //! of a program's crates: it compiles every crate it is given with `-Zalways-encode-mir -Zmir-opt-level=0`, and for
-//! the program's own crate, named by `--orcl-program` (or `ORCL_FRONT_PROGRAM`), it lowers the crate's
-//! `orcl_std::Program` implementation through `rustc_public` and writes the program file `--orcl-out` names (or
-//! `ORCL_FRONT_OUT`), under a header naming `orcl_std::LANGUAGE`, [`NIGHTLY`] and the revision `--orcl-revision`
-//! (or `ORCL_FRONT_REVISION`) gives. What the interpreter cannot run is refused by name and source location, and no
-//! file is written.
+//! the program's own crate, named by `--orcl-program` (or `ORCL_FRONT_PROGRAM`) and built as a library, it lowers
+//! the crate's `orcl_std::Program` implementation through `rustc_public` and writes the program file `--orcl-out`
+//! names (or `ORCL_FRONT_OUT`), under a header naming `orcl_std::LANGUAGE`, [`NIGHTLY`] and the revision
+//! `--orcl-revision` (or `ORCL_FRONT_REVISION`) gives. What the interpreter cannot run is refused by name and source
+//! location, and no file is written.
 #![cfg_attr(feature = "driver", feature(rustc_private))]
 #![forbid(unsafe_code)]
 #![deny(clippy::panic, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
@@ -32,6 +32,8 @@ extern crate rustc_middle;
 extern crate rustc_public;
 #[cfg(feature = "driver")]
 extern crate rustc_span;
+#[cfg(feature = "driver")]
+extern crate rustc_structures;
 
 #[cfg(feature = "driver")]
 mod body;
