@@ -1,6 +1,7 @@
-//! The front end proven against Rust (C-156). Each conformance program under `programs/` is compiled natively into
-//! this test and by the driver as a crate of its own (`orcl-std` first, as the driver compiles it, then the program
-//! with `--extern`), into a folder of its own under `CARGO_TARGET_TMPDIR`. The lowered program is read back from its
+//! The front end proven against Rust (C-156). Each conformance program under `programs/` (one file, or a folder of
+//! its name holding its files) is compiled natively into this test and by the driver as a crate of its own
+//! (`orcl-std` first, as the driver compiles it, then the program with `--extern`), into a folder of its own under
+//! `CARGO_TARGET_TMPDIR`. The lowered program is read back from its
 //! file, its first state and its safe outputs computed by calling its `Default` and its `safe_outputs` on a machine
 //! (as a host does until the file carries them, `docs/questions.md` Q231), and run on the engine of a scan beside
 //! its native build, each on its own virtual clock: every scan's report and every write compared, over thousands of
@@ -18,14 +19,32 @@ static CAP: cap::Capped = cap::Capped;
 #[path = "programs/arith.rs"]
 mod arith;
 #[allow(dead_code)]
+#[path = "programs/cgen.rs"]
+mod cgen;
+#[allow(dead_code)]
 #[path = "programs/conveyor.rs"]
 mod conveyor;
+#[allow(dead_code)]
+#[path = "programs/deref2.rs"]
+mod deref2;
 #[allow(dead_code)]
 #[path = "programs/edges.rs"]
 mod edges;
 #[allow(dead_code)]
 #[path = "programs/faults.rs"]
 mod faults;
+#[allow(dead_code)]
+#[path = "programs/lines.rs"]
+mod lines;
+#[allow(dead_code)]
+#[path = "programs/niches.rs"]
+mod niches;
+#[allow(dead_code)]
+#[path = "programs/order.rs"]
+mod order;
+#[allow(dead_code)]
+#[path = "programs/padded.rs"]
+mod padded;
 #[allow(dead_code)]
 #[path = "programs/probe.rs"]
 mod probe;
@@ -36,8 +55,14 @@ mod shapes;
 #[path = "programs/sound.rs"]
 mod sound;
 #[allow(dead_code)]
+#[path = "programs/twofile/twofile.rs"]
+mod twofile;
+#[allow(dead_code)]
 #[path = "programs/zst_const.rs"]
 mod zst_const;
+#[allow(dead_code)]
+#[path = "programs/zst_ref.rs"]
+mod zst_ref;
 
 use std::fmt::Debug;
 use std::fs;
@@ -156,8 +181,11 @@ fn lower_in(folder: &str, name: &str, source: &Path) -> Lowered {
     Lowered { file, result }
 }
 
+/// The conformance program `name`'s crate root: `programs/<name>.rs`, or `programs/<name>/<name>.rs` for a program of
+/// more than one file.
 fn program(name: &str) -> PathBuf {
-    here().join("tests/programs").join(format!("{name}.rs"))
+    let file = here().join("tests/programs").join(format!("{name}.rs"));
+    if file.exists() { file } else { here().join("tests/programs").join(name).join(format!("{name}.rs")) }
 }
 
 // Values as the interpreter's slots: a native program's own types, laid out as the front end lowers them (fields in
@@ -386,6 +414,22 @@ image!(faults::Inputs { sel: u8, a: i32, b: i32, idx: u8, c: u8, sh: u32 });
 image!(faults::Outputs { v: i32, w: u8 });
 image!(zst_const::Inputs { a: u8 });
 image!(zst_const::Outputs { v: u8 });
+image!(zst_ref::Inputs { a: u8 });
+image!(zst_ref::Outputs { v: u8 });
+image!(cgen::Inputs { v: u16 });
+image!(cgen::Outputs { short: u16, long: u16 });
+image!(deref2::Inputs { a: u8 });
+image!(deref2::Outputs { v: u8 });
+image!(order::Inputs { sel: u8 });
+image!(order::Outputs { p0: u8, p1: u16, p2: bool, a: u8, b: u32, c: u16 });
+image!(twofile::Inputs { a: i32, b: i32 });
+image!(twofile::Outputs { v: i32 });
+image!(lines::Inputs { a: i32, b: i32 });
+image!(lines::Outputs { v: i32 });
+image!(padded::Inputs { sel: u8 });
+image!(padded::Outputs { cmd: u16, pair: u16, recipe: u16 });
+image!(niches::Inputs { sel: u8 });
+image!(niches::Outputs { held: Duration, has: bool, dir: i8, step: Duration });
 
 // Inputs drawn from a scan's index, the same for the native program and its lowered twin.
 
@@ -720,6 +764,57 @@ fn constants_of_no_byte_hold_a_one_variant_enum_s_discriminant_and_run_lowered_a
 }
 
 #[test]
+fn a_promoted_reference_to_a_fieldless_enum_runs_lowered_as_natively() {
+    let inputs = |k: u64| zst_ref::Inputs { a: mix(k, 1) as u8 };
+    let outputs = conform("zst_ref", zst_ref::ZstRef::default(), "ZstRef", &inputs, 200);
+    both(&outputs, "an odd sum", |o| o.v % 2 == 1);
+}
+
+#[test]
+fn two_instances_of_a_const_generic_block_run_lowered_as_natively() {
+    // `Avg<4>` and `Avg<8>`: two types, of four and eight elements, one generic code
+    let inputs = |k: u64| cgen::Inputs { v: (mix(k, 1) % 1_000) as u16 };
+    let outputs = conform("cgen", cgen::Cgen::default(), "Cgen", &inputs, 400);
+    both(&outputs, "the two averages apart", |o| o.short != o.long);
+}
+
+#[test]
+fn a_place_behind_two_references_runs_lowered_as_natively() {
+    let inputs = |k: u64| deref2::Inputs { a: mix(k, 1) as u8 };
+    let outputs = conform("deref2", deref2::Deref2::default(), "Deref2", &inputs, 200);
+    both(&outputs, "a value of four times an even input", |o| o.v % 8 == 0);
+}
+
+#[test]
+fn constants_whose_fields_rustc_reorders_run_lowered_as_natively() {
+    // each field of a `(u8, u16, bool)` and of a `{ u8, u32, u16 }` read on its own, not summed
+    let inputs = |k: u64| order::Inputs { sel: (mix(k, 1) % 8) as u8 };
+    let outputs = conform("order", order::Order::default(), "Order", &inputs, 200);
+    assert!(outputs.iter().all(|o| (o.p1, o.a, o.b, o.c) == (300, 9, 70_000, 513)));
+    both(&outputs, "the tuple's bool", |o| o.p2);
+}
+
+#[test]
+fn constant_enums_padded_past_an_array_or_a_tuple_run_lowered_as_natively() {
+    // the slots an enum's smaller variant leaves unwritten count its largest variant's array or tuple whole
+    let inputs = |k: u64| padded::Inputs { sel: mix(k, 1) as u8 };
+    let outputs = conform("padded", padded::Padded::default(), "Padded", &inputs, 200);
+    both(&outputs, "the idle command", |o| o.cmd == 1);
+    both(&outputs, "the pair", |o| o.pair == 515);
+    both(&outputs, "the recipe", |o| o.recipe == 100);
+}
+
+#[test]
+fn constants_in_a_duration_s_niche_and_a_signed_enum_s_run_lowered_as_natively() {
+    let inputs = |k: u64| niches::Inputs { sel: mix(k, 1) as u8 };
+    let outputs = conform("niches", niches::Niches::default(), "Niches", &inputs, 200);
+    both(&outputs, "a time held", |o| o.has && o.held == Duration::from_millis(1_500));
+    both(&outputs, "back", |o| o.dir == -1);
+    both(&outputs, "none", |o| o.dir == 9);
+    both(&outputs, "the long step", |o| o.step == Duration::from_secs(3));
+}
+
+#[test]
 fn the_driver_takes_its_options_from_the_environment_as_a_wrapper_and_lowers_no_test_build() {
     // as `RUSTC_WRAPPER` (the compiler it wraps first, then rustc's arguments), the program named by the
     // environment: the file is written as with the options
@@ -783,6 +878,27 @@ fn an_option_wins_over_the_environment() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let (header, _) = file::read(&fs::read(&file).unwrap()).unwrap();
     assert_eq!(header.revision, "option");
+}
+
+#[test]
+fn the_driver_refuses_a_program_named_with_no_revision() {
+    let source = program("lines").display().to_string();
+    let mut args = strings(&["--crate-name", "lines", "--crate-type", "rlib", &source]);
+    args.extend(strings(&["--orcl-program=lines", "--orcl-out=/nonexistent/x.orclb"]));
+    let out = driver(&args);
+    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("error: orcl-front: usage: --orcl-revision names no revision"));
+}
+
+#[test]
+fn the_driver_refuses_an_option_given_twice() {
+    let source = program("lines").display().to_string();
+    let mut args = strings(&["--crate-name", "lines", "--crate-type", "rlib", &source]);
+    args.extend(strings(&["--orcl-program=lines", "--orcl-revision", "x"]));
+    args.extend(strings(&["--orcl-out=/nonexistent/a.orclb", "--orcl-out", "/nonexistent/b.orclb"]));
+    let out = driver(&args);
+    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("error: orcl-front: usage: --orcl-out given twice"));
 }
 
 #[test]
@@ -935,6 +1051,60 @@ fn the_source_map_names_no_file_of_core() {
             assert!(!f.contains("library/core"), "{name}: {f} in {:?}", code.files);
         }
     }
+}
+
+#[test]
+fn a_fault_in_a_program_s_second_file_names_that_file() {
+    // the scan in `twofile.rs` calls `helper::ratio` in `helper.rs`, whose division by zero is the fault
+    let source = program("twofile");
+    let helper = source.with_file_name("helper.rs");
+    let (_, code) = lower_in("twofile-fault", "twofile", &source).result.unwrap();
+    let e = fault::<_, twofile::Outputs>(&code, &twofile::Inputs { a: 5, b: 0 });
+    let (line, column) = place_of(&helper, "a / b");
+    assert_eq!(e.kind, ErrorKind::Check(Check::DivisionByZero));
+    assert_eq!(
+        (code.files[e.at.file as usize].as_str(), e.at.line as usize, e.at.column as usize),
+        (helper.display().to_string().as_str(), line, column),
+        "files {:?}",
+        code.files
+    );
+    // and the program runs as natively, its divisor never zero
+    let inputs = |k: u64| twofile::Inputs { a: (mix(k, 1) % 1_000) as i32 - 500, b: (mix(k, 2) % 9) as i32 + 1 };
+    let outputs = conform("twofile", twofile::Twofile::default(), "Twofile", &inputs, 200);
+    both(&outputs, "a negative ratio", |o| o.v < 0);
+}
+
+#[test]
+fn an_operation_over_two_lines_faults_at_its_first_line() {
+    let source = program("lines");
+    let (_, code) = lower("lines", &source).result.unwrap();
+    let e = fault::<_, lines::Outputs>(&code, &lines::Inputs { a: 5, b: 0 });
+    let (line, column) = place_of(&source, "i.a\n");
+    assert_eq!(e.kind, ErrorKind::Check(Check::DivisionByZero));
+    assert_eq!((e.at.line as usize, e.at.column as usize), (line, column));
+}
+
+#[test]
+fn orcl_std_s_own_macro_keeps_its_lines() {
+    // `impl_bits!` is orcl-std's: the statements of `get_bit` it expands to stand on the macro's lines, not where
+    // the macro is called
+    let (_, code) = lower_in("bits-lines", "probe", &program("probe")).result.unwrap();
+    let bits = here().join("../orcl-std/src/bits.rs");
+    let file = code.files.iter().position(|f| f.ends_with("orcl-std/src/bits.rs")).expect("bits.rs in the source map");
+    let file = file as u32;
+    let (inside, _) = place_of(&bits, "match self.checked_shr(n)");
+    let (call, _) = place_of(&bits, "impl_bits!(u8");
+    let lines: Vec<u32> = code
+        .functions
+        .iter()
+        .filter(|f| f.name.contains("get_bit"))
+        .flat_map(|f| f.blocks.iter().flat_map(|b| b.statements.iter().map(|s| s.at)))
+        .filter(|at| at.file == file)
+        .map(|at| at.line)
+        .collect();
+    assert!(!lines.is_empty(), "get_bit's statements");
+    let (inside, call) = (inside as u32, call as u32);
+    assert!(lines.contains(&inside) && !lines.contains(&call), "{lines:?}: inside {inside}, call {call}");
 }
 
 /// The program `name` of `programs/refused/`.
