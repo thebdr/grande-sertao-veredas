@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(live)"
   ],
   "exitCode": 0,
-  "outputSha": "fd70152146550de2b1dd41d695c54ea41c48f4981df21db12424f8f5a0c4259a",
-  "outputTail": "        PASS [   4.115s] (18/30) veredas-comissionador::live functions_take_typed_inputs_give_their_outputs_and_keep_their_bound\n        PASS [   4.186s] (19/30) veredas-comissionador::live routes_retries_and_ends_take_the_run_where_the_file_says\n        PASS [   4.344s] (20/30) veredas-comissionador::live a_reading_the_tester_stops_ends_the_run_on_the_stop\n        PASS [   2.896s] (21/30) veredas-comissionador::live values_compute_and_compare_as_the_reference_says\n        PASS [   6.340s] (22/30) veredas-comissionador::live rows_sharing_a_stamp_are_judged_together_and_each_awaited\n        PASS [   6.855s] (23/30) veredas-comissionador::live a_wait_and_a_read_agree_on_a_stamp_two_keys_share\n        PASS [   7.278s] (24/30) veredas-comissionador::live a_column_empty_over_its_table_is_read_back_in_growing_pages_the_stop_asked_before_each\n        PASS [   7.278s] (25/30) veredas-comissionador::live the_run_s_bound_is_the_run_s_clock_s_live_and_replayed_alike\n        PASS [   7.585s] (26/30) veredas-comissionador::live the_worked_example_passes_live_against_the_machine\n        PASS [   8.052s] (27/30) veredas-comissionador::live the_worked_example_fails_where_the_destination_is_free\n        PASS [  11.508s] (28/30) veredas-comissionador::live a_write_whose_answer_never_came_is_recorded_sent\n        PASS [  10.118s] (29/30) veredas-comissionador::live timeouts_the_run_s_bound_and_the_tester_s_stop\n        PASS [  18.630s] (30/30) veredas-comissionador::live the_tester_s_stop_ends_a_long_window_s_reading_between_its_pages\n────────────\n     Summary [  20.378s] 30 tests run: 30 passed, 0 skipped",
-  "ranAt": "2026-11-27T12:25:49.248Z",
-  "headCommit": "882c2fe8a9d8dd52c5e35e3d42fa16f4d5cde298",
+  "outputSha": "5597d6acb832cb112e81c981a292e8dfd4af41394e03b28bba7f064f891351e4",
+  "outputTail": "        PASS [   3.144s] (19/31) veredas-comissionador::live a_long_replayed_window_stops_at_the_tester_s_word\n        PASS [   3.187s] (20/31) veredas-comissionador::live awaits_over_a_view_take_each_row_of_a_stamp_once\n        PASS [   3.199s] (21/31) veredas-comissionador::live a_live_wait_for_a_duration_waits_until_its_bound_has_passed\n        PASS [   1.869s] (22/31) veredas-comissionador::live values_compute_and_compare_as_the_reference_says\n        PASS [   5.386s] (23/31) veredas-comissionador::live rows_sharing_a_stamp_are_judged_together_and_each_awaited\n        PASS [   5.536s] (24/31) veredas-comissionador::live a_column_empty_over_its_table_is_read_back_in_growing_pages_the_stop_asked_before_each\n        PASS [   4.843s] (25/31) veredas-comissionador::live the_run_s_bound_is_the_run_s_clock_s_live_and_replayed_alike\n        PASS [   6.079s] (26/31) veredas-comissionador::live a_wait_and_a_read_agree_on_a_stamp_two_keys_share\n        PASS [   6.477s] (27/31) veredas-comissionador::live the_worked_example_passes_live_against_the_machine\n        PASS [   7.542s] (28/31) veredas-comissionador::live the_worked_example_fails_where_the_destination_is_free\n        PASS [   8.673s] (29/31) veredas-comissionador::live timeouts_the_run_s_bound_and_the_tester_s_stop\n        PASS [  11.090s] (30/31) veredas-comissionador::live a_write_whose_answer_never_came_is_recorded_sent\n        PASS [  14.148s] (31/31) veredas-comissionador::live the_tester_s_stop_ends_a_long_window_s_reading_between_its_pages\n────────────\n     Summary [  15.571s] 31 tests run: 31 passed, 0 skipped",
+  "ranAt": "2026-11-27T17:19:59.525Z",
+  "headCommit": "475310223d653d1189772d7fe59e373b78fe4b55",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/live.rs",
       "file": "crates/veredas-comissionador/tests/live.rs",
-      "fileSha": "766e40806dd82a20ac08f8a44bb5c8ec87a22d570f1885b31497d0a6e38b9c95"
+      "fileSha": "646e7cda0f44f0a91be19a153dd51c8bf89a3c62df65f0a484759de586346931"
     }
   ]
 }
