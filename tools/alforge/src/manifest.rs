@@ -511,10 +511,61 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                 .flatten()
                 .find(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"].contains(&k.as_str().unwrap_or_default()))))
                 .and_then(|t| t["name"].as_str().map(String::from));
-            let (inputs, packages) = match workspace.inputs_and_packages(&name) {
+            let (mut inputs, packages) = match workspace.inputs_and_packages(&name) {
                 Ok((i, p)) => (Ok(i), p),
                 Err(e) => (Err(e), inputs::Packages::default()),
             };
+            // A dependency's feature its executables need (`--features serde_json/preserve_order`)
+            // is no feature of a member, which the lock is resolved with: what it turns on cargo
+            // resolves outside the lock, even under `--locked`, and no version names. The builder's
+            // own build of its executables, as cargo trees it, holds no crate the lock pins not.
+            let dep_features: Vec<&String> = features.iter().filter(|f| f.contains('/')).collect();
+            if inputs.is_ok() && !dep_features.is_empty() {
+                let spec = format!("{name}@{version}");
+                let mut argv = vec!["cargo", "tree", "--offline", "--target", crate::components::TARGET, "-e", "normal,build", "--prefix", "none", "--format", "{p}", "--manifest-path", root_manifest_path.as_str(), "-p", spec.as_str()];
+                for f in &dep_features {
+                    argv.extend(["--features", f.as_str()]);
+                }
+                let lock_text = std::fs::read_to_string(tree.join("Cargo.lock")).ok();
+                if lock_text.is_some() {
+                    argv.push("--locked");
+                }
+                let pinned: BTreeSet<(String, String)> = lock_text
+                    .as_deref()
+                    .and_then(|t| inputs::parse_lock(t).ok())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|l| l.source.is_some())
+                    .map(|l| (l.name, l.version))
+                    .collect();
+                let out = run(&argv)?;
+                if !out.status.success() {
+                    let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
+                    inputs = Err(format!("cargo cannot tree {name}'s executables with what they need offline: {}", why.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" / ")));
+                } else {
+                    let mut unpinned: BTreeSet<String> = BTreeSet::new();
+                    for line in String::from_utf8_lossy(&out.stdout).lines() {
+                        let line = line.strip_suffix(" (*)").unwrap_or(line);
+                        let Some((n, rest)) = line.split_once(" v") else { continue };
+                        let (v, rest) = rest.split_once(' ').unwrap_or((rest, ""));
+                        let rest = rest.strip_prefix("(proc-macro)").map_or(rest, str::trim_start);
+                        // A package by path is a member's or a fork's, its folder named.
+                        if rest.starts_with("(/") {
+                            continue;
+                        }
+                        if !pinned.contains(&(n.to_string(), v.to_string())) {
+                            unpinned.insert(format!("{n} {v}"));
+                        }
+                    }
+                    if !unpinned.is_empty() {
+                        inputs = Err(format!(
+                            "its executables need `{}`, under which cargo builds {} that its Cargo.lock does not pin: a dependency's feature no member turns on is resolved outside the lock",
+                            dep_features.iter().map(|f| f.as_str()).collect::<Vec<_>>().join("`, `"),
+                            unpinned.into_iter().collect::<Vec<_>>().join(", ")
+                        ));
+                    }
+                }
+            }
             held.insert(name.clone(), Held { dir, name, version, bins, features, unshipped, never, lib, inputs, packages });
         }
         Ok(None)

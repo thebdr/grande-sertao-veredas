@@ -304,8 +304,18 @@ fn this_repositorys_head_lists_every_component_and_every_crate_its_versions_name
     std::fs::create_dir_all(&tmp).unwrap();
     let tree = tempfile::Builder::new().prefix("alforge-units-").tempdir_in(&tmp).unwrap();
     alforge::git::export_tree(&root, &head, &[], tree.path()).unwrap();
-    let names: Vec<&str> = held.values().map(|h| h.name.as_str()).collect();
-    let (built, edges) = cargo_builds(tree.path(), &names, &[]);
+    // Each component's own, as the builder builds them one at a time, and their union.
+    let mut built = BTreeSet::new();
+    let mut edges = BTreeSet::new();
+    for h in held.values().filter(|h| h.lib.is_some() || !h.bins.is_empty()) {
+        let spec = format!("{}@{}", h.name, h.version);
+        let mut args: Vec<String> = vec![spec];
+        args.extend(h.features.iter().filter(|f| f.contains('/')).map(|f| format!("--features {f}")));
+        let words: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (b, e) = cargo_builds(tree.path(), &words, &[]);
+        built.extend(b);
+        edges.extend(e);
+    }
     let (packages, dependencies) = self::listed(&doc);
     assert!(built.len() > 300, "{}", built.len());
     assert_eq!(packages.symmetric_difference(&built).collect::<Vec<_>>(), Vec::<&Package>::new(), "the list against cargo's unit graph");
@@ -712,4 +722,78 @@ fn a_dependencys_feature_a_component_of_examples_alone_and_the_callers_toolchain
     for vars in [&[("RUSTUP_TOOLCHAIN", "no-such-toolchain")][..], &[("CARGO", "/no/such/cargo")], &[("RUSTC", "/no/such/rustc")]] {
         assert_eq!(run(vars), plain, "{vars:?}");
     }
+}
+
+/// Round 7's forms: a bin requiring a dependency's feature no member turns on, under which cargo
+/// builds crates the lock does not pin (resolved outside it even under `--locked`), refused as a
+/// commit whose build inputs do not read; and two components sharing a crate across a weak
+/// feature (`rand?/serde1`), each built alone by the builder, where neither turns it on: listed as
+/// the union of each one's own build.
+#[test]
+fn a_dependencys_feature_no_lock_pins_and_a_weak_feature_across_two_components() {
+    let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
+    r.write(
+        "crates/veredas-core/Cargo.toml",
+        "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nserde_json = \"=1.0.154\"\n\n[[bin]]\nname = \"veredas-core\"\npath = \"src/main.rs\"\nrequired-features = [\"serde_json/preserve_order\"]\n",
+    );
+    r.write("crates/veredas-core/src/main.rs", "fn main() {}\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let lock = std::fs::read_to_string(r.path().join("Cargo.lock")).unwrap();
+    assert!(!lock.contains("name = \"indexmap\""), "the lock pins no indexmap");
+    let c = r.commit("a dependency's feature no member turns on");
+    let why = "veredas-core's build inputs do not read: its executables need `serde_json/preserve_order`, under which cargo builds equivalent 1.0.3, foldhash 0.2.0, hashbrown 0.17.2, indexmap 2.14.2 that its Cargo.lock does not pin: a dependency's feature no member turns on is resolved outside the lock";
+    let held = alforge::manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    assert_eq!(held["veredas-core"].inputs.as_ref().err().map(|e| format!("veredas-core's build inputs do not read: {e}")).as_deref(), Some(why));
+    assert_eq!(alforge::components::list(r.path(), &c, None).unwrap_err().to_string(), why);
+    // Cargo's own build, held to the lock, compiles them all the same: none of them pinned.
+    let target = tempfile::tempdir().unwrap();
+    let out = cargo()
+        .args(["build", "--offline", "--locked", "-q", "-p", "veredas-core@2.1.0", "--bins", "--features", "serde_json/preserve_order"])
+        .env("CARGO_TARGET_DIR", target.path())
+        .current_dir(r.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    // Its rlib wherever cargo 1.100 lays it (`build/<package>/<hash>/out/`).
+    let mut stack = vec![target.path().to_path_buf()];
+    let mut rlib = false;
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.file_name().unwrap().to_string_lossy().starts_with("libindexmap-") {
+                rlib = true;
+            }
+        }
+    }
+    assert!(rlib, "cargo compiled indexmap");
+    assert_eq!(std::fs::read_to_string(r.path().join("Cargo.lock")).unwrap(), lock);
+
+    // A weak feature across two components: core asks ordered-float's `serde` (`dep:serde`,
+    // `rand?/serde1`), portal its `rand`; together cargo would turn `rand/serde1` on, alone
+    // neither does.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nordered-float = { version = \"5\", default-features = false, features = [\"serde\"] }\n");
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.3\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nordered-float = { version = \"5\", default-features = false, features = [\"rand\"] }\n");
+    r.write("crates/veredas-portal/src/main.rs", "fn main() {}\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let c = r.commit("a weak feature across two components");
+    let doc: Value = serde_json::from_str(&alforge::components::list(r.path(), &c, None).unwrap()).unwrap();
+    let (core_built, core_edges) = cargo_builds(r.path(), &["veredas-core@2.1.0"], &[]);
+    let (portal_built, portal_edges) = cargo_builds(r.path(), &["veredas-portal@2.0.3"], &[]);
+    let built: BTreeSet<Package> = core_built.union(&portal_built).cloned().collect();
+    let edges: BTreeSet<(Package, Package)> = core_edges.union(&portal_edges).cloned().collect();
+    assert_eq!(listed(&doc), (built, edges));
+    let names: Vec<&str> = doc["components"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"serde") && names.contains(&"rand") && !names.contains(&"serde_derive"), "{names:?}");
+    // Together, cargo's graph holds what neither build compiles.
+    let (together, _) = cargo_builds(r.path(), &["veredas-core@2.1.0", "veredas-portal@2.0.3"], &[]);
+    assert!(together.iter().any(|(n, _)| n == "serde_derive"), "{together:?}");
 }

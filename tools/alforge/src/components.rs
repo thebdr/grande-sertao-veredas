@@ -169,20 +169,15 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[(Stri
     // second), so what lies below a dependency no build compiles is left with it and nothing a
     // build compiles is printed there alone; drawn in ASCII, which marks a package's
     // build-dependencies (`[build-dependencies]`, at the depth of its children).
-    // The components together, every feature of theirs on; then each whose executables need a
-    // dependency's feature (`serde_json/preserve_order`, which `--all-features` never turns on)
-    // alone with those features on too, as the builder builds it (crate::builder::feature_args).
+    // Each component alone, as the builder builds it (docs/questions.md Q444: cargo unifies features
+    // within its own inputs, never across components, so a weak feature one turns on and an
+    // optional dependency another does make nothing there), every feature of its own on and the
+    // dependencies' features its executables need (`serde_json/preserve_order`, which
+    // `--all-features` never turns on; crate::builder::feature_args).
     let mut runs: Vec<Vec<String>> = Vec::new();
     let base_argv: Vec<String> = ["cargo", "tree", "--offline", "--all-features", "--target", target, "-e", "normal,build", "--no-dedupe", "--charset", "ascii", "--format", "{p}", "--manifest-path", &manifest].iter().map(|s| s.to_string()).collect();
     let locked = argv.contains(&"--locked");
-    if !components.is_empty() {
-        let mut all = base_argv.clone();
-        for (spec, _) in components {
-            all.extend(["-p".to_string(), spec.clone()]);
-        }
-        runs.push(all);
-    }
-    for (spec, needs) in components.iter().filter(|(_, needs)| !needs.is_empty()) {
+    for (spec, needs) in components {
         let mut one = base_argv.clone();
         one.extend(["-p".to_string(), spec.clone()]);
         for f in needs {
