@@ -91,6 +91,9 @@ Keys (each required unless a default is given):
   build, so Oficina's window ships with `shell` on). A bin whose features only the toolchain its
   package's folder names builds (`rust-toolchain`) is not shipped, and the cut says so: ORCL's front
   end's driver needs its pinned nightly and `rustc-dev` (Q449, raised 2026-11-27; taken meanwhile).
+  Nor is a bin whose required features cargo can meet for no build of the bins, which cargo builds
+  never: a feature its metadata does not name for the package, a dev-dependency's, one a
+  dependency does not have (C-290's rounds 31 and 32).
 - `[tested]`: `suite`, the commands whose green runs at the commit made the set tested (the whole
   suite, then each component's own tests built alone: Q444); `together`, what the cut ran from the
   bundle itself. Statements of what was run, written by the cut.

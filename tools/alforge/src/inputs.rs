@@ -99,6 +99,9 @@ pub struct Member {
     pub sources: Vec<String>,
     /// Whether it has a build script, which may read anything in its folder.
     pub build_script: bool,
+    /// Its features as cargo's metadata names them (an optional dependency's own among them when
+    /// no `dep:` hides it).
+    pub features: BTreeSet<String>,
 }
 
 /// A normal or build dependency of a member.
@@ -277,8 +280,10 @@ impl Workspace<'_> {
             if l.source.is_none() {
                 // A package by path the workspace knows (a member, or a fork one uses by path, as
                 // a `[patch]` may name it too): used as one reached by path.
-                let Some(known) = self.members.iter().find(|m| m.name == l.name && m.version == l.version) else {
-                    return Err(format!("its Cargo.lock's {} {} has no source and is no member a release builds from its folder", l.name, l.version));
+                let known = match self.members.iter().filter(|m| m.name == l.name && m.version == l.version).collect::<Vec<_>>()[..] {
+                    [one] => one,
+                    [] => return Err(format!("its Cargo.lock's {} {} has no source and is no member a release builds from its folder", l.name, l.version)),
+                    ref many => return Err(format!("its Cargo.lock's {} {} has no source and names more than one package by path ({}): which one cargo builds cannot be told", l.name, l.version, many.iter().map(|m| m.dir.as_str()).collect::<Vec<_>>().join(", "))),
                 };
                 // Behind a crate of the registry or git (a `[patch]` of a crate that one uses), cargo's
                 // dep-info does not follow it: what its build reads beyond what its sources name (a
@@ -545,7 +550,17 @@ impl Workspace<'_> {
                 }
             }
             let stem = Path::new(&file).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-            for module in declared(&text) {
+            // A file that does not lex: every `.rs` file of its folder, below it too, read in
+            // turn, as a `mod x;` of it can name no file elsewhere (beside it, in its own folder,
+            // inside its inline modules' folders); its `#[path]` names are read from its text.
+            let Some(modules) = declared(&text) else {
+                let mut inner = Vec::new();
+                let folder = from.display().to_string();
+                walk(self.tree, &folder, left, &mut inner).map_err(|e| format!("{folder}'s sources do not read: {e}"))?;
+                files.extend(inner);
+                continue;
+            };
+            for module in modules {
                 for base in [from.to_path_buf(), from.join(&stem)] {
                     for candidate in [base.join(format!("{module}.rs")), base.join(&module).join("mod.rs")] {
                         if let Some(path) = normal(&candidate).filter(|p| self.tree.join(p).is_file()) {
@@ -624,8 +639,10 @@ fn left_out(tree: &Path, m: &Member, dirs: &BTreeSet<&str>) -> Vec<String> {
 }
 
 /// The modules a Rust source declares by `mod x;`, each as its path below the file's own module
-/// folder (`x`, or `a/x` inside an inline `mod a { … }`), read from the tokens as rustc lexes them.
-pub fn declared(text: &str) -> Vec<String> {
+/// folder (`x`, or `a/x` inside an inline `mod a { … }`), read from the tokens as rustc lexes them;
+/// `None` for a text proc-macro2 does not lex (rustc's editions 2015 and 2018 take `'a#b`, which it
+/// does not).
+pub fn declared(text: &str) -> Option<Vec<String>> {
     fn inner(ts: proc_macro2::TokenStream, prefix: &str, out: &mut Vec<String>) {
         use proc_macro2::{Delimiter, TokenTree};
         let tts: Vec<TokenTree> = ts.into_iter().collect();
@@ -662,10 +679,8 @@ pub fn declared(text: &str) -> Vec<String> {
         lf = lf.find('\n').map(|i| lf[i..].to_string()).unwrap_or_default();
     }
     let mut out = Vec::new();
-    if let Ok(ts) = lf.parse::<proc_macro2::TokenStream>() {
-        inner(ts, "", &mut out);
-    }
-    out
+    inner(lf.parse::<proc_macro2::TokenStream>().ok()?, "", &mut out);
+    Some(out)
 }
 
 /// The feature resolver cargo builds the workspace with: the workspace's `resolver`, else the root

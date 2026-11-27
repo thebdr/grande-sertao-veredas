@@ -355,6 +355,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                     .filter_map(|t| t["src_path"].as_str().map(|p| from_root(Path::new(p)).unwrap_or_else(|| p.to_string())))
                     .collect();
                 let build_script = pkg["targets"].as_array().into_iter().flatten().any(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "custom-build")));
+                let features = pkg["features"].as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
                 out.push(inputs::Member {
                     name: pkg["name"].as_str().unwrap_or_default().to_string(),
                     version: pkg["version"].as_str().unwrap_or_default().to_string(),
@@ -363,6 +364,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                     deps,
                     sources,
                     build_script,
+                    features,
                 });
             }
             out
@@ -371,7 +373,9 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         // A path dependency outside the workspace's members (a fork kept in the tree, excluded from
         // the workspace) is read by cargo too, in the workspace it belongs to, so its own
         // dependencies and its inherited keys are cargo's; one cargo cannot read is its users'
-        // refusal.
+        // refusal. That package alone, never its workspace's other members: cargo neither locks
+        // nor builds one nothing reaches, and one of the same name and version would be taken for
+        // the package the lock pins (a `[patch]` to another folder, which is refused).
         let mut unread = BTreeMap::new();
         loop {
             let known: BTreeSet<String> = members.iter().map(|m| m.dir.clone()).chain(unread.keys().cloned()).collect();
@@ -415,7 +419,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                 if found.iter().all(|m| m.dir != dir) {
                     unread.insert(dir.clone(), format!("cargo names no package at {dir}"));
                 }
-                for m in found {
+                for m in found.into_iter().filter(|m| m.dir == dir) {
                     if !members.iter().any(|x| x.dir == m.dir) {
                         members.push(m);
                     }
@@ -432,23 +436,53 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
             // features only the toolchain its package's folder names builds (Q449).
             // DECISION PENDING (Q449)
             let own_toolchain = ["rust-toolchain", "rust-toolchain.toml"].iter().any(|f| tree.join(&dir).join(f).is_file());
-            // A required feature the package defines (an optional dependency's own name among
-            // them), or a dependency's (`dep/feature`, `dep?/feature`) of one it has.
+            // A required feature cargo can meet for a build of the bins: one cargo's metadata names
+            // for the package (an optional dependency's own when no `dep:` hides it), or a
+            // feature of one of its normal or build dependencies (`dep/feature`), as that
+            // dependency's metadata names it for one by path, as cargo's own resolve answers for
+            // one of the registry or git. A dev-dependency is in no build of the bins.
             let defined: BTreeSet<String> = pkg["features"].as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
-            let dependencies: Vec<&serde_json::Value> = pkg["dependencies"].as_array().into_iter().flatten().collect();
-            let named = |d: &&serde_json::Value| d["rename"].as_str().or_else(|| d["name"].as_str()).unwrap_or_default().to_string();
-            let optional: BTreeSet<String> = dependencies.iter().filter(|d| d["optional"].as_bool() == Some(true)).map(named).collect();
-            let deps: BTreeSet<String> = dependencies.iter().map(named).collect();
-            let defines = |f: &str| match f.split_once('/') {
-                Some((d, _)) => defined.contains(d.trim_end_matches('?')) || deps.contains(d.trim_end_matches('?')),
-                None => defined.contains(f) || optional.contains(f),
+            let dependencies: Vec<&serde_json::Value> = pkg["dependencies"].as_array().into_iter().flatten().filter(|d| d["kind"].as_str() != Some("dev")).collect();
+            let named = |d: &serde_json::Value| d["rename"].as_str().or_else(|| d["name"].as_str()).unwrap_or_default().to_string();
+            let defines = |f: &str| -> Result<bool, String> {
+                let Some((d, feature)) = f.split_once('/') else { return Ok(defined.contains(f)) };
+                let Some(dep) = dependencies.iter().find(|x| named(x) == d.trim_end_matches('?')) else { return Ok(false) };
+                if let Some(path) = dep["path"].as_str() {
+                    let dir = from_root(Path::new(path)).unwrap_or_default();
+                    return Ok(workspace.members.iter().find(|m| m.dir == dir).is_some_and(|m| m.features.contains(feature)));
+                }
+                // Cargo's own word: its resolve with that feature on, offline, held to the lock.
+                let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+                let mut c = Command::new(cargo);
+                c.args(["tree", "--offline", "--depth", "0", "-e", "normal", "--prefix", "none", "--manifest-path"]).arg(tree.join("Cargo.toml"));
+                if tree.join("Cargo.lock").is_file() {
+                    c.arg("--locked");
+                }
+                let out = c.args(["-p", &format!("{name}@{version}"), "--features", f]).current_dir(&tree).stdin(Stdio::null()).output().map_err(|e| format!("commit {commit}: cargo tree does not run: {e}"))?;
+                let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
+                match out.status.success() {
+                    true => Ok(true),
+                    false if why.contains("does not have that feature") || why.contains("does not contain this feature") => Ok(false),
+                    false => Err(format!("commit {commit}: whether cargo builds {name}'s bins requiring `{f}` cannot be told offline: {}", why.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" / "))),
+                }
             };
             let (mut bins, mut features, mut unshipped, mut never) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new(), BTreeMap::new());
             for t in pkg["targets"].as_array().into_iter().flatten().filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "bin"))) {
                 let Some(b) = t["name"].as_str() else { continue };
                 let required: Vec<String> = t["required-features"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
-                if let Some(f) = required.iter().find(|f| !defines(f)) {
-                    never.insert(b.to_string(), f.clone());
+                let mut unmet = None;
+                for f in &required {
+                    match defines(f) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            unmet = Some(f.clone());
+                            break;
+                        }
+                        Err(why) => return Ok(Some(why)),
+                    }
+                }
+                if let Some(f) = unmet {
+                    never.insert(b.to_string(), f);
                     continue;
                 }
                 if own_toolchain && !required.is_empty() {
