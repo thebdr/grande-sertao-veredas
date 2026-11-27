@@ -108,6 +108,7 @@ fn oficina_is_a_library_and_one_executable_its_window_behind_the_shell_feature()
     let staged = String::from_utf8(git(&["ls-files", "--stage", "--", "COPYING"])).expect("UTF-8");
     assert!(staged.starts_with("100644 ") && staged.trim_end().ends_with("\tCOPYING") && staged.lines().count() == 1, "COPYING kept by git as a regular file: {staged:?}");
     assert_eq!(sha256(&git(&["cat-file", "blob", ":./COPYING"])), GPL3, "the GPL version 3 text as git keeps it");
+    assert_eq!(sha256(&git(&["cat-file", "--filters", ":./COPYING"])), GPL3, "the GPL version 3 text as a checkout writes it");
     let mut targets: Vec<(String, String, Vec<String>)> = p["targets"]
         .as_array()
         .expect("targets")
@@ -318,9 +319,40 @@ fn the_bridge_is_one_private_seam() {
     let lib = std::fs::read_to_string(src.join("lib.rs")).expect("lib.rs");
     let declared: Vec<&str> = lib.lines().map(str::trim).filter(|l| l.contains("mod shell")).collect();
     assert_eq!(declared, ["mod shell;"], "the seam declared without `pub`");
+    // Every module mod.rs declares, `;` or inline, without `pub`.
     let seam_mod = std::fs::read_to_string(seam.join("mod.rs")).expect("shell/mod.rs");
-    for line in seam_mod.lines().map(str::trim).filter(|l| l.contains("mod ") && l.ends_with(';')) {
+    for line in seam_mod.lines().map(str::trim).filter(|l| l.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|w| w == "mod")) {
         assert!(!line.starts_with("pub"), "a module of the seam made public: {line}");
+    }
+    // Nothing the seam writes is public through the model either: no macro exported from the
+    // library, and no `impl` in the seam of a type the model declares (an inherent method or a
+    // trait's would be public through that type).
+    let model_types: BTreeSet<String> = files
+        .iter()
+        .filter(|f| !f.starts_with(&seam))
+        .flat_map(|f| {
+            let text = std::fs::read_to_string(f).expect("a source");
+            text.lines()
+                .map(str::trim)
+                .filter_map(|l| ["pub struct ", "pub enum ", "pub type ", "pub trait ", "pub union "].iter().find_map(|k| l.strip_prefix(k)))
+                .map(|rest| rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect::<String>())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(model_types.contains("Tree") && model_types.contains("Entry"), "the model's types read: {model_types:?}");
+    for file in &files {
+        let code: String = std::fs::read_to_string(file).expect("a source").lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+        assert!(!code.contains("macro_export"), "{}: a macro exported from the library", file.display());
+        if !file.starts_with(&seam) {
+            continue;
+        }
+        let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        for (at, _) in code.match_indices("impl").filter(|(i, _)| !word(code[..*i].chars().next_back()) && !word(code[i + 4..].chars().next())) {
+            let head = &code[at..];
+            let head = &head[..head.find(['{', ';']).unwrap_or(head.len())];
+            let named: Vec<&str> = head.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| model_types.contains(*w)).collect();
+            assert!(named.is_empty(), "{}: the seam implements for the model's {named:?}: {}", file.display(), head.trim());
+        }
     }
 }
 
@@ -406,25 +438,61 @@ fn the_window_that_ships_carries_no_test_server() {
     assert!(!answered, "something answered on port {port}");
 }
 
-/// The whole window as it draws now, through Spix's screenshot (a PNG it writes when it gets to
-/// the request), read once the file is whole.
-fn shot(shell: &Shell, name: &str) -> Vec<u8> {
+/// The whole window as it draws now: Spix's screenshot, written by Qt as a binary PPM (its pixels
+/// as plain RGB, by the file's extension) when Spix gets to the request, read once it is whole.
+struct Shot {
+    rgb: Vec<u8>,
+}
+
+impl Shot {
+    /// How many of its pixels are exactly `colour` (`#rrggbb`).
+    fn count(&self, colour: &str) -> usize {
+        let hex = colour.strip_prefix('#').filter(|h| h.len() == 6).unwrap_or_else(|| panic!("a colour #rrggbb: {colour:?}"));
+        let c: Vec<u8> = (0..3).map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("hex")).collect();
+        self.rgb.chunks_exact(3).filter(|p| *p == &c[..]).count()
+    }
+}
+
+fn shot(shell: &Shell, name: &str) -> Shot {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("shots");
     std::fs::create_dir_all(&dir).expect("a folder for the screenshots");
-    let file = dir.join(format!("{}-{name}.png", std::process::id()));
+    let file = dir.join(format!("{}-{name}.ppm", std::process::id()));
     let _ = std::fs::remove_file(&file);
     shell.screenshot("oficina", &file);
     let until = std::time::Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(bytes) = std::fs::read(&file) {
-            if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.ends_with(b"IEND\xaeB`\x82") {
-                let _ = std::fs::remove_file(&file);
-                return bytes;
-            }
+        if let Some(rgb) = std::fs::read(&file).ok().and_then(|b| ppm(&b)) {
+            let _ = std::fs::remove_file(&file);
+            return Shot { rgb };
         }
         assert!(std::time::Instant::now() < until, "no screenshot {name} within 10 s\nthe shell's log:\n{}", shell.log_text());
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// A binary PPM's pixels, once its header and all its width × height pixels are there.
+fn ppm(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut fields = Vec::new();
+    let mut at = 0;
+    while fields.len() < 4 {
+        while at < bytes.len() && bytes[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        let start = at;
+        while at < bytes.len() && !bytes[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        if start == at || at >= bytes.len() {
+            return None;
+        }
+        fields.push(std::str::from_utf8(&bytes[start..at]).ok()?.to_string());
+    }
+    let (w, h): (usize, usize) = (fields[1].parse().ok()?, fields[2].parse().ok()?);
+    if fields[0] != "P6" || fields[3] != "255" || w == 0 || h == 0 {
+        return None;
+    }
+    let data = &bytes[at + 1..];
+    (data.len() == w * h * 3).then(|| data.to_vec())
 }
 
 #[test]
@@ -446,17 +514,24 @@ fn the_window_opens_as_oficina_with_the_project_pane_docked() {
             std::thread::sleep(Duration::from_millis(50));
         }
     };
-    // And by what the window draws, not only by Qt's flag: its pixels change when the dock closes,
-    // and are the same again when it opens.
+    // And by what the window draws, not only by Qt's flag: the pane's own colour covers at least
+    // half of the pane's area in the window's pixels with its dock open, none of it with the dock
+    // closed, and the window draws the same again when the dock opens.
+    let colour = shell.property("oficina/projectPane", "color");
+    let size = |name: &str| shell.property("oficina/projectPane", name).parse::<f64>().unwrap_or_else(|e| panic!("the pane's {name}: {e}"));
+    let area = size("width") * size("height");
+    assert!(area >= 10_000.0, "a pane of some size: {area}");
+    let drawn = |s: &Shot| s.count(&colour) as f64;
     let open = shot(&shell, "open");
+    assert!(drawn(&open) >= area / 2.0, "the pane drawn: {} of its {area} pixels in its colour {colour}", drawn(&open));
     shell.invoke("oficina/area", "closeDock", &[common::X::Str("project".into())]);
     shown_within(false, "the pane still shown with its dock closed");
     let closed = shot(&shell, "closed");
+    assert_eq!(closed.count(&colour), 0, "the pane's colour drawn with its dock closed");
     shell.invoke("oficina/area", "openDock", &[common::X::Str("project".into())]);
     shown_within(true, "the pane not shown again with its dock opened");
     let reopened = shot(&shell, "reopened");
-    assert!(open != closed, "the window draws the same with the project's dock open and closed");
-    assert!(open == reopened, "the window draws otherwise with the project's dock opened again");
+    assert!(open.rgb == reopened.rgb, "the window draws otherwise with the project's dock opened again");
     shell.invoke("oficina/area", "describeDocks", &[]);
     shell.wait_for("oficina/area", "docks", r#"[["project",true,false,true,true]]"#);
     // No folder named: the tree is empty and says nothing went wrong.
