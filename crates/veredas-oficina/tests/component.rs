@@ -459,13 +459,15 @@ fn listening(pid: u32) -> Vec<String> {
         .collect()
 }
 
-/// Spix's server starts only when `OFICINA_SPIX_PORT` names a port: the driver's own executable
-/// started with the variable unset, `0` and not a number stays up and listens on no TCP port (read
-/// from `/proc` on Linux; elsewhere Spix's own default port, 9000, refuses).
+/// Spix's server starts only when `OFICINA_SPIX_PORT` names a port, a decimal number from 1 to
+/// 65535: the driver's own executable started with the variable unset, `0`, below 0, above 65535
+/// (which would wrap to a port of the system's choosing or another one), written in hexadecimal,
+/// and not a number stays up and listens on no TCP port (read from `/proc` on Linux; elsewhere
+/// Spix's own default port, 9000, refuses).
 #[test]
 fn the_driver_listens_only_on_a_port_named() {
     let platform = std::env::var("OFICINA_TEST_PLATFORM").unwrap_or_else(|_| "offscreen".to_string());
-    for value in [None, Some("0"), Some("not-a-port")] {
+    for value in [None, Some("0"), Some("-1"), Some("65536"), Some("70000"), Some("0x10E1"), Some("not-a-port")] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_veredas-oficina"));
         command.env("QT_QPA_PLATFORM", &platform).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         match value {

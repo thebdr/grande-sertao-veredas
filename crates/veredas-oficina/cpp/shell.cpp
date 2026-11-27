@@ -35,11 +35,14 @@
 
 #ifdef OFICINA_DRIVER
     // The tests' driver (the `driver` feature, never in a build that ships): Spix's server, started
-    // only when a test names its port.
+    // only when a test names its port, a decimal number from 1 to 65535. Anything else starts none:
+    // AnyRPC keeps only a port's low 16 bits (65536 would bind a port the system chooses), and Qt's
+    // own integer reader takes octal and hexadecimal too.
     std::unique_ptr<spix::AnyRpcServer> server;
     std::unique_ptr<spix::QtQmlBot> bot;
-    const int port = qEnvironmentVariableIntValue("OFICINA_SPIX_PORT");
-    if (port > 0) {
+    bool named = false;
+    const ushort port = qEnvironmentVariable("OFICINA_SPIX_PORT").toUShort(&named, 10);
+    if (named && port > 0) {
         server = std::make_unique<spix::AnyRpcServer>(port);
         bot = std::make_unique<spix::QtQmlBot>();
         bot->runTestServer(*server);
