@@ -1297,8 +1297,8 @@ fn a_newest_active_deleted_or_moved_away_while_written_still_wakes() {
     }
 }
 
-/// A family's folder, there and empty at the start and watched, removed and made again empty
-/// while the start still waits for its first member: in either mode, under a poll of five seconds
+/// A family's folder, there and empty at the start and watched, removed (or moved away) and made
+/// again empty while the start still waits for its first member: in either mode, under a poll of five seconds
 /// and a rescan of 200 ms, the member made then is read within the rescan and 400 ms. A removal the
 /// kernel does not report (a file deleted in the folder and still open keeps it unreported) is the
 /// stated limit, seen a poll later at most: the member then within the poll and 600 ms. The dead
@@ -1306,7 +1306,7 @@ fn a_newest_active_deleted_or_moved_away_while_written_still_wakes() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_family_folder_made_anew_during_the_start_is_looked_at_every_rescan() {
-    for (mode, pinned) in [("newest", false), ("fixed", false), ("newest", true), ("fixed", true)] {
+    for (mode, pinned, moved) in [("newest", false, false), ("fixed", false, false), ("newest", true, false), ("fixed", true, false), ("newest", false, true), ("fixed", false, true)] {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("logs");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1327,14 +1327,18 @@ fn a_family_folder_made_anew_during_the_start_is_looked_at_every_rescan() {
         let (mut set, rx) = SourceSet::new();
         set.spawn(Box::new(FamilyTailSource::new(mode, mode, spec, cfg))).unwrap();
         std::thread::sleep(Duration::from_millis(300));
-        std::fs::remove_dir_all(&dir).unwrap();
+        if moved {
+            std::fs::rename(&dir, root.path().join("logs.old")).unwrap();
+        } else {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
         std::thread::sleep(Duration::from_millis(200));
         std::fs::create_dir_all(&dir).unwrap();
         std::thread::sleep(Duration::from_millis(300));
         std::fs::write(&member, "first 0\n").unwrap();
         let made = Instant::now();
         let got = rx.recv_timeout(bound).map(|e| e.line);
-        assert_eq!(got.as_deref(), Ok("first 0"), "{mode}, pinned {pinned}: the first member read within {bound:?} ({:?})", made.elapsed());
+        assert_eq!(got.as_deref(), Ok("first 0"), "{mode}, pinned {pinned}, moved {moved}: the first member read within {bound:?} ({:?})", made.elapsed());
         drop(pin);
         set.stop_all();
     }
@@ -1401,5 +1405,136 @@ fn folders_born_nested_at_once_in_a_tree_are_each_watched() {
     let made = Instant::now();
     let got = rx.recv_timeout(bound).map(|e| e.line);
     assert_eq!(got.as_deref(), Ok("deep 0"), "the member in the deepest folder read within {bound:?} ({:?})", made.elapsed());
+    set.stop_all();
+}
+
+/// A newer member born first, then the active replaced at its own name 50 ms later, while the old
+/// file drains: the replacement's line then the newer member's, with the watcher on
+/// and off, for a file renamed over the active and for the active deleted and made again. The
+/// watcher's early wake on the newer member listed it before the replacement landed, and the
+/// catch-up from the old name's rank left the replacement unread (C-036's sixth idle-cost round).
+#[test]
+fn a_newer_member_then_a_replacement_are_read_in_order() {
+    for notify in [true, false] {
+        for deleted in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let active = dir.path().join("20261126_sorts1.log");
+            std::fs::write(&active, "").unwrap();
+            let spec = FamilySpec::new(dir.path(), r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d"), ActiveMode::NewestByOrder).unwrap();
+            let cfg = FamilyTailConfig { use_notify: Some(notify), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
+            let (mut set, rx) = SourceSet::new();
+            set.spawn(Box::new(FamilyTailSource::new("newerfirst", "newerfirst", spec, cfg))).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            let append = |path: &Path, text: &str| {
+                let mut f = std::fs::OpenOptions::new().append(true).create(true).open(path).unwrap();
+                std::io::Write::write_all(&mut f, text.as_bytes()).unwrap();
+            };
+            append(&active, "kept 0\n");
+            assert_eq!(rx.recv_timeout(Duration::from_secs(5)).map(|e| e.line).as_deref(), Ok("kept 0"));
+            append(&dir.path().join("20261126_sorts2.log"), "rotated 0\n");
+            // Inside the old file's drain grace, after the follower's pass found the newer member.
+            std::thread::sleep(Duration::from_millis(50));
+            if deleted {
+                std::fs::remove_file(&active).unwrap();
+                std::fs::write(&active, "replacement 0\n").unwrap();
+            } else {
+                let aside = dir.path().join("replacement.tmp");
+                std::fs::write(&aside, "replacement 0\n").unwrap();
+                std::fs::rename(&aside, &active).unwrap();
+            }
+            let got: Vec<String> = (0..2).filter_map(|_| rx.recv_timeout(Duration::from_secs(5)).ok().map(|e| e.line)).collect();
+            assert_eq!(got, ["replacement 0", "rotated 0"], "watcher {notify}, deleted {deleted}");
+            assert!(rx.recv_timeout(Duration::from_millis(500)).is_err(), "watcher {notify}, deleted {deleted}: nothing more");
+            set.stop_all();
+        }
+    }
+}
+
+/// With no watcher, a held replacement is awaited no longer than the rescan: under a poll of five
+/// seconds and a rescan of 200 ms, a replacement that cannot be read yet, opened 1.5 s later, is
+/// read within the rescan, the drain grace and 400 ms of the change of mode. Its wait was the
+/// default poll's in every test, below the rescan (C-036's sixth idle-cost round).
+#[cfg(unix)]
+#[test]
+fn with_no_watcher_a_held_replacement_is_awaited_no_longer_than_the_rescan() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("logs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let active = dir.join("20261126_sorts1.log");
+    std::fs::write(&active, "").unwrap();
+    let spec = FamilySpec::new(&dir, r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d"), ActiveMode::NewestByOrder).unwrap();
+    let cfg = FamilyTailConfig { poll_interval: Duration::from_secs(5), rescan_interval: Duration::from_millis(200), use_notify: Some(false), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
+    let bound = cfg.rescan_interval + cfg.drain_grace + Duration::from_millis(400);
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FamilyTailSource::new("heldnw", "heldnw", spec, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let held = root.path().join("held.log");
+    std::fs::write(&held, "replacement 0\n").unwrap();
+    std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o000)).unwrap();
+    std::fs::rename(&held, &active).unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    std::fs::set_permissions(&active, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let opened = Instant::now();
+    let got = rx.recv_timeout(bound).map(|e| e.line);
+    assert_eq!(got.as_deref(), Ok("replacement 0"), "the held replacement read within {bound:?} of its chmod ({:?})", opened.elapsed());
+    set.stop_all();
+}
+
+/// A recursive family beside a busy folder that can hold no member costs almost nothing, however
+/// many members it holds: three thousand members, a folder made and removed a thousand times a
+/// second at the top and another in a subfolder, under a poll of five seconds, each of fifteen
+/// lines read within half a second and the follower's thread and the watcher's each under a tenth
+/// of a second over three seconds. Every folder event listed the whole tree, a full core (C-036's
+/// sixth idle-cost round).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_recursive_family_beside_a_busy_folder_costs_almost_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    for (sub, n) in [("a", 1500), ("b", 1500)] {
+        std::fs::create_dir_all(dir.path().join(sub)).unwrap();
+        for i in 1..=n {
+            std::fs::write(dir.path().join(format!("{sub}/app_{i}.log")), "old\n").unwrap();
+        }
+    }
+    let active = dir.path().join("b/app_1501.log");
+    std::fs::write(&active, "").unwrap();
+    let spec = FamilySpec::new(dir.path(), r"[a-z]/app_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap().with_recursive(true);
+    let cfg = FamilyTailConfig { poll_interval: Duration::from_secs(5), use_notify: Some(true), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FamilyTailSource::new("busytree", "busytree", spec, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let churn = |at: std::path::PathBuf, stop: std::sync::Arc<std::sync::atomic::AtomicBool>| {
+        std::thread::spawn(move || {
+            let mut n = 0u64;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                std::fs::create_dir(&at).unwrap();
+                std::fs::remove_dir(&at).unwrap();
+                n += 1;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            n
+        })
+    };
+    let before = thread_cpu_s("family:busytree").expect("the follower's thread");
+    let watcher_before = thread_cpu_s("tail-watch").expect("the watcher's thread");
+    let top = churn(dir.path().join("tmp_build"), stop.clone());
+    let inner = churn(dir.path().join("a/tmp_build"), stop.clone());
+    for i in 0..15 {
+        let mut f = std::fs::OpenOptions::new().append(true).open(&active).unwrap();
+        std::io::Write::write_all(&mut f, format!("line {i}\n").as_bytes()).unwrap();
+        let written = Instant::now();
+        let got = rx.recv_timeout(Duration::from_millis(500)).map(|e| e.line);
+        assert_eq!(got.as_deref(), Ok(format!("line {i}").as_str()), "line {i} read within 500 ms of its write ({:?})", written.elapsed());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let used = thread_cpu_s("family:busytree").expect("the follower's thread") - before;
+    let watcher_used = thread_cpu_s("tail-watch").expect("the watcher's thread") - watcher_before;
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let churned = top.join().unwrap() + inner.join().unwrap();
+    assert!(churned > 1000, "the folders were busy ({churned} made and removed)");
+    assert!(used < 0.1, "three seconds beside a busy folder used {used:.2} s of the follower's processor time");
+    assert!(watcher_used < 0.1, "three seconds beside a busy folder used {watcher_used:.2} s of the watcher's processor time");
     set.stop_all();
 }

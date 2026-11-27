@@ -1521,6 +1521,15 @@ fn run_family(
                         // Drain the retiring file dry; once its length holds still, the held
                         // partial is final.
                         cursor.drain_stable(cfg.drain_grace, &stop, &mut emit)?;
+                        // A replacement at the active's name that landed while it drained, before
+                        // the follower moved on: read first, at the next pass, the newer member
+                        // after it (it was caught up past, lost, C-036's sixth idle-cost round).
+                        // One landing once the follower has moved on is a retiree's, as a member
+                        // dropped in is.
+                        if held_aware(cursor.check_path(), &cursor) == PathStatus::Replaced {
+                            next_rescan = Instant::now();
+                            continue;
+                        }
                         cursor.flush_pending(&mut emit);
                         let consumed = (current_key, current_name.clone());
                         match newest_catch_up(&spec, &cfg, consumed, &read_ids, &stop, &wake_rx, watch.wait_between(cfg.poll_interval, cfg.rescan_interval), &mut emit)? {

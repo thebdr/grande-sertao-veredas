@@ -89,19 +89,23 @@ enum Interest {
     /// A followed file: its name, and its link's target's name.
     Names(Vec<OsString>),
     /// A family: the names its pattern matches and its fixed active's, relative to its folder; in
-    /// a recursive one, any folder made, removed or renamed in the tree too.
+    /// a recursive one, a folder made or moved into the tree that holds a member (it is looked
+    /// into, its members perhaps made before its watch).
     Family(FamilySpec),
 }
 
 impl Interest {
     /// Whether an event naming `name` in the watched folder at `rel` (relative to the family's
-    /// folder, empty at its top) concerns what is followed. A name never UTF-8 is no member's.
+    /// folder, empty at its top) concerns what is followed. A name never UTF-8 is no member's. A
+    /// folder's own event in a recursive tree is judged by what the folder holds, not here: a
+    /// folder made and removed beside the members listed the whole tree each time (C-036's sixth
+    /// idle-cost round).
     fn wants_name(&self, rel: &str, name: &OsStr, is_dir: bool) -> bool {
         match self {
             Interest::Names(names) => names.iter().any(|n| n == name),
             Interest::Family(spec) => {
                 if spec.recursive() && is_dir {
-                    return true;
+                    return false;
                 }
                 let Some(name) = name.to_str() else { return false };
                 if rel.is_empty() { spec.names(name) } else { spec.names(&format!("{rel}/{name}")) }
@@ -315,25 +319,31 @@ mod backend {
             (wd >= 0).then_some(wd)
         }
 
-        /// Watch a folder for its names and, recursive, every folder under it to the depth listed.
-        fn add_tree(&self, path: &Path, rel: &str, depth: usize) -> bool {
-            let Some(wd) = self.add(path, FOLDER_MASK) else { return false };
+        /// Watch a folder for its names and, recursive, every folder under it to the depth listed:
+        /// whether the watch was set, and whether a member's name stands in what it watched (a
+        /// folder born or moved into the tree asks for a listing only then).
+        fn add_tree(&self, path: &Path, rel: &str, depth: usize) -> (bool, bool) {
+            let Some(wd) = self.add(path, FOLDER_MASK) else { return (false, false) };
             if let Ok(mut roles) = self.roles.lock() {
                 roles.insert(wd, Role::Folder(path.to_path_buf(), rel.to_string(), depth));
             }
-            if self.recursive && depth < MAX_DEPTH
+            let mut members = false;
+            if self.recursive
+                && depth < MAX_DEPTH
                 && let Ok(entries) = std::fs::read_dir(path)
             {
                 for e in entries.flatten() {
-                    if e.file_type().is_ok_and(|t| t.is_dir()) {
-                        let name = e.file_name();
-                        let Some(n) = name.to_str() else { continue };
-                        let sub = if rel.is_empty() { n.to_string() } else { format!("{rel}/{n}") };
-                        self.add_tree(&e.path(), &sub, depth + 1);
+                    let name = e.file_name();
+                    let Some(n) = name.to_str() else { continue };
+                    let sub = if rel.is_empty() { n.to_string() } else { format!("{rel}/{n}") };
+                    match e.file_type() {
+                        Ok(t) if t.is_dir() => members |= self.add_tree(&e.path(), &sub, depth + 1).1,
+                        Ok(t) if t.is_file() => members |= matches!(&self.interest, Interest::Family(spec) if spec.names(&sub)),
+                        _ => {}
                     }
                 }
             }
-            true
+            (true, members)
         }
 
         /// Read one batch of events: whether to wake the loop, whether a name may have changed. A
@@ -364,13 +374,18 @@ mod backend {
                     }
                     if mask & libc::IN_IGNORED != 0 {
                         // A watch gone with what it watched: a folder removed, the file's last link.
-                        if let Some(Role::Folder(_, _, depth)) = roles.remove(&wd) {
-                            renamed = true;
-                            if depth == 0 {
+                        // A folder below the top asks for nothing: its members report their own
+                        // removal (a folder made and removed beside the members woke the loop and
+                        // listed the tree each time, C-036's sixth idle-cost round).
+                        match roles.remove(&wd) {
+                            Some(Role::Folder(_, _, 0)) => {
+                                (wake, renamed) = (true, true);
                                 self.top_gone.store(true, Ordering::Release);
                             }
+                            Some(Role::File) => wake = true,
+                            // A folder below the top, or a watch this backend dropped itself.
+                            _ => {}
                         }
-                        wake = true;
                         continue;
                     }
                     match roles.get(&wd) {
@@ -378,13 +393,17 @@ mod backend {
                         Some(Role::File) => wake = true,
                         Some(Role::Folder(path, rel, depth)) => {
                             if name.is_empty() {
-                                // The folder itself, removed or renamed.
-                                (wake, renamed) = (true, true);
-                                if mask & libc::IN_MOVE_SELF != 0 && *depth > 0 {
+                                // The folder itself, removed or renamed: the top one wakes the
+                                // loop and kills the watch; one below asks for nothing (its
+                                // members report their own removal, or left with it), its watch
+                                // dropped when it moved.
+                                if *depth == 0 {
+                                    (wake, renamed) = (true, true);
+                                    if mask & (libc::IN_MOVE_SELF | libc::IN_DELETE_SELF) != 0 {
+                                        self.top_gone.store(true, Ordering::Release);
+                                    }
+                                } else if mask & libc::IN_MOVE_SELF != 0 {
                                     gone.push(path.clone());
-                                }
-                                if mask & (libc::IN_MOVE_SELF | libc::IN_DELETE_SELF) != 0 && *depth == 0 {
-                                    self.top_gone.store(true, Ordering::Release);
                                 }
                                 continue;
                             }
@@ -426,10 +445,12 @@ mod backend {
                     }
                 }
             }
-            // A folder born in a recursive tree is watched, and its members found by the listing
-            // its birth asks for (they may have been made before its watch).
+            // A folder born or moved into a recursive tree is watched, and looked into: a member
+            // there (perhaps made before its watch) wakes the loop and asks for a listing.
             for (path, rel, depth) in new_dirs {
-                self.add_tree(&path, &rel, depth);
+                if self.add_tree(&path, &rel, depth).1 {
+                    (wake, renamed) = (true, true);
+                }
             }
             (wake, renamed)
         }
@@ -499,7 +520,7 @@ mod backend {
             let inner = Arc::new(Inner { fd, interest, recursive, roles: Mutex::new(HashMap::new()), top_gone: AtomicBool::new(false) });
             // The followed path's folder or nothing; a link's target's folder, if it can be.
             for (i, f) in folders.iter().enumerate() {
-                if !inner.add_tree(f, "", 0) && i == 0 {
+                if !inner.add_tree(f, "", 0).0 && i == 0 {
                     return None;
                 }
             }
@@ -568,6 +589,33 @@ mod backend {
 
     pub(crate) struct Backend {
         _watcher: RecommendedWatcher,
+        /// The folder watched and its identity at the arm: another there, or none, is a dead watch.
+        root: PathBuf,
+        id: Option<super::FolderId>,
+    }
+
+    /// Whether a member's name stands in a folder of a recursive tree, to the depth listed.
+    fn holds_member(spec: &crate::family::FamilySpec, root: &Path, folder: &Path, depth: usize) -> bool {
+        let Ok(entries) = std::fs::read_dir(folder) else { return false };
+        for e in entries.flatten() {
+            let path = e.path();
+            match e.file_type() {
+                Ok(t) if t.is_dir() && depth < 16 => {
+                    if holds_member(spec, root, &path, depth + 1) {
+                        return true;
+                    }
+                }
+                Ok(t) if t.is_file() => {
+                    let Some(rel) = path.strip_prefix(root).ok() else { continue };
+                    let parts: Option<Vec<&str>> = rel.components().map(|c| c.as_os_str().to_str()).collect();
+                    if parts.is_some_and(|p| spec.names(&p.join("/"))) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
     }
 
     /// An event the follower makes itself: a file opened, read, or closed after reading.
@@ -609,7 +657,8 @@ mod backend {
                 let Some(rel) = folders.first().and_then(|root| path.strip_prefix(root).ok()) else { return true };
                 let parts: Option<Vec<&str>> = rel.components().map(|c| c.as_os_str().to_str()).collect();
                 match parts {
-                    Some(parts) => spec.names(&parts.join("/")) || folder_event(kind, path),
+                    // A folder's event asks for a listing only when the folder holds a member.
+                    Some(parts) => spec.names(&parts.join("/")) || (folder_event(kind, path) && folders.first().is_some_and(|root| holds_member(spec, root, path, 0))),
                     None => false,
                 }
             }
@@ -641,16 +690,18 @@ mod backend {
                     return None;
                 }
             }
-            Some(Backend { _watcher: watcher })
+            let root = folders.first().cloned().unwrap_or_default();
+            let id = super::folder_id(&root);
+            Some(Backend { _watcher: watcher, root, id })
         }
 
         /// The folder watch reports the file's writes already.
         pub(crate) fn keep_file(&mut self, _open: Option<&TailedFile>) {}
 
-        /// notify reports a watched folder's removal as an event; the folder's identity, checked
-        /// at every keep, arms it again.
+        /// Whether the folder watched is gone or another now: told by its identity, a stat, since
+        /// what notify reports of a watched folder's removal differs by system.
         pub(crate) fn gone(&self) -> bool {
-            false
+            super::folder_id(&self.root) != self.id
         }
     }
 }
@@ -778,9 +829,10 @@ mod tests {
         assert!(watch.listing_due());
     }
 
-    /// A folder moved out of a recursive tree is watched no more, nor are the folders under it: a
-    /// member's name made in it or in its subfolder wakes nothing and asks for no listing; moved
-    /// back into the tree, it is watched again.
+    /// A folder moved out of a recursive tree is watched no more, nor are the folders under it: its
+    /// move wakes nothing, a member's name made in it or in its subfolder wakes nothing and asks for
+    /// no listing; moved back into the tree holding members, it wakes, asks for a listing and is
+    /// watched again.
     #[test]
     fn a_folder_moved_out_of_the_tree_is_watched_no_more() {
         let root = tempfile::tempdir().unwrap();
@@ -796,10 +848,11 @@ mod tests {
         assert!(woken(&rx), "a member made in the subfolder");
         assert!(watch.listing_due());
         let archived = root.path().join("archived");
-        std::fs::rename(top.join("sub"), &archived).unwrap();
-        assert!(woken(&rx), "the subfolder moved out");
         settle(&rx);
         let _ = watch.listing_due();
+        std::fs::rename(top.join("sub"), &archived).unwrap();
+        assert!(quiet(&rx), "the subfolder moved out: its members gone with it, nothing to read");
+        assert!(!watch.listing_due());
         std::fs::write(archived.join("app_2.log"), "").unwrap();
         std::fs::write(archived.join("deeper/app_2.log"), "").unwrap();
         assert!(quiet(&rx), "a member's name made in the folder moved out or in its subfolder");
