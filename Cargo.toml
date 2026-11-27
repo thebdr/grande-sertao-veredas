@@ -111,6 +111,8 @@ serde_json = "1"
 serde_ignored = "0.1"
 # Hashes (alforge): a bundle's SHA256SUMS, an OVA's manifest, the base image's pinned SHA-512.
 sha2 = "0.10"
+# A component list's serial number, a name-based UUID of RFC 4122's version 5 (alforge).
+sha1 = "0.10"
 socket2 = "0.6"
 # Scratch directories for tests, removed when the test ends.
 tempfile = "3"

@@ -24,6 +24,8 @@ toml = { workspace = true }
 serde_json = { workspace = true }
 # The bundle's sums, the OVA's manifest, the base image's check.
 sha2 = { workspace = true }
+# The component list's serial number, a version-5 UUID (SHA-1 of a name, RFC 4122).
+sha1 = { workspace = true }
 # A scratch folder of each call's own for a commit's tree, removed when the call ends.
 tempfile = { workspace = true }
 # The OVA's descriptor read as XML, each value inside its own element (the proof, C-292).
