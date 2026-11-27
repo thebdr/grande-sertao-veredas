@@ -117,7 +117,9 @@ Built on 2026-11-27 (C-156): `orcl-front-driver` compiles every crate it is give
 -Zmir-opt-level=0` (no `-Cpanic=abort`: with no drop glue nothing unwinds, and an aborting crate would not link into
 an unwinding build), lowers the program crate's `Program` implementation, and writes the file only after rustc has
 finished and the interpreter's loader has checked it. Beyond `rustc_public` it reads the compiler's `TyCtxt` for
-lang and diagnostic items, names, an impl's own type and macro call sites, which `rustc_public` does not give; each
+lang and diagnostic items, names, an impl's own type, macro call sites and the kinds of crate it builds
+(`rustc_structures::CrateType`, so a bin or a test build of the program's name is compiled and not lowered), which
+`rustc_public` does not give; each
 move of the nightly runs its suite. The closed list's next members, met by the first programs and refused by name
 until then: `<[T; N] as Default>::default`, `<&T as PartialEq>::eq` (derived on an enum with data), `Range`, `From`
 and `TryFrom`, `Ord::clamp`, a slice's `get`, `Option::unwrap_or`.
