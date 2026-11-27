@@ -4353,3 +4353,30 @@ answered "chromium is sufficient". So the page is claimed and tested in Chromium
 another engine is outside the claim, the misalignment found in Firefox with it. The architect's
 other finding of the same sitting stands apart from the engine: the layout view's zoom level "is
 not written anywhere".
+
+---
+
+## Q322 - Should a replayed write take the answer its live run had?
+
+**Raised** 2026-11-27, by the comissionador session, from C-202's and C-203's sixth refute round.
+
+A replayed write is not sent and its step passes (Q315 (a), ruled). So a live run whose write the
+plant refused (or portal refused before sending) replays its own window to another verdict: live
+aborted at the write, replayed passed. The design's "a failed live run can be replayed from its
+own window" then shows a pass for a run that failed at a write. Once portal keeps every write and
+send with its answer (Q318 (a), ruled, not built), a replay could read the live answer there.
+Options:
+- (a) As ruled: not sent, the step passes. C-203's claim is narrowed to live runs whose every write
+  and send was taken, and a test pins the difference.
+- (b) Once portal's table of writes is built, a replayed write takes the answer the live run had
+  from it (by its target and its moment), its step taking the live outcome; until then (a).
+- (c) A replayed write's step takes the outcome the run's own report recorded, when the replay is of
+  a kept run (`runs/<id>/<nnnn>/`); any other window as (a).
+
+The assistant recommends (b): it reads what portal already ruled it keeps, needs nothing of the
+run's folder, and keeps a replay of any window (not only a kept run's) to the live verdict.
+
+**Taken meanwhile**: (a), the claim narrowed; C-203 states it and `replay.rs` pins it.
+
+**Reversible?** Yes: the replayed write's outcome is one branch of the engine's gated write
+(`run.rs`, the replay's `not sent: replay`).
