@@ -1,8 +1,8 @@
 {
   "clause": "C-156",
   "verdict": "refuted",
-  "ranAt": "2026-11-27T15:33:31.767Z",
-  "headCommit": "3396e93915eca97341c0c599974ffac27a6f2a42",
+  "ranAt": "2026-11-27T16:18:51.798Z",
+  "headCommit": "c425ae7401b948afe283c210eb1abc58aaaf3357",
   "tests": [
     {
       "name": "crates/orcl-front/tests/shell.rs",

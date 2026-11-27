@@ -3906,6 +3906,36 @@ with a few of (c)'s power cuts on real boards before a release.
 
 ---
 
+## Q238 - A program file under cargo when one target directory holds two configurations
+
+**Raised** 2026-11-27, by the controlador session, from C-156's thirteenth refute round (`orcl-front`, the front end).
+
+Cargo keeps one set of compiled units per configuration (a feature set, a profile) in one target directory, and runs no
+compiler for a unit it finds fresh. So a program built for one configuration, then for another into the same output
+file, then for the first again, leaves the second configuration's program in the file: the last build compiles nothing,
+exits 0, and the header names the same revision. Shown: dev, then release, then dev again leaves release's program, which
+wraps an `i32` addition where dev's faults to the safe outputs. The driver already makes cargo rebuild for a new
+revision, output, program, driver or a switch between plain and wrapped builds; a configuration it cannot see.
+- (a) The promise is one configuration's: each configuration of a program is built into an output path of its own (the
+  engineer's, Oficina choosing it per profile), the clause and the README say so, and a build naming a program the build
+  does not hold writes nothing and leaves what was there.
+- (b) The program's crate lists its own program file among its inputs, so a file changed since its build makes cargo
+  build it again: never stale, at the cost of that crate (alone) compiling on every build.
+- (c) The program file's header names the configuration it was lowered for (the profile's overflow checks and debug
+  assertions, the features), a format past 1 (C-154), and a download refuses a file whose configuration is not the one
+  asked for.
+
+The assistant recommends (a) now and (c) when the file's format next changes (Q231's first state and safe outputs make
+that change too): (a) is what cargo itself does for every other output, and (c) lets the controller, not the build,
+refuse a wrong file; (b) rebuilds on every build to cover a case (a) avoids.
+
+**Taken meanwhile**: (a). C-156 promises a fresh file for one configuration of one target directory; DECISION PENDING
+in `crates/orcl-front/src/driver.rs`.
+
+**Reversible?** Yes: (b) is one more entry of the dep-info, (c) a format version.
+
+---
+
 ## Q47 - How much debug information do development builds carry?
 
 **Raised** 2026-11-23, by the orchestrating session, on the home disk's use with ten sessions.
