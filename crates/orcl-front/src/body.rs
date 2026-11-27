@@ -109,8 +109,8 @@ impl Lowerer<'_> {
         for (i, decl) in body.locals().iter().enumerate() {
             let ty = self.ty(decl.ty, decl.span)?;
             let name = names.get(&i).cloned();
-            // ORCL has no `usize` or `isize`: the program's own results, parameters and variables are refused one,
-            // the compiler's temporaries keep theirs (an index, a discriminant)
+            // ORCL has no `usize` or `isize`: the program's own results, parameters and variables are refused one
+            // anywhere in their types, the compiler's temporaries keep theirs (an index, a discriminant)
             if i <= params as usize || name.is_some() {
                 self.no_word(ty, decl.span)?;
             }

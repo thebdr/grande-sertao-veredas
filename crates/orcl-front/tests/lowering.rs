@@ -721,6 +721,36 @@ fn a_usize_the_program_declares_is_refused_where_it_declares_it() {
 }
 
 #[test]
+fn a_usize_array_parameter_is_refused_at_the_parameter_not_at_the_caller_s_temporary() {
+    refused("usize_array_param", &at("usize_array_param", "at: [usize; 2]", TYPE, "usize"));
+}
+
+#[test]
+fn a_usize_in_a_tuple_field_is_refused_where_the_program_declares_it() {
+    refused("usize_tuple", &at("usize_tuple", "pair: (usize, u8)", TYPE, "usize"));
+}
+
+#[test]
+fn a_usize_behind_a_reference_parameter_is_refused_where_the_program_declares_it() {
+    refused("usize_ref", &at("usize_ref", "at: &usize", TYPE, "usize"));
+}
+
+#[test]
+fn a_usize_inside_an_option_field_is_refused_where_the_program_declares_it_not_inside_core() {
+    refused("usize_option", &at("usize_option", "last: Option<usize>", TYPE, "usize"));
+}
+
+#[test]
+fn an_isize_deep_in_an_enum_s_payload_is_refused_where_the_program_declares_the_payload() {
+    refused("isize_payload", &at("isize_payload", "Option<(u8, isize)>", TYPE, "isize"));
+}
+
+#[test]
+fn a_usize_behind_an_array_an_option_a_tuple_and_a_reference_is_refused_where_the_variable_is_declared() {
+    refused("usize_nested", &at("usize_nested", "held: [Option", TYPE, "usize"));
+}
+
+#[test]
 fn a_type_with_drop_glue_is_refused_where_the_program_holds_it() {
     refused("drop_glue", &at("drop_glue", "guard = Guard", "a type with drop glue", "Guard"));
 }

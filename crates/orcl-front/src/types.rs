@@ -1,5 +1,7 @@
 //! The program's types: each of rustc's types the program holds, as one of ORCL's, once each; anything else refused
 //! by name where the program first holds it.
+use std::collections::HashSet;
+
 use orcl_interp::{Field, Int, Type, TypeId, Variant};
 use rustc_public::{CrateDef, CrateDefType};
 use rustc_public::mir::mono::Instance;
@@ -52,14 +54,39 @@ impl Lowerer<'_> {
         self.slots.get(id.0 as usize).copied().unwrap_or(0)
     }
 
-    /// Refuses `usize` and `isize` where the program declares them: ORCL has neither (`docs/orcl/language`), the
-    /// compiler's own temporaries (an index, a discriminant) excepted.
+    /// Refuses `usize` and `isize` where the program declares them, wherever they stand in the type it declares: ORCL
+    /// has neither (`docs/orcl/language`), the compiler's own temporaries (an index, a discriminant) excepted. The
+    /// refusal names the innermost type, `usize` or `isize`, at `at`, the program's declaration.
     pub(crate) fn no_word(&self, id: TypeId, at: Span) -> Result<TypeId, Refusal> {
-        match self.get(id) {
-            Some(Type::Int(Int::Usize)) => Err(self.refuse(Refused::Type, "usize", at)),
-            Some(Type::Int(Int::Isize)) => Err(self.refuse(Refused::Type, "isize", at)),
-            _ => Ok(id),
+        match self.word_in(id) {
+            Some(word) => Err(self.refuse(Refused::Type, word, at)),
+            None => Ok(id),
         }
+    }
+
+    /// The first `usize` or `isize` a type holds, in its fields' declared order: the type itself, a structure's or a
+    /// tuple's field, a variant's payload (an enum's discriminant is the compiler's), an array's element, a
+    /// reference's pointee. A type still being lowered holds none yet; its fields are checked as they are lowered.
+    fn word_in(&self, id: TypeId) -> Option<&'static str> {
+        let mut seen = HashSet::new();
+        let mut todo = vec![id];
+        while let Some(id) = todo.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            match self.get(id) {
+                Some(Type::Int(Int::Usize)) => return Some("usize"),
+                Some(Type::Int(Int::Isize)) => return Some("isize"),
+                Some(Type::Struct { fields, .. }) => todo.extend(fields.iter().rev().map(|f| f.ty)),
+                Some(Type::Enum { variants, .. }) => {
+                    todo.extend(variants.iter().rev().flat_map(|v| v.fields.iter().rev().map(|f| f.ty)));
+                }
+                Some(Type::Array { element, .. }) => todo.push(*element),
+                Some(Type::Ref { to, .. }) => todo.push(*to),
+                _ => {}
+            }
+        }
+        None
     }
 
     /// The name a type has in the program: a structure's or an enum's own, with its arguments.
@@ -139,8 +166,8 @@ impl Lowerer<'_> {
             }
             RigidTy::Array(element, len) => {
                 let len = len.eval_target_usize().ok().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| refused(self))?;
+                // an element's `usize` is refused where the program declares the array, as any other `usize` it holds
                 let element = self.ty(element, at)?;
-                self.no_word(element, at)?;
                 let slots = self.slots_of(element).saturating_mul(len);
                 Ok(self.intern(Key::Array(element, len), Type::Array { element, len }, slots))
             }
@@ -195,9 +222,12 @@ impl Lowerer<'_> {
             let mut fields = Vec::new();
             let mut size = 0u32;
             for f in v.fields() {
-                // a field's type is refused where the field is declared
+                // a field's type is refused where the field is declared; `Option`'s field is core's, its payload
+                // refused where the program declares the `Option`
                 let fid = self.ty(f.ty_with_args(args), f.span())?;
-                self.no_word(fid, f.span())?;
+                if !option {
+                    self.no_word(fid, f.span())?;
+                }
                 size = size.saturating_add(self.slots_of(fid));
                 fields.push(Field { name: f.name.clone(), ty: fid });
             }

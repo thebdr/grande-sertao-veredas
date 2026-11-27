@@ -20,7 +20,9 @@ impl fmt::Display for Location {
 pub enum Refused {
     /// A type outside ORCL's: a raw pointer, `String`, a slice, a closure, a trait object, a `char`, a 128-bit
     /// integer, a union, a type from a crate other than the program's (core's `Option` and `Duration` excepted),
-    /// or `usize` and `isize` where the program declares them (a field, a parameter, a result, a named variable).
+    /// or `usize` and `isize` where the program declares them (a field, a parameter, a result, a named variable),
+    /// wherever they stand in the type it declares (a tuple's field, a reference's pointee, an enum's payload, an
+    /// array's element).
     Type,
     /// A type with drop glue: no ORCL type has any (O6).
     DropGlue,
