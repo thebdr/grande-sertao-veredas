@@ -829,6 +829,9 @@ pub fn prove(r: &Recipe, ova: &Path, release: &str, canvas: (u8, u8, u8), bundle
             }
         }
     }
+    // The check's last line said before its console is judged: the page may cover the screen
+    // before the window's ten seconds have run.
+    m.wait_until("the boot's check to end", Duration::from_secs(120), check_finished)?;
     let console_text = m.console();
     m.kill();
     let after = cache::sha256(&vmdk)?;
@@ -911,9 +914,10 @@ pub fn check_begun(console: &str) -> bool {
     rejoined(console).contains("VEREDAS-SUMS-")
 }
 
-/// Whether the boot's check has said its last line on `console`, read rejoined.
+/// Whether the boot's check has said its last line ([`CHECK_LINES`]' last, the window's, said once
+/// its executable has run ten seconds) on `console`, read rejoined.
 pub fn check_finished(console: &str) -> bool {
-    rejoined(console).contains("VEREDAS-ATUALIZAR ")
+    rejoined(console).contains(CHECK_LINES[CHECK_LINES.len() - 1])
 }
 
 /// Why the console does not show the root file system on a disk of the paravirtual SCSI host, as

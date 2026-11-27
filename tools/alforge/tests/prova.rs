@@ -294,7 +294,11 @@ fn the_proof_names_a_missing_card_a_page_not_drawn_and_a_changed_disk() {
     let cut_marker = "[    9.000000] veredas-verifica[600]: VEREDAS-SU[    9.000100] audit: type=1400\nMS-OK 2.0.0\n";
     assert!(!cut_marker.contains("VEREDAS-SUMS-") && maquina::check_begun(cut_marker));
     assert!(!maquina::check_begun("[    9.000000] veredas-verifica[600]: nothing yet\n"));
-    assert!(maquina::check_finished("VEREDAS-ATUA[    9.000100] audit: type=1400\nLIZAR ok\n") && !maquina::check_finished("VEREDAS-SUMS-OK 2.0.0\n"));
+    assert!(maquina::check_finished("VEREDAS-WIN[    9.000100] audit: type=1400\nDOW ok\n") && !maquina::check_finished("VEREDAS-SUMS-OK 2.0.0\n"));
+    // The check ends at its window's line, said ten seconds after its libraries' (C-292's record at
+    // 4899a094 judged a console read between the two): its libraries' line is not its end.
+    assert!(!maquina::check_finished("VEREDAS-ATUALIZAR ok\nVEREDAS-LIBRARIES ok\n"));
+    assert_eq!(maquina::CHECK_LINES.last(), Some(&"VEREDAS-WINDOW "));
     let late = format!("{kernel}veredas login: \nVEREDAS-SUMS-OK 2.0.0\n{card}\n{promised}");
     assert_eq!(maquina::proof_faults(&proof(&late, 0.3, "a"), "2.0.0"), ["the boot's check said its lines after a login started on the serial console"]);
     // A login between two of its lines, the check's first said before it and the rest after: named
