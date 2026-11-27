@@ -1702,6 +1702,59 @@ fn every_start_of_a_key_is_its_own_and_the_first_names_it() {
     linear(&[("keys of an inline table on one line", 20_000, &inline), ("inline tables in an array on one line", 20_000, &tables)]);
 }
 
+// ---- refute round 12 -----------------------------------------------------------------------
+
+#[test]
+fn a_used_path_to_no_file_of_its_own_is_refused_before_it_is_opened() {
+    // A `use` naming a pipe waited for a writer forever, `/dev/null` from the root was read, and a
+    // device reads without end: a used path is relative to the test's folder, through no device's
+    // name, to a file of its own, or it is a used file that cannot be read, named at its place.
+    let dir = tempfile::tempdir().unwrap();
+    let status = std::process::Command::new("mkfifo").arg(dir.path().join("pipe.fn")).status().unwrap();
+    assert!(status.success());
+    std::fs::create_dir(dir.path().join("folder.fn")).unwrap();
+    std::fs::create_dir(dir.path().join("functions")).unwrap();
+    std::fs::write(dir.path().join("functions/nul.fn"), blocks("function").remove(0)).unwrap();
+    let up = "../".repeat(32);
+    let cases = [
+        ("pipe.fn", "not a file (a folder, a pipe or a device)".to_string()),
+        ("folder.fn", "not a file (a folder, a pipe or a device)".to_string()),
+        (&format!("{up}dev/zero"), "not a file (a folder, a pipe or a device)".to_string()),
+        ("/dev/null", "a path relative to the test file's folder, not from the root".to_string()),
+        ("functions/nul.fn", "a name Windows keeps for a device is in its path".to_string()),
+        ("CON/x.fn", "a name Windows keeps for a device is in its path".to_string()),
+    ];
+    for (used, reason) in cases {
+        let file = dir.path().join("t.test");
+        std::fs::write(&file, test_of(&format!("  use {used}\n  step a stop pass\n"))).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(veredas_comissionador::load_test(&file).map(|_| ()).map_err(|ps| ps.iter().map(|p| p.message.clone()).collect::<Vec<_>>()));
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap_or_else(|_| panic!("`use {used}` still read after 5 s"));
+        assert_eq!(got, Err(vec![format!("`{used}` cannot be read: {reason}")]), "{used}");
+    }
+}
+
+#[test]
+fn every_device_name_is_refused_as_an_id_in_any_case() {
+    // The device list pinned whole (refute round 12): the reference's 22 names, upper, lower and
+    // mixed case, refused; their kin past the list read.
+    let one = |id: &str| problems(&format!("{HEAD}test \"t\" {{\n  id {id}\n  step a stop pass\n}}\n"));
+    let mut names = vec!["CON".to_string(), "PRN".to_string(), "AUX".to_string(), "NUL".to_string()];
+    names.extend((1..=9).map(|d| format!("COM{d}")));
+    names.extend((1..=9).map(|d| format!("LPT{d}")));
+    for name in &names {
+        let mixed: String = name.chars().enumerate().map(|(i, c)| if i % 2 == 1 { c.to_ascii_lowercase() } else { c }).collect();
+        for id in [name.clone(), name.to_ascii_lowercase(), mixed] {
+            assert_eq!(one(&id), [format!("5:6: `id` is `{id}`, a name Windows keeps for a device")], "{id}");
+        }
+    }
+    for id in ["com0", "lpt0", "COM10", "lpt99", "nul_", "a-con", "COM", "console"] {
+        assert_eq!(one(id), Vec::<String>::new(), "{id}");
+    }
+}
+
 // ---- the architect's Q312 (e) ----------------------------------------------------------------
 
 #[test]
@@ -1981,7 +2034,9 @@ pair of quotes removed.
 - `timeout` (`10min`): the whole run's bound, on the run's clock (the plant's time, which a replay
   of the run's own window reproduces, never the machine's work), judged at each step and between
   its actions. A wait with no timeout of its own is bounded by what is left of it.
-- `use` (none; once per file): a function file, its path relative to the test file's folder.
+- `use` (none; once per file): a function file, its path relative to the test file's folder; a
+  path from the root, one through a name Windows keeps for a device, or one to no file of its own
+  (a folder, a pipe, a device) is a used file that cannot be read.
 - `sign` (none): the roles that must sign each run's report, `tester`, `witness` or both
   (`docs/questions.md` Q312 (e)): the report awaits each until it has signed.
 - `let` (none; once per name): `let <name> = <expression>`, a constant, the expression made of

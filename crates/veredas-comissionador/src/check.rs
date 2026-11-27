@@ -62,7 +62,26 @@ pub fn load_test(path: &Path) -> Result<Checked, Vec<Problem>> {
     let file = path.display().to_string();
     let text = std::fs::read_to_string(path).map_err(|e| vec![Problem { file: file.clone(), line: 1, column: 1, message: format!("cannot be read: {e}") }])?;
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-    check_test(&text, &file, &|p| std::fs::read_to_string(dir.join(p)).map_err(|e| e.to_string()))
+    check_test(&text, &file, &|p| read_used(&dir, p))
+}
+
+/// A used function file's text: a path relative to the test file's folder, through no name Windows
+/// keeps for a device, to a file of its own. A pipe, a device or a folder is refused before it is
+/// opened (a pipe's open waits for a writer, a device reads without end), so the check always ends.
+fn read_used(dir: &Path, used: &str) -> Result<String, String> {
+    let rel = Path::new(used);
+    if rel.is_absolute() || rel.has_root() {
+        return Err("a path relative to the test file's folder, not from the root".to_string());
+    }
+    if rel.components().any(|c| matches!(c, std::path::Component::Normal(n) if crate::record::device_name(&n.to_string_lossy()))) {
+        return Err("a name Windows keeps for a device is in its path".to_string());
+    }
+    let full = dir.join(rel);
+    match std::fs::metadata(&full) {
+        Ok(m) if m.is_file() => std::fs::read_to_string(&full).map_err(|e| e.to_string()),
+        Ok(_) => Err("not a file (a folder, a pipe or a device)".to_string()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Read and check a function file on disk, alone.

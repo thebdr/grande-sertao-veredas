@@ -171,7 +171,9 @@ pair of quotes removed.
 - `timeout` (`10min`): the whole run's bound, on the run's clock (the plant's time, which a replay
   of the run's own window reproduces, never the machine's work), judged at each step and between
   its actions. A wait with no timeout of its own is bounded by what is left of it.
-- `use` (none; once per file): a function file, its path relative to the test file's folder.
+- `use` (none; once per file): a function file, its path relative to the test file's folder; a
+  path from the root, one through a name Windows keeps for a device, or one to no file of its own
+  (a folder, a pipe, a device) is a used file that cannot be read.
 - `sign` (none): the roles that must sign each run's report, `tester`, `witness` or both
   (`docs/questions.md` Q312 (e)): the report awaits each until it has signed.
 - `let` (none; once per name): `let <name> = <expression>`, a constant, the expression made of
