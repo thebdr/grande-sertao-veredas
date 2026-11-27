@@ -94,6 +94,9 @@ mod own_macro;
 #[allow(dead_code)]
 #[path = "programs/grid.rs"]
 mod grid;
+#[allow(dead_code)]
+#[path = "programs/corners.rs"]
+mod corners;
 
 use std::fmt::Debug;
 use std::fs;
@@ -493,6 +496,12 @@ image!(own_macro::Inputs { a: i32, b: i32 });
 image!(own_macro::Outputs { v: i32 });
 image!(grid::Inputs { v: u16 });
 image!(grid::Outputs { small: u16, large: u16 });
+image!(corners::Inputs { sel: u8, v: u8, flag: bool });
+image!(corners::Outputs {
+    step: u8, wait: Duration, opt_step: u8, nested: u8, nested_d: Duration, promoted: u8, promoted_d: Duration,
+    r16: u16, r32: i32, r16_match: u8, r32_match: u8, oi: i16, oi_some: bool, arr: u32, picked: u16, abc: u16,
+    broke: Duration, cfg_t: Duration, cfg_a: u8, cfg_b: bool, cfg_c: i16,
+});
 
 // Inputs drawn from a scan's index, the same for the native program and its lowered twin.
 
@@ -1688,4 +1697,79 @@ fn locals_keep_the_source_s_names() {
     let (_, code) = lower_in("locals-names", "faults", &program("faults")).result.unwrap();
     let names: Vec<Option<&str>> = code.functions[0].locals.iter().map(|l| l.name.as_deref()).collect();
     assert_eq!(names.get(1..=4), Some(&[Some("self"), Some("_scan"), Some("i"), Some("o")][..]), "{names:?}");
+}
+
+// The sixth refute round's tests: the names the file carries (variables', fields', variants', types' and functions'),
+// and a program of corners.
+
+#[test]
+fn corners_run_lowered_as_natively() {
+    // a `Duration` payload beside three fieldless variants in its niche, an `Option` of it, `Option<Option<Duration>>`,
+    // a promoted reference into a constant array of such enums, `repr(u16)` and `repr(i32)` enums at their edges,
+    // `Option<i16>` constants holding negatives, an array through `&mut [u8; 4]`, an array returned and destructured
+    let inputs = |k: u64| corners::Inputs { sel: mix(k, 1) as u8, v: mix(k, 2) as u8, flag: mix(k, 3) % 2 == 0 };
+    let (outputs, _) = conform("corners", corners::Corners::default(), "Corners", &inputs, 600);
+    for v in 1..=4 {
+        both(&outputs, &format!("step {v}"), |o| o.step == v);
+    }
+    both(&outputs, "opt none", |o| o.opt_step == 9);
+    both(&outputs, "opt skip", |o| o.opt_step == 4);
+    both(&outputs, "opt wait 7 s", |o| o.opt_step == 11);
+    for v in 1..=3 {
+        both(&outputs, &format!("nested {v}"), |o| o.nested == v);
+        both(&outputs, &format!("r16 {v}"), |o| o.r16_match == v);
+        both(&outputs, &format!("r32 {v}"), |o| o.r32_match == v);
+    }
+    both(&outputs, "promoted wait", |o| o.promoted == 1);
+    both(&outputs, "promoted skip", |o| o.promoted == 4);
+    assert!(outputs.iter().all(|o| o.promoted_d == Duration::from_millis(1_250)));
+    both(&outputs, "oi min", |o| o.oi == i16::MIN);
+    both(&outputs, "oi -300", |o| o.oi == -300);
+    both(&outputs, "cfg far", |o| o.cfg_t == Duration::from_secs(3_000_000_000));
+    both(&outputs, "cfg c", |o| o.cfg_c == -5);
+}
+
+#[test]
+fn variables_keep_the_source_s_names() {
+    // the conveyor's scan names its variables: each a local of that name in the file, as its parameters are
+    let (_, code) = lower_in("variable-names", "conveyor", &program("conveyor")).result.unwrap();
+    let names: Vec<&str> = code.functions[0].locals.iter().filter_map(|l| l.name.as_deref()).collect();
+    for v in ["alarm", "start", "cleared", "moving", "part"] {
+        assert!(names.contains(&v), "{v} among {names:?}");
+    }
+}
+
+#[test]
+fn fields_and_variants_keep_the_source_s_names() {
+    let (_, code) = lower_in("field-names", "conveyor", &program("conveyor")).result.unwrap();
+    let outputs = code.types.iter().find_map(|t| match t {
+        Type::Struct { name, fields } if name == "Outputs" => Some(fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()),
+        _ => None,
+    });
+    assert_eq!(outputs, Some(vec!["motor_on", "door_alarm", "lamp_running", "lamp_fault", "parts"]));
+    let state = code.types.iter().find_map(|t| match t {
+        Type::Enum { name, variants, .. } if name == "State" => Some(variants.iter().map(|v| v.name.as_str()).collect::<Vec<_>>()),
+        _ => None,
+    });
+    assert_eq!(state, Some(vec!["Idle", "Running", "Stopping", "Fault"]));
+}
+
+#[test]
+fn types_and_functions_keep_the_source_s_names() {
+    // a generic structure by its arguments, and the functions the entries reach as the program names them
+    let (_, code) = lower_in("type-names", "cgen", &program("cgen")).result.unwrap();
+    let names: Vec<&str> = code
+        .types
+        .iter()
+        .filter_map(|t| match t {
+            Type::Struct { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(names.contains(&"Avg<4>") && names.contains(&"Avg<8>"), "{names:?}");
+    let (_, code) = lower_in("function-names", "conveyor", &program("conveyor")).result.unwrap();
+    let functions: Vec<&str> = code.functions.iter().map(|f| f.name.as_str()).collect();
+    for f in ["Door::scan", "RTrig::scan", "Ton::scan", "Ctu::scan", "ms", "s"] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
 }
