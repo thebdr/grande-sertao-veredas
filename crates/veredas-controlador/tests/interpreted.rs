@@ -1371,3 +1371,60 @@ fn a_scan_s_507_keeps_the_faulted_program_and_its_own_periods() {
     assert_eq!(times, [0, 13, 23, 33].map(ms));
     assert!(c.program().is_some());
 }
+
+// The seventeenth refute round's tests (the critic's probes, adopted): limits past the tests' own handed in whole,
+// an acknowledge of a program's fault on the target's grid never exchanging twice at one instant, and an acknowledge
+// of a program's fault needing the switch and a person.
+
+fn refused_at_1(index: usize) -> In {
+    if index == 1 { In { value: REFUSED, divisor: 1 } } else { steady(index) }
+}
+
+fn refused_at_2(index: usize) -> In {
+    if index == 2 { In { value: REFUSED, divisor: 1 } } else { steady(index) }
+}
+
+// R17-M1: a stack of 2^16 slots under a ceiling of 2^17, both past the tests' own limits, are the machine's: the call
+// past the stack 65 536 frames deep; the same stack under a ceiling of 2^16 makes no program.
+#[test]
+fn limits_past_the_tests_own_are_handed_in_whole() {
+    let big = Limits { stack: 1 << 16, memory: 1 << 17 };
+    let c = Controller::power_on_from(config(), SIM, Restart::First, Loaded::new(spinning(), FunctionId(0), REGIONS, first(), SAFE, big)).unwrap();
+    assert_eq!(c.load_error(), None);
+    let (c, _, _) = started(c, steady, 1);
+    assert_eq!(text(&c), r#"FAULT program(id=502, at="count.rs:7:9") sim() no_realtime()"#);
+    assert_eq!(c.program().unwrap().machine().depth(), 1 << 16);
+    let tight = Limits { stack: 1 << 16, memory: 1 << 16 };
+    let c = Controller::power_on_from(config(), SIM, Restart::First, Loaded::<In, Out>::new(code(), FunctionId(0), REGIONS, first(), SAFE, tight)).unwrap();
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
+}
+
+// R17-M5: a program's fault (502, and a scan's 507) on the target's grid, acknowledged at the instant of its last
+// exchange: the safe outputs at the next period, never twice at 20 ms.
+#[test]
+fn an_acknowledge_of_a_program_s_fault_on_the_target_s_grid_never_exchanges_twice_at_one_instant() {
+    for inputs in [zero_at_2 as fn(usize) -> In, refused_at_2] {
+        let (mut c, mut plant, mut clock) = started(interpreted(), inputs, 3); // scans at 0 and 10, the fault at 20
+        c.acknowledge(OFICINA, &Key).unwrap();
+        step(&mut c, &mut plant, &mut clock, 2);
+        let times: Vec<Duration> = plant.writes.iter().map(|w| w.0).collect();
+        assert_eq!(times, [0, 10, 20, 30, 40].map(ms));
+        assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()");
+    }
+}
+
+// R17-M6: in a program's fault (502, and a scan's 507), an acknowledge with the switch off and one from the program
+// are refused by their own reasons, the state and the faulted program unchanged.
+#[test]
+fn in_a_program_s_fault_an_acknowledge_needs_the_switch_and_a_person() {
+    for inputs in [zero_at_1 as fn(usize) -> In, refused_at_1] {
+        let (mut c, _, _) = started(interpreted(), inputs, 2);
+        let before = c.state().clone();
+        let command = Command::Acknowledge;
+        assert_eq!(c.acknowledge(OFICINA, &SwitchOff), Err(Refusal::Switch { command }));
+        let program = CommandSource::Program;
+        assert_eq!(c.acknowledge(program, &Key), Err(Refusal::Source { command, source: program }));
+        assert_eq!(c.state(), &before);
+        assert!(c.program().is_some());
+    }
+}
