@@ -300,6 +300,19 @@ fn the_tree_is_hers_only_when_git_looks_at_every_file() {
         git(&["checkout", "--", "README.md"]);
     }
     assert_eq!(cut::differs_from(c.path(), &commit).unwrap(), None);
+    // A CRLF copy of an LF file, added: `git status` reads it through `text=auto eol=lf` as HEAD's,
+    // the bytes are not (C-291's round 25: supervisão compiles its page in by `include_str!`).
+    assert!(std::fs::read_to_string(c.path().join(".gitattributes")).unwrap().contains("text=auto eol=lf"));
+    let lf = std::fs::read_to_string(c.path().join("README.md")).unwrap();
+    std::fs::write(c.path().join("README.md"), lf.replace('\n', "\r\n")).unwrap();
+    git(&["add", "README.md"]);
+    let status = Command::new("git").arg("-C").arg(c.path()).args(["status", "--porcelain"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&status.stdout), "", "git reads it as HEAD's");
+    let why = cut::differs_from(c.path(), &commit).unwrap().unwrap();
+    assert_eq!(why, "files hold other bytes than HEAD's though git's filters read them as the same (a line ending `.gitattributes` converts), so the suite would test what the builder does not build:\nREADME.md");
+    std::fs::write(c.path().join("README.md"), &lf).unwrap();
+    git(&["add", "README.md"]);
+    assert_eq!(cut::differs_from(c.path(), &commit).unwrap(), None);
     std::fs::write(c.path().join("docs/x.md"), "x\n").unwrap();
     git(&["add", "docs/x.md"]);
     git(&["-c", "user.name=e", "-c", "user.email=e@example.invalid", "commit", "-q", "-m", "moved on"]);

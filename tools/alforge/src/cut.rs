@@ -3,6 +3,7 @@
 //! extracted again, its sums checked and its bench and supervisão run together on its plant; only
 //! then is the manifest written, and checked against the repository like any other.
 
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -119,8 +120,9 @@ pub fn suite_rustc(root: &Path, tmp: &Path, env: impl Iterator<Item = (std::ffi:
 
 /// Why the working tree at `root` is not exactly `commit`, or `None`: HEAD moved, a tracked file
 /// changed, an untracked file stands (whatever `status.showUntrackedFiles` says), a file is ignored
-/// by a rule the commit does not hold, or a file is marked so git does not look at it
-/// (`--assume-unchanged`, `--skip-worktree`).
+/// by a rule the commit does not hold, a file is marked so git does not look at it
+/// (`--assume-unchanged`, `--skip-worktree`), or a file's bytes are not the commit's though git's
+/// filters read it as the same (a CRLF copy under `text=auto eol=lf`, once added).
 pub fn differs_from(root: &Path, commit: &str) -> Result<Option<String>, git::GitError> {
     let head = git::text(root, &["rev-parse", "HEAD"])?.map(|t| t.trim().to_string());
     if head.as_deref() != Some(commit) {
@@ -175,6 +177,46 @@ pub fn differs_from(root: &Path, commit: &str) -> Result<Option<String>, git::Gi
         .collect();
     if !flagged.is_empty() {
         return Ok(Some(format!("files are marked for git not to look at them, so the tree is not known to be HEAD's:\n{}", flagged.join("\n"))));
+    }
+    // Each file the commit holds, read as it lies with no filter of git's (`git status` and the
+    // index read a working copy through the repository's `.gitattributes`, and a CRLF copy of an LF
+    // file counts as clean once added), hashed as git hashes a blob, held to the commit's: the
+    // suite and the tests alone run on these bytes, the builder builds the commit's.
+    let sha256 = git::text(root, &["rev-parse", "--show-object-format"])?.is_some_and(|f| f.trim() == "sha256");
+    let listing = git::run(root, &["ls-tree", "-r", "-z", "--full-tree", commit])?.unwrap_or_default();
+    let mut other = Vec::new();
+    for entry in listing.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        let Some(tab) = entry.iter().position(|b| *b == b'\t') else { continue };
+        let head = String::from_utf8_lossy(&entry[..tab]).into_owned();
+        let path = &entry[tab + 1..];
+        let fields: Vec<&str> = head.split(' ').collect();
+        // A link or a submodule is no file's bytes (a link is refused at the export).
+        let [mode, "blob", id] = fields.as_slice() else { continue };
+        if *mode == "120000" {
+            continue;
+        }
+        let file = root.join(std::ffi::OsStr::from_bytes(path));
+        let Ok(bytes) = std::fs::read(&file) else { continue };
+        let header = format!("blob {}\0", bytes.len());
+        let found: String = if sha256 {
+            use sha2::Digest;
+            let mut h = sha2::Sha256::new();
+            h.update(header.as_bytes());
+            h.update(&bytes);
+            h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+        } else {
+            use sha1::Digest;
+            let mut h = sha1::Sha1::new();
+            h.update(header.as_bytes());
+            h.update(&bytes);
+            h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+        };
+        if found != *id {
+            other.push(String::from_utf8_lossy(path).into_owned());
+        }
+    }
+    if !other.is_empty() {
+        return Ok(Some(format!("files hold other bytes than HEAD's though git's filters read them as the same (a line ending `.gitattributes` converts), so the suite would test what the builder does not build:\n{}", other.join("\n"))));
     }
     Ok(None)
 }

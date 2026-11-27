@@ -169,7 +169,7 @@ Keys (each required unless a default is given):
 
    **Each build runs traced** (Q448, ruled "Trace each build"): `strace -f` (one of the recipe's
    packages) logs every file each process of the build opens, as the kernel's own path of what it
-   opened, and every program it starts. The trace comes back gzipped on the output disk, and the
+   opened, and every program it starts. The trace comes back on the output disk as `trace/<component>.trace`, and the
    cut judges every file a process other than the builder's cargo (a cargo a build script runs is
    judged) opened to read under the tree or the vendored
    sources as it judges the dep-info's paths. So a build script's undeclared read, a header the C
