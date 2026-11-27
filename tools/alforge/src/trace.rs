@@ -15,7 +15,7 @@
 //! version's. A file read without being opened (a kernel ring's, `io_uring`) is in no trace, and a
 //! file whose existence alone a build looks at (`stat`) is not judged.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::inputs::{self, Inputs, Packages};
@@ -117,88 +117,141 @@ fn is_cargo(program: &str) -> bool {
 /// by `clone` or `fork` (its threads) until one of them runs another program: a cargo a build
 /// script runs is not it.
 pub fn reads(trace: &str, cwd: &str) -> Vec<Read> {
-    let mut program: BTreeMap<String, String> = BTreeMap::new();
-    let mut folder: BTreeMap<String, String> = BTreeMap::new();
-    let mut pending: BTreeMap<String, String> = BTreeMap::new();
-    let mut builders: BTreeMap<String, bool> = BTreeMap::new();
-    let mut out = Vec::new();
+    // strace may print a process's first lines before the line of its parent's `clone` that
+    // returns its id (a busy machine runs the child first: 45 times in a real trace of Oficina's
+    // build): a process's lines are held until that line is read, then read in their own order,
+    // so a child inherits its parent's program, folder and standing before its own lines apply.
+    let mut state = State { cwd: cwd.to_string(), ..State::default() };
+    let mut known: BTreeSet<String> = BTreeSet::new();
+    let mut held: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    let mut order: Vec<String> = Vec::new();
     let mut first = true;
     for raw in trace.lines() {
-        let Some((pid, rest)) = raw.split_once(' ') else { continue };
-        let pid = pid.to_string();
+        let Some((pid, _)) = raw.split_once(' ') else { continue };
         if first {
-            folder.insert(pid.clone(), cwd.to_string());
-            builders.insert(pid.clone(), true);
+            state.folder.insert(pid.to_string(), cwd.to_string());
+            state.builders.insert(pid.to_string(), true);
+            known.insert(pid.to_string());
             first = false;
         }
+        if !known.contains(pid) {
+            held.entry(pid.to_string()).or_insert_with(|| {
+                order.push(pid.to_string());
+                Vec::new()
+            }).push(raw);
+            continue;
+        }
+        state.run(vec![raw], &mut known, &mut held);
+    }
+    // A process no line of the log says the start of: read as it came, inheriting nothing.
+    for pid in order {
+        if let Some(lines) = held.remove(&pid) {
+            known.insert(pid);
+            state.run(lines, &mut known, &mut held);
+        }
+    }
+    state.out
+}
+
+/// What [`reads`] knows of each process as it reads the log: its program, its folder, whether it
+/// is the builder's cargo, a call cut in two waiting for its second half; and the reads so far.
+#[derive(Default)]
+struct State {
+    cwd: String,
+    program: BTreeMap<String, String>,
+    folder: BTreeMap<String, String>,
+    pending: BTreeMap<String, String>,
+    builders: BTreeMap<String, bool>,
+    out: Vec<Read>,
+}
+
+impl State {
+    /// `lines` read in order, each child a `clone` starts read at once after it, with the lines
+    /// held for it, before the rest.
+    fn run<'a>(&mut self, lines: Vec<&'a str>, known: &mut BTreeSet<String>, held: &mut BTreeMap<String, Vec<&'a str>>) {
+        let mut queue: std::collections::VecDeque<&'a str> = lines.into();
+        while let Some(line) = queue.pop_front() {
+            if let Some(child) = self.step(line) {
+                known.insert(child.clone());
+                for l in held.remove(&child).unwrap_or_default().into_iter().rev() {
+                    queue.push_front(l);
+                }
+            }
+        }
+    }
+
+    /// One line of the log read: its reads added, its process's state moved; the id of the
+    /// process it starts, if it starts one.
+    fn step(&mut self, raw: &str) -> Option<String> {
+        let (pid, rest) = raw.split_once(' ')?;
+        let pid = pid.to_string();
         let rest = rest.trim_start();
         if rest.starts_with("---") || rest.starts_with("+++") {
-            continue;
+            return None;
         }
         // A call cut in two by another process's: its two halves joined.
         let line: String = if let Some(head) = rest.strip_suffix("<unfinished ...>") {
-            pending.insert(pid.clone(), head.to_string());
-            continue;
+            self.pending.insert(pid.clone(), head.to_string());
+            return None;
         } else if let Some(tail) = rest.strip_prefix("<... ") {
-            let Some((_, after)) = tail.split_once(" resumed>") else { continue };
-            format!("{}{after}", pending.remove(&pid).unwrap_or_default())
+            let (_, after) = tail.split_once(" resumed>")?;
+            format!("{}{after}", self.pending.remove(&pid).unwrap_or_default())
         } else {
             rest.to_string()
         };
-        let Some(paren) = line.find('(') else { continue };
+        let paren = line.find('(')?;
         let name = &line[..paren];
-        let Some(eq) = line.rfind(" = ") else { continue };
+        let eq = line.rfind(" = ")?;
         let args = &line[paren + 1..eq];
         let ret = line[eq + 3..].trim();
-        let here = folder.get(&pid).cloned().unwrap_or_else(|| cwd.to_string());
-        let running = program.get(&pid).cloned().unwrap_or_default();
-        let builder = builders.get(&pid).copied().unwrap_or(false);
+        let here = self.folder.get(&pid).cloned().unwrap_or_else(|| self.cwd.clone());
+        let running = self.program.get(&pid).cloned().unwrap_or_default();
+        let builder = self.builders.get(&pid).copied().unwrap_or(false);
         match name {
             "clone" | "clone3" | "fork" | "vfork" => {
-                if let Some(child) = ret.split_whitespace().next().filter(|c| c.bytes().all(|b| b.is_ascii_digit())) {
-                    program.insert(child.to_string(), running);
-                    folder.insert(child.to_string(), here);
-                    builders.insert(child.to_string(), builder);
-                }
+                let child = ret.split_whitespace().next().filter(|c| c.bytes().all(|b| b.is_ascii_digit()))?.to_string();
+                self.program.insert(child.clone(), running);
+                self.folder.insert(child.clone(), here);
+                self.builders.insert(child.clone(), builder);
+                return Some(child);
             }
             "execve" | "execveat" => {
                 // `execveat(<fd>, "path", …)`: the path from that folder, as `-y` names it.
                 let base = if name == "execveat" { args.split_once(',').and_then(|(fd, _)| fd_path(fd)).unwrap_or(here.clone()) } else { here.clone() };
                 if let Some((path, _)) = first_string(args) {
                     let path = resolved(&base, &path);
-                    program.insert(pid.clone(), path.clone());
+                    self.program.insert(pid.clone(), path.clone());
                     // The builder's cargo stays it through rustup's proxy; a process that runs
                     // anything else, and all it starts, is the build's.
                     let still = builder && is_cargo(&path);
-                    builders.insert(pid.clone(), still);
+                    self.builders.insert(pid.clone(), still);
                     if !still {
-                        out.push(Read { program: path.clone(), path });
+                        self.out.push(Read { program: path.clone(), path });
                     }
                 }
             }
             "chdir" => {
                 if let Some((path, _)) = first_string(args) {
-                    folder.insert(pid.clone(), resolved(&here, &path));
+                    self.folder.insert(pid.clone(), resolved(&here, &path));
                 }
             }
             "fchdir" => {
                 if let Some(path) = fd_path(args) {
-                    folder.insert(pid.clone(), path);
+                    self.folder.insert(pid.clone(), path);
                 }
             }
             "open" | "openat" | "openat2" => {
-                let Some(path) = fd_path(ret) else { continue };
+                let path = fd_path(ret)?;
                 let flags = first_string(args).map(|(_, after)| after.to_string()).unwrap_or_default();
                 let writes_only = flags.contains("O_WRONLY");
-                if writes_only || flags.contains("O_PATH") || builder {
-                    continue;
+                if !(writes_only || flags.contains("O_PATH") || builder) {
+                    self.out.push(Read { program: running, path });
                 }
-                out.push(Read { program: running, path });
             }
             _ => {}
         }
+        None
     }
-    out
 }
 
 /// What the reads of a traced build (`reads`) name that `inputs` does not: each file under `src`

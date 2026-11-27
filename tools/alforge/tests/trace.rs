@@ -223,3 +223,58 @@ fn a_cargo_a_build_script_runs_is_judged_as_any_program() {
     // each refused, so the cut stops on such a build.
     assert_eq!(refused, ["cargo read Cargo.toml", "cargo read crates", "cargo read crates/veredas-b/Cargo.toml"], "{refused:?}");
 }
+
+/// A busy machine runs a forked child before its parent's `clone` returns, and strace prints the
+/// child's lines first (C-291's round 24: 45 times in a real trace of Oficina's build in the
+/// builder): the child is still read as its parent's, its own lines after. A build script and the
+/// cargo it runs, each printed before the line that starts it, and a rustc a thread of cargo's
+/// starts, are each judged by their own program.
+#[test]
+fn a_childs_lines_printed_before_the_clone_that_starts_it_are_read_as_that_childs() {
+    let script = "/build/src/target/release/build/veredas-portal/1111222233334444/out/build_script_build";
+    let cargo = "/opt/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/bin/cargo";
+    let rustc = "/opt/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/bin/rustc";
+    let log = [
+        format!(r#"200 execve("{cargo}", ["cargo", "build", "--release"], 0x7ffd /* 20 vars */) = 0"#),
+        // The build script's lines, then the cargo it runs, both before the lines that start them.
+        r#"201 chdir("/build/src/crates/veredas-portal") = 0"#.to_string(),
+        format!(r#"201 execve("{script}", ["build_script_build"], 0x7ffd /* 40 vars */) = 0"#),
+        r#"201 openat(AT_FDCWD</build/src/crates/veredas-portal>, "tests", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 3</build/src/crates/veredas-portal/tests>"#.to_string(),
+        format!(r#"202 execve("{cargo}", ["cargo", "metadata", "--no-deps"], 0x7ffd /* 40 vars */) = 0"#),
+        r#"202 openat(AT_FDCWD</build/src/crates/veredas-portal>, "/build/src/crates/veredas-outro/Cargo.toml", O_RDONLY|O_CLOEXEC) = 3</build/src/crates/veredas-outro/Cargo.toml>"#.to_string(),
+        r#"201 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f00) = 202"#.to_string(),
+        // The nested cargo's next read, after the line that starts it: still that cargo's.
+        r#"202 openat(AT_FDCWD</build/src/crates/veredas-portal>, "/build/src/crates/veredas-b/Cargo.toml", O_RDONLY|O_CLOEXEC) = 3</build/src/crates/veredas-b/Cargo.toml>"#.to_string(),
+        r#"200 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f00) = 201"#.to_string(),
+        // The build script's next read, after the line that starts it: still the script's.
+        r#"201 openat(AT_FDCWD</build/src/crates/veredas-portal>, "../../docs/gerado.txt", O_RDONLY|O_CLOEXEC) = 3</build/src/docs/gerado.txt>"#.to_string(),
+        // A thread of cargo's, its own reads cargo's, and the rustc it starts printed first.
+        r#"200 clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD, child_tid=0x7e50, parent_tid=0x7e50, exit_signal=0, stack=0x7e50, stack_size=0x1ff100, tls=0x7e50} => {parent_tid=[203]}, 88) = 203"#.to_string(),
+        r#"204 chdir("/build/vendor/clang-format-0.3.0") = 0"#.to_string(),
+        format!(r#"204 execve("{rustc}", ["rustc", "--crate-name", "clang_format"], 0x7ffd /* 30 vars */) = 0"#),
+        r#"204 openat(AT_FDCWD</build/vendor/clang-format-0.3.0>, "src/lib.rs", O_RDONLY|O_CLOEXEC) = 4</build/vendor/clang-format-0.3.0/src/lib.rs>"#.to_string(),
+        r#"203 openat(AT_FDCWD</build/src>, "/build/src/Cargo.lock", O_RDONLY|O_CLOEXEC) = 9</build/src/Cargo.lock>"#.to_string(),
+        r#"203 clone3({flags=CLONE_VM|CLONE_VFORK|CLONE_CLEAR_SIGHAND, exit_signal=SIGCHLD, stack=0x7522, stack_size=0x9000}, 88) = 204"#.to_string(),
+        // The rustc's next read, after the line that starts it: still rustc's, never cargo's.
+        r#"204 openat(AT_FDCWD</build/vendor/clang-format-0.3.0>, "src/style.rs", O_RDONLY|O_CLOEXEC) = 5</build/vendor/clang-format-0.3.0/src/style.rs>"#.to_string(),
+    ]
+    .join("\n");
+    let read = |program: &str, path: &str| Read { program: program.to_string(), path: path.to_string() };
+    assert_eq!(
+        trace::reads(&log, SRC),
+        [
+            read(script, script),
+            read(script, "/build/src/crates/veredas-portal/tests"),
+            read(cargo, cargo),
+            read(cargo, "/build/src/crates/veredas-outro/Cargo.toml"),
+            read(cargo, "/build/src/crates/veredas-b/Cargo.toml"),
+            read(script, "/build/src/docs/gerado.txt"),
+            read(rustc, rustc),
+            read(rustc, "/build/vendor/clang-format-0.3.0/src/lib.rs"),
+            read(rustc, "/build/vendor/clang-format-0.3.0/src/style.rs"),
+        ]
+    );
+    // A process whose start no line names is read as it came, inheriting nothing.
+    let orphan = r#"300 openat(AT_FDCWD</build/src>, "/build/src/docs/x.txt", O_RDONLY|O_CLOEXEC) = 3</build/src/docs/x.txt>"#;
+    assert_eq!(trace::reads(&format!("200 execve(\"{cargo}\", [\"cargo\"], 0x7ffd) = 0\n{orphan}\n"), SRC), [read("", "/build/src/docs/x.txt")]);
+}
