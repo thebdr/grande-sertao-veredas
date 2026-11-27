@@ -2604,3 +2604,167 @@ mod round_7 {
         assert!(code == Some(0) && took >= Duration::from_millis(1900), "exit {code:?} {took:?} after `stop`");
     }
 }
+
+/// Refute round 8's probes (the critic's, `~/.cache/veredas/critic-c033-r8/probes`), kept as pins:
+/// a non-blocking stdout losing no line, a stdin line without an end, the start's order for the
+/// four kinds round 7 left, and a value range's low end not finite.
+mod round_8 {
+    use super::*;
+
+    #[cfg(target_os = "linux")]
+    const EXE: &str = env!("CARGO_BIN_EXE_veredas-maquinar");
+
+    /// The worked example's channel file, catalog and scene beside a bench file.
+    fn folder(tag: &str) -> PathBuf {
+        let dir = scratch(tag);
+        std::fs::write(dir.join("channel.toml"), &blocks("channel-schema.md")[0]).unwrap();
+        std::fs::write(dir.join("catalog.toml"), &blocks("controller-schema.md")[0]).unwrap();
+        std::fs::write(dir.join("scene.toml"), &blocks("cena-schema.md")[0]).unwrap();
+        dir
+    }
+
+    /// A bench of `parts` Modbus servers on port 0.
+    #[cfg(target_os = "linux")]
+    fn modbus_bench(dir: &Path, parts: usize) -> PathBuf {
+        let path = dir.join("bench.toml");
+        let mut text = header().to_string();
+        for i in 0..parts {
+            text.push_str(&format!("[[modbus]]\nname = \"m{i:04}\"\nport = 0\n\n"));
+        }
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    /// 30 servers, their stdout a pipe of one page (the start's 61 lines do not fit it) left
+    /// non-blocking or not, read from 1 s on, `stop` at 2.5 s: the plan's 30 lines, the start's 30
+    /// status lines and `stopped` last either way (non-blocking, a line that found the pipe full
+    /// was dropped: m0020 to m0029 never came; a terminal shares this flag with its stdin).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_non_blocking_stdout_loses_no_line() {
+        use std::io::Read;
+        use std::os::fd::AsRawFd;
+        let run = |tag: &str, nonblocking: bool| -> (usize, usize, Option<String>, Option<i32>) {
+            let dir = scratch(tag);
+            let path = modbus_bench(&dir, 30);
+            let (mut r, w) = std::io::pipe().unwrap();
+            // SAFETY: fcntl on a descriptor this test owns: its size and its flags.
+            unsafe {
+                let fd = w.as_raw_fd();
+                assert_eq!(libc::fcntl(fd, libc::F_SETPIPE_SZ, 4096), 4096);
+                if nonblocking {
+                    let flags = libc::fcntl(fd, libc::F_GETFL);
+                    assert_eq!(libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK), 0);
+                }
+            }
+            let mut child = Command::new(EXE).arg(&path).stdin(Stdio::piped()).stdout(w).stderr(Stdio::piped()).spawn().unwrap();
+            let mut stdin = child.stdin.take().unwrap();
+            std::thread::sleep(Duration::from_secs(1));
+            let reader = std::thread::spawn(move || {
+                let mut text = Vec::new();
+                r.read_to_end(&mut text).unwrap();
+                String::from_utf8_lossy(&text).to_string()
+            });
+            std::thread::sleep(Duration::from_millis(1500));
+            stdin.write_all(b"stop\n").unwrap();
+            let status = child.wait().unwrap();
+            drop(stdin);
+            let text = reader.join().unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            let lines: Vec<&str> = text.lines().collect();
+            let plan = lines.iter().filter(|l| l.starts_with("  modbus `m")).count();
+            // The start's status lines: those up to the first part named twice.
+            let mut seen = std::collections::BTreeSet::new();
+            for l in lines.iter().filter(|l| l.starts_with("modbus m")) {
+                if !seen.insert(l.split(':').next().unwrap().to_string()) {
+                    break;
+                }
+            }
+            (plan, seen.len(), lines.last().map(|l| l.to_string()), status.code())
+        };
+        let want = (30, 30, Some("stopped".to_string()), Some(0));
+        assert_eq!(run("r8-blocking", false), want, "a blocking stdout");
+        assert_eq!(run("r8-nonblocking", true), want, "a non-blocking stdout");
+    }
+
+    /// Stdin `/dev/zero`, a line without an end, under an address space of 2 GB: still running at
+    /// 2 s, its memory flat, and a SIGTERM ends it with exit 0 and `stopped` last (the line was
+    /// kept whole: a gigabyte at 1 s, then an allocation failed and the process aborted, no part
+    /// stopped).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_stdin_line_without_an_end_is_read_past_in_bounded_memory() {
+        use std::io::Read;
+        let dir = scratch("r8-devzero");
+        let path = modbus_bench(&dir, 1);
+        let mut child = Command::new("sh")
+            .args(["-c", "ulimit -v 2097152 && exec \"$0\" \"$1\"", EXE])
+            .arg(&path)
+            .stdin(std::fs::File::open("/dev/zero").unwrap())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_secs(2));
+        let running = child.try_wait().unwrap();
+        let rss = std::fs::read_to_string(format!("/proc/{}/status", child.id())).ok().and_then(|s| s.lines().find(|l| l.starts_with("VmRSS:")).map(|l| l.split_whitespace().nth(1).unwrap().parse::<u64>().unwrap()));
+        // SAFETY: a signal to the child this test spawned.
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+        }
+        let status = child.wait().unwrap();
+        let mut out = String::new();
+        child.stdout.take().unwrap().read_to_string(&mut out).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((running, status.code(), out.lines().last()), (None, Some(0), Some("stopped")), "rss {rss:?} kB");
+        assert!(rss.is_some_and(|kb| kb < 200_000), "rss {rss:?} kB at 2 s");
+    }
+
+    /// Two PROFINET devices and then two EtherCAT segments, each on an interface there is not, and
+    /// two listening channels on taken ports: the first of each in the file starts first and is
+    /// named (each kind started last to first had passed).
+    #[test]
+    fn the_first_of_a_kind_that_cannot_start_is_named_for_devices_segments_and_channels() {
+        let dir = folder("r8-first");
+        let profinet = start_err(load(&format!("{}[[profinet]]\nname = \"first\"\ninterface = \"nowhere0\"\n\n[[profinet]]\nname = \"second\"\ninterface = \"nowhere1\"\n", header()), &dir).unwrap());
+        let ethercat = start_err(
+            load(&format!("{}[[ethercat]]\nname = \"first\"\ninterface = \"nowhere0\"\ndevices = [ {{ name = \"t\" }} ]\n\n[[ethercat]]\nname = \"second\"\ninterface = \"nowhere1\"\ndevices = [ {{ name = \"t\" }} ]\n", header()), &dir).unwrap(),
+        );
+        let (s1, s2) = (std::net::TcpListener::bind("127.0.0.1:0").unwrap(), std::net::TcpListener::bind("127.0.0.1:0").unwrap());
+        let (t1, t2) = (s1.local_addr().unwrap().port(), s2.local_addr().unwrap().port());
+        let ch = |name: &str, port: u16| format!("[[channel]]\nname = \"{name}\"\nrole = \"listen\"\nport = {port}\nchannel = \"channel.toml\"\ncatalog = \"catalog.toml\"\n\n");
+        let channels = start_err(load(&format!("{}{}{}", header(), ch("first", t1), ch("second", t2)), &dir).unwrap());
+        drop((s1, s2));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(profinet.starts_with("profinet `first`: "), "{profinet}");
+        assert!(ethercat.starts_with("ethercat `first`: "), "{ethercat}");
+        assert!(channels.starts_with("channel `first`: "), "{channels}");
+    }
+
+    /// Two scenes, and two model parts beside a server: each kind shown in the file's order (the
+    /// scenes shown last to first had passed every test of the bench file).
+    #[test]
+    fn scenes_and_model_parts_show_in_the_file_s_order() {
+        let dir = folder("r8-order");
+        let scenes = Bench::start(load(&format!("{}[[fisica]]\nname = \"first\"\nscene = \"scene.toml\"\n\n[[fisica]]\nname = \"second\"\nscene = \"scene.toml\"\n", header()), &dir).unwrap()).unwrap();
+        let scene_names: Vec<String> = scenes.status().into_iter().map(|(n, _)| n).collect();
+        scenes.stop();
+        let modbus = "[[modbus]]\nname = \"m\"\nport = 0\npoints = [ { name = \"run\", table = \"coil\", address = 0 }, { name = \"sp\", table = \"holding-register\", address = 0 }, { name = \"sp2\", table = \"holding-register\", address = 1 } ]\n\n";
+        let part = |name: &str, sp: &str| format!("[[reflexo]]\nname = \"{name}\"\ndrive = [ {{ name = \"d\", run = \"m.run\", setpoint = \"m.{sp}\", accel = 1, decel = 1 }} ]\n\n");
+        let models = Bench::start(load(&format!("{}{modbus}{}{}", header(), part("first", "sp"), part("second", "sp2")), &dir).unwrap()).unwrap();
+        let model_names: Vec<String> = models.status().into_iter().map(|(n, _)| n).collect();
+        models.stop();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((scene_names, model_names), (vec!["first".to_string(), "second".into()], vec!["m".to_string(), "first".into(), "second".into()]));
+    }
+
+    /// A value's range whose low end is -inf or NaN: refused by its text (only `high` was pinned).
+    #[test]
+    fn a_range_whose_low_end_is_not_finite_is_refused() {
+        let dir = scratch("r8-low");
+        let emitter = |values: &str| format!("{}[[emitter]]\nname = \"e\"\ntemplate = \"{{ts}}\"\nts_format = \"%H\"\ninterval_ms = 1\nfile = \"e.log\"\nvalues = [ {values} ]\n", header());
+        let got = ["-inf", "nan"].map(|low| refused(&emitter(&format!("{{ name = \"v\", low = {low}, high = 2 }}")), &dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(got, ["emitter[0] (`e`).values[0] (`v`): the range -inf..=2 is empty or not finite", "emitter[0] (`e`).values[0] (`v`): the range NaN..=2 is empty or not finite"]);
+    }
+}

@@ -19,12 +19,41 @@ use std::time::Duration;
 
 const USAGE: &str = "usage: veredas-maquinar <bench.toml> [--check] | --version";
 
-/// Prints a line, a stdout closed or failing ignored: what the bench does does not hang on it.
+/// How long a write that found a non-blocking stdout full waits before it tries again.
+const AGAIN: Duration = Duration::from_millis(20);
+
+/// Prints a line whole, a stdout closed or failing ignored: what the bench does does not hang on
+/// it. A stdout left non-blocking (a parent's shared terminal leaves its stdout so with its stdin)
+/// that is full takes the rest of the line a moment later (round 8: the line was dropped, the
+/// start's lines among them, whenever the reader fell behind).
 fn say(line: &str) {
+    use std::io::ErrorKind::{Interrupted, WouldBlock};
     let mut out = std::io::stdout().lock();
-    let _ = writeln!(out, "{line}");
-    let _ = out.flush();
+    let bytes = format!("{line}\n");
+    let mut rest = bytes.as_bytes();
+    while !rest.is_empty() {
+        match out.write(rest) {
+            Ok(0) => return,
+            Ok(n) => rest = &rest[n..],
+            Err(e) if e.kind() == Interrupted => {}
+            Err(e) if e.kind() == WouldBlock => std::thread::sleep(AGAIN),
+            Err(_) => return,
+        }
+    }
+    loop {
+        match out.flush() {
+            Ok(()) => return,
+            Err(e) if e.kind() == Interrupted => {}
+            Err(e) if e.kind() == WouldBlock => std::thread::sleep(AGAIN),
+            Err(_) => return,
+        }
+    }
 }
+
+/// The most of a stdin line kept to be judged: a longer line is no `stop`, read to its end and past
+/// without being kept (round 8: a line without an end, `/dev/zero`, was kept whole till the
+/// process ran out of memory).
+const LONGEST_LINE: usize = 4096;
 
 /// Writes a line to stderr, a stderr closed or failing ignored: the exit code stays the one stated.
 fn complain(line: &str) {
@@ -158,16 +187,37 @@ fn main() {
         // Read as bytes: a line that is not UTF-8 is a line like any other, not an end. A stdin
         // left non-blocking (a parent's shared terminal) has nothing yet, not its end: it is read
         // again a moment later, the part of a line already read kept (round 7: it ended the run).
+        // A line's first `LONGEST_LINE` bytes are kept, the rest read past.
         let mut stdin = std::io::stdin().lock();
         let mut line = Vec::new();
+        let mut cut = false;
         loop {
-            match stdin.read_until(b'\n', &mut line) {
-                Ok(0) => break,
-                Ok(_) if String::from_utf8_lossy(&line).trim() == "stop" => break,
-                Ok(_) => line.clear(),
+            let buf = match stdin.fill_buf() {
+                Ok(buf) => buf,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(50)),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
                 Err(_) => break,
+            };
+            if buf.is_empty() {
+                break;
+            }
+            let (taken, ends) = match buf.iter().position(|b| *b == b'\n') {
+                Some(i) => (i + 1, true),
+                None => (buf.len(), false),
+            };
+            let keep = taken.min(LONGEST_LINE.saturating_sub(line.len()));
+            cut |= keep < taken;
+            line.extend_from_slice(&buf[..keep]);
+            stdin.consume(taken);
+            if ends {
+                if !cut && String::from_utf8_lossy(&line).trim() == "stop" {
+                    break;
+                }
+                line.clear();
+                cut = false;
             }
         }
         let _ = tx.send(());
