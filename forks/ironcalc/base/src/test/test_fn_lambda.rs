@@ -233,3 +233,62 @@ fn a_defined_name_for_a_single_cell_is_a_reference() {
     assert_eq!(model._get_text("A8"), *"text");
     assert_eq!(model._get_text("A9"), *"2");
 }
+
+// Veredas fork change 44: LAMBDA calls and defined names' formulas nested
+// deeper than the evaluation's bound are `#NUM!` (whose message is
+// `TOO_DEEP`), and on record, instead of overflowing the stack of a thread as
+// small as a test's and aborting the process.
+#[test]
+fn a_recursion_too_deep_is_num_and_overflows_no_stack() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let mut model = new_empty_model();
+            for (name, formula) in [
+                ("Soma", "=LAMBDA(n,IF(n<=0,0,n+Soma(n-1)))"),
+                ("Aa", "=Aa+1"),
+                ("Bb", "=1"),
+                ("Cc", "=Bb+1"),
+            ] {
+                model
+                    .new_defined_name(DefinedNameEntry::new(name, formula))
+                    .unwrap();
+            }
+            // two names reading each other
+            model
+                .update_defined_name("Bb", None, DefinedNameEntry::new("Bb", "=Cc+1"))
+                .unwrap();
+            model._set("A1", "=Soma(5)");
+            model._set("A2", "=Soma(5000)");
+            model._set("A3", "=Aa");
+            model._set("A4", "=Bb");
+            model._set("A5", "=A2+1");
+            model._set("A6", "=IFERROR(Soma(5000),-1)");
+            model._set("A7", "=SUM(Aa)");
+            model._set("A8", "=MAP(SEQUENCE(1),Soma)");
+            model._set("A9", "=Soma(5000)/0");
+            model.evaluate();
+            assert_eq!(model._get_text("A1"), *"15");
+            for cell in ["A2", "A3", "A4", "A5", "A7", "A9"] {
+                assert_eq!(model._get_text(cell), *"#NUM!", "{cell}");
+            }
+            assert_eq!(model._get_text("A6"), *"-1");
+            assert_eq!(model._get_text("A8"), *"1");
+            assert_eq!(
+                model.too_deep_cells(),
+                vec![(0, 2, 1), (0, 3, 1), (0, 4, 1), (0, 5, 1), (0, 6, 1), (0, 7, 1), (0, 9, 1)]
+            );
+            // the next evaluation says it again, of the cells it leaves so
+            model._set("A2", "=Soma(3)");
+            model.evaluate();
+            assert_eq!(model._get_text("A2"), *"6");
+            assert_eq!(model._get_text("A5"), *"7");
+            assert_eq!(
+                model.too_deep_cells(),
+                vec![(0, 3, 1), (0, 4, 1), (0, 6, 1), (0, 7, 1), (0, 9, 1)]
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

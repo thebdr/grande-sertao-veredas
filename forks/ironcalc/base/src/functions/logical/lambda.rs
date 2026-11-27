@@ -59,7 +59,8 @@ impl<'a> Model<'a> {
             self.variable_stack.insert(*raw_id, val);
         }
 
-        let result = self.evaluate_node_in_context(&patched_body, cell);
+        // one call inside the others running, bounded (Veredas fork change 44)
+        let result = self.nested(cell, |model| model.evaluate_node_in_context(&patched_body, cell));
 
         for raw_id in bound_ids {
             self.variable_stack.remove(&raw_id);
@@ -113,7 +114,8 @@ impl<'a> Model<'a> {
             self.variable_stack.insert(*raw_id, val);
         }
 
-        let result = self.evaluate_node_in_context(&patched_body, cell);
+        // one call inside the others running, bounded (Veredas fork change 44)
+        let result = self.nested(cell, |model| model.evaluate_node_in_context(&patched_body, cell));
 
         for raw_id in bound_ids {
             self.variable_stack.remove(&raw_id);

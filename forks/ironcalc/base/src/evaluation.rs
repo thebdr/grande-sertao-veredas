@@ -425,6 +425,15 @@ pub(crate) struct Evaluation {
     /// restart, the cells stay on `stack`, still `Evaluating`, to be run again
     /// from the top once the recursion has unwound.
     pub(crate) unwinding: bool,
+    /// LAMBDA calls and defined names' formulas running one inside another
+    /// (Veredas fork change 44). A recursion through them runs inside a single
+    /// formula, where no unwind can come, so it is bounded on its own.
+    pub(crate) nested: usize,
+    /// Where the stack was when the outermost of them started.
+    pub(crate) nested_base: usize,
+    /// The formula cells whose last run went deeper in them than
+    /// `MAX_NESTED_STACK` allows.
+    pub(crate) too_deep: HashSet<CellKey, KeyBuild>,
 }
 
 /// How deep the recursion may go when nobody has said otherwise, in formulas
@@ -435,6 +444,19 @@ pub(crate) struct Evaluation {
 /// thread) and cost nothing to workbooks that never reach them.
 const DEFAULT_MAX_DEPTH: usize = 64;
 const DEFAULT_MAX_STACK: usize = 256 * 1024;
+
+/// How much stack LAMBDA calls and defined names' formulas may take running
+/// one inside another, counted from the outermost (Veredas fork change 44). A
+/// recursive LAMBDA's call takes some 24 KB of it in a debug build, a name
+/// that reads itself never ends: beyond this the call is `#NUM!`, as Excel's
+/// is past its own limit, where the thread's stack would have overflowed and
+/// aborted the process. Half of the smallest common stack (1 MB in
+/// WebAssembly), the formulas' own `DEFAULT_MAX_STACK` coming on top.
+const MAX_NESTED_STACK: usize = 512 * 1024;
+
+/// The message of the `#NUM!` of a LAMBDA call or a defined name's formula
+/// nested deeper than `MAX_NESTED_STACK` allows (Veredas fork change 44).
+pub const TOO_DEEP: &str = "LAMBDA calls or defined names nested deeper than the evaluation computes";
 
 /// Roughly where the stack is: the address of a local.
 #[inline(never)]
@@ -476,6 +498,9 @@ impl Default for Evaluation {
             max_stack: DEFAULT_MAX_STACK,
             stack_base: 0,
             unwinding: false,
+            nested: 0,
+            nested_base: 0,
+            too_deep: HashSet::default(),
         }
     }
 }
@@ -519,6 +544,8 @@ impl<'a> Model<'a> {
     /// `#CIRC!` and keeps no spill cells: its stale cells are dropped when it
     /// is marked, so there is nothing of it to read or to contradict.
     pub fn evaluate(&mut self) {
+        // which runs go too deep is this evaluation's to say (Veredas fork change 44)
+        self.evaluation.too_deep.clear();
         let Survey {
             formulas,
             dynamic_anchors,
@@ -581,6 +608,56 @@ impl<'a> Model<'a> {
     /// The limit set by `set_max_evaluation_stack`.
     pub fn get_max_evaluation_stack(&self) -> usize {
         self.evaluation.max_stack
+    }
+
+    /// Runs `f`, a LAMBDA's call or a defined name's formula, inside the ones
+    /// already running (Veredas fork change 44): `#NUM!`, whose message is
+    /// `TOO_DEEP`, once they take more than `MAX_NESTED_STACK` of stack, the
+    /// formula cell `cell` then on record as gone too deep, unless the run is
+    /// one the evaluation abandons.
+    pub(crate) fn nested(
+        &mut self,
+        cell: CellReferenceIndex,
+        f: impl FnOnce(&mut Self) -> CalcResult,
+    ) -> CalcResult {
+        let here = stack_address();
+        if self.evaluation.nested == 0 {
+            self.evaluation.nested_base = here;
+        } else if self.evaluation.nested_base.abs_diff(here) >= MAX_NESTED_STACK {
+            if !self.evaluation.unwinding && self.evaluation.restart.is_none() {
+                self.evaluation.too_deep.insert(key(cell));
+            }
+            return CalcResult::new_error(Error::NUM, cell, TOO_DEEP.to_string());
+        }
+        self.evaluation.nested += 1;
+        let result = f(self);
+        self.evaluation.nested -= 1;
+        result
+    }
+
+    /// The formula cells the last evaluation left `#NUM!` because LAMBDA calls
+    /// or defined names' formulas went deeper inside one another than it
+    /// computes (Veredas fork change 44): those whose own run went that deep,
+    /// and those that hold such a run's error, by (sheet, row, column), in
+    /// order. A cell that caught the error (`IFERROR`) in another's run is
+    /// not among them.
+    pub fn too_deep_cells(&self) -> Vec<(u32, i32, i32)> {
+        use crate::types::FormulaValue;
+        let mut cells: Vec<CellKey> = self.evaluation.too_deep.iter().copied().collect();
+        for (sheet, worksheet) in self.workbook.worksheets.iter().enumerate() {
+            for (row, column, cell) in worksheet.sheet_data.cells() {
+                if let Cell::CellFormula { v: FormulaValue::Error { d, .. }, .. }
+                | Cell::ArrayFormula { v: FormulaValue::Error { d, .. }, .. } = &*cell
+                {
+                    if d.m == TOO_DEEP {
+                        cells.push((sheet as u32, row, column));
+                    }
+                }
+            }
+        }
+        cells.sort_unstable();
+        cells.dedup();
+        cells
     }
 
     /// The sheets that can hold a formula, with their index. A formula cell
@@ -950,6 +1027,8 @@ impl<'a> Model<'a> {
         // refined: a run abandoned to an unwind, whose depth depends on the build's stack, had
         // drawn some already).
         crate::model::begin_cell_draws(&cell_reference);
+        // and whether it goes too deep in LAMBDA calls (Veredas fork change 44)
+        self.evaluation.too_deep.remove(&key);
         self.evaluation.depth += 1;
         let result = if self.evaluation.circular.contains(&key) {
             circular_reference(cell_reference)

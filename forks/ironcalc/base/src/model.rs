@@ -656,8 +656,12 @@ impl<'a> Model<'a> {
                                 right: range.right,
                             };
                         }
+                        // a name's formula inside the ones running, bounded (Veredas fork
+                        // change 44): one that reads itself never ends
                         ParsedDefinedName::Formula(formula) => {
-                            return self.evaluate_node_with_reference(&formula, cell);
+                            return self.nested(cell, |model| {
+                                model.evaluate_node_with_reference(&formula, cell)
+                            });
                         }
                         ParsedDefinedName::LambdaDefinition(..)
                         | ParsedDefinedName::InvalidDefinedNameFormula => {}
@@ -1273,9 +1277,9 @@ impl<'a> Model<'a> {
                             self.lambdas.insert(lambda_id, (param_names, body));
                             CalcResult::Lambda(lambda_id)
                         }
-                        ParsedDefinedName::Formula(formula) => {
-                            self.evaluate_node_in_context(&formula, cell)
-                        }
+                        ParsedDefinedName::Formula(formula) => self.nested(cell, |model| {
+                            model.evaluate_node_in_context(&formula, cell)
+                        }),
                         ParsedDefinedName::InvalidDefinedNameFormula => CalcResult::new_error(
                             Error::NAME,
                             cell,
