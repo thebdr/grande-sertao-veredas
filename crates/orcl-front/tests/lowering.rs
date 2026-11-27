@@ -1909,11 +1909,15 @@ fn a_generic_over_options_keeps_its_arguments() {
 #[test]
 fn a_fault_after_accented_names_names_its_column_in_characters() {
     let source = program("accents");
-    let (_, code) = lower("accents", &source).result.unwrap_or_else(|e| panic!("{e}"));
+    let (_, code) = lower_in("accents-fault", "accents", &source).result.unwrap_or_else(|e| panic!("{e}"));
     let e = fault::<_, accents::Outputs>(&code, &accents::Inputs { a: 5, b: 0 });
     let (line, column) = place_of(&source, "razão / pressão");
     assert_eq!(e.kind, ErrorKind::Check(Check::DivisionByZero));
     assert_eq!((e.at.line as usize, e.at.column as usize), (line, column), "the division's place");
+    // and the program runs as natively, its divisor never zero
+    let inputs = |k: u64| accents::Inputs { a: (mix(k, 1) % 1_000) as i32 - 500, b: (mix(k, 2) % 9) as i32 + 1 };
+    let (outputs, _) = conform("accents", accents::RAccents::default(), "RAccents", &inputs, 200);
+    both(&outputs, "a negative quotient", |o| o.v < 0);
 }
 
 // The eighth refute round's tests: types outside ORCL's inside core's `Option` and a `char` refused at the program's
