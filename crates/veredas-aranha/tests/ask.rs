@@ -494,6 +494,11 @@ fn asking_is_refused_where_it_cannot_be_heard_sent_or_bounded() {
     // its turn and a second is said not sent.
     let full = Listener::start(vec![Box::new(hub.port("lan1", Mac([2, 0, 0, 0, 0, 0xA1])))], Options { rate: 1, queue: 1, ..Options::default() }).unwrap();
     let frame = dcp::identify_request(LAN0, 1, 1, &Filter::All).unwrap();
+    // (The first sent before the queue is filled: its worker then waits a whole second for the
+    // next turn, and the queue stays full while the ask is refused; filled at once, the worker
+    // could take the first in the instant before the ask, and make room for it.)
+    full.send("lan1", frame.clone()).unwrap();
+    assert!(full.until(Duration::from_secs(5), |s| s.stats.interfaces["lan1"].sent == 1));
     while full.send("lan1", frame.clone()).is_ok() {}
     assert!(matches!(ask::identify(&full, "lan1", &Identify::default()), Err(AskError::Listen(ListenError::QueueFull { queued: 1, .. }))));
     // A worker that ends while the request waits its turn: the request never sent, said at once.
