@@ -121,7 +121,7 @@ lang and diagnostic items, names, an impl's own type, macro call sites and the k
 (`rustc_structures::CrateType`, so a bin or a test build of the program's name is compiled and not lowered), which
 `rustc_public` does not give; each
 move of the nightly runs its suite. The closed list's next members, met by the first programs and refused by name
-until then: `<[T; N] as Default>::default`, `<&T as PartialEq>::eq` (derived on an enum with data), `Range`, `From`
+until then: `<[T; N] as Default>::default`, `<&T as PartialEq>::eq` (derived on an enum with data), `PartialEq::ne` on a program's own enum (derived), `Range`, `From`
 and `TryFrom`, `Ord::clamp`, a slice's `get`, `Option::unwrap_or`.
 
 ### Translators
