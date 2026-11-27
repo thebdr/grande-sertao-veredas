@@ -131,8 +131,17 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
         let s = |k: &str| p[k].as_str().map(str::to_string);
         let (Some(id), Some(name), Some(version)) = (s("id"), s("name"), s("version")) else { continue };
         let source = s("source");
-        let dir = PathBuf::from(s("manifest_path").unwrap_or_default());
-        let dir = dir.parent().and_then(|d| d.strip_prefix(&base).ok()).map(|d| d.display().to_string());
+        let manifest_path = PathBuf::from(s("manifest_path").unwrap_or_default());
+        // A package cargo reads by path from outside the commit's tree: a `paths` override of the
+        // caller's cargo configuration in place of a locked crate, which the builder's build, with
+        // no configuration, never reads.
+        if source.is_none() && !manifest_path.starts_with(&base) {
+            return Err(refused(format!(
+                "commit {commit}: cargo reads {name} {version} from {}, outside the commit's tree: a cargo configuration of the caller's (a `paths` override) puts it there, which the builder's build has none of",
+                manifest_path.parent().unwrap_or(&manifest_path).display()
+            )));
+        }
+        let dir = manifest_path.parent().and_then(|d| d.strip_prefix(&base).ok()).map(|d| d.display().to_string());
         // An empty or blank `license` or `license-file` states nothing (`license = ""`): none.
         let stated = |k: &str| s(k).filter(|v| !v.trim().is_empty());
         let licence = match (stated("license"), stated("license_file")) {
@@ -180,11 +189,11 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
     });
     let identify = |line: &str| -> Result<Option<String>, ListError> {
         // `name vX`, then cargo's marks and the source as it prints them (`(proc-macro)` first,
-        // `(<source>)` its parentheses alone taken off, a folder's own kept; ` (*)` last): a name
-        // and a version hold no space.
+        // `(<source>)` its parentheses alone taken off, a folder's own kept): a name and a version
+        // hold no space. No ` (*)` follows: `--no-dedupe` prints none, and normal and build edges
+        // make no cycle.
         let unread = || refused(format!("commit {commit}: cargo tree printed `{line}`"));
-        let rest = line.strip_suffix(" (*)").unwrap_or(line);
-        let (name, rest) = rest.split_once(" v").ok_or_else(unread)?;
+        let (name, rest) = line.split_once(" v").ok_or_else(unread)?;
         let (version, rest) = rest.split_once(' ').unwrap_or((rest, ""));
         let rest = rest.strip_prefix("(proc-macro)").map_or(rest, str::trim_start);
         let paren = match rest {
@@ -202,8 +211,10 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
                 (Some(path), None) => p.dir.as_ref().is_some_and(|d| Path::new(path) == base.join(d)),
                 (Some(printed), Some(src)) => match (printed.strip_prefix("registry `"), src.strip_prefix("git+")) {
                     (Some(r), _) => {
+                        // A registry the configuration names is printed by its name
+                        // (`registry `outra``): any of another registry than crates.io fits it.
                         let r = r.trim_end_matches('`');
-                        src != CRATES_IO && (src == r || src.strip_prefix("registry+") == Some(r))
+                        src != CRATES_IO && (src == r || src.strip_prefix("registry+") == Some(r) || (!r.contains("://") && (src.starts_with("registry+") || src.starts_with("sparse+"))))
                     }
                     (None, Some(git)) => {
                         // Its reference as cargo prints it, URL-encoded (`branch=fix%2Fx`), where
@@ -300,7 +311,7 @@ fn form_encoded(value: &str) -> String {
 /// builder compiles.
 fn list_cargo(cwd: &Path, tmp: &Path, argv: &[&str]) -> std::process::Command {
     let mut c = crate::cut::suite_command(cwd, tmp, argv, std::env::vars_os());
-    c.env("CARGO_ENCODED_RUSTFLAGS", "").env("RUSTC", "rustc").env("RUSTC_WRAPPER", "").env("RUSTC_WORKSPACE_WRAPPER", "");
+    c.env("CARGO_ENCODED_RUSTFLAGS", "").env("RUSTC", "rustc").env("RUSTC_WRAPPER", "").env("RUSTC_WORKSPACE_WRAPPER", "").env("CARGO_TERM_COLOR", "never");
     c
 }
 
@@ -378,7 +389,10 @@ pub fn list(root: &Path, commit: &str, release: Option<&str>) -> Result<String, 
     if !unread.is_empty() {
         return Err(refused(unread.join("\n")));
     }
-    let names: Vec<&str> = held.keys().map(String::as_str).collect();
+    // Each by its name and version (`-p veredas-core@2.1.0`): a package by path of the same name at
+    // another version may share the graph.
+    let specs: Vec<String> = held.values().map(|h| format!("{}@{}", h.name, h.version)).collect();
+    let names: Vec<&str> = specs.iter().map(String::as_str).collect();
     let packages = resolve_packages(root, commit, TARGET, &names)?;
     let lock_text = git::show(root, commit, "Cargo.lock").map_err(|e| refused(e.to_string()))?.unwrap_or_default();
     let lock = inputs::parse_lock(&lock_text).map_err(|e| refused(format!("commit {commit}: {e}")))?;

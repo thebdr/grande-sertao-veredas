@@ -291,7 +291,8 @@ pub fn as_built(root: &Path, release: &semver::Version, text: &str) -> Result<Ma
 pub fn tests_alone(root: &Path, tmp: &Path, commit: &str, held: &std::collections::BTreeMap<String, manifest::Held>, lock: &str) -> Result<(), CutError> {
     for h in held.values() {
         let features: Vec<String> = h.features.iter().cloned().collect();
-        let mut argv: Vec<String> = ["cargo", "nextest", "run", "-p", h.name.as_str(), "--profile", "default", "--no-tests=pass"].iter().map(|s| s.to_string()).collect();
+        let spec = format!("{}@{}", h.name, h.version);
+        let mut argv: Vec<String> = ["cargo", "nextest", "run", "-p", spec.as_str(), "--profile", "default", "--no-tests=pass"].iter().map(|s| s.to_string()).collect();
         argv.extend(builder::feature_args(&h.name, &features));
         eprintln!("alforge: {}'s own tests, built alone", h.name);
         let mut first = argv.clone();
@@ -463,7 +464,7 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     // Each component built alone, its executables named.
     let builds: Vec<builder::Build> = held
         .values()
-        .map(|h| builder::Build { package: h.name.clone(), dir: h.dir.clone(), bins: h.bins.iter().cloned().collect(), lib: h.lib.clone(), features: h.features.iter().cloned().collect() })
+        .map(|h| builder::Build { package: h.name.clone(), version: h.version.clone(), dir: h.dir.clone(), bins: h.bins.iter().cloned().collect(), lib: h.lib.clone(), features: h.features.iter().cloned().collect() })
         .collect();
     std::fs::create_dir_all(&o.work)?;
     let built = builder::build(&recipe, root, &commit, &toolchain, &builds, &o.work)?;

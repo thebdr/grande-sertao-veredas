@@ -86,6 +86,9 @@ pub const VENDOR: &str = "/build/vendor";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Build {
     pub package: String,
+    /// Its version, which names it to cargo with its name (`-p veredas-core@2.1.0`): a package by
+    /// path of the same name at another version may share the graph.
+    pub version: String,
     /// Its folder in the tree (`crates/veredas-oficina`), whose QML a Qt program imports.
     pub dir: String,
     pub bins: Vec<String>,
@@ -130,7 +133,7 @@ pub fn script(r: &Recipe, builds: &[Build]) -> String {
                 (true, false) => return None,
             };
             // Traced (docs/questions.md Q448): the log is the component's, beside its executables.
-            Some(format!("{} /build/out/trace/{}.trace cargo build --release --locked --offline --jobs {} -p {} {what}\n", crate::trace::STRACE, b.package, r.builder.cpus, b.package))
+            Some(format!("{} /build/out/trace/{}.trace cargo build --release --locked --offline --jobs {} -p {}@{} {what}\n", crate::trace::STRACE, b.package, r.builder.cpus, b.package, b.version))
         })
         .collect();
     let copies: String = builds

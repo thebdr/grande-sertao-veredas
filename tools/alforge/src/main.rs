@@ -81,8 +81,20 @@ fn components(commit: &str, release: Option<&str>) -> i32 {
         eprintln!("`{r}` is not SemVer: a release is named by its version");
         return 1;
     }
-    // The commit by its full id, as a release's manifest names it.
-    let id = match git::text(&root, &["rev-parse", "--verify", "--quiet", &format!("{commit}^{{commit}}")]) {
+    // The commit by its full id, as a release's manifest names it: the name resolved first, then
+    // peeled to its commit (a `:/<text>` name takes all that follows as its pattern).
+    let named = match git::text(&root, &["rev-parse", "--verify", "--quiet", "--end-of-options", commit]) {
+        Ok(Some(id)) => id.trim().to_string(),
+        Ok(None) => {
+            eprintln!("{commit} is no commit of {}", root.display());
+            return 2;
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    let id = match git::text(&root, &["rev-parse", "--verify", "--quiet", &format!("{named}^{{commit}}")]) {
         Ok(Some(id)) => id.trim().to_string(),
         Ok(None) => {
             eprintln!("{commit} is no commit of {}", root.display());

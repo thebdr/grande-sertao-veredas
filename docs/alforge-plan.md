@@ -139,7 +139,7 @@ Keys (each required unless a default is given):
    runs the whole suite there (`cargo nextest run --workspace`, the gate of `CLAUDE.md`, built
    first and run behind the machine's lock, its temporary files in the cache), and refuses a red
    one; then **each component's own tests, built alone** (Q444, ruled "Alone, and tested alone"):
-   `cargo nextest run -p <component>` with the features its executables need (Q443), each built
+   `cargo nextest run -p <component>@<version>` with the features its executables need (Q443), each built
    first and run behind the machine's lock, on the development machine, where the suite runs. Built
    alone, a component's features unify within its own inputs and its tests' dependencies, as its
    executables are built, so what ships is tested as it is built, not only with every member's
@@ -158,7 +158,7 @@ Keys (each required unless a default is given):
    build four jobs, holding the machine's lock for the database engine's compilation: the
    commit's tree as git stores it (its objects, no attribute or filter applied) and its
    dependencies' sources (`cargo vendor`, as `Cargo.lock` pins them) handed in on a disk as a tar
-   stream, `cargo build --release --locked --offline -p <component> --bins --features <what its
+   stream, `cargo build --release --locked --offline -p <component>@<version> --bins --features <what its
    bins require>` run inside for each component alone (in one build cargo unifies features across
    the packages it builds, so one component's manifest would reach another's executables) under
    the toolchain the suite was tested with (the development machine's `rustc`), the executables

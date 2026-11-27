@@ -529,3 +529,128 @@ fn the_callers_cargo_configuration_steers_no_list() {
     assert!(tree.status.success(), "{}", String::from_utf8_lossy(&tree.stderr));
     assert!(String::from_utf8_lossy(&tree.stdout).lines().any(|l| l.starts_with("errno ")), "{}", String::from_utf8_lossy(&tree.stdout));
 }
+
+/// The machine's cargo home, whose registry a test's own cargo home links to.
+fn machine_cargo_home() -> std::path::PathBuf {
+    std::env::var_os("CARGO_HOME").map(std::path::PathBuf::from).unwrap_or_else(|| Path::new(&std::env::var("HOME").unwrap()).join(".cargo"))
+}
+
+/// A cargo home of a test's own at `home`, crates.io's index, downloads and sources linked to the
+/// machine's (nothing else of the machine's written through it), `config` its configuration.
+fn own_cargo_home(home: &Path, config: &str) {
+    let real = machine_cargo_home().join("registry");
+    for part in ["index", "cache", "src"] {
+        let from = std::fs::read_dir(real.join(part)).unwrap().map(|e| e.unwrap().path()).find(|p| p.file_name().unwrap().to_string_lossy().starts_with("index.crates.io-")).unwrap();
+        std::fs::create_dir_all(home.join("registry").join(part)).unwrap();
+        std::os::unix::fs::symlink(&from, home.join("registry").join(part).join(from.file_name().unwrap())).unwrap();
+    }
+    std::fs::write(home.join("config.toml"), config).unwrap();
+}
+
+/// Round 5's forms: a `paths` override of the caller's cargo configuration, which reads a locked
+/// crate from outside the commit's tree, refused; a component named like a package by path of its
+/// graph at another version, in a folder whose name ends in ` (*`, listed; a `:/<text>` name of
+/// the commit taken as git takes it.
+#[test]
+fn a_paths_override_a_component_s_namesake_in_a_starred_folder_and_a_commit_named_by_its_message() {
+    let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\nexclude = [\"forks\"]\n");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nitoa = \"=1.0.19\"\n");
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    r.write(
+        "crates/veredas-portal/Cargo.toml",
+        "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nveredas-core = { path = \"../veredas-core\" }\ncore_v1 = { package = \"veredas-core\", path = \"../../forks/core (*\" }\n",
+    );
+    r.write("crates/veredas-portal/src/main.rs", "fn main() {}\n");
+    r.write("forks/core (*/Cargo.toml", "[workspace]\n\n[package]\nname = \"veredas-core\"\nversion = \"1.4.0\"\nedition = \"2021\"\nlicense = \"MIT\"\n");
+    r.write("forks/core (*/src/lib.rs", "\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let c = r.commit("an old core beside the new");
+    let run = |name: &str, home: Option<&Path>| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_alforge"));
+        cmd.args(["components", name]).current_dir(r.path());
+        if let Some(h) = home {
+            cmd.env("CARGO_HOME", h);
+        }
+        cmd.output().unwrap()
+    };
+    let out = run(&c, None);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let path = |r: &str| entry(&doc, r)["properties"].as_array().unwrap().iter().find(|p| p["name"] == "veredas:path").map(|p| p["value"].clone());
+    assert_eq!(path("veredas-core@2.1.0"), Some(serde_json::json!("crates/veredas-core")));
+    assert_eq!(path("veredas-core@1.4.0"), Some(serde_json::json!("forks/core (*")));
+    let portal = doc["dependencies"].as_array().unwrap().iter().find(|d| d["ref"] == "veredas-portal@2.0.0").unwrap();
+    assert_eq!(portal["dependsOn"], serde_json::json!(["veredas-core@1.4.0", "veredas-core@2.1.0"]));
+    // The commit by a `:/<text>` name: the same document.
+    let by_message = run(":/an old core", None);
+    assert!(by_message.status.success(), "{}", String::from_utf8_lossy(&by_message.stderr));
+    assert_eq!(by_message.stdout, out.stdout);
+
+    // A `paths` override of the caller's configuration, an unchanged copy of the locked crate
+    // outside the tree: cargo reads it there, which the builder never does, so the list is refused.
+    let d = tempfile::tempdir().unwrap();
+    let copy = d.path().join("override/itoa");
+    let src = std::fs::read_dir(machine_cargo_home().join("registry/src")).unwrap().map(|e| e.unwrap().path()).find(|p| p.file_name().unwrap().to_string_lossy().starts_with("index.crates.io-")).unwrap().join("itoa-1.0.19");
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    assert!(Command::new("cp").arg("-r").arg(&src).arg(&copy).status().unwrap().success());
+    let home = d.path().join("cargo-home");
+    own_cargo_home(&home, &format!("paths = [\"{}\"]\n", copy.display()));
+    let over = run(&c, Some(&home));
+    assert_eq!(over.status.code(), Some(2), "{}", String::from_utf8_lossy(&over.stdout));
+    let why = String::from_utf8_lossy(&over.stderr);
+    assert!(why.contains(&format!("cargo reads itoa 1.0.19 from {}, outside the commit's tree", copy.display())), "{why}");
+    // The same home without the override: the same document as the machine's.
+    std::fs::write(home.join("config.toml"), "").unwrap();
+    let plain = run(&c, Some(&home));
+    assert!(plain.status.success(), "{}", String::from_utf8_lossy(&plain.stderr));
+    assert_eq!(plain.stdout, out.stdout);
+}
+
+/// A crate of a registry the configuration names (`registry = "outra"`, a `file://` index of the
+/// test's own holding crates.io's own itoa 1.0.19) beside its crates.io twin: cargo prints the
+/// registry by its name, and each twin is its own entry (round 5's form).
+#[test]
+fn a_crate_of_a_named_registry_beside_its_crates_io_twin() {
+    use sha2::Digest;
+    let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let d = tempfile::tempdir().unwrap();
+    let crate_file = machine_cargo_home().join("registry/cache").read_dir().unwrap().map(|e| e.unwrap().path()).find(|p| p.file_name().unwrap().to_string_lossy().starts_with("index.crates.io-")).unwrap().join("itoa-1.0.19.crate");
+    let bytes = std::fs::read(&crate_file).unwrap();
+    let sum: String = sha2::Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::create_dir_all(d.path().join("dl")).unwrap();
+    std::fs::write(d.path().join("dl/itoa-1.0.19.crate"), &bytes).unwrap();
+    let index = Repo::new();
+    index.write("config.json", &format!("{{\"dl\":\"file://{}/dl/{{crate}}-{{version}}.crate\",\"api\":null}}", d.path().display()));
+    index.write("it/oa/itoa", &format!("{{\"name\":\"itoa\",\"vers\":\"1.0.19\",\"deps\":[{{\"name\":\"no-panic\",\"req\":\"^0.1\",\"features\":[],\"optional\":true,\"default_features\":true,\"target\":null,\"kind\":\"normal\"}}],\"cksum\":\"{sum}\",\"features\":{{}},\"yanked\":false}}\n"));
+    index.commit("an index of one crate");
+    let index_url = format!("file://{}", index.path().display());
+    let home = d.path().join("cargo-home");
+    own_cargo_home(&home, &format!("[registries.outra]\nindex = \"{index_url}\"\n"));
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n");
+    let core = |deps: &str| format!("[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\n{deps}");
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    // The other registry's crate fetched first (its index and download by `file://` alone), then
+    // crates.io's twin locked offline.
+    r.write("crates/veredas-core/Cargo.toml", &core("itoa_outra = { package = \"itoa\", version = \"=1.0.19\", registry = \"outra\" }\n"));
+    let out = cargo().args(["fetch"]).env("CARGO_HOME", &home).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    r.write("crates/veredas-core/Cargo.toml", &core("itoa = \"=1.0.19\"\nitoa_outra = { package = \"itoa\", version = \"=1.0.19\", registry = \"outra\" }\n"));
+    let out = cargo().args(["generate-lockfile", "--offline"]).env("CARGO_HOME", &home).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let c = r.commit("twins of two registries");
+    let tree = cargo().args(["tree", "--offline", "--locked", "--prefix", "none", "--format", "{p}"]).env("CARGO_HOME", &home).current_dir(r.path()).output().unwrap();
+    assert!(String::from_utf8_lossy(&tree.stdout).lines().any(|l| l == "itoa v1.0.19 (registry `outra`)"), "{}", String::from_utf8_lossy(&tree.stdout));
+    let run = Command::new(env!("CARGO_BIN_EXE_alforge")).args(["components", &c]).env("CARGO_HOME", &home).current_dir(r.path()).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let doc: Value = serde_json::from_slice(&run.stdout).unwrap();
+    let outra = format!("pkg:cargo/itoa@1.0.19?repository_url={}", url_encoded(&index_url));
+    for r in ["pkg:cargo/itoa@1.0.19", outra.as_str()] {
+        assert_eq!(entry(&doc, r)["hashes"][0]["content"], sum, "{r}");
+    }
+    let core_deps = doc["dependencies"].as_array().unwrap().iter().find(|d| d["ref"] == "veredas-core@2.1.0").unwrap();
+    assert_eq!(core_deps["dependsOn"].as_array().unwrap().len(), 2);
+}

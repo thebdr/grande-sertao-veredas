@@ -680,7 +680,7 @@ fn a_real_cuts_suite_is_the_whole_default_profile_behind_the_lock_and_the_tree_j
 
     // Each component's own tests, built alone after the suite (docs/questions.md Q444): built
     // first, then run behind the machine's lock, in the suite's environment; a red one refuses.
-    let alone = "cargo nextest run -p veredas-core --profile default --no-tests=pass";
+    let alone = "cargo nextest run -p veredas-core@2.0.0 --profile default --no-tests=pass";
     let alone_built = format!("{alone} --no-run{env}");
     let alone_locked = format!("flock /tmp/veredas-suite.lock {alone}");
     let alone_ran = format!("{alone}{env}");
@@ -917,7 +917,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
     assert_eq!(r.builder.cpus, 4);
     // Each component built alone, so cargo unifies features within its own inputs.
     // A component that ships no executable has its library built alone, for its dep-info.
-    let build = |p: &str, bins: &[&str], lib: &str| builder::Build { package: p.into(), dir: format!("crates/{p}"), bins: bins.iter().map(|b| b.to_string()).collect(), lib: Some(lib.into()), features: vec![] };
+    let build = |p: &str, bins: &[&str], lib: &str| builder::Build { package: p.into(), version: "2.0.0".into(), dir: format!("crates/{p}"), bins: bins.iter().map(|b| b.to_string()).collect(), lib: Some(lib.into()), features: vec![] };
     // Portal's `porteiro` requires features, which its build turns on whatever its defaults are
     // (docs/questions.md Q443), each quoted for the shell: a dependency's as cargo states it, its
     // own as `<package>/<feature>`, which a root package of the workspace cannot take for its own.
@@ -935,9 +935,9 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         format!("set -eu\nexport RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin\n\
          cd /build/src\nmkdir -p /build/out/bin /build/out/deps /build/out/trace\nrustc --version > /build/out/toolchain\nldd --version | head -1 > /build/out/libc\n\
          {qt_env}\n{qt_stage}\n\
-         {st} /build/out/trace/veredas-aranha.trace cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\n\
-         {st} /build/out/trace/veredas-maquinar.trace cargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\n\
-         {st} /build/out/trace/veredas-portal.trace cargo build --release --locked --offline --jobs 4 -p veredas-portal --bins --features 'dep/servir' --features 'veredas-portal/it'\\''s'\n\
+         {st} /build/out/trace/veredas-aranha.trace cargo build --release --locked --offline --jobs 4 -p veredas-aranha@2.0.0 --lib\n\
+         {st} /build/out/trace/veredas-maquinar.trace cargo build --release --locked --offline --jobs 4 -p veredas-maquinar@2.0.0 --bins\n\
+         {st} /build/out/trace/veredas-portal.trace cargo build --release --locked --offline --jobs 4 -p veredas-portal@2.0.0 --bins --features 'dep/servir' --features 'veredas-portal/it'\\''s'\n\
          {control}\nmissing=\n\
          cp target/release/libveredas_aranha.d /build/out/deps/\n\
          if [ -f target/release/veredas-bancada ]; then cp target/release/veredas-bancada /build/out/bin/; cp target/release/veredas-bancada.d /build/out/deps/; else echo \"ALFORGE-MISSING veredas-bancada\"; missing=1; fi\n\
@@ -976,7 +976,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
         let log = std::fs::read_to_string(&log_path).unwrap();
         assert_eq!(
             std::fs::read_to_string(d.path().join("calls")).unwrap(),
-            "cargo build --release --locked --offline --jobs 4 -p veredas-aranha --lib\ncargo build --release --locked --offline --jobs 4 -p veredas-maquinar --bins\ncargo build --release --locked --offline --jobs 4 -p veredas-portal --bins --features dep/servir --features veredas-portal/it's\n"
+            "cargo build --release --locked --offline --jobs 4 -p veredas-aranha@2.0.0 --lib\ncargo build --release --locked --offline --jobs 4 -p veredas-maquinar@2.0.0 --bins\ncargo build --release --locked --offline --jobs 4 -p veredas-portal@2.0.0 --bins --features dep/servir --features veredas-portal/it's\n"
         );
         assert_eq!(std::fs::read_to_string(root.join("out/toolchain")).unwrap(), "rustc 1.100.0 (0ef1bc386 2026-11-09)\n");
         let mut shipped: Vec<String> = std::fs::read_dir(root.join("out/bin")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
@@ -1057,7 +1057,7 @@ fn the_builder_builds_locked_offline_on_its_processors_and_refuses_a_bin_cargo_d
     // After every build, before anything is copied out (the staging function's own lines are
     // defined before the builds and run after the copies).
     let at = |f: &dyn Fn(&str) -> bool| script.lines().position(f).unwrap();
-    assert!(at(&|l| l == builder::CONTROL_CHECK) > at(&|l| l.contains(" cargo build ") && l.contains("-p veredas-portal --bins")));
+    assert!(at(&|l| l == builder::CONTROL_CHECK) > at(&|l| l.contains(" cargo build ") && l.contains("-p veredas-portal@2.0.0 --bins")));
     assert!(at(&|l| l == builder::CONTROL_CHECK) < at(&|l| l.starts_with("cp target/release/")));
     assert!(at(&|l| l.starts_with("cp target/release/")) < at(&|l| l.starts_with("stage_qt ")));
     match builder::outcome("ALFORGE-CONTROL-NAME\n", "ALFORGE-BUILD-EXIT 1", true, Path::new("/build/out/build.log")) {
@@ -1553,9 +1553,9 @@ fn a_proc_macro_component_has_its_library_built_for_its_dep_info() {
     let c = r.commit("a proc-macro component");
     let held = alforge::manifest::components_at(r.dir.path(), &c, &mut Vec::new()).unwrap();
     assert_eq!(held["veredas-macro"].lib.as_deref(), Some("veredas_macro"));
-    let b = builder::Build { package: "veredas-macro".into(), dir: "crates/veredas-macro".into(), bins: vec![], lib: held["veredas-macro"].lib.clone(), features: vec![] };
+    let b = builder::Build { package: "veredas-macro".into(), version: "2.0.0".into(), dir: "crates/veredas-macro".into(), bins: vec![], lib: held["veredas-macro"].lib.clone(), features: vec![] };
     let s = builder::script(&recipe(), &[b]);
-    assert!(s.lines().any(|l| l == format!("{} /build/out/trace/veredas-macro.trace cargo build --release --locked --offline --jobs 4 -p veredas-macro --lib", alforge::trace::STRACE)), "{s}");
+    assert!(s.lines().any(|l| l == format!("{} /build/out/trace/veredas-macro.trace cargo build --release --locked --offline --jobs 4 -p veredas-macro@2.0.0 --lib", alforge::trace::STRACE)), "{s}");
     assert!(s.lines().any(|l| l == "cp target/release/libveredas_macro.d /build/out/deps/"), "{s}");
 }
 
