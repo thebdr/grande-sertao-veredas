@@ -1,8 +1,8 @@
 {
   "clause": "C-250",
-  "verdict": "refuted",
-  "ranAt": "2026-11-27T10:17:39.437Z",
-  "headCommit": "f56b42fae7d5a546a35afa26cd1badd8582c7f02",
+  "verdict": "holds",
+  "ranAt": "2026-11-27T10:37:05.886Z",
+  "headCommit": "d82840bc57037d9316ba6215e77a58fbc333ed9a",
   "tests": [
     {
       "name": "crates/veredas-oficina/tests/component.rs",
