@@ -542,6 +542,48 @@ fn a_write_handed_to_the_caller_has_landed_already() {
 #[test]
 fn the_guard_refuses_another_wire_type_and_counts_it_and_the_access_levels_hold() {
     let server = Server::start(&spec()).unwrap();
+    // The access each variable advertises, as the stack's client reads it: AccessLevel and
+    // UserAccessLevel both, read 0x01 and read-write 0x03. The write-only variable's can be read
+    // by no client: async-opcua 0.19 refuses every attribute of a node that cannot be read.
+    let levels = block(async {
+        use opcua_types::{
+            AttributeId, NumericRange, QualifiedName, ReadValueId, TimestampsToReturn,
+        };
+        let mut client = raw_client();
+        let (session, handle) = raw_session(&mut client, &server).await;
+        let mut reads = Vec::new();
+        for id in ["count", "level", "start", "batch"] {
+            for attribute in [AttributeId::AccessLevel, AttributeId::UserAccessLevel] {
+                reads.push(ReadValueId {
+                    node_id: server.node_id(id),
+                    attribute_id: attribute as u32,
+                    index_range: NumericRange::None,
+                    data_encoding: QualifiedName::null(),
+                });
+            }
+        }
+        let read = session
+            .read(&reads, TimestampsToReturn::Neither, 0.0)
+            .await
+            .unwrap();
+        let _ = session.disconnect().await;
+        handle.abort();
+        read.into_iter().map(|d| d.value).collect::<Vec<_>>()
+    });
+    let byte = |b: u8| Some(Variant::Byte(b));
+    assert_eq!(
+        levels,
+        vec![
+            byte(3),
+            byte(3),
+            byte(1),
+            byte(1),
+            None,
+            None,
+            byte(3),
+            byte(3)
+        ]
+    );
     let (w, rx) = worker(&server, Auth::Anonymous);
     next_poll(&rx, Duration::from_secs(15));
     // A Double into the Int32, an Int32 into the bool, a bool into the text: each refused
@@ -566,8 +608,9 @@ fn the_guard_refuses_another_wire_type_and_counts_it_and_the_access_levels_hold(
         Some(("batch".into(), "Boolean(true)".into()))
     );
     // The caller's set of another type is refused, counted with them, and changes nothing.
+    let refused = server.set("level", 2);
     assert_eq!(
-        server.set("level", 2),
+        refused,
         Err(SetError::TypeMismatch {
             id: "level".into(),
             ty: "float",
@@ -575,8 +618,16 @@ fn the_guard_refuses_another_wire_type_and_counts_it_and_the_access_levels_hold(
         })
     );
     assert_eq!(
+        refused.unwrap_err().to_string(),
+        "variable `level` is float, not Int32(2)"
+    );
+    assert_eq!(
         server.set("nothing", 2),
         Err(SetError::Unknown("nothing".into()))
+    );
+    assert_eq!(
+        server.set("nothing", 2).unwrap_err().to_string(),
+        "no variable `nothing`"
     );
     assert_eq!(server.get("level"), Some(Variant::Double(1.5)));
     assert_eq!(server.status().type_mismatches, 4);
@@ -698,7 +749,7 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
     };
     let server = Server::start(&writable_spec()).unwrap();
     let ids = ["count", "level", "start", "batch"];
-    let (folder, namespaces, types, refused, after_refused, right) = block(async {
+    let (folder, namespaces, types, refused, after_refused, right, after_right) = block(async {
         use opcua_types::{
             BrowseDescription, BrowseDirection, BrowseResultMask, ObjectId, ReferenceTypeId,
         };
@@ -804,9 +855,25 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
             ])
             .await
             .unwrap();
+        // Landed: the next read finds each.
+        let after_right: Vec<Option<Variant>> = session
+            .read(&values, TimestampsToReturn::Neither, 0.0)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|d| d.value)
+            .collect();
         let _ = session.disconnect().await;
         handle.abort();
-        (folder, namespaces, types, refused, after_refused, right)
+        (
+            folder,
+            namespaces,
+            types,
+            refused,
+            after_refused,
+            right,
+            after_right,
+        )
     });
     assert_eq!(
         folder,
@@ -852,6 +919,17 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
     assert_eq!(types, want);
     assert_eq!(refused, vec![StatusCode::BadTypeMismatch; 5]);
     assert_eq!(right, vec![StatusCode::Good; 4]);
+    let landed = vec![
+        Some(Variant::Int32(7)),
+        Some(Variant::Double(2.5)),
+        Some(Variant::Boolean(true)),
+        Some(Variant::from("B-7")),
+    ];
+    assert_eq!(after_right, landed);
+    assert_eq!(
+        ids.iter().map(|id| server.get(id)).collect::<Vec<_>>(),
+        landed
+    );
     let mut handed = Vec::new();
     while let Some(w) = server.next_write(Duration::from_secs(5)) {
         handed.push(w);
@@ -894,6 +972,7 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
         assert_eq!(e.endpoint_url.as_ref(), server.endpoint_url);
         assert_eq!(e.server.application_uri.as_ref(), APP);
         assert_eq!(e.server.application_name.text.as_ref(), "veredas test");
+        assert_eq!(e.server.product_uri.as_ref(), APP);
     }
 }
 
@@ -978,9 +1057,19 @@ fn a_spec_that_cannot_be_served_is_refused_by_name_before_anything_binds() {
     let mut s = spec();
     s.port = taken_port;
     match Server::start(&s) {
-        Err(ServerError::Bind { addr, source }) => {
+        Err(e @ ServerError::Bind { .. }) => {
+            let text = e.to_string();
+            let ServerError::Bind { addr, source } = e else {
+                unreachable!()
+            };
             assert_eq!(addr, format!("127.0.0.1:{}", s.port));
             assert_eq!(source.kind(), std::io::ErrorKind::AddrInUse);
+            // The address, then the system's own words.
+            assert!(
+                text.starts_with(&format!("bind 127.0.0.1:{}: ", s.port)),
+                "{text}"
+            );
+            assert_eq!(text, format!("bind 127.0.0.1:{}: {source}", s.port));
         }
         other => panic!("{other:?}"),
     }
@@ -1039,7 +1128,8 @@ fn it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clien
     // Bound on the host it was given alone: another loopback address finds nothing there.
     let elsewhere = std::net::TcpStream::connect_timeout(
         &format!("127.0.0.2:{port}").parse().unwrap(),
-        Duration::from_secs(2),
+        // Windows answers a refused loopback connection after its own retries, about 2 s.
+        Duration::from_secs(10),
     );
     assert_eq!(
         elsewhere.map(|_| ()).map_err(|e| e.kind()),
@@ -1079,11 +1169,44 @@ fn it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clien
         ConnState::Retrying { .. }
     ));
     w.handle.join().unwrap();
-    // A drop stops it too.
+    // A drop is the same teardown: an accepted and answered connection at its end of file at
+    // once, a task on the server's runtime ended, the port free.
+    struct Ended(Arc<AtomicBool>);
+    impl Drop for Ended {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
     let server = Server::start(&spec()).unwrap();
     let port = server.port;
+    let mut plain = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    std::io::Write::write_all(&mut plain, &hello(&server.endpoint_url)).unwrap();
+    plain
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut ack = [0u8; 28];
+    std::io::Read::read_exact(&mut plain, &mut ack).unwrap();
+    assert_eq!(&ack[..4], b"ACKF");
+    let ended = Arc::new(AtomicBool::new(false));
+    let guard = Ended(Arc::clone(&ended));
+    let (started_tx, started_rx) = channel();
+    server.runtime().spawn(async move {
+        let _guard = guard;
+        let _ = started_tx.send(());
+        std::future::pending::<()>().await;
+    });
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     drop(server);
+    assert!(ended.load(Ordering::SeqCst), "the task outlived the drop");
     std::net::TcpListener::bind(("127.0.0.1", port)).expect("the port is free after a drop");
+    plain
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    let mut buf = [0u8; 64];
+    match std::io::Read::read(&mut plain, &mut buf) {
+        Ok(0) => {}
+        other => panic!("the accepted connection not closed by the drop: {other:?}"),
+    }
 }
 
 #[test]
