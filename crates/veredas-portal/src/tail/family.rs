@@ -500,6 +500,18 @@ fn retry_resolve(spec: &FamilySpec, stop: &AtomicBool) -> Option<Vec<FamilyFile>
 /// the newest is opened as the new active. Each round either opens the newest or consumes it as
 /// retired and resolves again: a rotation during the catch-up cannot outrun it. `None` means
 /// stopped.
+/// What a catch-up ends on: the newest opened, or (from the live loop, nothing above the old
+/// active by the time it looked) the old active kept.
+enum CatchUp {
+    Moved(TailedFile, OrderKey, String),
+    Stay,
+}
+
+/// `old`, from the live loop: the active the catch-up leaves. Nothing ranked above it at the
+/// catch-up's first look (a newer member gone between the listing that found it and this one, while
+/// the old active drained) keeps it, nothing flushed: waiting here, the active itself was read no
+/// more and every line written to it lost (C-036's ninth idle-cost round). Something above it, its
+/// torn last line is final, flushed before anything newer is read.
 #[allow(clippy::too_many_arguments)]
 fn newest_catch_up(
     spec: &FamilySpec,
@@ -509,8 +521,9 @@ fn newest_catch_up(
     stop: &AtomicBool,
     wake_rx: &Receiver<()>,
     wait: Duration,
+    mut old: Option<&mut TailedFile>,
     emit: &mut dyn FnMut(String),
-) -> Result<Option<(TailedFile, OrderKey, String)>, SourceError> {
+) -> Result<Option<CatchUp>, SourceError> {
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(None);
@@ -524,6 +537,12 @@ fn newest_catch_up(
         };
         let pending: Vec<FamilyFile> =
             files.iter().filter(|f| rank(f) > (consumed.0, consumed.1.as_str())).cloned().collect();
+        if pending.is_empty() && old.is_some() {
+            return Ok(Some(CatchUp::Stay));
+        }
+        if let Some(o) = old.take() {
+            o.flush_pending(emit);
+        }
         if pending.is_empty() {
             // Nothing above the high-water mark right now; wait for the family to move (both
             // while attaching to a family being born and when everything newer vanished
@@ -556,7 +575,7 @@ fn newest_catch_up(
             }
         };
         match opened {
-            Some(c) => return Ok(Some((c, cand.key, cand.file_name.clone()))),
+            Some(c) => return Ok(Some(CatchUp::Moved(c, cand.key, cand.file_name.clone()))),
             None => {
                 // Rotated away before it could be opened: consume what remains and resolve
                 // everything above it again.
@@ -795,9 +814,9 @@ fn attach_backfill(
                             Whereabouts::Here | Whereabouts::Unknown => lost(),
                         }
                     }
-                    match newest_catch_up(spec, cfg, (planned.key, planned.name.clone()), &[], stop, wake_rx, cfg.poll_interval, emit)? {
-                        None => Ok(BackfillAttach::Stopped),
-                        Some((c, k, nm)) => Ok(BackfillAttach::Attached { cursor: Box::new(c), key: k, name: nm, known: consumed, history_to: None }),
+                    match newest_catch_up(spec, cfg, (planned.key, planned.name.clone()), &[], stop, wake_rx, cfg.poll_interval, None, emit)? {
+                        None | Some(CatchUp::Stay) => Ok(BackfillAttach::Stopped),
+                        Some(CatchUp::Moved(c, k, nm)) => Ok(BackfillAttach::Attached { cursor: Box::new(c), key: k, name: nm, known: consumed, history_to: None }),
                     }
                 }
             }
@@ -1039,9 +1058,11 @@ fn run_family(
                         // The generic convergence reads every generation from the family's first
                         // file onward and opens the newest: no birth-window generation slips past.
                         let sentinel = (OrderKey::NONE, String::new());
-                        match newest_catch_up(&spec, &cfg, sentinel, &[], &stop, &wake_rx, attach_wait, &mut emit)? {
+                        match newest_catch_up(&spec, &cfg, sentinel, &[], &stop, &wake_rx, attach_wait, None, &mut emit)? {
                             None => return Ok(()),
-                            Some((c, k, n)) => break (c, k, n),
+                            Some(CatchUp::Moved(c, k, n)) => break (c, k, n),
+                            // No active to keep at the start: only the live loop's catch-up stays.
+                            Some(CatchUp::Stay) => continue,
                         }
                     }
                     ActiveMode::Fixed(fixed_name) => {
@@ -1530,11 +1551,12 @@ fn run_family(
                             next_rescan = Instant::now();
                             continue;
                         }
-                        cursor.flush_pending(&mut emit);
                         let consumed = (current_key, current_name.clone());
-                        match newest_catch_up(&spec, &cfg, consumed, &read_ids, &stop, &wake_rx, watch.wait_between(cfg.poll_interval, cfg.rescan_interval), &mut emit)? {
+                        match newest_catch_up(&spec, &cfg, consumed, &read_ids, &stop, &wake_rx, watch.wait_between(cfg.poll_interval, cfg.rescan_interval), Some(&mut cursor), &mut emit)? {
                             None => return Ok(()),
-                            Some((c, k, n)) => {
+                            // Nothing newer by the time it looked: the old active read on.
+                            Some(CatchUp::Stay) => continue,
+                            Some(CatchUp::Moved(c, k, n)) => {
                                 cursor = c;
                                 current_key = k;
                                 current_name = n;

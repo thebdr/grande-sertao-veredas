@@ -1096,24 +1096,31 @@ mod tests {
 
     /// After a flood: every overflow's wake, and any listing a walk during it asked for, taken as
     /// they come; then, once a walk has run after the last overflow (a walk needs 50 ms without one,
-    /// so none runs between an overflow and its being seen here), whether it asked for a listing
-    /// and woke the loop, a wake only that walk sends by then (nothing the tests flood with is a
+    /// so none runs between an overflow and its being seen here), asserted within half a second of
+    /// it, whether it asked for a listing and woke the loop, a wake only that walk sends by then (nothing the tests flood with is a
     /// name the watch wants).
     fn the_walk_lists_and_wakes(watch: &Watch, rx: &Receiver<()>) -> (bool, bool) {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let mut last = watch.overflows();
         let mut walks = watch.resyncs();
+        let mut last_seen = std::time::Instant::now();
         while std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
             let now = watch.overflows();
             if now != last {
                 last = now;
+                last_seen = std::time::Instant::now();
                 while rx.try_recv().is_ok() {}
                 let _ = watch.listing_due();
                 walks = watch.resyncs();
                 continue;
             }
             if watch.resyncs() > walks {
+                // The walk comes 50 ms after the last overflow: within half a second of its being
+                // seen here, whatever the rest of the run's load (a walk two seconds late passed
+                // every test, C-036's ninth idle-cost round).
+                let after = last_seen.elapsed();
+                assert!(after < Duration::from_millis(500), "the walk {after:?} after the last overflow was seen");
                 // The walk's listing, perhaps put off (five seconds after the last at least),
                 // then its wake.
                 let listed_by = std::time::Instant::now() + Duration::from_secs(6);
@@ -1127,6 +1134,25 @@ mod tests {
             }
         }
         (false, false)
+    }
+
+    /// After a flood, the watch settled: no overflow and no walk for longer than a listing may be put
+    /// off (`LIST_SPACING`), so nothing of the flood wakes the loop any more, whatever woke it
+    /// meanwhile taken.
+    fn settled_after_the_flood(watch: &Watch, rx: &Receiver<()>) {
+        let mut seen = (watch.overflows(), watch.resyncs());
+        let mut since = std::time::Instant::now();
+        while since.elapsed() < Duration::from_millis(5500) {
+            std::thread::sleep(Duration::from_millis(100));
+            let now = (watch.overflows(), watch.resyncs());
+            if now != seen {
+                seen = now;
+                since = std::time::Instant::now();
+            }
+        }
+        assert!(watch.resyncs() > 0, "the folders were walked after the flood");
+        while rx.try_recv().is_ok() {}
+        let _ = watch.listing_due();
     }
 
     /// A flood of names that overflows the kernel's queue wakes the loop (a write to the file read
@@ -1218,8 +1244,7 @@ mod tests {
         for f in flooding {
             f.join().unwrap();
         }
-        let (listed, woke) = the_walk_lists_and_wakes(&watch, &rx);
-        assert!(listed && woke, "the walk after the flood, its listing and its wake");
+        settled_after_the_flood(&watch, &rx);
         for i in 1..=20 {
             settle(&rx);
             let _ = watch.listing_due();

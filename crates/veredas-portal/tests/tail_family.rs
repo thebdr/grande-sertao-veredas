@@ -1636,3 +1636,56 @@ fn a_quiet_family_beside_a_flood_of_names_costs_its_follower_almost_nothing() {
     assert!(used < 0.1, "three seconds beside a flood of names used {used:.2} s of the follower's processor time");
     set.stop_all();
 }
+
+/// A newer member born and gone again (moved out of the folder) while the old active drains, its
+/// writer still writing the old active: the old active is read on, each of five lines within half a
+/// second (a poll of five seconds with the watcher on, the default poll with it off), and when a
+/// newer member comes at last every one of those lines is read once, in order, before its first.
+/// The catch-up found nothing above the old active and waited there, the active read no more:
+/// sixteen lines lost (C-036's ninth idle-cost refute round).
+#[test]
+fn a_newer_member_gone_while_the_old_active_drains_leaves_the_old_active_read() {
+    for notify in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("logs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let active = dir.join("app_1.log");
+        std::fs::write(&active, "").unwrap();
+        let spec = FamilySpec::new(&dir, r"app_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap();
+        let cfg = if notify {
+            FamilyTailConfig { poll_interval: Duration::from_secs(5), use_notify: Some(true), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() }
+        } else {
+            // A rescan of 50 ms lists the newer member in the 150 ms it lives, gone before the drain
+            // ends.
+            FamilyTailConfig { rescan_interval: Duration::from_millis(50), use_notify: Some(false), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() }
+        };
+        let (mut set, rx) = SourceSet::new();
+        set.spawn(Box::new(FamilyTailSource::new("vanished", "vanished", spec, cfg))).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let mut writer = std::fs::OpenOptions::new().append(true).open(&active).unwrap();
+        let mut line = |text: &str| {
+            std::io::Write::write_all(&mut writer, format!("{text}\n").as_bytes()).unwrap();
+            let written = Instant::now();
+            let got = rx.recv_timeout(Duration::from_millis(500)).map(|e| e.line);
+            assert_eq!(got.as_deref(), Ok(text), "watcher {notify}: {text} read within 500 ms of its write ({:?})", written.elapsed());
+        };
+        line("a 0");
+        std::fs::write(dir.join("app_2.log"), "").unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        std::fs::rename(dir.join("app_2.log"), root.path().join("away.log")).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        for i in 1..=5 {
+            line(&format!("a {i}"));
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        // Written unread, then a newer member: the old active's lines first, once, in order.
+        let mut f = std::fs::OpenOptions::new().append(true).open(&active).unwrap();
+        std::io::Write::write_all(&mut f, b"a 6\na 7\n").unwrap();
+        drop(f);
+        std::fs::write(dir.join("app_3.log"), "new 0\n").unwrap();
+        let got: Vec<String> = (0..3).filter_map(|_| rx.recv_timeout(Duration::from_secs(5)).ok().map(|e| e.line)).collect();
+        assert_eq!(got, ["a 6", "a 7", "new 0"], "watcher {notify}");
+        assert!(rx.recv_timeout(Duration::from_millis(500)).is_err(), "watcher {notify}: nothing more");
+        set.stop_all();
+    }
+}
