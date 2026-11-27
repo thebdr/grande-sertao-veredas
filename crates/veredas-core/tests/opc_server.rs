@@ -691,13 +691,20 @@ fn the_guard_refuses_another_wire_type_and_counts_it_and_the_access_levels_hold(
 }
 
 /// What core's worker never sends, sent through the stack's own client: a write with an index
-/// range, refused `BadIndexRangeInvalid` by the guard; one carrying no value, which the stack
-/// answers `BadTypeMismatch` before the guard sees it, uncounted; and one carrying the Null
-/// variant, which the stack lets through and the guard refuses as another wire type, counted.
-/// Nothing of them lands or is handed; a right write in the same call lands.
+/// range, refused `BadIndexRangeInvalid` by the guard; what the stack's own check answers
+/// `BadTypeMismatch` before the guard sees it, uncounted and no last kept (a write carrying no
+/// value, a ByteString into a text, an array of Doubles into the Int32); and what the stack lets
+/// through and the guard refuses as another wire type, counted (an array of Int32 into the
+/// Int32, the Null variant). Nothing of them lands or is handed; a right write in the same call
+/// lands.
 #[test]
 fn a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands() {
-    use opcua_types::{AttributeId, DataValue, NumericRange, WriteValue};
+    use opcua_types::{
+        Array, AttributeId, ByteString, DataValue, NumericRange, VariantScalarTypeId, WriteValue,
+    };
+    let array = |ty: VariantScalarTypeId, one: Variant| {
+        Variant::Array(Box::new(Array::new(ty, vec![one]).unwrap()))
+    };
     let server = Server::start(&spec()).unwrap();
     let results = block(async {
         let mut client = raw_client();
@@ -722,6 +729,21 @@ fn a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands() {
                 ),
                 write("count", DataValue::null(), NumericRange::None),
                 write(
+                    "batch",
+                    DataValue::value_only(Variant::ByteString(ByteString::from(vec![0x79u8]))),
+                    NumericRange::None,
+                ),
+                write(
+                    "count",
+                    DataValue::value_only(array(VariantScalarTypeId::Double, Variant::Double(1.5))),
+                    NumericRange::None,
+                ),
+                write(
+                    "count",
+                    DataValue::value_only(array(VariantScalarTypeId::Int32, Variant::Int32(4))),
+                    NumericRange::None,
+                ),
+                write(
                     "count",
                     DataValue::value_only(Variant::Empty),
                     NumericRange::None,
@@ -745,6 +767,9 @@ fn a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands() {
             StatusCode::BadIndexRangeInvalid,
             StatusCode::BadTypeMismatch,
             StatusCode::BadTypeMismatch,
+            StatusCode::BadTypeMismatch,
+            StatusCode::BadTypeMismatch,
+            StatusCode::BadTypeMismatch,
             StatusCode::Good,
         ]
     );
@@ -759,7 +784,8 @@ fn a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands() {
     assert_eq!(server.get("count"), Some(Variant::Int32(3)));
     assert_eq!(server.get("batch"), Some(Variant::from("z")));
     let status = server.status();
-    assert_eq!((status.type_mismatches, status.client_writes), (1, 1));
+    // The Int32 array and the Null counted, the Null the last; the stack's three not at all.
+    assert_eq!((status.type_mismatches, status.client_writes), (2, 1));
     assert_eq!(status.last_mismatch, Some(("count".into(), "Empty".into())));
 }
 
@@ -852,6 +878,11 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
                 write("count", Variant::UInt32(7)),
                 write("count", Variant::Int16(7)),
                 write("level", Variant::Float(2.5)),
+                write("level", Variant::Int32(2)),
+                write(
+                    "batch",
+                    Variant::LocalizedText(Box::new(opcua_types::LocalizedText::new("en", "B-9"))),
+                ),
                 write("start", Variant::Byte(1)),
             ])
             .await
@@ -945,7 +976,7 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
     .map(|t| Some(Variant::from(NodeId::from(t))))
     .collect();
     assert_eq!(types, want);
-    assert_eq!(refused, vec![StatusCode::BadTypeMismatch; 5]);
+    assert_eq!(refused, vec![StatusCode::BadTypeMismatch; 7]);
     assert_eq!(right, vec![StatusCode::Good; 4]);
     let landed = vec![
         Some(Variant::Int32(7)),
@@ -981,7 +1012,7 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
     assert_eq!(server.next_write(Duration::from_millis(200)), None);
     // Counted by the time they are handed.
     let status = server.status();
-    assert_eq!((status.type_mismatches, status.client_writes), (5, 4));
+    assert_eq!((status.type_mismatches, status.client_writes), (7, 4));
     assert_eq!(
         status.last_mismatch,
         Some(("start".into(), "Byte(1)".into()))
@@ -1001,7 +1032,40 @@ fn each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_cal
         assert_eq!(e.server.application_uri.as_ref(), APP);
         assert_eq!(e.server.application_name.text.as_ref(), "veredas test");
         assert_eq!(e.server.product_uri.as_ref(), APP);
+        let urls: Vec<&str> = e
+            .server
+            .discovery_urls
+            .iter()
+            .flatten()
+            .map(|u| u.as_ref())
+            .collect();
+        assert_eq!(urls, vec![server.endpoint_url.as_str()]);
     }
+    // FindServers, as a client looking for servers sees this one: the caller's application, its
+    // discovery URL the endpoint's own.
+    let found = block(async {
+        raw_client()
+            .find_servers(server.endpoint_url.as_str(), None, None)
+            .await
+            .unwrap()
+    });
+    let seen: Vec<(String, Vec<String>)> = found
+        .iter()
+        .map(|a| {
+            (
+                a.application_uri.as_ref().to_string(),
+                a.discovery_urls
+                    .iter()
+                    .flatten()
+                    .map(|u| u.as_ref().to_string())
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![(APP.to_string(), vec![server.endpoint_url.clone()])]
+    );
 }
 
 #[test]
@@ -1197,6 +1261,41 @@ fn it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clien
         ConnState::Retrying { .. }
     ));
     w.handle.join().unwrap();
+    // Bound on the host it is given: a spec naming 127.0.0.2 advertises it, a client reads a
+    // value there, and 127.0.0.1 at that port finds nothing.
+    let mut s = spec();
+    s.bind = "127.0.0.2".into();
+    let server = Server::start(&s).unwrap();
+    assert_eq!(
+        server.endpoint_url,
+        format!("opc.tcp://127.0.0.2:{}/", server.port)
+    );
+    let read = block(async {
+        let mut client = raw_client();
+        let (session, handle) = raw_session(&mut client, &server).await;
+        let read = session
+            .read(
+                &[value_of(server.node_id("count"))],
+                opcua_types::TimestampsToReturn::Neither,
+                0.0,
+            )
+            .await
+            .unwrap();
+        let _ = session.disconnect().await;
+        handle.abort();
+        read
+    });
+    assert_eq!(read[0].value, Some(Variant::Int32(3)));
+    let elsewhere = std::net::TcpStream::connect_timeout(
+        &format!("127.0.0.1:{}", server.port).parse().unwrap(),
+        Duration::from_secs(10),
+    );
+    assert_eq!(
+        elsewhere.map(|_| ()).map_err(|e| e.kind()),
+        Err(std::io::ErrorKind::ConnectionRefused)
+    );
+    drop(server);
+
     // A drop is the same teardown: an accepted and answered connection at its end of file at
     // once, a task on the server's runtime ended, the port free.
     struct Ended(Arc<AtomicBool>);
@@ -1345,6 +1444,78 @@ fn the_callers_limits_on_one_read_and_on_sessions_hold() {
     assert_eq!(nine_hundred, 900);
     assert_eq!(sessions, 20);
     assert_eq!(twenty_first, Err(true), "the 21st session");
+    drop(server);
+
+    // Limits given, three of each: three nodes per read advertised, a read of three answered and
+    // one of four refused; three sessions each reading, a fourth refused.
+    let mut s = spec();
+    s.max_nodes_per_read = Some(3);
+    s.max_sessions = Some(3);
+    let server = Server::start(&s).unwrap();
+    let (advertised, three, four, sessions, fourth) = block(async {
+        let node = |id: &str| value_of(server.node_id(id));
+        let mut held = Vec::new();
+        let mut sessions = 0;
+        for _ in 0..3 {
+            let mut client = raw_client();
+            let (session, handle) = raw_session(&mut client, &server).await;
+            let read = session
+                .read(&[node("count")], TimestampsToReturn::Neither, 0.0)
+                .await
+                .unwrap();
+            if read[0].value == Some(Variant::Int32(3)) {
+                sessions += 1;
+            }
+            held.push((client, session, handle));
+        }
+        let mut client = raw_client();
+        let fourth = try_raw_session(&mut client, &server)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.contains("BadTooManySessions"));
+        let session = &held[0].1;
+        let advertised = session
+            .read(
+                &[value_of(max_nodes_per_read.into())],
+                TimestampsToReturn::Neither,
+                0.0,
+            )
+            .await
+            .unwrap()[0]
+            .value
+            .clone();
+        let three = session
+            .read(
+                &[node("count"), node("level"), node("batch")],
+                TimestampsToReturn::Neither,
+                0.0,
+            )
+            .await
+            .map(|r| r.len())
+            .map_err(|e| e.to_string());
+        let four = session
+            .read(
+                &[node("count"), node("level"), node("start"), node("batch")],
+                TimestampsToReturn::Neither,
+                0.0,
+            )
+            .await
+            .map(|r| r.len())
+            .map_err(|e| e.to_string());
+        for (_client, session, handle) in held {
+            let _ = session.disconnect().await;
+            handle.abort();
+        }
+        (advertised, three, four, sessions, fourth)
+    });
+    assert_eq!(advertised, Some(Variant::UInt32(3)));
+    assert_eq!(three, Ok(3));
+    assert!(
+        matches!(&four, Err(e) if e.contains("BadTooManyOperations")),
+        "{four:?}"
+    );
+    assert_eq!(sessions, 3);
+    assert_eq!(fourth, Err(true), "the fourth session");
     drop(server);
 
     // A limit given: two nodes per read, advertised so.

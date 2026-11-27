@@ -573,7 +573,8 @@ async fn serve(
         .product_uri(spec.application_uri.as_str())
         .host(host)
         .port(port)
-        .discovery_urls(vec!["/".to_owned()]);
+        // The endpoint's whole URL: a client going from FindServers to GetEndpoints follows it.
+        .discovery_urls(vec![format!("opc.tcp://{host}:{port}/")]);
     if let Some(user) = &spec.user {
         builder = builder.add_user_token(
             &user.name,
