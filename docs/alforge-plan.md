@@ -215,14 +215,19 @@ Every crate but Oficina states `MIT OR Apache-2.0` and carries `LICENSE-MIT` and
 beside its manifest, the copyright holder thebdr; Oficina is `GPL-3.0-or-later` (Q35, ruled
 2026-11-25). A release ships that code and what it links (no legal advice):
 - **The cut refuses**, before it runs or builds anything, a release whose component list (C-295)
-  holds an entry stating no `license` (nor a `license-file`): a component, a package by path, a
-  crate cargo resolves for them. Every member states its licence since 2026-11-26, and every
+  holds an entry stating no `license` (nor a `license-file`; an empty one states none): a
+  component, a package by path, a crate cargo resolves for them; and a package by path whose
+  `license-file` the commit does not hold as a file, or which lies outside the repository. Every member states its licence since 2026-11-26, and every
   package the list holds at HEAD states one (C-294).
 - **The bundle carries `licenses/`**, made from the component list:
   - for each component and each package by path, its licence files and notices at any depth of its
-    folder (`LICENSE*`, `COPYING*`, `*NOTICE*`, `THIRD-PARTY*` and the like, and every file of a
-    `LICENSES/` folder) as git stores them, in `components/<name>/`;
-  - for each crate, the same of what its vendored sources ship, in `crates/<name>-<version>/`;
+    folder (any name holding `LICENSE`, `LICENCE`, `COPYING` or `NOTICE`, `THIRD-PARTY*` and the
+    like, and every file of a `LICENSES/` folder) as git stores them, in `components/<name>/`, a
+    package nested in its folder left to that package; and the file its `license-file` names,
+    whatever its name, wherever it lies in the repository (outside its folder, by its name at
+    `components/<name>/`, as `cargo package` would put it);
+  - for each crate, the same of what its vendored sources ship, in `crates/<name>-<version>/`, the
+    file its `license-file` names among them;
   - with Oficina's window, Qt's texts (Debian's own LGPL-3, GPL-2 and GPL-3) and Qt's own SPDX
     documents of the modules the bundle carries, which name the third-party code inside Qt (PCRE2,
     double-conversion, libpng, libjpeg, HarfBuzz, md4c) and its licences, and KDDockWidgets' (its

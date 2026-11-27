@@ -14,14 +14,15 @@ use crate::vm::VmError;
 
 /// Whether a file is one of a package's licence files or notices, by the names packages give them
 /// (`LICENSE`, `LICENSE-MIT`, `COPYING`, `NOTICE`, `UNLICENSE`, `COPYRIGHT`, `THIRD-PARTY-NOTICES.md`,
-/// `3RDPARTY.md`, with any ending but a Rust source's `.rs`; any name holding `NOTICE`).
+/// `3RDPARTY.md`, with any ending but a Rust source's `.rs`; any name holding `LICENSE`, `LICENCE`,
+/// `COPYING` or `NOTICE`, as a font's `OFL-LICENSE.txt`).
 pub fn is_licence_file(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     // A source of Rust (`licenses.rs`) is code, never a licence's text.
     if upper.ends_with(".RS") {
         return false;
     }
-    ["LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE", "COPYRIGHT", "THIRD-PARTY", "THIRD_PARTY", "THIRDPARTY", "3RDPARTY"].iter().any(|p| upper.starts_with(p)) || upper.contains("NOTICE")
+    ["COPYRIGHT", "THIRD-PARTY", "THIRD_PARTY", "THIRDPARTY", "3RDPARTY"].iter().any(|p| upper.starts_with(p)) || ["LICENSE", "LICENCE", "COPYING", "NOTICE"].iter().any(|p| upper.contains(p))
 }
 
 /// Whether a path inside a package (`src/x/LICENSE-MIT`, `LICENSES/MIT.txt`) is one of its licence
@@ -72,9 +73,57 @@ fn property<'a>(c: &'a Value, name: &str) -> Option<&'a str> {
     c["properties"].as_array().into_iter().flatten().find(|p| p["name"] == name).and_then(|p| p["value"].as_str())
 }
 
+/// The file an entry's licence is, as its manifest's `license-file` names it (crate::components
+/// writes it from the repository's root for a package by path, from the crate's folder for a crate).
+fn licence_file(c: &Value) -> Option<&str> {
+    c["licenses"][0]["license"]["name"].as_str()?.strip_prefix("the package's own file ")
+}
+
+/// A relative path with its `.` and `..` parts read away (`crates/x/../../LICENSE` is `LICENSE`):
+/// `None` for an absolute one or one that climbs above where it starts.
+fn within(path: &str) -> Option<String> {
+    if path.starts_with('/') {
+        return None;
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for p in path.split('/') {
+        match p {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            p => parts.push(p),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// The entries by path of a component list (`sbom`) whose `license-file` names a file the commit
+/// `commit` of the repository at `root` does not hold as a file (or one outside it), each said: what
+/// the cut refuses before it builds, as it refuses an entry stating no licence.
+pub fn missing_texts(sbom: &str, root: &Path, commit: &str) -> Result<Vec<String>, crate::git::GitError> {
+    let doc: Value = serde_json::from_str(sbom).unwrap_or_default();
+    let mut out = Vec::new();
+    for c in doc["components"].as_array().into_iter().flatten() {
+        let (Some(_), Some(file)) = (property(c, "veredas:path"), licence_file(c)) else { continue };
+        let r = c["bom-ref"].as_str().unwrap_or_default();
+        match within(file) {
+            None => out.push(format!("{r} names its licence file {file}, outside the repository: a release carries the text its licence is")),
+            Some(p) => {
+                if crate::git::run(root, &["cat-file", "blob", &format!("{commit}:{p}")])?.is_none() {
+                    out.push(format!("{r} names its licence file {p}, which commit {commit} does not hold: a release carries the text its licence is"));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Each vendored crate's licence files (`vendor/<name>-<version>/`, at any depth, a `LICENSES/`
-/// folder whole), copied into `dest/<name>-<version>/` at their own paths, before the vendored
-/// sources go.
+/// folder whole, and the file its manifest's `license-file` names, whatever its name), copied into
+/// `dest/<name>-<version>/` at their own paths, before the vendored sources go. A `license-file`
+/// outside the crate's folder is the file of its name at the crate's top, where `cargo package`
+/// put it.
 pub fn keep_vendored(vendor: &Path, dest: &Path) -> std::io::Result<()> {
     let _ = std::fs::remove_dir_all(dest);
     std::fs::create_dir_all(dest)?;
@@ -84,7 +133,16 @@ pub fn keep_vendored(vendor: &Path, dest: &Path) -> std::io::Result<()> {
         if !e.file_type()?.is_dir() {
             continue;
         }
-        for f in files_under(&e.path())?.into_iter().filter(|f| is_licence_path(f)) {
+        let mut kept: Vec<String> = files_under(&e.path())?.into_iter().filter(|f| is_licence_path(f)).collect();
+        let stated = std::fs::read_to_string(e.path().join("Cargo.toml")).ok().and_then(|t| t.parse::<toml::Table>().ok()).and_then(|m| m.get("package").and_then(|p| p.get("license-file")).and_then(|f| f.as_str()).map(str::to_string));
+        if let Some(f) = stated {
+            let named = within(&f).filter(|p| e.path().join(p).is_file());
+            let at_top = Path::new(&f).file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| e.path().join(n).is_file());
+            if let Some(p) = named.or(at_top).filter(|p| !kept.contains(p)) {
+                kept.push(p);
+            }
+        }
+        for f in kept {
             let to = dest.join(e.file_name()).join(&f);
             if let Some(parent) = to.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -151,21 +209,63 @@ pub fn assemble(sbom: &str, root: &Path, commit: &str, vendored: &Path, kdd_doc:
         let mut files: Vec<String> = Vec::new();
         let source;
         if let Some(dir) = property(c, "veredas:path") {
-            // A component or a package by path: its folder's own files at the commit.
+            // A component or a package by path: its folder's own files at the commit, a package's
+            // nested in it (a folder holding a manifest with `[package]`) left to that package.
             source = format!("this repository, {dir}");
             let to = format!("components/{name}");
-            let listing = crate::git::run(root, &["ls-tree", "-r", "-z", "--name-only", &format!("{commit}:{dir}")]).map_err(|e| io(e.to_string()))?.unwrap_or_default();
-            let paths: Vec<String> = listing.split(|b| *b == 0).filter(|p| !p.is_empty()).map(|p| String::from_utf8_lossy(p).into_owned()).filter(|p| is_licence_path(p)).collect();
-            for f in paths {
-                if let Some(text) = crate::git::run(root, &["cat-file", "blob", &format!("{commit}:{dir}/{f}")]).map_err(|e| io(e.to_string()))? {
-                    let at = dest.join(&to).join(&f);
-                    if let Some(parent) = at.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-                    std::fs::write(at, text)?;
-                    files.push(format!("{to}/{f}"));
+            let blob = |path: &str| crate::git::run(root, &["cat-file", "blob", &format!("{commit}:{path}")]).map_err(|e| io(e.to_string()));
+            let from_root = |f: &str| if dir.is_empty() { f.to_string() } else { format!("{dir}/{f}") };
+            // Its files alone (`<mode> blob <id>\t<path>`): a submodule's entry is no file of it.
+            let listing = crate::git::run(root, &["ls-tree", "-r", "-z", &format!("{commit}:{dir}")]).map_err(|e| io(e.to_string()))?.unwrap_or_default();
+            let all: Vec<String> = listing
+                .split(|b| *b == 0)
+                .filter_map(|e| {
+                    let e = String::from_utf8_lossy(e).into_owned();
+                    let (head, path) = e.split_once('\t')?;
+                    (head.split(' ').nth(1) == Some("blob")).then(|| path.to_string())
+                })
+                .collect();
+            let mut nested: Vec<String> = Vec::new();
+            for m in all.iter().filter_map(|p| p.strip_suffix("/Cargo.toml")) {
+                let text = blob(&from_root(&format!("{m}/Cargo.toml")))?.unwrap_or_default();
+                let manifest = String::from_utf8_lossy(&text).parse::<toml::Table>().unwrap_or_default();
+                if manifest.contains_key("package") || manifest.contains_key("project") {
+                    nested.push(format!("{m}/"));
                 }
             }
+            let mut paths: Vec<String> = all.into_iter().filter(|p| is_licence_path(p) && !nested.iter().any(|n| p.starts_with(n.as_str()))).collect();
+            // The file its `license-file` names, wherever it lies in the repository: at its own
+            // path inside the folder, by its name at the folder's top outside it (as `cargo
+            // package` puts it), under `license-file/` when a file of the folder has that name.
+            let mut stated: Option<(String, String)> = None;
+            if let Some(file) = licence_file(c) {
+                let p = within(file).ok_or_else(|| io(format!("{name} names its licence file {file}, outside the repository")))?;
+                let inside = if dir.is_empty() { Some(p.as_str()) } else { p.strip_prefix(&format!("{dir}/")) };
+                match inside {
+                    Some(rel) => {
+                        if !paths.iter().any(|x| x == rel) {
+                            paths.push(rel.to_string());
+                        }
+                    }
+                    None => {
+                        let base = Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        let at = if paths.contains(&base) { format!("license-file/{base}") } else { base };
+                        stated = Some((at, p.clone()));
+                    }
+                }
+            }
+            let mut carried: Vec<(String, String)> = paths.into_iter().map(|f| (f.clone(), from_root(&f))).collect();
+            carried.extend(stated);
+            for (f, from) in carried {
+                let text = blob(&from)?.ok_or_else(|| io(format!("{name}'s licence file {from} is not a file of commit {commit}")))?;
+                let at = dest.join(&to).join(&f);
+                if let Some(parent) = at.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(at, text)?;
+                files.push(format!("{to}/{f}"));
+            }
+            files.sort();
         } else if c["purl"].as_str().is_some_and(|p| p.starts_with("pkg:cargo/")) {
             source = c["purl"].as_str().unwrap_or_default().to_string();
             let folder = format!("{name}-{version}");

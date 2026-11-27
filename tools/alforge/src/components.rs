@@ -138,7 +138,9 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
         let source = s("source");
         let dir = PathBuf::from(s("manifest_path").unwrap_or_default());
         let dir = dir.parent().and_then(|d| d.strip_prefix(&base).ok()).map(|d| d.display().to_string());
-        let licence = match (s("license"), s("license_file")) {
+        // An empty or blank `license` or `license-file` states nothing (`license = ""`): none.
+        let stated = |k: &str| s(k).filter(|v| !v.trim().is_empty());
+        let licence = match (stated("license"), stated("license_file")) {
             (Some(l), _) => Licence::Expression(l),
             // A licence file, named from the root for a package by path.
             (None, Some(f)) => Licence::File(match (&source, &dir) {

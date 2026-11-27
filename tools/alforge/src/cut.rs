@@ -429,6 +429,11 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
     if !unlicensed.is_empty() {
         return Err(refused(unlicensed.iter().map(|r| format!("{r} states no licence (`license` or `license-file`): a release carries every package's licence")).collect::<Vec<_>>().join("\n")));
     }
+    // A package by path's `license-file` is a file of the commit, carried in `licenses/`.
+    let missing = crate::licences::missing_texts(&sbom, root, &commit).map_err(|e| refused(e.to_string()))?;
+    if !missing.is_empty() {
+        return Err(refused(missing.join("\n")));
+    }
     if o.run_suite {
         eprintln!("alforge: the whole suite at {commit}, behind the machine's lock");
         // Its temporary files on disk, outside any repository: /tmp is a tmpfs of the machine's

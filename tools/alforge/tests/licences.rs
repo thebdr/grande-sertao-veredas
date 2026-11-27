@@ -41,14 +41,14 @@ impl Repo {
 
 #[test]
 fn a_packages_licence_files_are_known_by_their_names() {
-    for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "license.txt", "COPYING", "COPYING.LESSER", "NOTICE", "UNLICENSE", "COPYRIGHT", "Licence.md", "THIRD-PARTY-NOTICES.md", "3RDPARTY.md", "LICENSE-UNICODE", "ThirdPartyNotices.txt"] {
+    for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "license.txt", "COPYING", "COPYING.LESSER", "NOTICE", "UNLICENSE", "COPYRIGHT", "Licence.md", "THIRD-PARTY-NOTICES.md", "3RDPARTY.md", "LICENSE-UNICODE", "ThirdPartyNotices.txt", "FiraSans-LICENSE.txt", "SourceSerif4-LICENSE.md", "noto-sans-kr-v13-korean-regular-LICENSE.txt", "OFL-licence.md", "README.COPYING"] {
         assert!(alforge::licences::is_licence_file(name), "{name}");
     }
     // At any depth, and every file of a `LICENSES/` folder (crc-catalog's, tokio-modbus's).
-    for path in ["LICENSES/MIT.txt", "LICENSES/Apache-2.0.txt", "src/polyfill/once_cell/LICENSE-MIT", "src/unicode_tables/LICENSE-UNICODE", "tz/LICENSE", "third_party/fiat/LICENSE"] {
+    for path in ["LICENSES/MIT.txt", "LICENSES/Apache-2.0.txt", "src/polyfill/once_cell/LICENSE-MIT", "src/unicode_tables/LICENSE-UNICODE", "tz/LICENSE", "third_party/fiat/LICENSE", "docs/doc/SourceCodePro-LICENSE.txt"] {
         assert!(alforge::licences::is_licence_path(path), "{path}");
     }
-    for path in ["src/lib.rs", "licenses.rs", "src/licensing/mod.rs"] {
+    for path in ["src/lib.rs", "licenses.rs", "src/licensing/mod.rs", "src/check_license.rs"] {
         assert!(!alforge::licences::is_licence_path(path), "{path}");
     }
     for name in ["README.md", "Cargo.toml", "src", "build.rs", "notes.md"] {
@@ -60,6 +60,105 @@ fn a_packages_licence_files_are_known_by_their_names() {
 fn an_entry_stating_no_licence_is_named() {
     let sbom = r#"{"components":[{"bom-ref":"a@1","licenses":[{"expression":"MIT"}]},{"bom-ref":"b@2"},{"bom-ref":"c@3","licenses":[{"license":{"name":"the package's own file c/LICENCA"}}]}]}"#;
     assert_eq!(alforge::licences::unlicensed(sbom), ["b@2"]);
+}
+
+#[test]
+fn a_manifest_stating_an_empty_licence_states_none() {
+    // `license = ""`, `license = "  "`, `license-file = ""`: the list states no licence for them,
+    // and the cut refuses them as it refuses a package stating none (`tests/bundle.rs`).
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
+    for (name, field) in [("veredas-um", "license = \"\""), ("veredas-dois", "license = \"   \""), ("veredas-tres", "license-file = \"\""), ("veredas-quatro", "license = \"\"\nlicense-file = \"LICENCA\"")] {
+        r.write(&format!("crates/{name}/Cargo.toml"), &format!("[package]\nname = \"{name}\"\nversion = \"2.0.0\"\nedition = \"2024\"\n{field}\n"));
+        r.write(&format!("crates/{name}/src/lib.rs"), "\n");
+    }
+    r.write("crates/veredas-quatro/LICENCA", "the text\n");
+    r.git(&["add", "-A"]);
+    r.git(&["commit", "-q", "-m", "empty licences"]);
+    let c = r.git(&["rev-parse", "HEAD"]);
+    let sbom = alforge::components::list(r.path(), &c, None).unwrap();
+    let mut none = alforge::licences::unlicensed(&sbom);
+    none.sort();
+    assert_eq!(none, ["veredas-dois@2.0.0", "veredas-tres@2.0.0", "veredas-um@2.0.0"]);
+    // An empty expression beside a licence file: the file is the licence.
+    let doc: serde_json::Value = serde_json::from_str(&sbom).unwrap();
+    let quatro = doc["components"].as_array().unwrap().iter().find(|e| e["name"] == "veredas-quatro").unwrap();
+    assert_eq!(quatro["licenses"], serde_json::json!([{ "license": { "name": "the package's own file crates/veredas-quatro/LICENCA" } }]));
+}
+
+#[test]
+fn the_file_a_license_file_names_ships_wherever_it_lies() {
+    // A component whose licence is a file of a name no licence file has, one whose file lies at the
+    // repository's top, and one naming a file the commit does not hold. A package nested in a
+    // component's folder keeps its own licence files.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-um\", \"crates/veredas-dois\", \"crates/veredas-dois/interno\"]\n");
+    r.write("LICENSE", "the repository's own text\n");
+    let pkg = |name: &str, field: &str| format!("[package]\nname = \"{name}\"\nversion = \"2.0.0\"\nedition = \"2024\"\n{field}\n");
+    r.write("crates/veredas-um/Cargo.toml", &pkg("veredas-um", "license-file = \"legal/terms.txt\""));
+    r.write("crates/veredas-um/src/lib.rs", "\n");
+    r.write("crates/veredas-um/legal/terms.txt", "um's terms\n");
+    r.write("crates/veredas-dois/Cargo.toml", &pkg("veredas-dois", "license-file = \"../../LICENSE\"\n\n[dependencies]\ninterno = { path = \"interno\" }"));
+    r.write("crates/veredas-dois/src/lib.rs", "\n");
+    r.write("crates/veredas-dois/interno/Cargo.toml", &pkg("interno", "license = \"BSD-3-Clause\""));
+    r.write("crates/veredas-dois/interno/src/lib.rs", "\n");
+    r.write("crates/veredas-dois/interno/LICENSE", "interno's BSD text\n");
+    // A folder of dois's that holds a manifest of no package is still dois's.
+    r.write("crates/veredas-dois/espaco/Cargo.toml", "[workspace]\n");
+    r.write("crates/veredas-dois/espaco/NOTICE", "dois's notice\n");
+    r.git(&["add", "-A"]);
+    r.git(&["commit", "-q", "-m", "licence files"]);
+    let c = r.git(&["rev-parse", "HEAD"]);
+    let sbom = alforge::components::list(r.path(), &c, Some("2.0.0")).unwrap();
+    assert_eq!(alforge::licences::unlicensed(&sbom), Vec::<String>::new());
+    assert_eq!(alforge::licences::missing_texts(&sbom, r.path(), &c).unwrap(), Vec::<String>::new());
+    let d = tempfile::tempdir().unwrap();
+    let dest = d.path().join("licenses");
+    alforge::licences::assemble(&sbom, r.path(), &c, &d.path().join("vendored"), None, &d.path().join("common"), &[], &dest).unwrap();
+    let read = |f: &str| std::fs::read_to_string(dest.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+    assert_eq!(read("components/veredas-um/legal/terms.txt"), "um's terms\n");
+    assert_eq!(read("components/veredas-dois/LICENSE"), "the repository's own text\n");
+    assert_eq!(read("components/veredas-dois/espaco/NOTICE"), "dois's notice\n");
+    assert_eq!(read("components/interno/LICENSE"), "interno's BSD text\n");
+    assert!(!dest.join("components/veredas-dois/interno").exists());
+    let third = read("THIRD-PARTY.md");
+    for row in [
+        "| veredas-um | 2.0.0 | the package's own file crates/veredas-um/legal/terms.txt | this repository, crates/veredas-um | components/veredas-um/legal/terms.txt |",
+        "| veredas-dois | 2.0.0 | the package's own file crates/veredas-dois/../../LICENSE | this repository, crates/veredas-dois | components/veredas-dois/LICENSE, components/veredas-dois/espaco/NOTICE |",
+        "| interno | 2.0.0 | BSD-3-Clause | this repository, crates/veredas-dois/interno | components/interno/LICENSE |",
+    ] {
+        assert!(third.lines().any(|l| l == row), "{row}\n{third}");
+    }
+
+    // A file of that name in the folder already: the stated one beside it, under `license-file/`.
+    r.write("crates/veredas-dois/LICENSE", "dois's own text\n");
+    r.git(&["add", "-A"]);
+    r.git(&["commit", "-q", "-m", "a LICENSE of dois's own"]);
+    let c = r.git(&["rev-parse", "HEAD"]);
+    let sbom = alforge::components::list(r.path(), &c, Some("2.0.0")).unwrap();
+    let dest = d.path().join("again");
+    alforge::licences::assemble(&sbom, r.path(), &c, &d.path().join("vendored"), None, &d.path().join("common"), &[], &dest).unwrap();
+    assert_eq!(std::fs::read_to_string(dest.join("components/veredas-dois/LICENSE")).unwrap(), "dois's own text\n");
+    assert_eq!(std::fs::read_to_string(dest.join("components/veredas-dois/license-file/LICENSE")).unwrap(), "the repository's own text\n");
+
+    // A licence file the commit does not hold, a folder, one outside the repository: each named.
+    r.write("crates/veredas-um/Cargo.toml", &pkg("veredas-um", "license-file = \"LICENCA\""));
+    r.write("crates/veredas-dois/Cargo.toml", &pkg("veredas-dois", "license-file = \"../../../LICENSE\"\n\n[dependencies]\ninterno = { path = \"interno\" }"));
+    r.write("crates/veredas-dois/interno/Cargo.toml", &pkg("interno", "license-file = \"src\""));
+    r.git(&["add", "-A"]);
+    r.git(&["commit", "-q", "-m", "missing licence files"]);
+    let c = r.git(&["rev-parse", "HEAD"]);
+    let sbom = alforge::components::list(r.path(), &c, Some("2.0.0")).unwrap();
+    let mut missing = alforge::licences::missing_texts(&sbom, r.path(), &c).unwrap();
+    missing.sort();
+    assert_eq!(
+        missing,
+        [
+            format!("interno@2.0.0 names its licence file crates/veredas-dois/interno/src, which commit {c} does not hold: a release carries the text its licence is"),
+            "veredas-dois@2.0.0 names its licence file crates/veredas-dois/../../../LICENSE, outside the repository: a release carries the text its licence is".to_string(),
+            format!("veredas-um@2.0.0 names its licence file crates/veredas-um/LICENCA, which commit {c} does not hold: a release carries the text its licence is"),
+        ]
+    );
 }
 
 #[test]
@@ -76,6 +175,15 @@ fn the_vendored_crates_licence_files_are_kept_and_nothing_else() {
         ("crc-catalog-2.5.0/src/lib.rs", "code"),
         ("ring-0.17.14/LICENSE", "ring"),
         ("ring-0.17.14/src/polyfill/once_cell/LICENSE-MIT", "once_cell's mit"),
+        // A licence file of a name no licence file has, named by the crate's `license-file`.
+        ("casket-0.1.3/Cargo.toml", "[package]\nname = \"casket\"\nlicense-file = \"legal/terms.txt\"\n"),
+        ("casket-0.1.3/legal/terms.txt", "casket's terms"),
+        ("casket-0.1.3/legal/other.txt", "not its licence"),
+        // One `cargo package` brought in from outside the crate: at its top, by its name.
+        ("cip-0.1.0/Cargo.toml", "[package]\nname = \"cip\"\nlicense-file = \"../TERMOS\"\n"),
+        ("cip-0.1.0/TERMOS", "cip's terms"),
+        // A font's licence, by its name.
+        ("deltae-0.3.2/docs/doc/FiraSans-LICENSE.txt", "OFL"),
     ] {
         std::fs::create_dir_all(vendor.join(f).parent().unwrap()).unwrap();
         std::fs::write(vendor.join(f), t).unwrap();
@@ -99,7 +207,10 @@ fn the_vendored_crates_licence_files_are_kept_and_nothing_else() {
     assert_eq!(
         found,
         [
+            "casket-0.1.3/legal/terms.txt",
+            "cip-0.1.0/TERMOS",
             "crc-catalog-2.5.0/LICENSES/MIT.txt",
+            "deltae-0.3.2/docs/doc/FiraSans-LICENSE.txt",
             "itoa-1.0.19/LICENSE-APACHE",
             "itoa-1.0.19/LICENSE-MIT",
             "ring-0.17.14/LICENSE",

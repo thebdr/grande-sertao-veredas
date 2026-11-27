@@ -1184,6 +1184,20 @@ fn every_refusal_before_the_build_stops_the_cut_with_nothing_built() {
     let (got, left) = trial_cut(r.dir.path());
     assert_eq!(message(got), "veredas-core@2.0.0 states no licence (`license` or `license-file`): a release carries every package's licence");
     assert!(!left);
+    // An empty one states none.
+    let (r, _) = repo_for_cut(workspace, Some(&recipe_with("cpus = 4", "cpus = 4")));
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\nlicense = \"\"\n");
+    r.commit("core states an empty licence");
+    let (got, left) = trial_cut(r.dir.path());
+    assert_eq!(message(got), "veredas-core@2.0.0 states no licence (`license` or `license-file`): a release carries every package's licence");
+    assert!(!left);
+    // A licence file the commit does not hold: refused before anything runs, naming it.
+    let (r, _) = repo_for_cut(workspace, Some(&recipe_with("cpus = 4", "cpus = 4")));
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\nlicense-file = \"LICENCA\"\n");
+    let c = r.commit("core's licence file is not there");
+    let (got, left) = trial_cut(r.dir.path());
+    assert_eq!(message(got), format!("veredas-core@2.0.0 names its licence file crates/veredas-core/LICENCA, which commit {c} does not hold: a release carries the text its licence is"));
+    assert!(!left);
 
     // The commit's components refused (its root manifest no workspace).
     let (r, c) = repo_for_cut("[package]\nname = \"veredas-raiz\"\nversion = \"2.0.0\"\nedition = \"2024\"\n", Some(&recipe_with("cpus = 4", "cpus = 4")));
