@@ -628,6 +628,59 @@ fn the_session_s_store_is_reached_by_its_readers_alone() {
     assert_eq!(one("// l.store.save_to(p)\nconst S: &str = \"the store\";"), Vec::<String>::new());
 }
 
+/// Each call of the session's arming as it is written: `Some(true)` when it is a closure's whole
+/// body handing on the closure's one parameter (`|on| s.set_writes_armed(on)`), so the run's arming
+/// and disarming reach the switch as the run gives them; `Some(false)` for any other call.
+fn armings_as_given(text: &str) -> Vec<bool> {
+    use proc_macro2::{Delimiter, TokenTree as T};
+    fn walk(stream: proc_macro2::TokenStream, out: &mut Vec<bool>) {
+        let trees: Vec<T> = stream.into_iter().collect();
+        let punct = |k: usize, c: char| matches!(trees.get(k), Some(T::Punct(p)) if p.as_char() == c);
+        let ident = |k: usize| match trees.get(k) {
+            Some(T::Ident(id)) => Some(id.to_string()),
+            _ => None,
+        };
+        for (i, t) in trees.iter().enumerate() {
+            match t {
+                T::Ident(id) if id.to_string().trim_start_matches("r#") == "set_writes_armed" => {
+                    let param = if i >= 5 && punct(i - 1, '.') && ident(i - 2).is_some() && punct(i - 3, '|') && punct(i - 5, '|') { ident(i - 4) } else { None };
+                    let handed = match trees.get(i + 1) {
+                        Some(T::Group(g)) if g.delimiter() == Delimiter::Parenthesis => {
+                            let inner: Vec<String> = g.stream().into_iter().map(|t| t.to_string()).collect();
+                            param.is_some_and(|p| inner == [p])
+                        }
+                        _ => false,
+                    };
+                    let whole = trees.len() == i + 2;
+                    out.push(handed && whole);
+                }
+                T::Group(g) => walk(g.stream(), out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(text.parse().unwrap_or_else(|e| panic!("a source that does not lex: {e:?}")), &mut out);
+    out
+}
+
+#[test]
+fn the_executable_hands_the_run_its_arming_as_given() {
+    // Refute round 8: the closure the executable hands the plant could arm on every call (the run's
+    // disarming arming again, the switch left armed until the session stops) with every count and
+    // test unmoved. Its one call of the session's arming is the closure's whole body, handing on
+    // what the run gives.
+    let text = std::fs::read_to_string(crate_dir().join("src").join(ARMING_FILE)).unwrap();
+    assert_eq!(armings_as_given(&text), [true], "{ARMING_FILE}: the session's arming handed to the run as given");
+    assert_eq!(armings_as_given("let a = Box::new(move |on| s.set_writes_armed(on));"), [true]);
+    assert_eq!(armings_as_given("let a = Box::new(move |_on: bool| s.set_writes_armed(true));"), [false]);
+    assert_eq!(armings_as_given("let a = Box::new(move |on| s.set_writes_armed(!on));"), [false]);
+    assert_eq!(armings_as_given("let a = Box::new(move |on| s.set_writes_armed(true));"), [false]);
+    assert_eq!(armings_as_given("let a = Box::new(move |on| { s.set_writes_armed(on); s.set_writes_armed(true) });"), [false, false]);
+    assert_eq!(armings_as_given("let a = Box::new(move |on| s.set_writes_armed(on) || true);"), [false]);
+    assert_eq!(armings_as_given("fn f(s: &Session) { s.set_writes_armed(true) }"), [false]);
+}
+
 #[test]
 fn the_plant_s_arming_is_named_where_the_run_arms_and_disarms_alone() {
     // A call of the plant's arming in any other file, or a third in `run.rs`, is counted.
