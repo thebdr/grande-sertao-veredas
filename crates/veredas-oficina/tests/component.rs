@@ -95,8 +95,19 @@ fn oficina_is_a_library_and_one_executable_its_window_behind_the_shell_feature()
     let copying = std::fs::read(crate_dir().join("COPYING")).expect("COPYING beside the manifest");
     assert_eq!(copying.len(), 35_149, "the GPL version 3 text's length");
     assert!(copying.starts_with(b"                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n"), "the GPL version 3's title");
-    let digest: String = Sha256::digest(&copying).iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(digest, "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986", "the GPL version 3 text, unchanged");
+    let sha256 = |bytes: &[u8]| Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect::<String>();
+    const GPL3: &str = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986";
+    assert_eq!(sha256(&copying), GPL3, "the GPL version 3 text, unchanged");
+    // And in what a commit holds (git's index): a regular file, not a link, holding the same text,
+    // so a clone and a release built from the tree carry it.
+    let git = |args: &[&str]| {
+        let out = Command::new("git").arg("-C").arg(crate_dir()).args(args).output().expect("git runs");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        out.stdout
+    };
+    let staged = String::from_utf8(git(&["ls-files", "--stage", "--", "COPYING"])).expect("UTF-8");
+    assert!(staged.starts_with("100644 ") && staged.trim_end().ends_with("\tCOPYING") && staged.lines().count() == 1, "COPYING kept by git as a regular file: {staged:?}");
+    assert_eq!(sha256(&git(&["cat-file", "blob", ":./COPYING"])), GPL3, "the GPL version 3 text as git keeps it");
     let mut targets: Vec<(String, String, Vec<String>)> = p["targets"]
         .as_array()
         .expect("targets")
@@ -282,9 +293,15 @@ fn the_bridge_is_one_private_seam() {
     let mut files = Vec::new();
     rust_files(&src, &mut files);
     let mut bridged = 0;
+    // Any identifier beginning `cxx` (cxx, cxx_qt, cxx_qt_lib…), its comments set aside.
+    fn names_bridge(text: &str) -> bool {
+        let code: String = text.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+        let ident = |c: char| c.is_alphanumeric() || c == '_';
+        code.match_indices("cxx").any(|(i, _)| !code[..i].chars().next_back().is_some_and(ident))
+    }
     for file in &files {
         let text = std::fs::read_to_string(file).expect("a source");
-        let names_bridge = text.contains("cxx_qt") || text.contains("cxx::");
+        let names_bridge = names_bridge(&text);
         if file.starts_with(&seam) {
             bridged += usize::from(text.contains("#[cxx_qt::bridge]"));
             for line in text.lines().map(str::trim) {
@@ -389,6 +406,27 @@ fn the_window_that_ships_carries_no_test_server() {
     assert!(!answered, "something answered on port {port}");
 }
 
+/// The whole window as it draws now, through Spix's screenshot (a PNG it writes when it gets to
+/// the request), read once the file is whole.
+fn shot(shell: &Shell, name: &str) -> Vec<u8> {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("shots");
+    std::fs::create_dir_all(&dir).expect("a folder for the screenshots");
+    let file = dir.join(format!("{}-{name}.png", std::process::id()));
+    let _ = std::fs::remove_file(&file);
+    shell.screenshot("oficina", &file);
+    let until = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(bytes) = std::fs::read(&file) {
+            if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.ends_with(b"IEND\xaeB`\x82") {
+                let _ = std::fs::remove_file(&file);
+                return bytes;
+            }
+        }
+        assert!(std::time::Instant::now() < until, "no screenshot {name} within 10 s\nthe shell's log:\n{}", shell.log_text());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 fn the_window_opens_as_oficina_with_the_project_pane_docked() {
     let shell = Shell::start(&[], &[]);
@@ -408,10 +446,17 @@ fn the_window_opens_as_oficina_with_the_project_pane_docked() {
             std::thread::sleep(Duration::from_millis(50));
         }
     };
+    // And by what the window draws, not only by Qt's flag: its pixels change when the dock closes,
+    // and are the same again when it opens.
+    let open = shot(&shell, "open");
     shell.invoke("oficina/area", "closeDock", &[common::X::Str("project".into())]);
     shown_within(false, "the pane still shown with its dock closed");
+    let closed = shot(&shell, "closed");
     shell.invoke("oficina/area", "openDock", &[common::X::Str("project".into())]);
     shown_within(true, "the pane not shown again with its dock opened");
+    let reopened = shot(&shell, "reopened");
+    assert!(open != closed, "the window draws the same with the project's dock open and closed");
+    assert!(open == reopened, "the window draws otherwise with the project's dock opened again");
     shell.invoke("oficina/area", "describeDocks", &[]);
     shell.wait_for("oficina/area", "docks", r#"[["project",true,false,true,true]]"#);
     // No folder named: the tree is empty and says nothing went wrong.
