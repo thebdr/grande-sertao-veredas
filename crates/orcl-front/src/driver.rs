@@ -15,11 +15,16 @@
 //! Every crate it compiles depends on the driver's three variables, `ORCL_FRONT_PROGRAM`, `ORCL_FRONT_OUT` and
 //! `ORCL_FRONT_REVISION`: the compiler's dep-info file names each with the value it holds (`# env-dep:`), as
 //! clippy-driver names `CLIPPY_ARGS`, and cargo, which reads that file back, rebuilds the crates when one of them
-//! changes, so a new revision or output path is written with no source changed. A crate cargo finds fresh it never
-//! compiles at all: one built plainly, without the driver's flags, in a target directory a wrapped build shares is
-//! reused as it is, and the wrapped build writes nothing or meets a function without MIR. So a wrapped build runs in
-//! a target directory of its own, never shared with a plain build, and a function of the program's crates without
-//! MIR is refused naming that likely cause.
+//! changes, so a new revision or output path is written with no source changed.
+//!
+//! Asked the compiler's verbose version (`-vV`), the driver answers with rustc's lines and one of its own after them,
+//! `orcl-front: <its version> <the nightly>` ([`version_line`]), whatever the environment or the options say. Cargo
+//! asks the wrapper as it asks rustc and fingerprints every crate by that answer, so in a target directory shared by
+//! plain and wrapped builds every switch between the two, either way, rebuilds every crate: a crate built plainly,
+//! without the driver's flags, is never reused by a wrapped build, nor a stale program file kept. A function of the
+//! program's crates without MIR, from a crate built without those flags by other means (an rlib built by rustc
+//! alone, by hand or elsewhere), is refused naming that likely cause.
+use std::io::Write;
 use std::process::ExitCode;
 
 use orcl_interp::{Limits, Machine};
@@ -41,6 +46,20 @@ use crate::error::Error;
 const PROGRAM: (&str, &str) = ("--orcl-program", "ORCL_FRONT_PROGRAM");
 const OUT: (&str, &str) = ("--orcl-out", "ORCL_FRONT_OUT");
 const REVISION: (&str, &str) = ("--orcl-revision", "ORCL_FRONT_REVISION");
+
+/// rustc's options asking its version, and asking it verbose: each alone, or the two in one (`-vV`, as cargo asks).
+const VERSION: [&str; 4] = ["-V", "--version", "-vV", "-Vv"];
+const VERBOSE: [&str; 4] = ["-v", "--verbose", "-vV", "-Vv"];
+
+fn any_of(args: &[String], options: &[&str]) -> bool {
+    args.iter().any(|a| options.contains(&a.as_str()))
+}
+
+/// The line the driver adds to the compiler's verbose version, after rustc's own: the front end, its version and the
+/// nightly it is pinned to, `orcl-front: 2.0.0-alpha.1 nightly-2026-11-21`.
+pub fn version_line() -> String {
+    format!("orcl-front: {} {NIGHTLY}", env!("CARGO_PKG_VERSION"))
+}
 
 /// What the driver lowers: the program's crate, where its file goes, and the revision its header names.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,7 +152,7 @@ impl Invocation {
         let program = option(PROGRAM)?;
         let out = option(OUT)?;
         let revision = option(REVISION)?;
-        let asks_version = args.iter().any(|a| a == "-vV" || a == "-V" || a == "--version");
+        let asks_version = any_of(&args, &VERSION);
         if !asks_version {
             args.push("-Zalways-encode-mir".into());
             args.push("-Zmir-opt-level=0".into());
@@ -259,6 +278,12 @@ pub fn main() -> ExitCode {
     match &invocation.lowers {
         Lowers::Nothing => rustc_driver::catch_with_exit_code(|| {
             rustc_driver::compiler_entrypoint(&invocation.rustc, &mut Front { lowers: &Lowers::Nothing, lowered: None });
+            // whatever the environment or the options say: cargo asks the wrapper as it asks rustc, and the driver
+            // gives every crate its flags, a program named or none
+            if any_of(&invocation.rustc, &VERSION) && any_of(&invocation.rustc, &VERBOSE) {
+                // a stdout closed under rustc's own lines is rustc's to answer
+                let _ = writeln!(std::io::stdout(), "{}", version_line());
+            }
         }),
         lowers => match compile_and_lower(&invocation.rustc, lowers) {
             Ok(()) => ExitCode::SUCCESS,

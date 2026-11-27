@@ -1290,9 +1290,15 @@ fn package(work: &Path, name: &str) -> PathBuf {
 /// plainly, or, when `wrapped` gives the program's file and revision, with the driver as `RUSTC_WRAPPER` and the
 /// environment naming the program `name`, its file and its revision.
 fn cargo_build(work: &Path, name: &str, target: &str, wrapped: Option<(&Path, &str)>) -> Output {
+    cargo_run(work, name, target, &["build"], wrapped)
+}
+
+/// `cargo_build` with cargo's command and its options `args` (`build`, `test --no-run`).
+fn cargo_run(work: &Path, name: &str, target: &str, args: &[&str], wrapped: Option<(&Path, &str)>) -> Output {
     let mut command = Command::new(env!("CARGO"));
     command
-        .args(["build", "--offline", "--manifest-path"])
+        .args(args)
+        .args(["--offline", "--manifest-path"])
         .arg(work.join(name).join("Cargo.toml"))
         // a cargo home of the test's own and a target it names: no other build's lock, cache or configuration
         .env("CARGO_HOME", work.join("cargo-home"))
@@ -1349,9 +1355,8 @@ fn under_cargo_a_new_revision_is_written() {
     assert_eq!(file::read(&fs::read(&second).unwrap()).unwrap().0.revision, "second");
 }
 
-/// The rule a wrapped build keeps, a target directory of its own: after a plain build of the package in another, the
-/// wrapped build compiles every crate with the driver's flags, the conveyor calling into `orcl-std`, and writes the
-/// program file.
+/// A wrapped build in a target directory of its own, after a plain build of the package in another: it compiles every
+/// crate with the driver's flags, the conveyor calling into `orcl-std`, and writes the program file.
 #[test]
 fn under_cargo_a_wrapped_build_in_a_target_of_its_own_after_a_plain_one_writes_the_file() {
     let work = fresh("cargo-plain-first");
@@ -1365,30 +1370,123 @@ fn under_cargo_a_wrapped_build_in_a_target_of_its_own_after_a_plain_one_writes_t
     assert_eq!(file::read(&fs::read(&file).unwrap()).unwrap().0.revision, "after-plain");
 }
 
-/// What the rule keeps away: a wrapped build sharing a plain build's target directory, the program's source touched,
-/// compiles the program's crate with the driver against the `orcl-std` the plain build left, which cargo finds fresh
-/// and which holds no MIR. The lowering is refused naming that likely cause, at the function's own name and place,
-/// and no file is written.
+/// Whether cargo's output says it compiled `krate`.
+fn compiled(out: &Output, krate: &str) -> bool {
+    String::from_utf8_lossy(&out.stderr).lines().any(|l| l.trim_start().starts_with(&format!("Compiling {krate} v")))
+}
+
+/// The round's third case, in one target directory: a wrapped build after a plain `cargo test`, no source changed,
+/// rebuilds every crate (the driver's answer to `-vV` is not rustc's, and cargo fingerprints every crate by it) and
+/// writes the conveyor's file, the program as lowered alone; a plain build after it rebuilds every crate again.
 #[test]
-fn under_cargo_a_wrapped_build_sharing_a_plain_build_s_target_refuses_naming_the_likely_cause() {
+fn under_cargo_a_wrapped_build_sharing_a_plain_build_s_target_rebuilds_and_writes_the_file() {
     let work = fresh("cargo-shared-target");
-    let package = package(&work, "conveyor");
-    let out = cargo_build(&work, "conveyor", "target", None);
-    assert!(out.status.success(), "the plain build: {}", String::from_utf8_lossy(&out.stderr));
-    let lib = package.join("src/lib.rs");
-    let mut text = fs::read_to_string(&lib).unwrap();
-    text.push_str("// touched\n");
-    fs::write(&lib, text).unwrap();
+    package(&work, "conveyor");
+    let out = cargo_run(&work, "conveyor", "target", &["test", "--no-run"], None);
+    assert!(out.status.success(), "the plain tests' build: {}", String::from_utf8_lossy(&out.stderr));
     let file = work.join("conveyor.orclb");
     let out = cargo_build(&work, "conveyor", "target", Some((&file, "shared")));
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(!out.status.success(), "the wrapped build in the plain build's target succeeded: {stderr}");
+    assert!(out.status.success(), "the wrapped build: {stderr}");
+    assert!(compiled(&out, "orcl-std") && compiled(&out, "conveyor"), "every crate rebuilt: {stderr}");
+    let (header, code) = file::read(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(header.revision, "shared");
+    let alone = lower_in("cargo-shared-target-alone", "conveyor", &program("conveyor")).result.unwrap().1;
+    assert_eq!((&code.types, &code.functions), (&alone.types, &alone.functions), "the program, as lowered alone");
+    let out = cargo_build(&work, "conveyor", "target", None);
+    assert!(out.status.success(), "the plain build after it: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(compiled(&out, "orcl-std") && compiled(&out, "conveyor"), "every crate rebuilt plainly");
+}
+
+/// The round's first case, in one target directory: a wrapped build of program A, a plain build of program B (A's
+/// source changed), then a wrapped build of B naming A's file and a new revision: the file is B's, never A's kept.
+#[test]
+fn under_cargo_program_a_then_program_b_keeps_no_stale_file() {
+    let work = fresh("cargo-a-then-b");
+    let package = package(&work, "lines");
+    let file = work.join("x.orclb");
+    let out = cargo_build(&work, "lines", "target", Some((&file, "rev-a")));
+    assert!(out.status.success(), "program A's wrapped build: {}", String::from_utf8_lossy(&out.stderr));
+    let a = file::read(&fs::read(&file).unwrap()).unwrap().1;
+    let lib = package.join("src/lib.rs");
+    let text = fs::read_to_string(&lib).unwrap();
+    let b = text.replace("o.v = i.a\n", "o.v = i.a + 1\n");
+    assert_ne!(b, text, "program B differs from A");
+    fs::write(&lib, &b).unwrap();
+    let out = cargo_build(&work, "lines", "target", None);
+    assert!(out.status.success(), "program B's plain build: {}", String::from_utf8_lossy(&out.stderr));
+    let out = cargo_build(&work, "lines", "target", Some((&file, "rev-b")));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "program B's wrapped build: {stderr}");
+    assert!(compiled(&out, "lines"), "program B's crate compiled by the driver: {stderr}");
+    let (header, code) = file::read(&fs::read(&file).unwrap()).unwrap();
+    assert_eq!(header.revision, "rev-b", "the file names B's revision");
+    let source = work.join("b.rs");
+    fs::write(&source, &b).unwrap();
+    let alone = lower_in("cargo-a-then-b-alone", "lines", &source).result.unwrap().1;
+    assert_eq!((&code.types, &code.functions), (&alone.types, &alone.functions), "the file holds program B");
+    assert_ne!(code.functions, a.functions, "not program A's");
+}
+
+/// A crate built without the front end's flags, an `orcl-std` rlib built by rustc alone: the conveyor calling into it
+/// is refused, by the name and place of the first function it reaches without MIR, in words naming that likely cause,
+/// and no file is written.
+#[test]
+fn a_function_of_a_crate_built_without_the_front_end_s_flags_is_refused_naming_the_likely_cause() {
+    let work = fresh("plain-std");
+    let w = work.display().to_string();
+    let std_src = orcl_std_dir().join("src/lib.rs").display().to_string();
+    let out = Command::new("rustc")
+        .arg(format!("+{}", nightly()))
+        .args(["--crate-name", "orcl_std", "--crate-type", "rlib", "--edition", "2024", &std_src, "--out-dir", &w])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "orcl-std by rustc alone: {}", String::from_utf8_lossy(&out.stderr));
+    let file = work.join("conveyor.orclb");
+    let source = program("conveyor").display().to_string();
+    let mut args = strings(&["--crate-name", "conveyor", "--crate-type", "rlib", "--edition", "2024", &source]);
+    args.extend(strings(&["--extern", &format!("orcl_std={w}/liborcl_std.rlib"), "-L", &w, "--out-dir", &w]));
+    args.extend(strings(&["--orcl-program", "conveyor", &format!("--orcl-out={}", file.display()), "--orcl-revision", "r"]));
+    let out = driver(&args);
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
     let edges = orcl_std_dir().join("src/edges.rs");
     let (line, column) = place_of(&edges, "pub fn scan(&mut self, clk: bool)");
     let words = "a crate built without the front end's flags, likely a target directory shared with a plain build";
     let wanted = format!("error: orcl-front: {}:{line}:{column}: {words}: `RTrig::scan`", edges.display());
     assert!(stderr.lines().any(|l| l == wanted), "wanted\n{wanted}\ngot\n{stderr}");
     assert!(!file.exists(), "no file written");
+}
+
+/// The driver's answer to a version query: rustc's own, and, asked verbose (`-vV`, as cargo asks the wrapper), one
+/// line more naming the front end, its version and its nightly, whatever the environment says; `-V` alone is
+/// rustc's.
+#[test]
+fn the_driver_s_verbose_version_is_rustc_s_and_a_line_of_its_own() {
+    let rustc = |arg: &str| {
+        let out = Command::new("rustc").arg(format!("+{}", nightly())).arg(arg).output().unwrap();
+        assert!(out.status.success(), "rustc {arg}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let answer = |args: &[&str], program: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_orcl-front-driver"));
+        command.env("LD_LIBRARY_PATH", library_path()).args(args);
+        for var in ["ORCL_FRONT_PROGRAM", "ORCL_FRONT_OUT", "ORCL_FRONT_REVISION"] {
+            command.env_remove(var);
+        }
+        if let Some(p) = program {
+            command.env("ORCL_FRONT_PROGRAM", p).env("ORCL_FRONT_OUT", "/nonexistent/x.orclb").env("ORCL_FRONT_REVISION", "r");
+        }
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let verbose = format!("{}orcl-front: {} {}\n", rustc("-vV"), env!("CARGO_PKG_VERSION"), nightly());
+    assert_eq!(answer(&["-vV"], None), verbose, "asked directly, no variable");
+    assert_eq!(answer(&["/usr/bin/rustc", "-vV"], None), verbose, "as cargo's wrapper, no variable");
+    assert_eq!(answer(&["/usr/bin/rustc", "-vV"], Some("conveyor")), verbose, "as cargo's wrapper, a program named");
+    assert_eq!(answer(&["--version", "--verbose"], None), verbose, "in long options");
+    assert_eq!(answer(&["-V"], None), rustc("-V"), "not verbose: rustc's line alone");
 }
 
 /// The 1-based line and column where `snippet` first stands in `source`.

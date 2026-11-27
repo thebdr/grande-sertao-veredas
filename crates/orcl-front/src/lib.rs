@@ -13,8 +13,9 @@
 //! the crate's `orcl_std::Program` implementation through `rustc_public` and writes the program file `--orcl-out`
 //! names (or `ORCL_FRONT_OUT`), under a header naming `orcl_std::LANGUAGE`, [`NIGHTLY`] and the revision
 //! `--orcl-revision` (or `ORCL_FRONT_REVISION`) gives. What the interpreter cannot run is refused by name and source
-//! location, and no file is written. Every crate it compiles depends on the three variables, so cargo rebuilds it when
-//! one changes; a wrapped build runs in a target directory of its own, never one a plain build shares.
+//! location, and no file is written. Every crate it compiles depends on the three variables, and the driver's answer
+//! to `-vV` adds a line of its own to rustc's, so cargo rebuilds every crate when one of them changes and on every
+//! switch between a plain build and a wrapped one, either way.
 #![cfg_attr(feature = "driver", feature(rustc_private))]
 #![forbid(unsafe_code)]
 #![deny(clippy::panic, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]

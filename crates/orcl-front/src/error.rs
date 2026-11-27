@@ -38,8 +38,8 @@ pub enum Refused {
     /// function, through a pointer or a trait object.
     Call,
     /// A function of the program's crates whose MIR the compiler did not keep: a crate built without the front end's
-    /// flags (`-Zalways-encode-mir`), likely `orcl-std` reused by cargo from a plain build in the target directory a
-    /// wrapped build shares.
+    /// flags (`-Zalways-encode-mir`), an rlib of `orcl-std` built by rustc alone, by hand or elsewhere (under cargo
+    /// the driver's answer to `-vV` keeps a plain build's crates apart from a wrapped build's).
     NoBody,
     /// A crate that is no program: not one non-generic `orcl_std::Program` implementation, or no `Default` of its
     /// state.
