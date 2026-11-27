@@ -1136,6 +1136,11 @@ const CONTROLS_CLEAR: &str = r#"(() => {
   return [mine.length, over, [s.left, s.top, s.right, s.bottom]];
 })()"#;
 
+/// What the view's zoom readout says, over its buttons.
+fn zoom_said(page: &mut Browser) -> String {
+    page.eval(r#"document.querySelector(".zoom .at").textContent"#).as_str().unwrap_or("").to_string()
+}
+
 fn assert_controls_clear(page: &mut Browser, what: &str) {
     let got = page.eval(CONTROLS_CLEAR);
     assert!(got[0].as_u64().unwrap() >= 14 && got[1] == json!([]), "{what}: the page's own controls over the drawing: {got}");
@@ -2752,8 +2757,10 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
     assert!(legend.iter().cloned().fold(0.0, f64::max) > 1.4 * legend[0], "a window where the legend wraps driven: its heights {legend:?}");
     // Placed by the element's box as it stands at every scale, whatever changed it (the fit, the
     // buttons, the wheel, Fit, the window): a group holding a text, a marker a group with a text or
-    // a text, each box moving with the scale.
-    for (step, act) in [("the fit", ""), ("a zoom in", "Zoom in"), ("a wheel in", "wheel in"), ("a wheel out", "wheel out"), ("a zoom out", "Zoom out"), ("Fit", "Fit"), ("a smaller window", "resize"), ("the window back", "restore")] {
+    // a text, each box moving with the scale. And the view's zoom said over its buttons at each:
+    // `Fit` while it stands on its fit's frame (a window changed among it), else its scale against
+    // the fit in percent.
+    for (step, act, said) in [("the fit", "", "Fit"), ("a zoom in", "Zoom in", "125%"), ("a wheel in", "wheel in", "140%"), ("a wheel out", "wheel out", "125%"), ("a zoom out", "Zoom out", "100%"), ("Fit", "Fit", "Fit"), ("a smaller window", "resize", "Fit"), ("the window back", "restore", "Fit")] {
         match act {
             "" => {}
             "wheel in" => wheel(&mut page, -100.0),
@@ -2772,7 +2779,23 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
         let moved = page.eval(MARKERS_NOW);
         assert!(moved[0].as_u64().unwrap() >= 8 && moved[1] == json!([]) && moved[2] == json!(2), "after {step}: a marker or a key's clone placed otherwise than by its box as it stands: {moved}");
         assert_controls_clear(&mut page, &format!("after {step}"));
+        assert_eq!(zoom_said(&mut page), said, "the zoom said after {step}");
     }
+    // Far in, a factor from ten times on; far out, under 1 % said so; the readout clear of the
+    // drawing at both.
+    for _ in 0..11 {
+        button(&mut page, "Zoom in");
+    }
+    still(&mut page);
+    assert_eq!(zoom_said(&mut page), "×12", "eleven zooms in, 1.25 to the eleventh");
+    assert_controls_clear(&mut page, "eleven zooms in");
+    button(&mut page, "Fit");
+    for _ in 0..24 {
+        button(&mut page, "Zoom out");
+    }
+    still(&mut page);
+    assert_eq!(zoom_said(&mut page), "<1%", "twenty-four zooms out");
+    assert_controls_clear(&mut page, "twenty-four zooms out");
     // The wheel's zoom, the person's until Fit, as the buttons' is: it narrows the view, which holds
     // across a change of the feed and of the window.
     button(&mut page, "Fit");
@@ -2827,6 +2850,10 @@ fn the_page_keeps_its_controls_off_the_drawing_and_tells_a_click_from_a_pan() {
     still(&mut page);
     let panned = vb(&mut page);
     assert!(panned != fit && page.eval(SELECTED) == json!(["outlet-3"]), "a drag from the background pans the view and clears nothing: {panned} from {fit}, selected {}", page.eval(SELECTED));
+    assert_eq!(zoom_said(&mut page), "100%", "a pan alone leaves the view at the fit's scale, no longer fitted");
+    button(&mut page, "Fit");
+    still(&mut page);
+    assert_eq!(zoom_said(&mut page), "Fit", "Fit after a pan");
     // The slop, 4 px from where the press went down (`SLOP`, the clause's): a press released under
     // it across, down, aslant and back is a click (the view not panned, `panned_between`, outlet 3
     // picked, the background clicked first to clear it); one released past it each way a pan (the

@@ -529,12 +529,15 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
   // A change of the view's scale (a fit, a zoom) has everything measured anew (`rescale`, below).
   let scaledAt = { w: vb.w, h: vb.h };
   let onScale = () => {};
+  // The view's zoom said beside its controls (set where they are made, below), anew at every change.
+  let sayZoom = () => {};
   const setVb = () => {
     svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
     if (vb.w !== scaledAt.w || vb.h !== scaledAt.h) {
       scaledAt = { w: vb.w, h: vb.h };
       onScale();
     }
+    sayZoom();
   };
   setVb();
   const fontSize = Math.max(vb0.h, vb0.w * 0.5) / 34;
@@ -994,6 +997,19 @@ export async function mountLayout(base: string, defs: ObjectDef[], onSelect: (id
 
   const controls = document.createElement("div");
   controls.className = "zoom";
+  // How far the view is zoomed, over its buttons: `Fit` while it stands on its fit's frame (fitted,
+  // or come back to it), else its scale against the last fit (a pan alone 100 %), in percent below
+  // ten times, as a factor from there, and under 1 % said so.
+  const at = document.createElement("output");
+  at.className = "at";
+  at.title = "The view's zoom against its fit";
+  sayZoom = () => {
+    const r = frame.w / vb.w, pct = Math.round(r * 100);
+    const onFrame = vb.x === frame.x && vb.y === frame.y && vb.w === frame.w && vb.h === frame.h;
+    at.textContent = onFrame ? "Fit" : pct >= 1000 ? `×${Math.round(r)}` : pct < 1 ? "<1%" : `${pct}%`;
+  };
+  controls.append(at);
+  sayZoom();
   for (const [label, f] of [["+", 1 / 1.25], ["−", 1.25], ["⤢", 0]] as [string, number][]) {
     const b = document.createElement("button");
     b.textContent = label;
