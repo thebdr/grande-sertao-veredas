@@ -249,29 +249,117 @@ fn refusal_statuses() -> std::collections::BTreeSet<u16> {
     out
 }
 
-/// Every way a read is refused: with each status a read is refused with (`refusal_statuses`), and
-/// answered as a success whose body is no JSON (cut short on its way, `cut`); each its name and the
-/// script that sets the page's stand-in for it.
+/// Every way a read is refused: with each status a read is refused with (`refusal_statuses`),
+/// answered as a success whose body is no JSON (cut short on its way, `cut`), and answered by a
+/// redirect in place of portal's answer (`redirect`: the read let through to the network and held
+/// there by the browser's own protocol, `redirected`, so the browser's own handling of one is what
+/// the page meets); each its name and the script that sets the page's stand-in for it.
 fn refusal_kinds() -> Vec<(String, String)> {
-    refusal_statuses().into_iter().map(|s| (s.to_string(), format!("window.__cut = false; window.__status = {s};"))).chain([("cut".to_string(), "window.__cut = true; window.__status = null;".to_string())]).collect()
+    refusal_statuses()
+        .into_iter()
+        .map(|s| (s.to_string(), format!("window.__cut = false; window.__redirect = false; window.__status = {s};")))
+        .chain([("cut".to_string(), "window.__cut = true; window.__redirect = false; window.__status = null;".to_string()), ("redirect".to_string(), "window.__cut = false; window.__redirect = true; window.__status = null;".to_string())])
+        .collect()
 }
+
+/// The way `go` makes a read refused by `kind`: as it is, or, for a redirect, with the next request
+/// whose address `pattern` matches held at its response by the browser's protocol (`Fetch`) and
+/// answered 302 to its own address asked again (which a page following redirects would read as
+/// data, or as portal's refusal of the address), the browser then doing with it what the page's
+/// fetch asks.
+fn refused_by(page: &mut Browser, kind: &str, pattern: &str, go: impl FnOnce(&mut Browser)) {
+    if kind != "redirect" {
+        return go(page);
+    }
+    page.call("Fetch.enable", json!({ "patterns": [{ "urlPattern": pattern, "requestStage": "Response" }] }));
+    let seen = page.events_of("Fetch.requestPaused").len();
+    go(page);
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let held = loop {
+        let all = page.events_of("Fetch.requestPaused");
+        if all.len() > seen {
+            break all[seen].clone();
+        }
+        assert!(std::time::Instant::now() < deadline, "no read of {pattern} held");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let url = held["params"]["request"]["url"].as_str().unwrap();
+    let to = format!("{url}{}moved=1", if url.contains('?') { '&' } else { '?' });
+    page.call("Fetch.fulfillRequest", json!({ "requestId": held["params"]["requestId"], "responseCode": 302, "responseHeaders": [{ "name": "location", "value": to }], "body": "" }));
+    page.call("Fetch.disable", json!({}));
+}
+
+/// The addresses of each read, as the browser's protocol matches a request's (`refused_by`).
+const LISTING_AT: &str = "*/portal/api/tables";
+const PAGE_AT: &str = "*/portal/api/table/data*";
+const SERIES_AT: &str = "*/portal/api/series";
+const WINDOW_AT: &str = "*/portal/api/series/data*";
 
 /// What the page draws for a read refused by `kind` whose stand-in says `words`: portal's words, led
-/// by two spaces and a tab, with the status, a line break and a space at their end; or, for a
-/// success that is no JSON, its status and that it was no JSON.
+/// by two spaces and a tab, with the status, a line break and a space at their end; for a success
+/// that is no JSON, its status and that it was no JSON; for a redirect, the browser's refusal to
+/// follow it (nothing of the address it points to).
 fn refusal_drawn(kind: &str, words: &str) -> String {
-    if kind == "cut" { "Error: 200 OK: an answer that is no JSON".to_string() } else { format!("Error:   \t{words} {kind}\nits second line ") }
+    match kind {
+        "cut" => "Error: 200 OK: an answer that is no JSON".to_string(),
+        "redirect" => "TypeError: Failed to fetch".to_string(),
+        _ => format!("Error:   \t{words} {kind}\nits second line "),
+    }
 }
 
-/// Every way each view makes each of its reads, by the page's own source (`main.ts`'s `route` shows a
-/// view, its `show`; a list's button picks, its `show` again; the pager's buttons ask a page; `show`
-/// asks the held table's page): the Tables view's listing by a pick and by its route, its page by
-/// Older, by a pick and by its route; the Series view's listing and window by a pick and by its route.
+/// Every way each view makes each of its reads, by the page's own source: the method each read's
+/// `getJson` stands in, and every call of it (`this.<method>(`): a call inside another method makes
+/// the read by that method's ways, a list's button (`b.onclick`) by a pick, the pager's buttons
+/// (`prev.onclick`, `next.onclick`) by Newer and by Older, and `main.ts`'s `route` (`<view>.show()`)
+/// by the view's route; a call of any other kind is refused by name until this reading knows it.
 fn read_ways() -> std::collections::BTreeSet<String> {
-    [("Tables tables", &["a pick", "its route"][..]), ("Tables table/data", &["Older", "a pick", "its route"][..]), ("Series series", &["a pick", "its route"][..]), ("Series series/data", &["a pick", "its route"][..])]
-        .into_iter()
-        .flat_map(|(read, ways)| ways.iter().map(move |w| format!("{read} by {w}")))
-        .collect()
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = std::fs::read_to_string(root.join("web/src/tables.ts")).unwrap().replace("\r\n", "\n");
+    let main = std::fs::read_to_string(root.join("web/src/main.ts")).unwrap().replace("\r\n", "\n");
+    let (tables, series) = src.split_once("export class Series").unwrap();
+    // The method a line of a class stands in: the last header at the class's own indentation above it.
+    let method_of = |part: &str, at: usize| -> String {
+        part[..at].lines().rev().find_map(|l| l.strip_prefix("  ").filter(|r| !r.starts_with(' ')).and_then(|r| { let r = r.trim_start_matches("private ").trim_start_matches("async "); let name: String = r.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect(); (!name.is_empty() && r[name.len()..].starts_with('(')).then_some(name) })).unwrap_or_else(|| panic!("no method above {}", &part[at..at + 40]))
+    };
+    fn ways(part: &str, main: &str, view: &str, m: &str, method_of: &dyn Fn(&str, usize) -> String) -> Vec<String> {
+        let mut out = Vec::new();
+        for (at, _) in part.match_indices(&format!("this.{m}(")) {
+            let line = part[..at].rsplit('\n').next().unwrap();
+            if line.contains("prev.onclick") {
+                out.push("Newer".to_string());
+            } else if line.contains("next.onclick") {
+                out.push("Older".to_string());
+            } else if line.contains("b.onclick") {
+                out.push("a pick".to_string());
+            } else if line.contains("onclick") || line.contains("addEventListener") || line.contains("setTimeout") || line.contains("setInterval") {
+                panic!("the {view} view calls {m} by a way this test does not name: {line}");
+            } else {
+                let outer = method_of(part, at);
+                assert_ne!(outer, m, "{m} calls itself");
+                out.extend(ways(part, main, view, &outer, method_of));
+            }
+        }
+        if main.contains(&format!("void {}.{m}()", view.to_lowercase())) {
+            out.push("its route".to_string());
+        }
+        out
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for (view, part) in [("Tables", tables), ("Series", series)] {
+        for (at, _) in part.match_indices("getJson<") {
+            let line = part[at..].lines().next().unwrap();
+            let route: String = line.split_once("/portal/api/").unwrap().1.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '/' || *c == '_').collect();
+            let m = method_of(part, at);
+            let found = ways(part, &main, view, &m, &method_of);
+            assert!(!found.is_empty(), "the {view} view's {route} made by no way this test knows");
+            out.extend(found.into_iter().map(|w| format!("{view} {route} by {w}")));
+        }
+    }
+    // The reading itself: the ways the views make today, Newer among them.
+    for w in ["Tables tables by a pick", "Tables tables by its route", "Tables table/data by Older", "Tables table/data by Newer", "Tables table/data by a pick", "Tables table/data by its route", "Series series by a pick", "Series series by its route", "Series series/data by a pick", "Series series/data by its route"] {
+        assert!(out.contains(w), "{w} not read off the source: {out:?}");
+    }
+    out
 }
 
 /// A refusal the page draws for `read` (a view and the route it reads, as `reads_made` names it),
@@ -350,22 +438,25 @@ const KEEP_ANSWERS: &str = r#"(() => {
   // A refusal of a read: portal's kind, its words led by two spaces and a tab and holding the
   // status, two spaces, a tab, a line break and a space at their end, with the status in
   // `__status`; or, while `__cut` is set, a success whose body was cut short (no JSON).
-  const refusal = (words) => window.__cut
+  // While `__redirect` is set the read is let through to the network instead, where the browser's
+  // protocol answers it by a redirect (`refused_by`), once.
+  const refusal = (words, a) => window.__redirect ? (window.__redirect = false, orig(...a)) : window.__cut
     ? new Response('{"schema": [', { status: 200, statusText: "OK", headers: { "content-type": "application/json" } })
     : new Response(JSON.stringify({ error: `  \t${words} ${window.__status ?? 500}\nits second line ` }), { status: window.__status ?? 500, headers: { "content-type": "application/json" } });
   window.fetch = async (...a) => {
     const url = String(a[0]);
     if (window.__fail && url.includes("/api/table/data")) {
       window.__fail = false;
-      return refusal("probe  failure,\tpage");
+      return refusal("probe  failure,\tpage", a);
     }
     if (window.__failSeries && new URL(url, location.href).pathname.endsWith("/portal/api/series")) {
       window.__failSeries = false;
-      return refusal("probe  failure,\tlisting");
+      return refusal("probe  failure,\tlisting", a);
     }
     const slow = window.__slow && url.includes(window.__slow);
     const refuse = slow && window.__slowRefuse;
-    if (slow) { window.__slow = null; window.__slowRefuse = false; window.__slowDone = false; window.__slowSent = true; }
+    // A slow read is made whatever it is answered with: a redirect meets it on the network.
+    if (slow) { window.__slow = null; window.__slowRefuse = false; window.__slowDone = false; window.__slowSent = true; window.__redirect = false; }
     const at = window.__holds.findIndex(([part]) => url.includes(part));
     const hold = at >= 0 ? window.__holds.splice(at, 1)[0] : null;
     if (hold) window.__held[hold[0]] = "sent";
@@ -376,7 +467,7 @@ const KEEP_ANSWERS: &str = r#"(() => {
       if (hold[2]) return new Response(JSON.stringify({ error: "probe refusal, held" }), { status: 500, headers: { "content-type": "application/json" } });
     }
     if (slow) { await new Promise((done) => setTimeout(done, 1500)); setTimeout(() => { window.__slowDone = true; }, 300); }
-    if (refuse) return refusal("probe  refusal,\tlate");
+    if (refuse) return refusal("probe  refusal,\tlate", a);
     if (!url.includes("/api/table/data") && !url.includes("/api/series/data")) return r;
     const j = await r.clone().json();
     if (window.__gone && url.includes("/api/table/data") && r.ok) {
@@ -991,14 +1082,18 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     // Each with every status a read is refused with (`refusal_statuses`), its words its own.
     // (And answered as a success whose body is no JSON.)
     for (kind, set) in refusal_kinds() {
-        page.eval(&format!(r#"(() => {{ {set} window.__slowSent = false; window.__slowRefuse = true; window.__slow = "/api/series/data"; {}; return true; }})()"#, series_button("plc/fill1")));
-        page.wait_for("window.__slowSent || null", Duration::from_secs(10));
+        refused_by(&mut page, &kind, WINDOW_AT, |page| {
+            page.eval(&format!(r#"(() => {{ {set} window.__slowSent = false; window.__slowRefuse = true; window.__slow = "/api/series/data"; {}; return true; }})()"#, series_button("plc/fill1")));
+            page.wait_for("window.__slowSent || null", Duration::from_secs(10));
+        });
         refused_whole(&mut page, &format!("a refused window ({kind})"), &[format!("Series series/data {kind}"), "Series series/data by a pick".into()], &refusal_drawn(&kind, "probe  refusal,\tlate"));
     }
     // The listing portal refuses (its own address, not a window's), a series picked: said in its own
     // words in the chart's place.
     for (kind, set) in refusal_kinds() {
-        page.eval(&format!(r#"(() => {{ {set} window.__failSeries = true; {}; return true; }})()"#, series_button("plc/fill1")));
+        refused_by(&mut page, &kind, SERIES_AT, |page| {
+            page.eval(&format!(r#"(() => {{ {set} window.__failSeries = true; {}; return true; }})()"#, series_button("plc/fill1")));
+        });
         refused_whole(&mut page, &format!("the series' listing refused ({kind})"), &[format!("Series series {kind}"), "Series series by a pick".into()], &refusal_drawn(&kind, "probe  failure,\tlisting"));
     }
     // And each made by the view's route, the series picked held: its window, then its listing.
@@ -1255,8 +1350,10 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     for (kind, set) in refusal_kinds() {
         pick(&mut page, "sorts");
         shown_at(&mut page, "1-50/110");
-        page.eval(&format!(r#"(() => {{ {set} window.__slowSent = false; window.__slowRefuse = true; window.__slow = "/api/tables"; document.querySelector('.list button[data-table="outlets"]').click(); return true; }})()"#));
-        page.wait_for("window.__slowSent || null", Duration::from_secs(10));
+        refused_by(&mut page, &kind, LISTING_AT, |page| {
+            page.eval(&format!(r#"(() => {{ {set} window.__slowSent = false; window.__slowRefuse = true; window.__slow = "/api/tables"; document.querySelector('.list button[data-table="outlets"]').click(); return true; }})()"#));
+            page.wait_for("window.__slowSent || null", Duration::from_secs(10));
+        });
         refused_whole(&mut page, &format!("the latest pick's listing refused ({kind})"), &[format!("Tables tables {kind}"), "Tables tables by a pick".into()], &refusal_drawn(&kind, "probe  refusal,\tlate"));
     }
     // Shown anew, the table's window takes the rows stored since; a page portal refuses is said in
@@ -1264,9 +1361,23 @@ fn a_sessions_tables_rows_series_and_windows_read_through_its_portal() {
     for (kind, set) in refusal_kinds() {
         pick(&mut page, "sorts");
         shown_at(&mut page, "1-50/110");
-        page.eval(&format!("{set} window.__fail = true; true"));
-        click(&mut page, "Older ›");
+        refused_by(&mut page, &kind, PAGE_AT, |page| {
+            page.eval(&format!("{set} window.__fail = true; true"));
+            click(page, "Older ›");
+        });
         refused_whole(&mut page, &format!("a refused page ({kind})"), &[format!("Tables table/data {kind}"), "Tables table/data by Older".into()], &refusal_drawn(&kind, "probe  failure,\tpage"));
+    }
+    // And a page asked by Newer, from the second page, refused with every way a read is refused.
+    for (kind, set) in refusal_kinds() {
+        pick(&mut page, "sorts");
+        shown_at(&mut page, "1-50/110");
+        click(&mut page, "Older ›");
+        shown_at(&mut page, "51-100/110");
+        refused_by(&mut page, &kind, PAGE_AT, |page| {
+            page.eval(&format!("{set} window.__fail = true; true"));
+            click(page, "‹ Newer");
+        });
+        refused_whole(&mut page, &format!("a page asked by Newer refused ({kind})"), &[format!("Tables table/data {kind}"), "Tables table/data by Newer".into()], &refusal_drawn(&kind, "probe  failure,\tpage"));
     }
     // And each made otherwise: the listing by the view's route, the page by a pick and by the route
     // (the table held).
