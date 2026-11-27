@@ -163,7 +163,7 @@ fn shared_files(sessions: &[SessionSpec]) -> Result<(), ConfigError> {
         }
         for (file, what) in files {
             // A path the engine may read otherwise than as a file here is refused by name (Q190,
-            // DECISION PENDING): the host places plain paths alone.
+            // ruled 2026-11-26: "Refuse it by name"): the host places plain paths alone.
             if engine_reads_otherwise(&file) {
                 return Err(ConfigError::Invalid(format!(
                     "session `{}`: {what} is at {}, a path whose first part holds a colon or which begins with `~`, which the database engine may read otherwise than as a file here (a database's type, another file system, a URL, the home folder): give the supervisão file and the project a plain path",

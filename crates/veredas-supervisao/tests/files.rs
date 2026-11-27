@@ -616,7 +616,7 @@ fn two_sessions_never_open_one_database_file() {
         chain_in(dir.path(), "stores", "a.duckdb");
         let got = refused(config::load_file(&path));
         assert!(got.starts_with("session `yard`: ") && got.contains(" is the database file session `hall` opens for its store"), "no place ahead of two sharing a file: {got}");
-        // A path the engine may read otherwise than as a file here (Q190, DECISION PENDING), refused
+        // A path the engine may read otherwise than as a file here (Q190, ruled 2026-11-26), refused
         // by name: the supervisão file given by a path whose first part is a folder named with a colon
         // (a database's type, the engine's own or another's; a file system's or a URL's scheme; one
         // letter before it, no drive on Linux) or beginning with `~` (the home folder), so the

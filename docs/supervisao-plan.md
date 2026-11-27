@@ -172,6 +172,11 @@ dashboard), and its `docs/supervisao-plan.md`.
   WebSocket the tests write in a few lines, and read back what it drew. The suite needs that
   browser as it needs a socket: a missing one fails, never skips. GitHub's Ubuntu runner carries
   Chrome.
+- The page is claimed in Chromium (`docs/questions.md` Q48, ruled 2026-11-26, "chromium is
+  sufficient"): the engine the tests drive and the tester machine ships. What it does in another
+  engine is outside the claim, and so is a refute round's finding that needs one (the markers the
+  architect found off their path in Firefox on 2026-11-26 among it; in Chrome for Testing they
+  were right).
 - What the page adds to the drawing for an object carries the object's id in `data-for` (a
   marker's tag its key in `data-key`), so the drawing is read by id, as it is bound.
 - The charts are SVG drawn by the page's own code: the objects are small and specific (dashed
@@ -270,7 +275,15 @@ The architect's decisions of 13 to 15 November 2026 that touch supervisão
   rule"): a name or a value from a device, a log or a file is shown as text, never as markup; the
   interface reads the structured state, never parsed state text; a CSV export, when there is one,
   neutralises formula cells.
-- Open: the review's entry 43 (contrast, a light theme), under Q31.
+- **A light theme joins the list** (Q31 entry 43, ruled 2026-11-26, "A light theme joins the
+  list"): it is the suite's interfaces', and reaches the page when the shared look gains it,
+  nothing built before then. Colour blindness is answered by the mark-and-word rule the page keeps
+  (a state's mark and word beside its colour); the outline keeps its colour ("Outline becomes
+  #7A7399" not chosen).
+- **Each component's role as a subtitle** (Q31 minor 54, ruled 2026-11-26, "Yes, subtitle and
+  aliases"): the top bar shows supervisão's role under its name, in the interface's language; the
+  command palette's unaccented and English aliases are Oficina's. Built with the shared look's
+  subtitle.
 - **A linked CSV read both ways** (`docs/questions.md` Q131, ruled 2026-11-25, "Show both, operator
   picks"): a file that fits two dialects comes from portal with both readings and their first rows,
   and a page shows them for the operator to pick, the pick written into the view. Whether that page
