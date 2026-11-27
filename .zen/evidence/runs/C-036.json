@@ -14,10 +14,10 @@
     "binary(tail_family) | test(tail::watch::)"
   ],
   "exitCode": 0,
-  "outputSha": "04d6d2198205f70c6f1021861224e02dccd962bdd37600ac348958b47fe407f9",
-  "outputTail": "        PASS [   2.679s] (43/55) veredas-portal::tail_family the_bench_emitter_rotating_on_a_line_count_is_followed_whole_in_utf8\n        PASS [   3.211s] (44/55) veredas-portal::tail_family the_bench_emitter_rotating_on_a_line_count_is_followed_whole_in_utf16\n        PASS [   3.669s] (45/55) veredas-portal::tail_family a_recursive_family_beside_a_busy_folder_costs_almost_nothing\n        PASS [   4.332s] (46/55) veredas-portal::tail_family fixed_name_generation_bursts_lose_nothing\n        PASS [   4.643s] (47/55) veredas-portal::tail_family fixed_name_straggler_into_the_renamed_file_loses_nothing\n        PASS [   4.782s] (48/55) veredas-portal::tail_family with_no_watcher_a_newest_family_waits_no_longer_than_its_rescan\n        PASS [   5.136s] (49/55) veredas-portal::tail_family a_replacement_and_a_newer_member_in_one_burst_are_read_in_order\n        PASS [   6.072s] (50/55) veredas-portal::tail_family folders_born_nested_at_once_in_a_tree_are_each_watched\n        PASS [   6.561s] (51/55) veredas-portal::tail_family indexed_generation_bursts_faster_than_the_rescan_lose_nothing\n        PASS [   6.595s] (52/55) veredas-portal::tail_family a_recursive_family_is_woken_in_every_folder_of_its_tree\n        PASS [   6.666s] (53/55) veredas-portal::tail_family a_second_rotation_inside_the_pre_read_sweep_keeps_the_order\n        PASS [   7.113s] (54/55) veredas-portal::tail_family indexed_straggler_and_split_writes_lose_nothing\n        PASS [  17.940s] (55/55) veredas-portal::tail_family following_a_quiet_family_costs_almost_no_processor_time\n────────────\n     Summary [  72.102s] 55 tests run: 55 passed, 53 skipped",
-  "ranAt": "2026-11-27T14:31:41.827Z",
-  "headCommit": "595aae9ca0b49f6e7e26d4eb43b8eb1e65671d16",
+  "outputSha": "a3255280114b396fb7c53500b6d1236dc86eddd1668344aa6e52517fde8dc3fa",
+  "outputTail": "        PASS [   2.301s] (44/56) veredas-portal::tail_family with_no_watcher_a_held_replacement_is_awaited_no_longer_than_the_rescan\n        PASS [   2.754s] (45/56) veredas-portal::tail_family the_bench_emitter_rotating_on_a_line_count_is_followed_whole_in_utf16\n        PASS [   3.991s] (46/56) veredas-portal::tail_family a_recursive_family_beside_a_busy_folder_costs_almost_nothing\n        PASS [   4.671s] (47/56) veredas-portal::tail_family fixed_name_generation_bursts_lose_nothing\n        PASS [   4.744s] (48/56) veredas-portal::tail_family fixed_name_straggler_into_the_renamed_file_loses_nothing\n        PASS [   4.855s] (49/56) veredas-portal::tail_family with_no_watcher_a_newest_family_waits_no_longer_than_its_rescan\n        PASS [   5.277s] (50/56) veredas-portal::tail_family a_replacement_and_a_newer_member_in_one_burst_are_read_in_order\n        PASS [   6.146s] (51/56) veredas-portal::tail_family folders_born_nested_at_once_in_a_tree_are_each_watched\n        PASS [   6.660s] (52/56) veredas-portal::tail_family a_recursive_family_is_woken_in_every_folder_of_its_tree\n        PASS [   6.714s] (53/56) veredas-portal::tail_family a_second_rotation_inside_the_pre_read_sweep_keeps_the_order\n        PASS [   6.955s] (54/56) veredas-portal::tail_family indexed_generation_bursts_faster_than_the_rescan_lose_nothing\n        PASS [   7.211s] (55/56) veredas-portal::tail_family indexed_straggler_and_split_writes_lose_nothing\n        PASS [  19.234s] (56/56) veredas-portal::tail_family following_a_quiet_family_costs_almost_no_processor_time\n────────────\n     Summary [  91.697s] 56 tests run: 56 passed, 53 skipped",
+  "ranAt": "2026-11-27T16:47:17.989Z",
+  "headCommit": "a88bc72e2c801d3a3d069e8f40d47e974461683c",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/tail_family.rs",
@@ -27,7 +27,7 @@
     {
       "name": "crates/veredas-portal/src/tail/watch.rs",
       "file": "crates/veredas-portal/src/tail/watch.rs",
-      "fileSha": "f3d08d206365132d23a7d9f3297588f6b0da9f63518d6d79a3800662e2f2b89b"
+      "fileSha": "c112da56449c083d1e75a40d5ad16e7ec51acd7fd6ccd95131664d3545489f60"
     }
   ]
 }

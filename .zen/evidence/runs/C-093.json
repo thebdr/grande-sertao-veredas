@@ -10,15 +10,15 @@
     "fault_copy"
   ],
   "exitCode": 0,
-  "outputSha": "95d4610a763a368090236e11fa2c0f3a989a08c4d99817c3f68bc7777717f5d8",
-  "outputTail": "\nrunning 4 tests\ntest a_reader_holding_the_store_holds_no_copy_back ... ok\ntest a_fault_accepted_while_the_session_stops_has_its_copy ... ok\ntest no_folder_no_copy_and_a_folder_that_cannot_be_made_is_an_error_with_its_text ... ok\ntest at_a_fault_the_window_is_written_to_the_drive_with_the_fault_record ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.58s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s\n     Running tests/fault_copy.rs (target/debug/build/veredas-portal/43f03d26c5333fe8/out/fault_copy-43f03d26c5333fe8)",
-  "ranAt": "2026-11-22T22:50:46.714Z",
-  "headCommit": "0ab45e44df238854b6914b7b5aa7de7110e08e91",
+  "outputSha": "d38ad7a5e5386454c254e9b8402ca55ab3998f038d1bebdc8084564852db3517",
+  "outputTail": "\nrunning 4 tests\ntest no_folder_no_copy_and_a_folder_that_cannot_be_made_is_an_error_with_its_text ... ok\ntest a_reader_holding_the_store_holds_no_copy_back ... ok\ntest a_fault_accepted_while_the_session_stops_has_its_copy ... ok\ntest at_a_fault_the_window_is_written_to_the_drive_with_the_fault_record ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.53s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s\n     Running tests/fault_copy.rs (target/debug/build/veredas-portal/c22b172def627103/out/fault_copy-c22b172def627103)",
+  "ranAt": "2026-11-27T16:47:24.410Z",
+  "headCommit": "a88bc72e2c801d3a3d069e8f40d47e974461683c",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/fault_copy.rs",
       "file": "crates/veredas-portal/tests/fault_copy.rs",
-      "fileSha": "fcea434d18a5d8ee2238a8dca96f2048e0298b85a8c5fad914cc417ca61cfbdb"
+      "fileSha": "3ec4186ae9fe8d85ca7de51914f625197f5efd60d1c2f65ff1eec368f2c31f35"
     }
   ]
 }
