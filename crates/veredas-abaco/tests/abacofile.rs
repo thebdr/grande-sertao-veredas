@@ -1921,3 +1921,59 @@ fn a_write_keeps_its_destination_whole_and_the_eighteenth_round_s_shapes_are_nam
     let got = refusal(&linked_parts, "workbook.toml", &|t| t.replacen("cells = []", "cells = [[1, 1, { Unexpected = 1.0 }]]", 1));
     assert!(got.contains("`external_books.0.sheets.0.cells.0.2.Unexpected` is a key nothing reads"), "{got}");
 }
+
+#[test]
+fn a_tag_s_stand_in_is_named_only_where_its_variant_leaves_it_alone_unread() {
+    // refute round 19: a field holding a variant's name (`value = "Blanks"`, a link's tooltip
+    // `"Internal"`) stood for a deleted tag, and the wrong variant's reading named a key read
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("r19.abaco");
+    let refusal = |parts: &[(String, Vec<u8>)], part: &str, edit: &dyn Fn(&str) -> String| -> String {
+        let edited: Vec<(String, Vec<u8>)> = parts.iter().map(|(n, b)| if n == part { (n.clone(), edit(std::str::from_utf8(b).unwrap()).into_bytes()) } else { (n.clone(), b.clone()) }).collect();
+        std::fs::write(&path, abacofile::zip_of(&edited).unwrap()).unwrap();
+        abacofile::read(&path).err().map(|e| e.to_string()).unwrap_or_else(|| "read, not refused".into())
+    };
+    let words = |got: &str| got.contains("missing field `type`") && !got.contains("is a key nothing reads");
+    // links: a tag deleted beside a tooltip naming the other variant
+    let mut example = worked_example();
+    example.book.ensure_calculated();
+    let parts = abacofile::parts(&example).unwrap();
+    for link in [r#"{ target = "https://example.org", tooltip = "Internal" }"#, r#"{ location = "Loads!A1", tooltip = "External" }"#] {
+        let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replace("links = []", &format!("links = [[1, 1, {link}]]")));
+        assert!(words(&got), "{link}: {got}");
+    }
+    // a link's tag replaced by a key whose value names no variant: no key stands for it (a limit)
+    let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replace("links = []", r#"links = [[1, 1, { kind = "Externl", target = "https://example.org" }]]"#));
+    assert!(words(&got), "{got}");
+    // rules: a tag deleted beside a field holding a variant's name, refused in the reader's words;
+    // a tag replaced beside it, named; a tag replaced by no variant's name, none (a limit)
+    let rules = AbacoFile::new(open(&corpus_dir().join("conditional_formatting/cf_tests.xlsx")));
+    let rule_parts = abacofile::parts(&rules).unwrap();
+    for (kind, field) in [("Text", "value"), ("CellIs", "formula")] {
+        let tag = format!("type = \"{kind}\"");
+        let (sheet, text) = rule_parts
+            .iter()
+            .filter(|(n, _)| n.starts_with("sheets/"))
+            .map(|(n, b)| (n.clone(), String::from_utf8(b.clone()).unwrap()))
+            .find(|(_, t)| t.contains(&tag))
+            .unwrap();
+        let blocks: Vec<&str> = text.split("\n[[conditional_formatting]]\n").collect();
+        let i = blocks.iter().position(|b| b.contains(&tag)).unwrap();
+        let line = blocks[i].lines().find(|l| l.starts_with(&format!("{field} = "))).unwrap_or_else(|| panic!("{kind}: no {field}"));
+        let with = |tag_line: &str| {
+            let block = blocks[i].replacen(line, &format!("{field} = \"Blanks\""), 1).replacen(&tag, tag_line, 1);
+            let mut edited: Vec<String> = blocks.iter().map(|b| b.to_string()).collect();
+            edited[i] = block;
+            edited.join("\n[[conditional_formatting]]\n")
+        };
+        let deleted = with("");
+        let got = refusal(&rule_parts, &sheet, &|_| deleted.clone());
+        assert!(words(&got), "{kind} tag deleted: {got}");
+        let replaced = with(&format!("kind = \"{kind}\""));
+        let got = refusal(&rule_parts, &sheet, &|_| replaced.clone());
+        assert!(got.contains(".cf_rule.kind` is a key nothing reads"), "{kind} tag replaced: {got}");
+        let no_variant = with("kind = \"Txt\"");
+        let got = refusal(&rule_parts, &sheet, &|_| no_variant.clone());
+        assert!(words(&got), "{kind} tag replaced by no variant: {got}");
+    }
+}

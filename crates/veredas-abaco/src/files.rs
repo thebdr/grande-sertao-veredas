@@ -6,6 +6,22 @@
 
 use std::path::Path;
 
+#[cfg(test)]
+thread_local! {
+    /// A test's failure of the second name, a copy cut short.
+    static SECOND_NAME_FAILS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `path`'s file given a second name, `keep`: a hard link, a copy where the file system has none.
+fn second_name(path: &Path, keep: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if SECOND_NAME_FAILS.with(std::cell::Cell::get) {
+        std::fs::write(keep, b"part of it")?;
+        return Err(std::io::Error::other("a copy cut short"));
+    }
+    std::fs::hard_link(path, keep).or_else(|_| std::fs::copy(path, keep).map(|_| ()))
+}
+
 /// Writes `path` through `write`, into a temporary file of its own beside it
 /// (`.veredas-<process>-<n>.tmp`, made new, so no file or link already there is followed or
 /// overwritten), then renames it into place; an existing `path` becomes `<name>.bak` (a previous
@@ -41,11 +57,14 @@ pub fn atomic_write(path: &Path, write: impl FnOnce(std::fs::File) -> Result<(),
         // renames left no destination)
         let existed = path.symlink_metadata().is_ok();
         if existed {
-            if bak.symlink_metadata().is_ok() {
-                std::fs::remove_file(&bak).map_err(|e| format!("{}: {e}", bak.display()))?;
-            }
-            if std::fs::hard_link(path, &bak).is_err() {
-                std::fs::copy(path, &bak).map_err(|e| format!("{}: {e}", bak.display()))?;
+            // the second name made beside under a name of its own, then given `.bak`'s in one
+            // rename: a link or a copy that fails partway leaves an earlier `.bak` as it was and
+            // nothing of its own (refute round 19: a copy cut short left a truncated `.bak`)
+            let keep = dir.join(format!(".veredas-{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            let kept = second_name(path, &keep).and_then(|()| std::fs::rename(&keep, &bak));
+            if let Err(e) = kept {
+                let _ = std::fs::remove_file(&keep);
+                return Err(format!("{}: {e}", bak.display()));
             }
         }
         std::fs::rename(&tmp, path).map_err(|e| {
@@ -66,4 +85,29 @@ pub fn atomic_write(path: &Path, write: impl FnOnce(std::fs::File) -> Result<(),
 /// equal means it did not move in between.
 pub fn contents(path: &Path) -> std::io::Result<Vec<u8>> {
     std::fs::read(path)
+}
+
+#[cfg(test)]
+mod second_name_tests {
+    #[test]
+    fn a_second_name_that_fails_leaves_the_destination_and_an_earlier_bak_as_they_were() {
+        // refute round 19: the copy fallback cut short left a truncated `.bak`, an earlier one gone
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("d.abaco");
+        std::fs::write(&dest, b"the destination").unwrap();
+        std::fs::write(dir.path().join("d.abaco.bak"), b"an earlier one").unwrap();
+        super::SECOND_NAME_FAILS.with(|f| f.set(true));
+        let got = super::atomic_write(&dest, |mut f| std::io::Write::write_all(&mut f, b"new").map_err(|e| e.to_string()));
+        super::SECOND_NAME_FAILS.with(|f| f.set(false));
+        assert!(got.is_err_and(|e| e.contains("a copy cut short")));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"the destination");
+        assert_eq!(std::fs::read(dir.path().join("d.abaco.bak")).unwrap(), b"an earlier one");
+        let mut left: Vec<String> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        assert_eq!(left, ["d.abaco", "d.abaco.bak"]);
+        // and once it succeeds, the replaced file is the `.bak`
+        super::atomic_write(&dest, |mut f| std::io::Write::write_all(&mut f, b"new").map_err(|e| e.to_string())).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        assert_eq!(std::fs::read(dir.path().join("d.abaco.bak")).unwrap(), b"the destination");
+    }
 }

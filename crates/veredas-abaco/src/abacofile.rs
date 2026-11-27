@@ -1268,6 +1268,21 @@ fn key_replacing_in(obj: &serde_json::Value, read: TaggedReader, part_budget: &m
     if budget == 0 {
         return None;
     }
+    // a tag missing: the key standing for it is one holding a variant's name as its text, named only
+    // where a reading leaves it, and nothing else, unread (refute round 19: a field
+    // holding a variant's name, `value = "Blanks"` beside a tag deleted, decided otherwise and named a
+    // key read)
+    if error.contains("missing field `type`") {
+        // the variants, as a tag none of them is shows them
+        let mut probe = obj.clone();
+        insert_at(&mut probe, &[], "type", serde_json::Value::String("\u{1}".into()));
+        let variants: Vec<String> = read(&probe)
+            .err()
+            .and_then(|e| e.split_once("`, expected").map(|(_, list)| list.split('`').skip(1).step_by(2).map(str::to_string).collect()))
+            .unwrap_or_default();
+        let stands_for_the_tag = |o: &Vec<String>| o.len() == 1 && obj.get(&o[0]).and_then(serde_json::Value::as_str).is_some_and(|v| variants.iter().any(|x| x == v));
+        return outcomes.iter().find(|o| stands_for_the_tag(o)).map(|o| o[0].clone());
+    }
     let fewest = outcomes.iter().map(Vec::len).min()?;
     let decide: Vec<&Vec<String>> = outcomes.iter().filter(|o| o.len() == fewest).collect();
     decide[0].iter().find(|k| decide.iter().all(|o| o.contains(k))).cloned()
