@@ -972,9 +972,11 @@ fn spelled_as_in_the_source(
 /// sheet holds, else the workbook's, and only where the engine parsed it as a LAMBDA definition (a
 /// name over a cell, a formula or a LET returning a LAMBDA is none it calls, nor a local name over
 /// a global LAMBDA, nor `_xlfn.f(` for a name `f`); and a defined name the formula reads, its own
-/// formula walked from the same cell's sheet, as the engine evaluates it there. Such a call would
-/// be cached as `#NAME?` and spelled as the engine prints an unknown name, so an edit writing one is
-/// refused.
+/// formula walked from the same cell's sheet, as the engine evaluates it there; a LAMBDA name it
+/// calls, its body walked so too, the engine running it for the calling cell (the round at
+/// 32f391f5). Such a call would be cached as `#NAME?` and spelled as the engine prints an unknown
+/// name, so an edit writing one is refused; so is a defined name read inside itself with no LAMBDA
+/// between, an evaluation that never ends.
 struct Calls<'a> {
     names: &'a ParsedNames,
     /// The sheet the formula is evaluated from (`None` for a workbook name's own formula).
@@ -983,12 +985,54 @@ struct Calls<'a> {
     bound: Vec<String>,
     /// A LET's names inside their own values: bound only within a LAMBDA there.
     in_lambdas: Vec<String>,
-    /// The defined names being walked, so a name read inside itself stops.
-    walking: Vec<usize>,
+    /// The defined names being walked, each with the LAMBDAs open when it was entered, so a name
+    /// read inside itself stops: a recursion where a LAMBDA lies between, an evaluation that never
+    /// ends where none does.
+    walking: Vec<(usize, usize)>,
+    /// The LAMBDA bodies open around the node.
+    lambdas: usize,
+}
+
+/// What [`Calls`] finds in a formula that the engine cannot compute.
+#[derive(Debug, Clone, PartialEq)]
+enum Unknown {
+    /// A function the engine does not compute, as the engine prints it.
+    Call(String),
+    /// A defined name read inside its own formula with no LAMBDA between.
+    ReadInsideItself(String),
+}
+
+impl std::fmt::Display for Unknown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unknown::Call(name) => write!(f, "{name} is a function the engine does not compute"),
+            Unknown::ReadInsideItself(name) => {
+                write!(f, "{name} is a defined name read inside its own formula with no LAMBDA between, an evaluation that never ends")
+            }
+        }
+    }
 }
 
 impl Calls<'_> {
-    fn first_unknown(&mut self, node: &Node) -> Option<String> {
+    fn new(names: &ParsedNames, sheet: Option<u32>) -> Calls<'_> {
+        Calls { names, sheet, bound: Vec::new(), in_lambdas: Vec::new(), walking: Vec::new(), lambdas: 0 }
+    }
+
+    /// The `i`-th defined name's formula walked as the engine evaluates it for this cell: from its
+    /// sheet, with no binding of the cell's; `None` when it is being walked already, a recursion.
+    fn walk_name(&mut self, i: usize, name: &str) -> Option<Unknown> {
+        if let Some((_, open)) = self.walking.iter().find(|(j, _)| *j == i) {
+            return (*open == self.lambdas).then(|| Unknown::ReadInsideItself(name.to_string()));
+        }
+        self.walking.push((i, self.lambdas));
+        let (bound, in_lambdas) = (std::mem::take(&mut self.bound), std::mem::take(&mut self.in_lambdas));
+        let found = self.first_unknown(&self.names.0[i].2);
+        (self.bound, self.in_lambdas) = (bound, in_lambdas);
+        self.walking.pop();
+        found
+    }
+
+    fn first_unknown(&mut self, node: &Node) -> Option<Unknown> {
         match node {
             Node::NamedFunctionKind { name, args, .. } => {
                 let key = name_key(name);
@@ -998,26 +1042,26 @@ impl Calls<'_> {
                     .sheet
                     .and_then(|s| self.names.find(Some(s), &key))
                     .or_else(|| self.names.find(None, &key))
-                    .is_some_and(|i| matches!(self.names.0[i].2, Node::LambdaDefKind { .. }));
-                if !own && !lambda {
-                    let bare = name.trim_start_matches("_xlfn._xlws.").trim_start_matches("_xlfn.").trim_start_matches("_xlpm.");
-                    return Some(bare.to_uppercase());
+                    .filter(|i| matches!(self.names.0[*i].2, Node::LambdaDefKind { .. }));
+                if own {
+                    return args.iter().find_map(|a| self.first_unknown(a));
                 }
-                args.iter().find_map(|a| self.first_unknown(a))
+                let Some(i) = lambda else {
+                    let bare = name.trim_start_matches("_xlfn._xlws.").trim_start_matches("_xlfn.").trim_start_matches("_xlpm.");
+                    return Some(Unknown::Call(bare.to_uppercase()));
+                };
+                // its arguments, then its body as the engine runs it for this cell (a LAMBDA that
+                // calls itself, or one calling it, walked once: a recursion)
+                args.iter().find_map(|a| self.first_unknown(a)).or_else(|| {
+                    let walked = self.walking.iter().any(|(j, _)| *j == i);
+                    if walked { None } else { self.walk_name(i, name) }
+                })
             }
             Node::DefinedNameKind { name, scope, .. } => {
                 // a name read: its formula as the engine evaluates it, from this cell's sheet, with
                 // no binding of the cell's
                 let i = self.names.find(*scope, &name_key(name))?;
-                if self.walking.contains(&i) {
-                    return None;
-                }
-                self.walking.push(i);
-                let (bound, in_lambdas) = (std::mem::take(&mut self.bound), std::mem::take(&mut self.in_lambdas));
-                let found = self.first_unknown(&self.names.0[i].2);
-                (self.bound, self.in_lambdas) = (bound, in_lambdas);
-                self.walking.pop();
-                found
+                self.walk_name(i, name)
             }
             Node::LambdaDefKind { parameters, body } => {
                 let depth = self.bound.len();
@@ -1025,7 +1069,9 @@ impl Calls<'_> {
                 // a LET's names in their own values are bound here, the LAMBDA running after them
                 let pending = std::mem::take(&mut self.in_lambdas);
                 self.bound.extend(pending.iter().cloned());
+                self.lambdas += 1;
                 let found = self.first_unknown(body);
+                self.lambdas -= 1;
                 self.in_lambdas = pending;
                 self.bound.truncate(depth);
                 found
@@ -1072,11 +1118,42 @@ impl Calls<'_> {
 /// from `scope` (the cell's sheet, a name's own scope; a workbook name's formula from no sheet, so
 /// only the workbook's LAMBDA names count for it): a LAMBDA name local to another sheet is none it
 /// can call.
-fn calls_unknown(wb: &Workbook, sheet: u32, a: Addr, formula: &str, scope: Option<&str>) -> Option<String> {
+fn calls_unknown(wb: &Workbook, sheet: u32, a: Addr, formula: &str, scope: Option<&str>) -> Option<Unknown> {
     let node = parsed_at(wb, sheet, a, formula)?;
     let names = ParsedNames::of(wb);
     let scope = scope.and_then(|s| wb.model().workbook.get_worksheet_names().iter().position(|n| n == s)).map(|i| i as u32);
-    Calls { names: &names, sheet: scope, bound: Vec::new(), in_lambdas: Vec::new(), walking: Vec::new() }.first_unknown(&node)
+    Calls::new(&names, scope).first_unknown(&node)
+}
+
+/// Every formula cell of the workbook that [`Calls`] finds something in, judged from its own sheet
+/// as the engine parsed it, by sheet and (row, column). Each of a sheet's formulas is judged once,
+/// however many cells share it.
+fn unknown_cells(wb: &Workbook) -> Vec<std::collections::HashMap<(i32, i32), Unknown>> {
+    let model = wb.model();
+    let names = ParsedNames::of(wb);
+    model
+        .workbook
+        .worksheets
+        .iter()
+        .enumerate()
+        .map(|(i, ws)| {
+            let verdicts: Vec<Option<Unknown>> = model
+                .parsed_formulas
+                .get(i)
+                .map(|parsed| parsed.iter().map(|p| Calls::new(&names, Some(i as u32)).first_unknown(p.0.as_ref())).collect())
+                .unwrap_or_default();
+            if verdicts.iter().all(Option::is_none) {
+                return std::collections::HashMap::new();
+            }
+            ws.sheet_data
+                .cells()
+                .filter_map(|(row, col, c)| {
+                    let found = verdicts.get(c.get_formula()? as usize)?.clone()?;
+                    Some(((row, col), found))
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// The first error a formula states that no file's formula may hold: MS-XLSX's `error-constant`
@@ -1420,6 +1497,9 @@ pub fn patch(
     // the engine's value of every formula BEFORE the edits: a cache is
     // re-written only where the edits moved it (see `Before`)
     let before = Before::take(&mut wb, &fixed);
+    // what the engine cannot compute in the file as it stands: the file's own, where it is
+    let unknown_before = unknown_cells(&wb);
+    let too_deep_before = wb.model().too_deep_cells();
     // the sheets as they stood, which key each cell's draws after the edits
     let original_order = wb.sheet_names();
 
@@ -1545,11 +1625,8 @@ pub fn patch(
                             "{canonical}!{a}: {prefix} is a 3-D reference, which the engine does not read (the patcher writes no formula it would read as another)"
                         )));
                     }
-                    if let Some(name) = calls_unknown(&wb, s, a, &target, Some(&canonical)) {
-                        return Err(PatchError::Unsupported(format!(
-                            "{canonical}!{a}: {name} is a function the engine does not compute (the patcher writes no formula it would cache as #NAME?)"
-                        )));
-                    }
+                    // its calls judged once every edit is in (`unknown_cells`), whichever order the
+                    // edits come in (the round at 32f391f5)
                     wb.set_formula(s, a, &target)
                         .map_err(|e| fail(e.to_string()))?;
                     ContentKind::Formula
@@ -1843,8 +1920,35 @@ pub fn patch(
         let standing = wb.names().iter().any(|n| name_key(&n.name) == name_key(name) && n.scope == *scope);
         if standing && let Some(called) = calls_unknown(&wb, *at, Addr::new(1, 1), user, scope.as_deref()) {
             return Err(PatchError::Unsupported(format!(
-                "name {name}: {called} is a function the engine does not compute (the patcher writes no formula it cannot read)"
+                "name {name}: {called} (the patcher writes no formula it cannot read)"
             )));
+        }
+    }
+    // every formula as the edits leave it, judged from its own sheet against the names they leave,
+    // whichever order they came in (the round at 32f391f5): one an edit wrote, and one of the file's
+    // reading a name or calling a LAMBDA the edits set or deleted (a set name judged so from the
+    // sheet of every cell that reads it); a cell of the file that held such a call before the
+    // edits, where it stood, is the file's own
+    for (i, found) in unknown_cells(&wb).iter().enumerate() {
+        if found.is_empty() {
+            continue;
+        }
+        let sheet = wb.sheet_name(i as u32).map_err(|e| PatchError::Malformed(e.to_string()))?;
+        let mut cells: Vec<(&(i32, i32), &Unknown)> = found.iter().collect();
+        cells.sort_by_key(|(at, _)| **at);
+        for (&(row, col), what) in cells {
+            let a = Addr::new(row, col);
+            let written = written_by_an_edit(&shifts, &writes, &sheet, a);
+            let was = original_order.get(i).filter(|n| **n == sheet).and_then(|_| backward(&shifts, &sheet, row, col));
+            if !written && was.is_some_and(|w| unknown_before.get(i).is_some_and(|b| b.contains_key(&w))) {
+                continue;
+            }
+            let why = match (written, what) {
+                (true, Unknown::Call(_)) => "the patcher writes no formula it would cache as #NAME?",
+                (true, Unknown::ReadInsideItself(_)) => "the patcher writes no formula whose evaluation never ends",
+                (false, _) => "a formula of the file's, once the edits are in: the patcher writes no cache the engine cannot compute",
+            };
+            return Err(PatchError::Unsupported(format!("{sheet}!{a}: {what} ({why})")));
         }
     }
 
@@ -1863,6 +1967,22 @@ pub fn patch(
         let values = Before::snapshot(&wb);
         Before::unstable(&mut wb, &values, &fixed)
     };
+    // LAMBDA calls or defined names' formulas nested deeper than the engine computes (fork change
+    // 44): its `#NUM!` where Excel computes a value, in a cell an edit wrote or one the edits brought
+    // to it; a cell of the file so before them, where it stood, is the file's own, its cache kept
+    // (the round at 32f391f5)
+    for (i, row, col) in wb.model().too_deep_cells() {
+        let sheet = wb.sheet_name(i).map_err(|e| PatchError::Malformed(e.to_string()))?;
+        let a = Addr::new(row, col);
+        let written = written_by_an_edit(&shifts, &writes, &sheet, a);
+        let was = original_order.get(i as usize).filter(|n| **n == sheet).and_then(|_| backward(&shifts, &sheet, row, col));
+        if !written && was.is_some_and(|(r, c)| too_deep_before.contains(&(i, r, c))) {
+            continue;
+        }
+        return Err(PatchError::Unsupported(format!(
+            "{sheet}!{a}: LAMBDA calls or defined names nest deeper there than the engine computes (the patcher writes no #NUM! of its own where Excel computes a value)"
+        )));
+    }
 
     // ---- the plan at final positions -------------------------------------
     let order: Vec<String> = wb.sheet_names();
@@ -2586,6 +2706,9 @@ fn commit(
         // the destination's previous version kept as `.bak` (a previous `.bak` replaced, read-only
         // or not), the destination's own permissions kept on its new version
         let permissions = dest.exists().then(|| std::fs::metadata(dest).map(|m| m.permissions())).transpose().map_err(|e| io_err(dest, e))?;
+        // the source itself patched in place: its `.bak` is to hold what was read
+        let in_place = same_file(source, dest);
+        let mut kept = None;
         if dest.exists() {
             let mut bak = file_name.to_os_string();
             bak.push(".bak");
@@ -2594,6 +2717,9 @@ fn commit(
                 std::fs::remove_file(&bak).map_err(|e| io_err(&bak, e))?;
             }
             std::fs::copy(dest, &bak).map_err(|e| io_err(&bak, e))?;
+            if in_place {
+                kept = Some(bak);
+            }
         }
         // the destination's permissions on the new version before it takes the name, so no moment
         // holds it with others (a kill between the rename and a chmod after it left the umask's:
@@ -2607,6 +2733,17 @@ fn commit(
                 hook(&tmp);
             }
         });
+        // the source compared again at the last moment before the rename, and a `.bak` of the
+        // source itself (patched in place) holding what was read: a save landing while the bytes
+        // were written is no version the rename would lose (the round at 32f391f5)
+        if crate::files::contents(source).map_err(|e| io_err(source, e))? != fingerprint {
+            return Err(PatchError::SourceMoved(source.to_path_buf()));
+        }
+        if let Some(bak) = &kept
+            && crate::files::contents(bak).map_err(|e| io_err(bak, e))? != fingerprint
+        {
+            return Err(PatchError::SourceMoved(source.to_path_buf()));
+        }
         std::fs::rename(&tmp, dest).map_err(|e| io_err(dest, e))?;
         Ok(())
     })();
@@ -2614,6 +2751,25 @@ fn commit(
         let _ = std::fs::remove_file(&tmp);
     }
     placed
+}
+
+/// Whether two paths name one file: on Unix one device's one inode (a hard link, a symbolic one,
+/// another spelling of the path), elsewhere one canonical path (a hard link there is two files, a
+/// limit); no file, none.
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (std::fs::metadata(a), std::fs::metadata(b)) {
+            (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// The cell metadata entry (its 1-based index, a cell's `cm`) of a metadata part that marks a
@@ -2802,34 +2958,56 @@ fn value_or_formula(edit: &Edit) -> (String, bool) {
     }
 }
 
-/// `_xlfn.`, `_xlws.` and `_xlpm.` removed (outside string literals): the
-/// engine's own names take user spelling.
+/// `_xlfn.`, `_xlws.` and `_xlpm.` removed where they open a token: the engine's own names take
+/// user spelling. Never inside a string, a quoted sheet name (`'_xlfn.Dados'!A1`, `'Q1 _xlpm.X'!A1`)
+/// or a structured reference's brackets (`Tabela[_xlpm.Col]`), nor on a sheet's name the engine
+/// spells unquoted (`_xlfn.Dados!A1`), which are another sheet's or column's name (the round at
+/// 32f391f5).
 fn strip_file_prefixes(f: &str) -> String {
     let mut out = String::with_capacity(f.len());
-    let mut in_str = false;
+    let mut quote: Option<char> = None;
+    // a structured reference's brackets, where `'` escapes the character after it and opens no
+    // quote (as `engine_only_error` reads them)
+    let mut brackets = 0usize;
+    let mut escaped = false;
     let mut i = 0;
-    let b = f.as_bytes();
     // a prefix opens a token alone: at the formula's start, after a character no name holds, or
     // after a prefix (`_xlfn._xlws.`); inside a name (`Rate_xlpm.A`) it is the name's (the round at
     // 01ea89f9)
     let mut at_token = true;
-    while i < b.len() {
-        if b[i] == b'"' {
-            in_str = !in_str;
-        }
-        if !in_str && at_token {
-            let rest = &f[i..];
-            if let Some(p) = ["_xlfn.", "_xlws.", "_xlpm."]
-                .iter()
-                .find(|p| rest.starts_with(**p))
-            {
+    while i < f.len() {
+        let rest = &f[i..];
+        if quote.is_none() && brackets == 0 && at_token
+            && let Some(p) = ["_xlfn.", "_xlws.", "_xlpm."].iter().find(|p| rest.starts_with(**p))
+        {
+            let after = &rest[p.len()..];
+            let name = after.find(|c: char| !ironcalc_base::expressions::utils::is_name_char(c)).unwrap_or(after.len());
+            if !after[name..].starts_with('!') {
                 i += p.len();
                 continue;
             }
         }
-        let ch = f[i..].chars().next().unwrap_or(' ');
+        let ch = rest.chars().next().unwrap_or(' ');
+        if brackets > 0 {
+            match ch {
+                _ if escaped => escaped = false,
+                '\'' => escaped = true,
+                '[' => brackets += 1,
+                ']' => brackets -= 1,
+                _ => {}
+            }
+        } else {
+            match quote {
+                // a doubled quote inside is the quote itself, read as closing and opening again
+                Some(q) if ch == q => quote = None,
+                Some(_) => {}
+                None if ch == '"' || ch == '\'' => quote = Some(ch),
+                None if ch == '[' => brackets = 1,
+                None => {}
+            }
+        }
         out.push(ch);
-        at_token = in_str || !ironcalc_base::expressions::utils::is_name_char(ch);
+        at_token = !ironcalc_base::expressions::utils::is_name_char(ch);
         i += ch.len_utf8();
     }
     out
@@ -3447,5 +3625,52 @@ mod tests {
             strip_file_prefixes(r#"_xlfn.LET(_xlpm.t,1,"_xlpm.t")"#),
             r#"LET(t,1,"_xlpm.t")"#
         );
+        // nor inside a quoted sheet name or a structured reference's brackets (the round at
+        // 32f391f5)
+        for (file, stored) in [
+            ("'_xlfn.Dados'!$A$1", "'_xlfn.Dados'!$A$1"),
+            ("'Q1 _xlpm.X'!$A$1+_xlfn.SUM(1)", "'Q1 _xlpm.X'!$A$1+SUM(1)"),
+            ("'It''s _xlfn.X'!A1*_xlpm.k", "'It''s _xlfn.X'!A1*k"),
+            ("Tabela[_xlpm.Col]+_xlpm.x", "Tabela[_xlpm.Col]+x"),
+            ("_xlfn.Dados!$A$1+_xlfn._xlws.SORT(A1)", "_xlfn.Dados!$A$1+SORT(A1)"),
+            ("Tabela[[#This Row],['[_xlfn.C]]*_xlfn.ABS(1)", "Tabela[[#This Row],['[_xlfn.C]]*ABS(1)"),
+        ] {
+            assert_eq!(strip_file_prefixes(file), stored, "{file}");
+        }
+    }
+
+    #[test]
+    fn a_save_landing_while_the_bytes_are_written_is_no_version_the_rename_loses() {
+        // the round at 32f391f5: the source was compared before the bytes were written alone
+        let dir = tempfile::tempdir().unwrap();
+        let hook = |f: Box<dyn Fn(&Path)>| BEFORE_RENAME.with(|h| *h.borrow_mut() = Some(f));
+        // patched in place, another program saving it just before the rename
+        let book = dir.path().join("book.xlsx");
+        std::fs::write(&book, b"read").unwrap();
+        let in_hook = book.clone();
+        hook(Box::new(move |_| std::fs::write(&in_hook, b"someone else's save").unwrap()));
+        let e = commit(&book, b"read", &book, b"patched", |_| Ok(())).unwrap_err();
+        assert!(matches!(e, PatchError::SourceMoved(_)), "{e}");
+        assert_eq!(std::fs::read(&book).unwrap(), b"someone else's save");
+        assert_eq!(std::fs::read(dir.path().join("book.xlsx.bak")).unwrap(), b"read");
+        // a `.bak` that does not hold what was read (a save there and back before the copy)
+        std::fs::write(&book, b"read").unwrap();
+        let bak = dir.path().join("book.xlsx.bak");
+        hook(Box::new(move |_| std::fs::write(&bak, b"a save undone").unwrap()));
+        let e = commit(&book, b"read", &book, b"patched", |_| Ok(())).unwrap_err();
+        assert!(matches!(e, PatchError::SourceMoved(_)), "{e}");
+        assert_eq!(std::fs::read(&book).unwrap(), b"read");
+        // a source apart from the destination
+        let (source, dest) = (dir.path().join("in.xlsx"), dir.path().join("out.xlsx"));
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&dest, b"before").unwrap();
+        let in_hook = source.clone();
+        hook(Box::new(move |_| std::fs::write(&in_hook, b"moved").unwrap()));
+        let e = commit(&source, b"source", &dest, b"after", |_| Ok(())).unwrap_err();
+        assert!(matches!(e, PatchError::SourceMoved(_)), "{e}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"before");
+        // and no temporary file left beside them
+        BEFORE_RENAME.with(|h| *h.borrow_mut() = None);
+        assert_eq!(listing(dir.path()), ["book.xlsx", "book.xlsx.bak", "in.xlsx", "out.xlsx", "out.xlsx.bak"]);
     }
 }

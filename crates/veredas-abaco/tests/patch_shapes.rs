@@ -3540,3 +3540,142 @@ fn a_name_is_called_as_the_engine_calls_it_set_read_from_any_sheet_and_spelled_w
     applied(&[formula("S", "D1", "=LET(f,LAMBDA(n,IF(n<=1,1,n*f(n-1))),f(5))")]);
     assert_eq!(read_back(&dst, "S", "D1"), Value::Number(120.0));
 }
+
+#[test]
+fn a_called_lambda_runs_from_the_calling_sheet_and_every_formula_is_judged_once_the_edits_are_in() {
+    // the round at 32f391f5
+    let dir = tempfile::tempdir().unwrap();
+    let names = concat!(
+        r#"<definedName name="Dobro">_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2)</definedName>"#,
+        r#"<definedName name="Dobro" localSheetId="1">T!$A$1</definedName>"#,
+        r#"<definedName name="Quad">_xlfn.LAMBDA(_xlpm.x,Dobro(_xlpm.x)*2)</definedName>"#,
+        r#"<definedName name="G">5</definedName>"#,
+    );
+    let src = dir.path().join("calls.xlsx");
+    let s_data = r#"<row r="1"><c r="A1"><v>1</v></c></row>"#;
+    let t_data = r#"<row r="1"><c r="A1"><v>5</v></c><c r="B1"><f>G</f><v>5</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(s_data, "")), ("T", worksheet(t_data, ""))], names, &[]);
+    let dst = dir.path().join("out.xlsx");
+    let formula = |sheet: &str, cell: &str, f: &str| Edit::Formula { sheet: sheet.into(), cell: cell.into(), formula: f.into(), expect: None };
+    let set = |n: &str, f: &str| Edit::SetName { name: n.into(), formula: f.into(), scope: None };
+    let delete = |n: &str| Edit::DeleteName { name: n.into(), scope: None };
+    let applied = |edits: &[Edit]| {
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let _ = std::fs::remove_file(&dst);
+            let report = patch(&src, &dst, edits, &options).unwrap_or_else(|e| panic!("{edits:?}: {e}"));
+            assert!(report.outcomes.iter().all(|o| o.status == Status::Applied), "{edits:?}: {:?}", report.outcomes);
+        }
+    };
+    let refused = |edits: &[Edit], said: &str| {
+        for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+            let _ = std::fs::remove_file(&dst);
+            match patch(&src, &dst, edits, &options) {
+                Err(PatchError::Unsupported(m)) => assert!(m.contains(said), "{edits:?}: {m}"),
+                other => panic!("{edits:?}: {other:?}"),
+            }
+            assert!(!dst.exists(), "{edits:?}");
+        }
+    };
+    let unknown = "DOBRO is a function the engine does not compute";
+    // a LAMBDA name called: its body runs for the calling cell, `Dobro` T's own cell there
+    refused(&[formula("T", "D1", "=Quad(1)")], unknown);
+    refused(&[formula("T", "D1", "=LET(g,Quad,g(1))")], unknown);
+    refused(&[formula("T", "D1", "=MAP(A1,Quad)")], unknown);
+    refused(&[set("Tri", "=LAMBDA(x,Dobro(x)*3)"), formula("T", "D1", "=Tri(1)")], unknown);
+    applied(&[formula("S", "D1", "=Quad(1)")]);
+    assert_eq!(read_back(&dst, "S", "D1"), Value::Number(4.0));
+    // a formula and the names it reads judged as the edits leave them, in either order
+    refused(&[formula("T", "D1", "=G"), set("G", "=Dobro(3)")], unknown);
+    refused(&[set("G", "=Dobro(3)"), formula("T", "D1", "=G")], unknown);
+    // a set name judged from the sheet of the file's cell that reads it, T!B1
+    refused(&[set("G", "=Dobro(3)")], "T!B1: DOBRO is a function the engine does not compute");
+    refused(&[formula("S", "D1", "=Dobro(A1)"), delete("Dobro")], unknown);
+    refused(&[formula("S", "D1", "=Dobro(A1)"), set("Dobro", "=5")], unknown);
+    // and a LAMBDA a later edit sets, called by an earlier one, computes in either order
+    for edits in [
+        [formula("S", "D1", "=Tri(2)"), set("Tri", "=LAMBDA(x,x*3)")],
+        [set("Tri", "=LAMBDA(x,x*3)"), formula("S", "D1", "=Tri(2)")],
+    ] {
+        applied(&edits);
+        assert_eq!(read_back(&dst, "S", "D1"), Value::Number(6.0));
+    }
+    // a recursion deeper than the engine computes refused by name, never a stack overflowed; a name
+    // read inside itself with no LAMBDA between refused, read by a cell or not
+    let soma = set("Soma", "=LAMBDA(n,IF(n<=0,0,n+Soma(n-1)))");
+    applied(&[soma.clone(), formula("S", "D1", "=Soma(5)")]);
+    assert_eq!(read_back(&dst, "S", "D1"), Value::Number(15.0));
+    let deep = "S!D1: LAMBDA calls or defined names nest deeper there than the engine computes";
+    refused(&[soma.clone(), formula("S", "D1", "=Soma(1000)")], deep);
+    refused(&[soma.clone(), formula("S", "D1", "=IFERROR(Soma(1000),0)")], deep);
+    refused(&[soma, formula("S", "D1", "=Soma(1000)+1")], deep);
+    let itself = "is a defined name read inside its own formula with no LAMBDA between";
+    refused(&[set("Aa", "=Aa+1"), formula("S", "D1", "=Aa")], itself);
+    refused(&[set("Aa", "=Bb+1"), set("Bb", "=Aa+1")], itself);
+    applied(&[set("F", "=LAMBDA(x,F)"), formula("S", "D1", "=ISREF(A1)")]);
+}
+
+#[test]
+fn a_recursion_the_file_holds_too_deep_or_endless_is_the_files_own_its_cache_kept() {
+    // the round at 32f391f5: a file whose names read each other, read by a cell, aborted the
+    // process opening it
+    let dir = tempfile::tempdir().unwrap();
+    let names = concat!(
+        r#"<definedName name="Aa">Bb+1</definedName>"#,
+        r#"<definedName name="Bb">Aa+1</definedName>"#,
+        r#"<definedName name="Soma">_xlfn.LAMBDA(_xlpm.n,IF(_xlpm.n&lt;=0,0,_xlpm.n+Soma(_xlpm.n-1)))</definedName>"#,
+    );
+    let src = dir.path().join("deep.xlsx");
+    let data = r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>Aa</f><v>0</v></c><c r="C1"><f>Soma(1000)</f><v>500500</v></c></row>"#;
+    plain_book(&src, &[("S", worksheet(data, ""))], names, &[]);
+    let dst = dir.path().join("out.xlsx");
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &[value("S", "A1", serde_json::json!(2))], &options).unwrap();
+        let sheet = part(&dst, "xl/worksheets/sheet1.xml");
+        assert_eq!(element(&sheet, "B1"), Some(r#"<c r="B1"><f>Aa</f><v>0</v></c>"#));
+        assert_eq!(element(&sheet, "C1"), Some(r#"<c r="C1"><f>Soma(1000)</f><v>500500</v></c>"#));
+    }
+}
+
+#[test]
+fn a_prefix_inside_a_quoted_sheet_name_is_the_sheets() {
+    // the round at 32f391f5: `'_xlfn.Dados'!$A$1` was stored `Dados!$A$1`, another sheet
+    let dir = tempfile::tempdir().unwrap();
+    let one = |v: u32| format!(r#"<row r="1"><c r="A1"><v>{v}</v></c></row>"#);
+    let src = dir.path().join("quoted.xlsx");
+    plain_book(
+        &src,
+        &[
+            ("Dados", worksheet(&one(111), "")),
+            ("_xlfn.Dados", worksheet(&one(222), "")),
+            ("Q1 X", worksheet(&one(111), "")),
+            ("Q1 _xlpm.X", worksheet(&one(222), "")),
+        ],
+        "",
+        &[],
+    );
+    let dst = dir.path().join("out.xlsx");
+    let edits = [
+        Edit::SetName { name: "Um".into(), formula: "='_xlfn.Dados'!$A$1".into(), scope: None },
+        Edit::SetName { name: "Dois".into(), formula: "='Q1 _xlpm.X'!$A$1".into(), scope: None },
+        Edit::Formula { sheet: "Dados".into(), cell: "B1".into(), formula: "=Um".into(), expect: None },
+        Edit::Formula { sheet: "Dados".into(), cell: "B2".into(), formula: "=Dois".into(), expect: None },
+        // and the sheet's name as the engine spells it, unquoted
+        Edit::SetName { name: "Tres".into(), formula: "=_xlfn.Dados!$A$1".into(), scope: None },
+        Edit::Formula { sheet: "Dados".into(), cell: "B3".into(), formula: "=Tres".into(), expect: None },
+    ];
+    for options in [verified(), PatchOptions { verify: false, ..Default::default() }] {
+        let _ = std::fs::remove_file(&dst);
+        patch(&src, &dst, &edits, &options).unwrap();
+        assert_eq!(read_back(&dst, "Dados", "B1"), Value::Number(222.0));
+        assert_eq!(read_back(&dst, "Dados", "B2"), Value::Number(222.0));
+        assert_eq!(read_back(&dst, "Dados", "B3"), Value::Number(222.0));
+        // stored as the engine spells a reference to the sheet (unquoted, its quoting rule taking
+        // `_xlfn.Dados` for a name), whole
+        let wb = part(&dst, "xl/workbook.xml");
+        for name in ["Um", "Tres"] {
+            assert!(wb.contains(&format!(r#"<definedName name="{name}">_xlfn.Dados!$A$1</definedName>"#)), "{wb}");
+        }
+        assert!(wb.contains(r#"<definedName name="Dois">'Q1 _xlpm.X'!$A$1</definedName>"#), "{wb}");
+    }
+}

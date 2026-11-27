@@ -356,6 +356,13 @@ own to close in a fork change of its own:
   twenty-second round): `docs/DAY.xlsx`, `docs/MONTH.xlsx` and `docs/YEAR.xlsx` hold Excel's caches
   for serials 0 to 2 and 29 February 1900, and `templates/weekly_timesheet.xlsx` thirty `WEEKDAY`
   and `ISOWEEKNUM` cells of an empty one.
+- **A recursion through LAMBDA calls or names stops short of Excel's:** a LAMBDA's call and a
+  defined name's formula run inside one formula, where the evaluator's unwind cannot come, so
+  change 44 bounds them at 512 KiB of stack, `#NUM!` beyond (Excel's own error past its limit, which
+  lies thousands of calls deep): a one-parameter recursion computes to 17 calls in a debug build
+  and 125 in a release one (measured 2026-11-27, on a 2 MB thread), and a name read inside itself
+  is `#NUM!` at once where it aborted the process. The patcher refuses such a `#NUM!` where an edit
+  wrote or the edits brought it (C-223's twenty-sixth round); no workbook of the corpus goes so deep.
 
 ## On this machine
 - No Excel, no Office: Excel's acceptance of a written file is owed elsewhere (Rules).
