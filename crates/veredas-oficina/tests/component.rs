@@ -88,7 +88,10 @@ fn oficina_is_a_library_and_one_executable_its_window_behind_the_shell_feature()
     assert!(p["license_file"].is_null(), "a licence file named: {}", p["license_file"]);
     // Unchanged: byte for byte the text the Free Software Foundation publishes (Debian's
     // `/usr/share/common-licenses/GPL-3`, its SHA-256 below), its lines ended LF everywhere
-    // (`.gitattributes`); the length and the title say which text it is when it differs.
+    // (`.gitattributes`); the length and the title say which text it is when it differs. A file of
+    // its own: a link to a copy elsewhere (a system's, automake's) is no text a clone carries.
+    let kind = std::fs::symlink_metadata(crate_dir().join("COPYING")).expect("COPYING beside the manifest").file_type();
+    assert!(kind.is_file(), "COPYING a file of its own, not a link: {kind:?}");
     let copying = std::fs::read(crate_dir().join("COPYING")).expect("COPYING beside the manifest");
     assert_eq!(copying.len(), 35_149, "the GPL version 3 text's length");
     assert!(copying.starts_with(b"                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n"), "the GPL version 3's title");
@@ -192,9 +195,11 @@ fn the_model_and_its_tests_build_with_no_qt() {
         let prefix = qmake.parent().and_then(Path::parent).expect("Qt's installation").to_path_buf();
         let deps = std::env::var_os("OFICINA_DEPS").map(PathBuf::from).unwrap_or_else(|| user_home.join(".local").join("opt").join("oficina-deps"));
         let mut hidden = vec![prefix, deps];
-        let qt_root = user_home.join(".local").join("opt").join("Qt");
-        if qt_root.is_dir() {
-            hidden.push(qt_root);
+        // The default places too, wherever `QMAKE` and `OFICINA_DEPS` point.
+        for default in [user_home.join(".local").join("opt").join("Qt"), user_home.join(".local").join("opt").join("oficina-deps")] {
+            if default.is_dir() && !hidden.contains(&default) {
+                hidden.push(default);
+            }
         }
         for d in &hidden {
             assert!(d.is_dir(), "{} to hide", d.display());
