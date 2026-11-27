@@ -17,7 +17,7 @@
 //!    retiree while the sweep runs; reading it there and through the handle would emit it twice.
 
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -205,40 +205,57 @@ fn read_range_full(
 #[cfg(test)]
 mod history_test;
 
-/// The members of a listing among `names`, in rotation order.
-fn beside_members(files: &[FamilyFile], names: &HashSet<String>) -> Vec<FamilyFile> {
-    let mut members: Vec<FamilyFile> = files.iter().filter(|f| !f.is_active && names.contains(&f.file_name)).cloned().collect();
-    members.sort_by(|a, b| rank(a).cmp(&rank(b)));
+/// The members of a listing born beside a held file, each with the listing it was first seen in,
+/// in rotation order.
+fn beside_members(files: &[FamilyFile], beside: &HashMap<String, u64>) -> Vec<(FamilyFile, u64)> {
+    let mut members: Vec<(FamilyFile, u64)> = files.iter().filter(|f| !f.is_active).filter_map(|f| beside.get(&f.file_name).map(|n| (f.clone(), *n))).collect();
+    members.sort_by(|a, b| rank(&a.0).cmp(&rank(&b.0)));
     members
 }
 
+/// A held file's copy, made by a copy-and-truncate (C-098): of the members born beside it, one
+/// holding at least as much as was seen of the held file (`seen`), as a copy of the file as it
+/// stood at its cut does, the one first listed latest (the copy is made just before the cut; a file
+/// dropped in before it, or shorter, is none), ties to the newest. Picked when the cut is first
+/// seen, and kept, so a copy removed later never lets a later one pass for it.
+fn pick_copy(members: &[(FamilyFile, u64)], seen: u64) -> Option<Identity> {
+    members
+        .iter()
+        .enumerate()
+        .filter(|(_, (f, _))| std::fs::metadata(&f.path).is_ok_and(|m| m.len() >= seen))
+        .max_by_key(|(at, (_, first))| (*first, *at))
+        .and_then(|(_, (f, _))| crate::tail::cursor::identity_at(&f.path))
+}
+
 /// The members born after the look while a held file stood at the active's path (C-098), decided
-/// once the held file opens, before its first line: cut in place, its copy (the oldest holding the
-/// look's length, `at_look`) read from where the held file stood, the ones after it whole (copies
-/// of later cuts); not cut, or before the copy, dropped in (a live tail does not replay them,
-/// C-036). Each read awaited while it is there and not readable; each marked read. False on a stop.
+/// once the held file opens, before its first line. Cut in place: its copy (`copy`, picked when
+/// the cut was seen) read from where the held file stood (`at_look`); a member first listed before
+/// the last sight of the held file whole was dropped in before the cut, not replayed; the others,
+/// born about or after the cut (copies of later cuts), read whole. Not cut, every one was dropped
+/// in (a live tail does not replay them, C-036). Each read awaited while it is there and not
+/// readable; each marked read. False on a stop.
 #[allow(clippy::too_many_arguments)]
 fn read_beside(
-    members: &[FamilyFile],
+    members: &[(FamilyFile, u64)],
     cut: bool,
     at_look: u64,
+    copy: Option<&Identity>,
+    seen_at: u64,
     read_new: &mut HashSet<String>,
     cfg: &FamilyTailConfig,
     stop: &AtomicBool,
     wake_rx: &Receiver<()>,
     emit: &mut dyn FnMut(String),
 ) -> Result<bool, SourceError> {
-    let mut copied = false;
-    for g in members {
+    for (g, first) in members {
         let from = if !cut {
             None
-        } else if copied {
-            Some(0)
-        } else if std::fs::metadata(&g.path).is_ok_and(|m| m.len() >= at_look) {
-            copied = true;
+        } else if copy.is_some_and(|c| crate::tail::cursor::identity_at(&g.path).as_ref() == Some(c)) {
             Some(at_look)
-        } else {
+        } else if *first < seen_at {
             None
+        } else {
+            Some(0)
         };
         if let Some(from) = from {
             loop {
@@ -263,13 +280,16 @@ fn read_beside(
 
 /// A held active owed (C-098): its name, the offset its lines after the look start at (the look's
 /// length; 0 for an active held in turn, all of it new), its identity, the most of it seen at the
-/// active's path, and whether it was seen cut in place there (shorter than that).
+/// active's path and the listing that saw it so, whether it was seen cut in place there (shorter
+/// than that), and its copy once the cut is seen.
 struct Held {
     name: String,
     from: u64,
     identity: Option<Identity>,
     seen: u64,
+    seen_at: u64,
     cut: bool,
+    copy: Option<Identity>,
 }
 
 /// After a held active's branch opened the fixed path, before the active's first line: whatever
@@ -934,7 +954,9 @@ fn run_family(
     let mut read_new: HashSet<String> = HashSet::new();
     let mut read_ids: Vec<Identity> = Vec::new();
     // The members born after the look while the held file stood at the active's path, undecided.
-    let mut beside: HashSet<String> = HashSet::new();
+    let mut beside: HashMap<String, u64> = HashMap::new();
+    // The held branch's listings, counted: when a member born beside the held file was first seen.
+    let mut listing_no: u64 = 0;
     // The held file's name at the look: a file under it once the held file is read or gone is
     // another file, born after the look, unless it is the held file back.
     let mut look_held_name: Option<String> = None;
@@ -1056,6 +1078,7 @@ fn run_family(
                 // the held file took after the look, then every generation born after it, then the
                 // active, each awaited while it is there and not readable.
                 if let Some(look) = at_look.clone() {
+                    listing_no += 1;
                     let active_now = files.iter().find(|f| f.is_active);
                     // The held file still standing at the active's path: the most of it seen there,
                     // and a cut in place (shorter than that) remembered; a member born after the
@@ -1073,6 +1096,7 @@ fn run_family(
                             h.cut = true;
                         } else if !h.cut {
                             h.seen = len;
+                            h.seen_at = listing_no;
                         }
                         for f in &files {
                             if !f.is_active
@@ -1080,8 +1104,11 @@ fn run_family(
                                 && !read_new.contains(&f.file_name)
                                 && !crate::tail::cursor::identity_at(&f.path).is_some_and(|i| read_ids.contains(&i))
                             {
-                                beside.insert(f.file_name.clone());
+                                beside.entry(f.file_name.clone()).or_insert(listing_no);
                             }
+                        }
+                        if h.cut && h.copy.is_none() {
+                            h.copy = pick_copy(&beside_members(&files, &beside), h.seen);
                         }
                     }
                     // The held file retired unopened: a member of its identity, no longer the
@@ -1121,9 +1148,12 @@ fn run_family(
                             // the look went with it; a search that cannot tell reads none of it. The
                             // members born beside it are decided by what was seen of it.
                             crate::tail::cursor::Located::Gone | crate::tail::cursor::Located::Unknown => {
-                                let (cut, at_look) = held.as_ref().map_or((false, 0), |h| (h.cut, h.from));
-                                if !read_beside(&beside_members(&files, &beside), cut, at_look, &mut read_new, &cfg, &stop, &wake_rx, &mut emit)? {
-                                    return Ok(());
+                                if let Some(h) = held.as_ref() {
+                                    let members = beside_members(&files, &beside);
+                                    let picked = if h.cut && h.copy.is_none() { pick_copy(&members, h.seen) } else { None };
+                                    if !read_beside(&members, h.cut, h.from, h.copy.as_ref().or(picked.as_ref()), h.seen_at, &mut read_new, &cfg, &stop, &wake_rx, &mut emit)? {
+                                        return Ok(());
+                                    }
                                 }
                                 beside.clear();
                                 held = None;
@@ -1136,7 +1166,9 @@ fn run_family(
                         match TailedFile::open_held_against(path, h.from, h.identity.as_ref(), h.seen, h.cut) {
                             Ok((mut c, cut)) if h.identity.as_ref().is_none_or(|id| c.has_identity(id)) => {
                                 // What was born beside it first, then its own lines.
-                                if !read_beside(&beside_members(&files, &beside), cut, h.from, &mut read_new, &cfg, &stop, &wake_rx, &mut emit)? {
+                                let members = beside_members(&files, &beside);
+                                let picked = if cut && h.copy.is_none() { pick_copy(&members, h.seen) } else { None };
+                                if !read_beside(&members, cut, h.from, h.copy.as_ref().or(picked.as_ref()), h.seen_at, &mut read_new, &cfg, &stop, &wake_rx, &mut emit)? {
                                     return Ok(());
                                 }
                                 beside.clear();
@@ -1161,7 +1193,7 @@ fn run_family(
                     // it landed in the pattern) taken as read.
                     let mut younger: Vec<&FamilyFile> = files
                         .iter()
-                        .filter(|f| !f.is_active && !look.contains(&f.file_name) && !read_new.contains(&f.file_name) && !beside.contains(&f.file_name))
+                        .filter(|f| !f.is_active && !look.contains(&f.file_name) && !read_new.contains(&f.file_name) && !beside.contains_key(&f.file_name))
                         .collect();
                     younger.sort_by(|a, b| rank(a).cmp(&rank(b)));
                     younger.retain(|g| {
@@ -1232,13 +1264,14 @@ fn run_family(
                                 // listing makes them generations, the live loop's to read (as
                                 // its rescans take a listing only with the path the same after).
                                 let still = crate::tail::cursor::identity_at(&active.path).is_some_and(|i| h.identity.as_ref() == Some(&i));
+                                listing_no += 1;
                                 for f in again.iter().filter(|_| still) {
                                     if !f.is_active
                                         && !look.contains(&f.file_name)
                                         && !read_new.contains(&f.file_name)
                                         && !crate::tail::cursor::identity_at(&f.path).is_some_and(|i| h.identity.as_ref() == Some(&i) || read_ids.contains(&i))
                                     {
-                                        beside.insert(f.file_name.clone());
+                                        beside.entry(f.file_name.clone()).or_insert(listing_no);
                                     }
                                 }
                                 // Cut after the open (a copy-and-truncate between it and the
@@ -1252,7 +1285,9 @@ fn run_family(
                                         c = top;
                                     }
                                 }
-                                if !read_beside(&beside_members(&again, &beside), cut, h.from, &mut read_new, &cfg, &stop, &wake_rx, &mut emit)? {
+                                let members = beside_members(&again, &beside);
+                                let picked = if cut && h.copy.is_none() { pick_copy(&members, h.seen) } else { None };
+                                if !read_beside(&members, cut, h.from, h.copy.as_ref().or(picked.as_ref()), h.seen_at, &mut read_new, &cfg, &stop, &wake_rx, &mut emit)? {
                                     return Ok(());
                                 }
                                 beside.clear();
@@ -1286,10 +1321,10 @@ fn run_family(
                                 let listed_again = spec.resolve().ok().is_some_and(|again| member_names(&again) == names);
                                 match after {
                                     Some((id, len)) if listed_again && before.as_ref() == Some(&id) => {
-                                        held = Some(Held { name: active.file_name.clone(), from: 0, identity: Some(id), seen: len, cut: false });
+                                        held = Some(Held { name: active.file_name.clone(), from: 0, identity: Some(id), seen: len, seen_at: listing_no, cut: false, copy: None });
                                     }
                                     None if listed_again && before.is_none() => {
-                                        held = Some(Held { name: active.file_name.clone(), from: 0, identity: None, seen: 0, cut: false });
+                                        held = Some(Held { name: active.file_name.clone(), from: 0, identity: None, seen: 0, seen_at: listing_no, cut: false, copy: None });
                                     }
                                     _ => {}
                                 }
@@ -1351,7 +1386,7 @@ fn run_family(
                             // the look taken.
                             let names = member_names(&files);
                             if after == before && spec.resolve().ok().is_some_and(|again| member_names(&again) == names) {
-                                held = Some(Held { name: active.file_name.clone(), from: len, identity: after, seen: len, cut: false });
+                                held = Some(Held { name: active.file_name.clone(), from: len, identity: after, seen: len, seen_at: listing_no, cut: false, copy: None });
                                 look_held_name = Some(active.file_name.clone());
                                 at_look = Some(names);
                                 attached(&mut attached_slot);

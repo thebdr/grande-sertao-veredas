@@ -1649,3 +1649,79 @@ fn a_copy_and_truncate_between_the_held_open_and_the_listing_again_is_read_from_
         AFTER_HELD_OPEN.lock().unwrap().retain(|(at, _)| *at != d.join("current.log"));
     }
 }
+
+/// C-098's eighth refute round. A held file's copy is the member born at its cut, not the oldest
+/// holding the look's length: a file dropped in earlier, longer than the look's length and shorter
+/// than the most of the held file seen, is not replayed and the copy is read from where the held
+/// file stood (20 to 55), as it is when made long before the cut, a short file dropped in after it
+/// (20 to 55); and with logrotate's `copytruncate` and one copy kept, the first copy,
+/// picked when a round saw the cut, removed at the second cut, the second copy is read whole,
+/// never from the look's length, though it is long enough to pass for the first (50 to 105: what
+/// the first copy alone held went with it).
+#[cfg(unix)]
+#[test]
+fn a_held_file_s_copy_is_the_one_born_at_its_cut() {
+    let dir = tempfile::tempdir().unwrap();
+    let held_fixed = |name: &str| {
+        let d = dir.path().join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        write(&d.join("done_1.log"), 0..10);
+        write(&d.join("current.log"), 10..20);
+        mode(&d.join("current.log"), 0o200);
+        d
+    };
+    let fixed = |d: &std::path::Path| FamilySpec::new(d, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap();
+    let cut = |p: &std::path::Path| std::fs::OpenOptions::new().write(true).open(p).unwrap().set_len(0).unwrap();
+
+    // A file dropped in before the cut, longer than the look's length.
+    let d = held_fixed("dropped-in-before-the-cut");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 35, move || {
+        write(&dd.join("done_2.log"), 900..915);
+        append(&p, 20..50);
+        std::thread::sleep(Duration::from_millis(600));
+        write(&dd.join("done_3.log"), 10..50);
+        cut(&p);
+        append(&p, 50..55);
+        std::thread::sleep(Duration::from_millis(1000));
+        mode(&p, 0o644);
+    });
+    assert_eq!(lines, (20..55).collect::<Vec<u32>>(), "a file dropped in before the cut");
+
+    // A slow copy, made long before the cut, and a short file dropped in after it.
+    let d = held_fixed("slow-copy-then-dropped-in");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 35, move || {
+        append(&p, 20..50);
+        write(&dd.join("done_2.log"), 10..50);
+        std::thread::sleep(Duration::from_millis(400));
+        write(&dd.join("done_3.log"), 900..905);
+        std::thread::sleep(Duration::from_millis(400));
+        cut(&p);
+        append(&p, 50..55);
+        std::thread::sleep(Duration::from_millis(1000));
+        mode(&p, 0o644);
+    });
+    assert_eq!(lines, (20..55).collect::<Vec<u32>>(), "a slow copy, then a short file dropped in");
+
+    // copytruncate, one copy kept: the first copy removed at the second cut.
+    let d = held_fixed("copytruncate-rotate-1");
+    let (p, dd) = (d.join("current.log"), d.clone());
+    let (lines, _) = at_end(fixed(&d), 55, move || {
+        append(&p, 20..50);
+        std::thread::sleep(Duration::from_millis(600));
+        write(&dd.join("done_2.log"), 10..50);
+        cut(&p);
+        append(&p, 50..60);
+        std::thread::sleep(Duration::from_millis(600));
+        append(&p, 60..100);
+        std::thread::sleep(Duration::from_millis(600));
+        write(&dd.join("done_3.log"), 50..100);
+        std::fs::remove_file(dd.join("done_2.log")).unwrap();
+        cut(&p);
+        append(&p, 100..105);
+        std::thread::sleep(Duration::from_millis(600));
+        mode(&p, 0o644);
+    });
+    assert_eq!(lines, (50..105).collect::<Vec<u32>>(), "copytruncate, the first copy removed");
+}

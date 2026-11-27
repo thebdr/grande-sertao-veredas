@@ -383,6 +383,11 @@ Recorded as the port meets them.
   path takes as "born beside" is checked after it is taken (round 6), as the live loop's are, and so
   is the held file's cut (round 7): judged at the open alone, a copy-and-truncate just after it was
   missed. A generation the held branch never opened is the one it cannot follow (a stated limit).
+  The copy of a cut held file is told by what was seen of the file (round 8): at least the most of
+  it seen, the latest listed, picked when the cut is first seen and kept. A copy can only be told
+  from a file dropped in by its length, since its bytes cannot be compared with a file that cannot
+  be read. Barring every member listed before the last whole sight would also bar a large file's
+  copy, which takes several rounds to make.
 - **A new `pub` name in portal is read by supervisão.** Its `writes` test reads portal's public
   functions and fields by name from the sources and refuses any of them among its own tokens
   unless reviewed; `Reach`'s `pub head` and `pub tail` turned it red on main (2026-11-26), and the
