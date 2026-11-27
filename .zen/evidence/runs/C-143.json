@@ -1,9 +1,7 @@
 {
   "clause": "C-143",
-  "command": "flock /tmp/veredas-suite.lock cargo test -j 8 -p veredas-aranha --test bench_device",
+  "command": "cargo test -j 8 -p veredas-aranha --test bench_device",
   "commandArgv": [
-    "flock",
-    "/tmp/veredas-suite.lock",
     "cargo",
     "test",
     "-j",
@@ -14,15 +12,15 @@
     "bench_device"
   ],
   "exitCode": 0,
-  "outputSha": "56b0e53c930c710b1f296933a9558c47a7251ce277294d12a44b5c4706334554",
-  "outputTail": "\nrunning 1 test\ntest the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running tests/bench_device.rs (target/debug/build/veredas-aranha/40213c8b1f6d0f53/out/bench_device-40213c8b1f6d0f53)",
-  "ranAt": "2026-11-25T10:14:18.801Z",
-  "headCommit": "a5d9196f98025d36c51df1b613a26558cd88d897",
+  "outputSha": "8f17d9fc9d1a1fe834625990b9e990b47a58052074fa04de51d54388a770ef98",
+  "outputTail": "\nrunning 1 test\ntest the_listener_finds_the_bench_devices_as_they_state_themselves_each_on_its_interface ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running tests/bench_device.rs (target/debug/build/veredas-aranha/472d30d5f52eedb2/out/bench_device-472d30d5f52eedb2)",
+  "ranAt": "2026-11-27T14:42:16.454Z",
+  "headCommit": "34ab7a458a0672567a8a84a829a8d924e5ace9b9",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/bench_device.rs",
       "file": "crates/veredas-aranha/tests/bench_device.rs",
-      "fileSha": "4baa9ef2ff6a3184c75a3245490409faa9d38c8e225418d12a767263fc2794d7"
+      "fileSha": "27bddd50a1449cb2b786283597290a6aa5a6ef1a59eda9b307e410c5b1d8dead"
     }
   ]
 }
