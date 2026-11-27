@@ -1281,7 +1281,26 @@ fn key_replacing_in(obj: &serde_json::Value, read: TaggedReader, part_budget: &m
             .and_then(|e| e.split_once("`, expected").map(|(_, list)| list.split('`').skip(1).step_by(2).map(str::to_string).collect()))
             .unwrap_or_default();
         let stands_for_the_tag = |o: &Vec<String>| o.len() == 1 && obj.get(&o[0]).and_then(serde_json::Value::as_str).is_some_and(|v| variants.iter().any(|x| x == v));
-        return outcomes.iter().find(|o| stands_for_the_tag(o)).map(|o| o[0].clone());
+        let key = outcomes.iter().find(|o| stands_for_the_tag(o)).map(|o| o[0].clone())?;
+        // and read by no variant: a key one of them reads is a field of its own, whatever text it
+        // holds (refute round 20: an internal link's `location = "External"` and a Formula rule's
+        // `formula = "Blanks"`, each all the other variant's reading leaves unread, were named); a
+        // variant whose fields the object holds otherwise reads none (a second fault, the Limits'),
+        // and a search past its readings names none
+        let mut spare = 4096usize;
+        for variant in &variants {
+            let mut trial = obj.clone();
+            insert_at(&mut trial, &[], "type", serde_json::Value::String(variant.clone()));
+            let mut readings = Vec::new();
+            match read(&trial) {
+                Ok(back) => readings.push(unread_keys(obj, &back)),
+                Err(e) => explore_from(obj, &trial, &e, 1, read, &mut spare, &mut readings),
+            }
+            if spare == 0 || readings.iter().any(|o| !o.contains(&key)) {
+                return None;
+            }
+        }
+        return Some(key);
     }
     let fewest = outcomes.iter().map(Vec::len).min()?;
     let decide: Vec<&Vec<String>> = outcomes.iter().filter(|o| o.len() == fewest).collect();

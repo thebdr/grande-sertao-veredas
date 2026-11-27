@@ -330,6 +330,11 @@ fn a_file_that_is_not_what_it_should_be_is_refused_by_its_part_and_place() {
         // a key the engine's structures do not read, at any depth, by its path
         ("workbook.toml", Box::new(|t| Some(t.replacen("tz = \"UTC\"", "tz = \"UTC\"\ntzz = \"UTC\"", 1))), "workbook.toml: `settings.tzz` is a key nothing reads"),
         ("workbook.toml", Box::new(|t| Some(t.replacen("sz = 12", "sz = 12\nszz = 12", 1))), "workbook.toml: `styles.fonts.0.szz` is a key nothing reads"),
+        // beside another fault, outside a tagged object, a key nothing reads is named only where the
+        // reader meets it before the fault, in sorted order (refute round 20, a limit): `aaa` before
+        // `tz = 5`, `tzz` after it, the deserialiser's words then standing
+        ("workbook.toml", Box::new(|t| Some(t.replacen("tz = \"UTC\"", "tz = 5\naaa = 1", 1))), "workbook.toml: `settings.aaa` is a key nothing reads"),
+        ("workbook.toml", Box::new(|t| Some(t.replacen("tz = \"UTC\"", "tz = 5\ntzz = 1", 1))), "workbook.toml: invalid type: integer `5`, expected a string"),
         // a misspelt key replacing the field it meant, and one under an optional field: named by
         // the file's own path (refute round 11)
         ("workbook.toml", Box::new(|t| Some(t.replacen("tz = \"UTC\"", "tzz = \"UTC\"", 1))), "workbook.toml: `settings.tzz` is a key nothing reads"),
@@ -1942,6 +1947,15 @@ fn a_tag_s_stand_in_is_named_only_where_its_variant_leaves_it_alone_unread() {
         let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replace("links = []", &format!("links = [[1, 1, {link}]]")));
         assert!(words(&got), "{link}: {got}");
     }
+    // a tag deleted beside the link's own field naming the other variant, read with its tag (refute
+    // round 20: `location` and `target`, each all the other variant's reading leaves unread, were
+    // named)
+    for (tag, link) in [("Internal", r#"location = "External""#), ("External", r#"target = "Internal""#)] {
+        let with_tag = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replace("links = []", &format!("links = [[1, 1, {{ type = \"{tag}\", {link} }}]]")));
+        assert_eq!(with_tag, "read, not refused", "{link}");
+        let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replace("links = []", &format!("links = [[1, 1, {{ {link} }}]]")));
+        assert!(words(&got), "{link}: {got}");
+    }
     // a link's tag replaced by a key whose value names no variant: no key stands for it (a limit)
     let got = refusal(&parts, "sheets/01-Loads.toml", &|t| t.replace("links = []", r#"links = [[1, 1, { kind = "Externl", target = "https://example.org" }]]"#));
     assert!(words(&got), "{got}");
@@ -1960,15 +1974,18 @@ fn a_tag_s_stand_in_is_named_only_where_its_variant_leaves_it_alone_unread() {
         let blocks: Vec<&str> = text.split("\n[[conditional_formatting]]\n").collect();
         let i = blocks.iter().position(|b| b.contains(&tag)).unwrap();
         let line = blocks[i].lines().find(|l| l.starts_with(&format!("{field} = "))).unwrap_or_else(|| panic!("{kind}: no {field}"));
-        let with = |tag_line: &str| {
-            let block = blocks[i].replacen(line, &format!("{field} = \"Blanks\""), 1).replacen(&tag, tag_line, 1);
+        let holding = |value: &str, tag_line: &str| {
+            let block = blocks[i].replacen(line, &format!("{field} = \"{value}\""), 1).replacen(&tag, tag_line, 1);
             let mut edited: Vec<String> = blocks.iter().map(|b| b.to_string()).collect();
             edited[i] = block;
             edited.join("\n[[conditional_formatting]]\n")
         };
-        let deleted = with("");
-        let got = refusal(&rule_parts, &sheet, &|_| deleted.clone());
-        assert!(words(&got), "{kind} tag deleted: {got}");
+        let with = |tag_line: &str| holding("Blanks", tag_line);
+        for value in ["Blanks", "Errors", "NoErrors", "AboveAverage"] {
+            let deleted = holding(value, "");
+            let got = refusal(&rule_parts, &sheet, &|_| deleted.clone());
+            assert!(words(&got), "{kind} tag deleted beside {value}: {got}");
+        }
         let replaced = with(&format!("kind = \"{kind}\""));
         let got = refusal(&rule_parts, &sheet, &|_| replaced.clone());
         assert!(got.contains(".cf_rule.kind` is a key nothing reads"), "{kind} tag replaced: {got}");
@@ -1976,4 +1993,36 @@ fn a_tag_s_stand_in_is_named_only_where_its_variant_leaves_it_alone_unread() {
         let got = refusal(&rule_parts, &sheet, &|_| no_variant.clone());
         assert!(words(&got), "{kind} tag replaced by no variant: {got}");
     }
+    // a Formula rule (the CellIs one retagged, its operator dropped) whose own `formula` holds a
+    // variant's name: read with its tag, refused in the deserialiser's words without it, its tag
+    // replaced named (refute round 20: `formula`, all a Blanks rule's reading leaves unread, was
+    // named)
+    let (sheet, text) = rule_parts
+        .iter()
+        .filter(|(n, _)| n.starts_with("sheets/"))
+        .map(|(n, b)| (n.clone(), String::from_utf8(b.clone()).unwrap()))
+        .find(|(_, t)| t.contains("type = \"CellIs\""))
+        .unwrap();
+    let blocks: Vec<&str> = text.split("\n[[conditional_formatting]]\n").collect();
+    let i = blocks.iter().position(|b| b.contains("type = \"CellIs\"")).unwrap();
+    let formula_rule = |value: &str, tag_line: &str| {
+        let block: Vec<String> = blocks[i]
+            .lines()
+            .filter(|l| !l.starts_with("operator = ") && !l.starts_with("formula2 = "))
+            .map(|l| if l.starts_with("formula = ") { format!("formula = \"{value}\"") } else { l.replacen("type = \"CellIs\"", tag_line, 1) })
+            .collect();
+        let mut edited: Vec<String> = blocks.iter().map(|b| b.to_string()).collect();
+        edited[i] = block.join("\n") + if blocks[i].ends_with('\n') { "\n" } else { "" };
+        edited.join("\n[[conditional_formatting]]\n")
+    };
+    for value in ["Blanks", "Errors", "NoErrors", "AboveAverage"] {
+        let tagged = formula_rule(value, "type = \"Formula\"");
+        assert_eq!(refusal(&rule_parts, &sheet, &|_| tagged.clone()), "read, not refused", "Formula beside {value}");
+        let deleted = formula_rule(value, "");
+        let got = refusal(&rule_parts, &sheet, &|_| deleted.clone());
+        assert!(words(&got), "Formula tag deleted beside {value}: {got}");
+    }
+    let replaced = formula_rule("Blanks", "kind = \"Formula\"");
+    let got = refusal(&rule_parts, &sheet, &|_| replaced.clone());
+    assert!(got.contains(".cf_rule.kind` is a key nothing reads"), "Formula tag replaced: {got}");
 }

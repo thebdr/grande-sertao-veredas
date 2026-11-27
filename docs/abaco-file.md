@@ -4,10 +4,11 @@ A workbook born in Ábaco, and at the same time the session that works on other 
 (`docs/abaco-plan.md`, "The `.abaco` file"): one zip of plain-text parts, readable with `unzip`
 and an editor. `veredas_abaco::abacofile` writes it (`write`, through a file beside the
 destination renamed into place, the file it replaces kept as `<name>.bak` (a second name of
-the old file made aside first and renamed onto `.bak`, so one rename replaces the destination: a
-write killed partway leaves it whole, the old or the new, and a second name that fails an earlier
-`.bak` as it was); a write that fails leaves the destination as it was and nothing beside
-it; the temporary file is one of its own, made
+the old file made aside first, under a name of its own made new so no link standing there is
+followed, and renamed onto `.bak`, so one rename replaces the destination: a write killed partway
+leaves it whole, the old or the new, and a second name or a rename that fails an earlier `.bak` as
+it was, kept aside until the new file has its name); a write that fails leaves the destination as
+it was and nothing beside it; the temporary file is one of its own, made
 new under a name of its own (`.veredas-<process>-<n>.tmp`, so a long destination name is written up
 to the file system's limit less the `.bak` four bytes), and the names are the system's whatever
 their encoding; two writes of one destination at once are not serialised, a limit) and reads it
@@ -34,8 +35,10 @@ table where a text does is refused by its path, in every part; in a part that do
 otherwise, in the reader's words, and so is a variant of no data written as a table with a key
 beside it at a place not named above (a sheet's `state`, a font's `scheme`). A tag replaced is
 found through the variant the object holds as a text (`kind = "CellIs"`), its key named where it is
-all that variant's reading leaves unread; a tag deleted names no key, whatever text a field holds
-(`value = "Blanks"`), nor does a tag replaced by a text that names no variant (`kind = "Txt"`). A search for a replacing key stops past 4 096 readings, the reader's words then standing. A tool's own records and state are tables whose keys
+all that variant's reading leaves unread and no variant reads a key of its name; a tag deleted names
+no key, whatever text a field holds (`value = "Blanks"`, a link's own `location = "External"`), nor
+does a tag replaced by a text that names no variant (`kind = "Txt"`). Beside another fault, a key
+nothing reads is named only where the reader meets it first, keys read in sorted order. A search for a replacing key stops past 4 096 readings, the reader's words then standing. A tool's own records and state are tables whose keys
 the tool chooses.
 
 ## The parts
