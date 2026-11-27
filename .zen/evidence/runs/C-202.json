@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(live)"
   ],
   "exitCode": 0,
-  "outputSha": "a0af5ba492c25ca4e5fd5b0e6e1d6e24a24462439174be2ec440030c6f345e16",
-  "outputTail": "        PASS [   2.296s] (12/24) veredas-comissionador::live a_run_arms_the_switch_for_the_writes_it_was_confirmed_for_and_disarms_it_after\n        PASS [   2.490s] (13/24) veredas-comissionador::live a_write_the_switch_or_the_plant_refuses_mid_run_ends_its_step_in_error\n        PASS [   2.559s] (14/24) veredas-comissionador::live functions_take_typed_inputs_give_their_outputs_and_keep_their_bound\n        PASS [   2.616s] (15/24) veredas-comissionador::live an_awaited_row_s_copies_are_followed_in_any_order_and_a_name_s_tables_judged_together\n        PASS [   2.756s] (16/24) veredas-comissionador::live a_live_wait_for_a_duration_waits_until_its_bound_has_passed\n        PASS [   2.842s] (17/24) veredas-comissionador::live a_long_replayed_window_stops_at_the_tester_s_word\n        PASS [   2.873s] (18/24) veredas-comissionador::live awaits_over_a_view_take_each_row_of_a_stamp_once\n        PASS [   3.696s] (19/24) veredas-comissionador::live the_run_s_bound_is_the_run_s_clock_s_live_and_replayed_alike\n        PASS [   5.157s] (20/24) veredas-comissionador::live rows_sharing_a_stamp_are_judged_together_and_each_awaited\n        PASS [   5.754s] (21/24) veredas-comissionador::live a_wait_and_a_read_agree_on_a_stamp_two_keys_share\n        PASS [   6.169s] (22/24) veredas-comissionador::live timeouts_the_run_s_bound_and_the_tester_s_stop\n        PASS [   6.491s] (23/24) veredas-comissionador::live the_worked_example_passes_live_against_the_machine\n        PASS [   7.446s] (24/24) veredas-comissionador::live the_worked_example_fails_where_the_destination_is_free\n────────────\n     Summary [   7.447s] 24 tests run: 24 passed, 0 skipped",
-  "ranAt": "2026-11-27T00:29:30.262Z",
-  "headCommit": "0bae76020b1511c5a1d42648732eb9f9cdb9c0da",
+  "outputSha": "8118bfff4eb8adf2c5023f185e6db59b237ab3934c0909017869c1f6537e416a",
+  "outputTail": "        PASS [   3.080s] (15/27) veredas-comissionador::live a_live_wait_for_a_duration_waits_until_its_bound_has_passed\n        PASS [   3.083s] (16/27) veredas-comissionador::live an_awaited_row_s_copies_are_followed_in_any_order_and_a_name_s_tables_judged_together\n        PASS [   3.121s] (17/27) veredas-comissionador::live a_long_replayed_window_stops_at_the_tester_s_word\n        PASS [   2.006s] (18/27) veredas-comissionador::live values_compute_and_compare_as_the_reference_says\n        PASS [   3.176s] (19/27) veredas-comissionador::live awaits_over_a_view_take_each_row_of_a_stamp_once\n        PASS [   5.171s] (20/27) veredas-comissionador::live the_run_s_bound_is_the_run_s_clock_s_live_and_replayed_alike\n        PASS [   5.338s] (21/27) veredas-comissionador::live rows_sharing_a_stamp_are_judged_together_and_each_awaited\n        PASS [   6.062s] (22/27) veredas-comissionador::live a_wait_and_a_read_agree_on_a_stamp_two_keys_share\n        PASS [   6.535s] (23/27) veredas-comissionador::live the_worked_example_passes_live_against_the_machine\n        PASS [   7.707s] (24/27) veredas-comissionador::live the_worked_example_fails_where_the_destination_is_free\n        PASS [   8.324s] (25/27) veredas-comissionador::live timeouts_the_run_s_bound_and_the_tester_s_stop\n        PASS [  11.182s] (26/27) veredas-comissionador::live a_write_whose_answer_never_came_is_recorded_sent\n        PASS [  13.009s] (27/27) veredas-comissionador::live the_tester_s_stop_ends_a_long_window_s_reading_between_its_pages\n────────────\n     Summary [  13.017s] 27 tests run: 27 passed, 0 skipped",
+  "ranAt": "2026-11-27T07:11:48.282Z",
+  "headCommit": "e201219fa3b4b89a3e5d0dee556837f1fe12b16a",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/live.rs",
       "file": "crates/veredas-comissionador/tests/live.rs",
-      "fileSha": "86fdc3b06373f8b4419398b9cc7663a2ff5cff1db7399105085a66a3a42cd7d1"
+      "fileSha": "fdf1fc290f3482c1e47afd783fa49b91d9f9093fa621721dfedceeb68a2b96b9"
     }
   ]
 }
