@@ -1619,3 +1619,54 @@ fn the_watcher_follows_a_link_and_a_folder_made_anew() {
     assert_eq!(got.as_deref(), Ok("renamed in 0"), "a replacement in the folder made anew read within 1.5 s ({:?})", renamed.elapsed());
     set.stop_all();
 }
+
+/// A quiet file beside a neighbour making and removing names flat out, four writers at once (the
+/// kernel's queue overflowing): under a poll of five seconds each of fifteen lines is read within
+/// half a second, the overflow waking the follower since its file's writes may be among what is
+/// lost, and the follower's thread stays under a tenth of a second over three seconds. The
+/// watcher's own thread reads the flood, what a neighbour does reaching at most it (C-035's seventh
+/// idle-cost round).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_quiet_file_beside_a_flood_of_names_costs_its_follower_almost_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("quiet.log");
+    std::fs::write(&path, "").unwrap();
+    let (mut set, rx) = SourceSet::new();
+    let cfg = TailConfig { poll_interval: Duration::from_secs(5), use_notify: Some(true), ..TailConfig::default() };
+    set.spawn(Box::new(FileTailSource::new("fileflood", "fileflood", &path, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flood: Vec<_> = (0..4)
+        .map(|t| {
+            let (dir, stop) = (dir.path().to_path_buf(), stop.clone());
+            std::thread::spawn(move || {
+                let mut n = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    let p = dir.join(format!("spool_{t}_{n}.tmp"));
+                    // A failed test removes the folder under the flood: it stops there.
+                    if std::fs::write(&p, "").and_then(|()| std::fs::remove_file(&p)).is_err() {
+                        break;
+                    }
+                    n += 1;
+                }
+                n
+            })
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(300));
+    let before = thread_cpu_s("tail:fileflood").expect("the follower's thread");
+    for i in 0..15 {
+        append(&path, &format!("line {i}\n"));
+        let written = Instant::now();
+        let got = rx.recv_timeout(Duration::from_millis(500)).map(|e| e.line);
+        assert_eq!(got.as_deref(), Ok(format!("line {i}").as_str()), "line {i} read within 500 ms of its write ({:?})", written.elapsed());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let used = thread_cpu_s("tail:fileflood").expect("the follower's thread") - before;
+    stop.store(true, Ordering::Relaxed);
+    let names: u64 = flood.into_iter().map(|f| f.join().unwrap()).sum();
+    assert!(names > 100_000, "the neighbours were busy ({names} names made and removed)");
+    assert!(used < 0.1, "three seconds beside a flood of names used {used:.2} s of the follower's processor time");
+    set.stop_all();
+}

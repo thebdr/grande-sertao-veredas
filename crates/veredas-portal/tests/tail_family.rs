@@ -1413,10 +1413,12 @@ fn folders_born_nested_at_once_in_a_tree_are_each_watched() {
 /// and off, for a file renamed over the active and for the active deleted and made again. The
 /// watcher's early wake on the newer member listed it before the replacement landed, and the
 /// catch-up from the old name's rank left the replacement unread (C-036's sixth idle-cost round).
+#[cfg(unix)]
 #[test]
 fn a_newer_member_then_a_replacement_are_read_in_order() {
+    use std::os::unix::fs::PermissionsExt;
     for notify in [true, false] {
-        for deleted in [false, true] {
+        for (deleted, held) in [(false, false), (true, false), (false, true)] {
             let dir = tempfile::tempdir().unwrap();
             let active = dir.path().join("20261126_sorts1.log");
             std::fs::write(&active, "").unwrap();
@@ -1438,13 +1440,21 @@ fn a_newer_member_then_a_replacement_are_read_in_order() {
                 std::fs::remove_file(&active).unwrap();
                 std::fs::write(&active, "replacement 0\n").unwrap();
             } else {
+                // Held: made where it cannot be read yet, opened a second later.
                 let aside = dir.path().join("replacement.tmp");
                 std::fs::write(&aside, "replacement 0\n").unwrap();
+                if held {
+                    std::fs::set_permissions(&aside, std::fs::Permissions::from_mode(0o000)).unwrap();
+                }
                 std::fs::rename(&aside, &active).unwrap();
+                if held {
+                    std::thread::sleep(Duration::from_secs(1));
+                    std::fs::set_permissions(&active, std::fs::Permissions::from_mode(0o644)).unwrap();
+                }
             }
             let got: Vec<String> = (0..2).filter_map(|_| rx.recv_timeout(Duration::from_secs(5)).ok().map(|e| e.line)).collect();
-            assert_eq!(got, ["replacement 0", "rotated 0"], "watcher {notify}, deleted {deleted}");
-            assert!(rx.recv_timeout(Duration::from_millis(500)).is_err(), "watcher {notify}, deleted {deleted}: nothing more");
+            assert_eq!(got, ["replacement 0", "rotated 0"], "watcher {notify}, deleted {deleted}, held {held}");
+            assert!(rx.recv_timeout(Duration::from_millis(500)).is_err(), "watcher {notify}, deleted {deleted}, held {held}: nothing more");
             set.stop_all();
         }
     }
@@ -1536,5 +1546,93 @@ fn a_recursive_family_beside_a_busy_folder_costs_almost_nothing() {
     assert!(churned > 1000, "the folders were busy ({churned} made and removed)");
     assert!(used < 0.1, "three seconds beside a busy folder used {used:.2} s of the follower's processor time");
     assert!(watcher_used < 0.1, "three seconds beside a busy folder used {watcher_used:.2} s of the watcher's processor time");
+    set.stop_all();
+}
+
+/// A folder holding a newer member, moved into a recursive tree: the member's line is read within
+/// the drain grace and half a second under a poll of five seconds, the folder looked into at its
+/// arrival and the tree listed. Woken without a listing, the member waited the ten-second
+/// fallback (C-036's seventh idle-cost round).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_folder_moved_into_a_tree_with_a_newer_member_is_read() {
+    let root = tempfile::tempdir().unwrap();
+    let top = root.path().join("tree");
+    std::fs::create_dir_all(top.join("a")).unwrap();
+    std::fs::write(top.join("a/app_1.log"), "").unwrap();
+    let spec = FamilySpec::new(&top, r"[a-z]/app_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap().with_recursive(true);
+    let cfg = FamilyTailConfig { poll_interval: Duration::from_secs(5), use_notify: Some(true), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
+    let bound = cfg.drain_grace + Duration::from_millis(500);
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FamilyTailSource::new("movedin", "movedin", spec, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    std::fs::create_dir_all(root.path().join("b")).unwrap();
+    std::fs::write(root.path().join("b/app_2.log"), "moved in 0\n").unwrap();
+    std::fs::rename(root.path().join("b"), top.join("b")).unwrap();
+    let moved = Instant::now();
+    let got = rx.recv_timeout(bound).map(|e| e.line);
+    assert_eq!(got.as_deref(), Ok("moved in 0"), "the moved-in member read within {bound:?} ({:?})", moved.elapsed());
+    set.stop_all();
+}
+
+/// A quiet family beside a neighbour making and removing names flat out, four writers at once (the
+/// kernel's queue overflowing): three thousand retired members, a poll of five seconds, each of
+/// fifteen lines read within half a second and the follower's thread under a tenth of a second
+/// over three seconds. Every overflow listed the family, 0.70 s to 1.35 s of the three (C-036's
+/// seventh idle-cost round). The watcher's own thread reads the flood (what a neighbour does
+/// reaches at most it, C-035).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_quiet_family_beside_a_flood_of_names_costs_its_follower_almost_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("dated");
+    std::fs::create_dir_all(&dir).unwrap();
+    let day0 = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    for d in 0..300 {
+        let day = (day0 + chrono::Days::new(d)).format("%Y%m%d");
+        for i in 1..=10 {
+            std::fs::write(dir.join(format!("{day}_sorts{i}.log")), "old\n").unwrap();
+        }
+    }
+    let active = dir.join("20261126_sorts1.log");
+    std::fs::write(&active, "").unwrap();
+    let spec = FamilySpec::new(&dir, r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d"), ActiveMode::NewestByOrder).unwrap();
+    let cfg = FamilyTailConfig { poll_interval: Duration::from_secs(5), use_notify: Some(true), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FamilyTailSource::new("flood", "flood", spec, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flood: Vec<_> = (0..4)
+        .map(|t| {
+            let (dir, stop) = (dir.clone(), stop.clone());
+            std::thread::spawn(move || {
+                let mut n = 0u64;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let p = dir.join(format!("spool_{t}_{n}.tmp"));
+                    // A failed test removes the folder under the flood: it stops there.
+                    if std::fs::write(&p, "").and_then(|()| std::fs::remove_file(&p)).is_err() {
+                        break;
+                    }
+                    n += 1;
+                }
+                n
+            })
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(300));
+    let before = thread_cpu_s("family:flood").expect("the follower's thread");
+    for i in 0..15 {
+        let mut f = std::fs::OpenOptions::new().append(true).open(&active).unwrap();
+        std::io::Write::write_all(&mut f, format!("line {i}\n").as_bytes()).unwrap();
+        let written = Instant::now();
+        let got = rx.recv_timeout(Duration::from_millis(500)).map(|e| e.line);
+        assert_eq!(got.as_deref(), Ok(format!("line {i}").as_str()), "line {i} read within 500 ms of its write ({:?})", written.elapsed());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let used = thread_cpu_s("family:flood").expect("the follower's thread") - before;
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let names: u64 = flood.into_iter().map(|f| f.join().unwrap()).sum();
+    assert!(names > 100_000, "the neighbours were busy ({names} names made and removed)");
+    assert!(used < 0.1, "three seconds beside a flood of names used {used:.2} s of the follower's processor time");
     set.stop_all();
 }
