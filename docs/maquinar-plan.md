@@ -316,6 +316,11 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   first step whose poses overlap, since Rapier detects contacts before it moves the bodies (the
   clause states it; 4 ms at the default step, a real sensor's own delay is longer); a part's
   `size` is along its own axes, so a belt yawed 90° is still long in its own x.
+  Its seventh refute round taught that one engine step per scene step makes a long step coarse
+  (a body falling through a body, a mover through a body, a part held at a seam at 50 to 100 ms):
+  the world steps its engine 4 ms at a time at most, a mover carried over those substeps, so a
+  scene's step chooses how often its models and readers meet it, not how well it is solved; the
+  cost of a second of scene is the same at every step.
 - **`reflexo`'s first half, as designed before its code** (2026-11-22). Ready-made models that make
   a bench device behave as the machine behind it: a model reads what a controller wrote to the
   device (its outputs) and writes what the controller reads (its inputs), and moves a `fisica`

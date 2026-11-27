@@ -1784,7 +1784,7 @@ mod round_6 {
 
     /// Eight cartons added one a second, each 1 cm above the top: at 50 to 100 ms they had sunk
     /// through each other to tens of metres under the floor. Now the lowest within 2 mm of 0.15 m,
-    /// each 0.29 to 0.3 m above the one under it.
+    /// each 0.29 to 0.301 m above the one under it (the top one rests a hair above, 0.30001).
     #[test]
     fn a_column_built_one_carton_at_a_time_stands_at_long_steps() {
         let mut wrong = Vec::new();
@@ -1799,7 +1799,7 @@ mod round_6 {
             }
             steps(&mut w, 3 * per_s);
             let z: Vec<f64> = (0..8).map(|i| w.body(&format!("c{i}")).unwrap().at[2]).collect();
-            if (z[0] - 0.15).abs() > 0.002 || (1..8).any(|i| !(0.29..=0.3).contains(&(z[i] - z[i - 1]))) {
+            if (z[0] - 0.15).abs() > 0.002 || (1..8).any(|i| !(0.29..=0.301).contains(&(z[i] - z[i - 1]))) {
                 wrong.push(format!("{step_ms} ms: centres {z:.4?}"));
             }
         }
@@ -1988,5 +1988,213 @@ mod round_6 {
         drop(h);
         let (surely, perhaps) = super::begun_late(&starts.lock().unwrap(), Duration::from_millis(4), from);
         assert!(late as usize + 3 >= surely && late as usize <= perhaps, "{late} counted late, {surely} to {perhaps} began late");
+    }
+}
+
+/// C-114's seventh refute round: the critic's probes (`~/.cache/veredas/critic-c114-r7/probes`),
+/// kept as pins, the world now stepping its engine in substeps of 4 ms at most: a light barrier
+/// seeing a part cross it once and a part carried or falling beside a sensor never; a body falling
+/// onto a body over a gap resting on it; a mover pushing at long steps; a part crossing a seam of
+/// two flush belts; the rebound and the cap; a parse error naming its key.
+mod round_7 {
+    use veredas_maquinar::fisica::{self, Placement, World};
+
+    fn world(body: &str) -> World {
+        World::new(&fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")).unwrap()).unwrap()
+    }
+
+    fn steps(w: &mut World, n: u64) {
+        for _ in 0..n {
+            w.step();
+        }
+    }
+
+    /// A 1 cm beam across a belt, as the reference's B1: each part crossing it seen once, one
+    /// entering and one leaving (the sweep had reported a 5 mm part six times).
+    #[test]
+    fn a_light_barrier_sees_a_part_cross_it_once() {
+        let mut wrong = Vec::new();
+        for (speed, size) in [(0.5f64, 0.005f64), (0.5, 0.01), (1.0, 0.01), (1.0, 0.02), (1.5, 0.02), (2.0, 0.03), (0.5, 0.3)] {
+            let mut w = world(&format!(
+                "[[belt]]\nname = \"infeed\"\nsize = [40.0, 0.6, 0.1]\nat = [18.0, 0.0, 0.75]\nspeed = {speed}\n\
+                 [[sensor]]\nname = \"B1\"\nsize = [0.01, 0.8, 0.05]\nat = [2.0, 0.0, {}]\n\
+                 [[body]]\nname = \"p\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\n",
+                0.8 + size / 2.0,
+                0.8 + size / 2.0
+            ));
+            let mut seen = Vec::new();
+            for _ in 0..((4.0 / speed) * 250.0) as u64 {
+                w.step();
+                seen.extend(w.take_events().into_iter().map(|e| e.entered));
+            }
+            if seen != [true, false] {
+                wrong.push(format!("a {size} m part at {speed} m/s: {seen:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A part carried 1 to 6 mm beside a sensor box at 4 to 100 ms, and one falling 2 to 6 mm
+    /// beside a switch: never seen (up to 31 entering and leaving pairs had fired).
+    #[test]
+    fn a_part_passing_beside_a_sensor_is_never_seen() {
+        let mut wrong = Vec::new();
+        for step_ms in [4u32, 20, 100] {
+            for (speed, size) in [(0.5f64, 0.02f64), (2.0, 0.1)] {
+                for gap in [0.001f64, 0.003, 0.006] {
+                    let sy = size / 2.0 + gap + 0.05;
+                    let mut w = world(&format!(
+                        "step_ms = {step_ms}\n[[belt]]\nname = \"belt\"\nsize = [60.0, 0.6, 0.1]\nat = [28.0, 0.0, 0.75]\nspeed = {speed}\n\
+                         [[sensor]]\nname = \"side\"\nsize = [0.2, 0.1, 0.1]\nat = [2.0, {sy}, {}]\n\
+                         [[body]]\nname = \"p\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\n",
+                        0.8 + size / 2.0,
+                        0.8 + size / 2.0
+                    ));
+                    let mut n = 0;
+                    for _ in 0..((3.0 / speed) * 1000.0 / f64::from(step_ms)) as u64 {
+                        w.step();
+                        n += w.take_events().len();
+                    }
+                    if n > 0 {
+                        wrong.push(format!("carried {gap} m beside at {step_ms} ms, {speed} m/s, {size} m: {n} events"));
+                    }
+                }
+            }
+            for gap in [0.002f64, 0.006] {
+                let mut w = world(&format!(
+                    "step_ms = {step_ms}\n[[fixed]]\nname = \"floor\"\nsize = [20.0, 20.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
+                     [[sensor]]\nname = \"switch\"\nsize = [0.1, 0.1, 0.1]\nat = [{}, 0.0, 1.0]\n\
+                     [[body]]\nname = \"p\"\nsize = [0.02, 0.02, 0.02]\nat = [0.0, 0.0, 3.0]\n",
+                    0.01 + gap + 0.05
+                ));
+                let mut n = 0;
+                for _ in 0..(3000 / step_ms) {
+                    w.step();
+                    n += w.take_events().len();
+                }
+                if n > 0 {
+                    wrong.push(format!("falling {gap} m beside at {step_ms} ms: {n} events"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A box dropped onto a 20 kg pallet (a body) lying across two rails, nothing under its middle
+    /// but the floor 1 m below: resting on the pallet at 4 to 100 ms from up to 30 m (54 of 180 had
+    /// fallen through, from 0.5 m at 50 and 100 ms).
+    #[test]
+    fn a_body_falling_onto_a_body_over_a_gap_rests_on_it() {
+        let mut through = Vec::new();
+        for step_ms in [4u32, 20, 50, 100] {
+            for (size, thick) in [(0.1f64, 0.02f64), (0.3, 0.1)] {
+                for drop in [0.5f64, 5.0, 30.0] {
+                    let mut w = world(&format!(
+                        "step_ms = {step_ms}\n[[fixed]]\nname = \"floor\"\nsize = [20.0, 20.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
+                         [[fixed]]\nname = \"rail_a\"\nsize = [0.2, 1.2, 1.0]\nat = [-0.9, 0.0, 0.5]\n\
+                         [[fixed]]\nname = \"rail_b\"\nsize = [0.2, 1.2, 1.0]\nat = [0.9, 0.0, 0.5]\n\
+                         [[body]]\nname = \"pallet\"\nsize = [2.0, 1.0, {thick}]\nat = [0.0, 0.0, {}]\nmass = 20\n\
+                         [[body]]\nname = \"b\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\nmass = 2.5\n",
+                        1.0 + thick / 2.0,
+                        1.0 + thick + size / 2.0 + drop
+                    ));
+                    steps(&mut w, u64::from(6000 / step_ms));
+                    let (b, p) = (w.body("b").unwrap(), w.body("pallet").unwrap());
+                    if (b.at[2] - size / 2.0 - (p.at[2] + thick / 2.0)).abs() > 0.005 {
+                        through.push(format!("{step_ms} ms, a {size} m box from {drop} m onto a {thick} m pallet: z {:.4}", b.at[2]));
+                    }
+                }
+            }
+        }
+        assert!(through.is_empty(), "{through:#?}");
+    }
+
+    /// A 5 cm blade swept at 0.5 and 1.5 m/s at 50 and 100 ms: each box in its way pushed ahead of
+    /// its face, never passed (it had passed 5 and 10 cm boxes).
+    #[test]
+    fn a_mover_pushes_at_long_steps() {
+        let mut passed = Vec::new();
+        for step_ms in [50u32, 100] {
+            for speed in [0.5f64, 1.5] {
+                for size in [0.05f64, 0.1, 0.4] {
+                    let mut w = world(&format!(
+                        "step_ms = {step_ms}\n[[fixed]]\nname = \"floor\"\nsize = [10.0, 10.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
+                         [[mover]]\nname = \"blade\"\nsize = [0.05, 1.0, 0.4]\nat = [-1.0, 0.0, 0.2]\n\
+                         [[body]]\nname = \"box\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\nmass = 2\n",
+                        size / 2.0
+                    ));
+                    steps(&mut w, u64::from(500 / step_ms));
+                    let dt = f64::from(step_ms) / 1000.0;
+                    for i in 1..=(2.0 / (speed * dt)).ceil() as u32 {
+                        w.place("blade", Placement::at([(-1.0 + speed * dt * f64::from(i)).min(1.0), 0.0, 0.2])).unwrap();
+                        w.step();
+                    }
+                    let (b, c) = (w.body("blade").unwrap(), w.body("box").unwrap());
+                    let ahead = c.at[0] - size / 2.0 - (b.at[0] + 0.025);
+                    if ahead < -0.001 {
+                        passed.push(format!("{step_ms} ms, {speed} m/s, a {size} m box: {ahead:.4} m ahead"));
+                    }
+                }
+            }
+        }
+        assert!(passed.is_empty(), "{passed:#?}");
+    }
+
+    /// A 2 cm part carried across a seam of two flush belts at 0.5 m/s: after 7 s within 2 % of
+    /// the 3.5 m the belts carried it, at 4 to 100 ms alike (at 100 ms it had stopped at the seam).
+    #[test]
+    fn a_part_crosses_a_seam_of_two_flush_belts() {
+        let mut wrong = Vec::new();
+        for step_ms in [4u32, 20, 50, 100] {
+            let mut w = world(&format!(
+                "step_ms = {step_ms}\n[[belt]]\nname = \"a\"\nsize = [4.0, 0.6, 0.1]\nat = [0.0, 0.0, 0.75]\nspeed = 0.5\n\
+                 [[belt]]\nname = \"b\"\nsize = [400.0, 0.6, 0.1]\nat = [202.0, 0.0, 0.75]\nspeed = 0.5\n\
+                 [[body]]\nname = \"p\"\nsize = [0.02, 0.02, 0.02]\nat = [0.0, 0.0, 0.81]\n"
+            ));
+            steps(&mut w, u64::from(7000 / step_ms));
+            let x = w.body("p").unwrap().at[0];
+            if !(3.43..=3.5).contains(&x) {
+                wrong.push(format!("{step_ms} ms: x {x:.4}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A 0.1 m box falling 1 m onto a fixed floor at 4 ms rebounds at 0.2 to 0.3 m/s, rising no
+    /// more than 6 mm; one from 9000 m meets the floor at the engine's cap of 400 m/s (a mutant with
+    /// no cap, or one of 100 m/s, had passed every pin).
+    #[test]
+    fn a_fall_rebounds_a_little_and_the_speed_is_capped() {
+        let fall = |height: f64| {
+            let mut w = world(&format!("[[fixed]]\nname = \"floor\"\nsize = [20.0, 20.0, 1.0]\nat = [0.0, 0.0, -0.5]\n[[body]]\nname = \"b\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 0.0, {}]\n", 0.05 + height));
+            let (mut fastest, mut up, mut rose, mut hit) = (0.0f64, 0.0f64, 0.0f64, false);
+            for _ in 0..(((2.0 * height / 9.81).sqrt() + 2.0) * 250.0) as u64 {
+                w.step();
+                let b = w.body("b").unwrap();
+                fastest = fastest.max(-b.velocity[2]);
+                if b.at[2] < 0.06 {
+                    hit = true;
+                }
+                if hit {
+                    up = up.max(b.velocity[2]);
+                    rose = rose.max(b.at[2] - 0.05);
+                }
+            }
+            (fastest, up, rose)
+        };
+        let (_, up, rose) = fall(1.0);
+        assert!((0.2..=0.3).contains(&up) && rose <= 0.006, "from 1 m: rebound {up} m/s, rose {rose} m");
+        let (fastest, _, _) = fall(9000.0);
+        assert!((399.9..=400.0).contains(&fastest), "from 9000 m: fastest {fastest} m/s");
+    }
+
+    /// A value of another kind and a missing key refused with the parser's own words, naming the
+    /// line and the key (the toml message alone, without the line, had passed).
+    #[test]
+    fn a_parse_error_names_its_key() {
+        let e = fisica::load("format = \"veredas-cena\"\nversion = 1\nstep_ms = \"4\"\n").unwrap_err().to_string();
+        assert!(e.starts_with("not a scene file: TOML parse error at line 3, column 11") && e.contains("step_ms = \"4\""), "{e}");
+        let e = fisica::load("format = \"veredas-cena\"\nversion = 1\n[[body]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\n").unwrap_err().to_string();
+        assert!(e.contains("missing field `at`"), "{e}");
     }
 }

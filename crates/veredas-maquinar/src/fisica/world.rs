@@ -146,6 +146,12 @@ pub struct World {
     dropped_events: u64,
     collisions: Receiver<CollisionEvent>,
     collector: ChannelEventCollector,
+    /// The engine's steps in one of the scene's: a step of 4 ms at most, so every step solves its
+    /// contacts as 4 ms does (C-114's seventh round: at 50 and 100 ms a body fell through a body, a
+    /// mover through a body, a part stalled at a seam of two belts).
+    substeps: u32,
+    /// The poses the movers placed since the last step reach at its end, by the engine's handle.
+    targets: Vec<(RigidBodyHandle, Pose)>,
     _forces: Receiver<ContactForceEvent>,
     _tears: Receiver<SoftBodyTearEvent>,
 }
@@ -174,15 +180,12 @@ impl World {
         scene::validate(scene)?;
         let mut w = PhysicsWorld::new();
         w.gravity = Vector::new(0.0, 0.0, -scene.gravity);
-        w.integration_parameters.dt = f64::from(scene.step_ms) / 1000.0;
+        let substeps = scene.step_ms.div_ceil(4).max(1);
+        w.integration_parameters.dt = f64::from(scene.step_ms) / 1000.0 / f64::from(substeps);
         // Contacts worked out anew at every step: recycled ones let a body falling from beyond the
         // prediction distance cross a fixed part whole at a long step (7 of 840 drops at 10 to
         // 100 ms; C-114's fourth refute round), which continuous collision detection did not change.
         w.integration_parameters.contact_recycling = false;
-        // A solver substep of a millisecond at most, as the default step's four iterations give at
-        // 4 ms: at longer steps fewer let a column of cartons sink into itself and through the floor
-        // (round 6: five equal cartons at 75 ms, ten at 50).
-        w.integration_parameters.num_solver_iterations = (scene.step_ms as usize).max(4);
         let ground = w.insert_body(RigidBodyBuilder::fixed());
         let (ctx, collisions) = channel();
         let (ftx, forces) = channel();
@@ -200,6 +203,8 @@ impl World {
             events: VecDeque::new(),
             dropped_events: 0,
             collisions,
+            substeps,
+            targets: Vec::new(),
             collector: ChannelEventCollector::new(ctx, ftx, ttx),
             _forces: forces,
             _tears: tears,
@@ -274,9 +279,50 @@ impl World {
     /// One fixed step: the bodies move, the movers reach the poses they were given, and every
     /// sensor's change is kept as an event of this step.
     pub fn step(&mut self) {
-        // A body asleep never meets its contacts' solver: one resting on a belt that runs slowly
-        // (under about 0.1 m/s the engine puts it to sleep) would stop. Every body touching a
-        // running belt is woken first.
+        let hooks = BeltHooks { belts: self.belts.values().map(|b| (b.collider, (b.axis * b.speed, b.up))).collect() };
+        // The movers' poses at the step's start, each carried to its target over the substeps.
+        let from: Vec<(RigidBodyHandle, Pose, Pose)> = self.targets.drain(..).filter_map(|(h, to)| self.w.bodies.get(h).map(|b| (h, *b.position(), to))).collect();
+        for k in 1..=self.substeps {
+            self.wake_on_running_belts();
+            for (h, start, to) in &from {
+                let at = if k == self.substeps { *to } else { start.lerp(to, f64::from(k) / f64::from(self.substeps)) };
+                if let Some(b) = self.w.bodies.get_mut(*h) {
+                    b.set_next_kinematic_position(at);
+                }
+            }
+            self.w.step_with_events(&hooks, &self.collector);
+        }
+        self.steps += 1;
+        // What each sensor holds at the step's end, by the last event of each pair: a pair started
+        // and stopped within the step (a body crossing within it, no pose of it at the step's end
+        // inside, or the sweep reporting a path that came within its slop of a sensor: a 1 cm beam
+        // had seen a 5 mm part cross it six times) is no change.
+        let mut last: BTreeMap<(String, String), bool> = BTreeMap::new();
+        while let Ok(e) = self.collisions.try_recv() {
+            let (a, b) = (e.collider1(), e.collider2());
+            let (sensor, other) = match (self.sensor_of.get(&a), self.sensor_of.get(&b)) {
+                (Some(s), None) => (s, b),
+                (None, Some(s)) => (s, a),
+                _ => continue,
+            };
+            // A collider no longer owned (a body removed, its leaving already counted) is skipped.
+            let Some(body) = self.owners.get(&other) else { continue };
+            last.insert((sensor.clone(), body.clone()), e.started());
+        }
+        // Within a step, by sensor and then by body: the engine's own order is not the scene's.
+        for ((sensor, body), entered) in last {
+            let Some(part) = self.sensors.get_mut(&sensor) else { continue };
+            let changed = if entered { part.inside.insert(body.clone()) } else { part.inside.remove(&body) };
+            if changed {
+                self.push_event(SensorEvent { step: self.steps, sensor, body, entered });
+            }
+        }
+    }
+
+    /// A body asleep never meets its contacts' solver: one resting on a belt that runs slowly
+    /// (under about 0.1 m/s the engine puts it to sleep) would stop. Every body touching a running
+    /// belt is woken before each of the engine's steps.
+    fn wake_on_running_belts(&mut self) {
         let mut wake = Vec::new();
         for b in self.belts.values().filter(|b| b.speed != 0.0) {
             for pair in self.w.contact_pairs_with(b.collider) {
@@ -291,30 +337,6 @@ impl World {
         }
         for body in wake {
             self.w.wake_up(body, true);
-        }
-        let hooks = BeltHooks { belts: self.belts.values().map(|b| (b.collider, (b.axis * b.speed, b.up))).collect() };
-        self.w.step_with_events(&hooks, &self.collector);
-        self.steps += 1;
-        let mut seen = Vec::new();
-        while let Ok(e) = self.collisions.try_recv() {
-            let (a, b) = (e.collider1(), e.collider2());
-            let (sensor, other) = match (self.sensor_of.get(&a), self.sensor_of.get(&b)) {
-                (Some(s), None) => (s, b),
-                (None, Some(s)) => (s, a),
-                _ => continue,
-            };
-            // A collider no longer owned (a body removed, its leaving already counted) is skipped.
-            let Some(body) = self.owners.get(&other) else { continue };
-            seen.push(SensorEvent { step: self.steps, sensor: sensor.clone(), body: body.clone(), entered: e.started() });
-        }
-        // Within a step, by sensor and then by body: the engine's own order is not the scene's.
-        seen.sort_by(|x, y| (&x.sensor, &x.body).cmp(&(&y.sensor, &y.body)));
-        for e in seen {
-            let Some(part) = self.sensors.get_mut(&e.sensor) else { continue };
-            let changed = if e.entered { part.inside.insert(e.body.clone()) } else { part.inside.remove(&e.body) };
-            if changed {
-                self.push_event(e);
-            }
         }
     }
 
@@ -405,9 +427,9 @@ impl World {
             _ => return Err(self.unknown(Kind::Mover, mover)),
         };
         scene::check_pose(&format!("mover `{mover}`"), to.at, [to.yaw, to.pitch, to.roll])?;
-        if let Some(b) = self.w.bodies.get_mut(handle) {
-            b.set_next_kinematic_position(pose(to.at, to.yaw, to.pitch, to.roll));
-        }
+        // Reached at the next step's end, carried there evenly over its substeps.
+        self.targets.retain(|(h, _)| *h != handle);
+        self.targets.push((handle, pose(to.at, to.yaw, to.pitch, to.roll)));
         Ok(())
     }
 
