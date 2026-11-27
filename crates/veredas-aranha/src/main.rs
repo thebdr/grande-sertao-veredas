@@ -223,10 +223,56 @@ fn create_new(p: &Path, what: &str, bytes: &[u8], made: &mut Vec<PathBuf>) -> st
     Ok(name)
 }
 
-/// The file at `p` kept aside under a name of this run's own made new (a second link to it, the
-/// first removed), never over a file a user holds there; where links cannot be made (a FAT
-/// stick), moved to a name of the run's own not there.
+/// The file at `p` kept aside under a name of this run's own made new, never over a file a user
+/// holds there: moved by a rename that replaces nothing (Linux's `renameat2` with
+/// `RENAME_NOREPLACE`), which leaves nothing where it may not move the file (another user's in a
+/// sticky folder); where the system or its filesystem takes no such rename, a second link made
+/// new and the first removed, and where links cannot be made either (a FAT stick), a rename to a
+/// name of the run's own not there.
 fn keep_aside(p: &Path) -> std::io::Result<PathBuf> {
+    let mut tries = 0;
+    loop {
+        let kept = own_name(p, "kept");
+        match rename_new(p, &kept) {
+            Ok(()) => return Ok(kept),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries + 1 < TRIES => tries += 1,
+            Err(e) if unsupported(&e) => return keep_aside_by_link(p),
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// A rename that replaces nothing: an error of its kind `AlreadyExists` where `to` is there.
+#[cfg(target_os = "linux")]
+fn rename_new(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e));
+    let (a, b) = (c(from)?, c(to)?);
+    // SAFETY: two NUL-terminated paths, read by the call alone.
+    if unsafe { libc::renameat2(libc::AT_FDCWD, a.as_ptr(), libc::AT_FDCWD, b.as_ptr(), libc::RENAME_NOREPLACE) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn rename_new(_from: &Path, _to: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
+/// The system or the filesystem takes no rename that replaces nothing.
+fn unsupported(e: &std::io::Error) -> bool {
+    #[cfg(target_os = "linux")]
+    if matches!(e.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP)) {
+        return true;
+    }
+    e.kind() == std::io::ErrorKind::Unsupported
+}
+
+/// `keep_aside` where no rename that replaces nothing is taken: a second link made new, the first
+/// removed; where links cannot be made either, a rename to a name of the run's own not there.
+fn keep_aside_by_link(p: &Path) -> std::io::Result<PathBuf> {
     let mut tries = 0;
     let kept = loop {
         let kept = own_name(p, "kept");
@@ -250,6 +296,26 @@ fn keep_aside(p: &Path) -> std::io::Result<PathBuf> {
     Ok(kept)
 }
 
+/// A file at `p` the run could not replace or move aside: another user's in a sticky folder
+/// (as /tmp is), where only the file's owner, the folder's or a privileged user may.
+#[cfg(target_os = "linux")]
+fn replaceable(p: &Path) -> Result<(), Refused> {
+    use std::os::unix::fs::MetadataExt;
+    let folder = p.parent().filter(|f| !f.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let (Ok(f), Ok(m)) = (std::fs::metadata(folder), std::fs::symlink_metadata(p)) else { return Ok(()) };
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    if f.mode() & 0o1000 != 0 && me != 0 && m.uid() != me && f.uid() != me {
+        return Err(Refused(format!("{}: another user's file in a folder where only its owner may move it (sticky): it could not be replaced", p.display())));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn replaceable(_p: &Path) -> Result<(), Refused> {
+    Ok(())
+}
+
 /// What is at `p`: nothing (false), or a file (true; a regular one, not a link); anything else
 /// refused.
 fn file_or_nothing(p: &Path) -> Result<bool, Refused> {
@@ -269,9 +335,11 @@ fn put_in_place(out: &Path, capture: &Path, scan: &Scan, frames: &[veredas_aranh
     let text = scan.to_toml()?;
     let bytes = veredas_aranha::wire::pcap::write(frames).map_err(|e| Refused(format!("{}: {e}", capture.display())))?;
     // What is there now, again: something other than a file (made while it listened: a folder, a
-    // link, a pipe) is never moved aside or replaced.
+    // link, a pipe) is never moved aside or replaced, nor another user's file in a sticky folder.
     for p in [out, capture] {
-        file_or_nothing(p)?;
+        if file_or_nothing(p)? {
+            replaceable(p)?;
+        }
     }
     let mut made: Vec<PathBuf> = Vec::new();
     let written = (|| -> Result<(), Refused> {
@@ -441,6 +509,7 @@ fn listen(args: &[OsString]) -> Result<(), Refused> {
     for p in [&out, &capture_path] {
         if file_or_nothing(p)? {
             std::fs::OpenOptions::new().write(true).open(p).map_err(|e| Refused(format!("{}: {e}", p.display())))?;
+            replaceable(p)?;
         }
     }
     // The folder they go in, a file of this run's own made there and removed.

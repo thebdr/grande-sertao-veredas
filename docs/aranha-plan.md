@@ -443,3 +443,11 @@ is pinned by a test when its phase lands.
   an order nothing promises: it reads from where the listener stood before it asked (found
   2026-11-27, an Identify case red once under the whole suite's load, then reproduced at will by a
   pause between the wire's send and the keep).
+- **A sticky folder (as /tmp is) lets a user link another user's file but not remove it.** A user
+  who may read and write a file may give it a second name (`fs.protected_hardlinks`), and in a
+  sticky folder only the file's owner, the folder's or a privileged user may unlink either name:
+  a capture kept aside by a second link there can be neither put back nor cleaned up. The run
+  keeps it aside by a rename that replaces nothing (`renameat2` with `RENAME_NOREPLACE`, which
+  fails there leaving nothing), and refuses another user's file in a sticky folder before
+  anything is opened (C-149's fourth refute round). A test needs a second user: a user namespace
+  mapping this user's range of ids (`unshare --map-auto`) gives one, and `setpriv` runs as it.

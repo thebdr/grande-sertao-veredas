@@ -89,6 +89,7 @@ fn every_usage_it_cannot_follow_is_refused_with_its_reason() {
         (vec!["identify"], "identify needs an interface"),
         (vec!["identify", "eth0", "eth1"], "identify asks on one interface"),
         (vec!["identify", "eth0", "--wait", "soon"], "--wait takes milliseconds"),
+        (vec!["identify", "eth0", "--loud"], "identify takes no --loud"),
         // An option given twice is refused, never the second taken over the first.
         (vec!["listen", "eth0", "--for", "1", "--for", "2", "--out", s], "--for is given twice"),
         (vec!["listen", "eth0", "--out", s, "--out", s], "--out is given twice"),
@@ -478,6 +479,25 @@ fn the_diff_prints_every_kind_of_change_a_line_each_its_texts_quoted() {
     assert_eq!(lines, want.iter().map(String::as_str).collect::<Vec<_>>());
     assert!(!lines.contains(&"no change"));
 
+    // A file that is no scan, refused naming its path once: its header another format's, its body
+    // holding a key nothing takes, its check failing (devices out of their order).
+    let header = d.join("header.toml");
+    std::fs::write(&header, "format = \"veredas-other\"\nversion = 1\n").unwrap();
+    let body = d.join("body.toml");
+    std::fs::write(&body, std::fs::read_to_string(&bf).unwrap().replacen("\n", "\nfrob = 1\n", 1)).unwrap();
+    let unchecked = d.join("unchecked.toml");
+    let mut swapped = baseline.clone();
+    swapped.devices.swap(0, 1);
+    std::fs::write(&unchecked, toml::to_string(&swapped).unwrap()).unwrap();
+    for bad in [&header, &body, &unchecked] {
+        let p = bad.to_str().unwrap();
+        for out in [aranha(&["diff", p, lf.to_str().unwrap()]), aranha(&["diff", lf.to_str().unwrap(), p])] {
+            let e = text(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{p}: {e}");
+            assert!(e.starts_with(&format!("veredas-aranha: {p}: ")) && e.matches(p).count() == 1 && out.stdout.is_empty(), "{e}");
+        }
+    }
+
     // A value one scan alone states and an interface one scan alone listened on: said, then `no
     // change`, status 0 (neither a change nor silence), either way round.
     let stated = scan(&[hello(a, "a", Some(ten), 1), arp(a, ten, 3)], &["eth1"], &[]);
@@ -624,6 +644,19 @@ fn a_scan_with_the_ports_read_draws_the_devices_own_word_on_their_cables() {
         // an address on its network (a0), never on a1, named first, which holds none.
         let reversed_path = d.join("reversed.toml");
         let reversed = aranha(&["listen", "a1", "a0", "--for", "3", "--identify", "--ports", "--out", reversed_path.to_str().unwrap()]);
+        // Both interfaces holding an address on the devices' network: the first named reads them,
+        // in either order.
+        netns::ip(&["addr", "add", "192.168.0.2/24", "dev", "a1"]);
+        let both: Vec<(&str, &str, Output)> = [("a1", "a0"), ("a0", "a1")].into_iter().map(|(x, y)| {
+            let path = d.join(format!("both-{x}.toml"));
+            (x, y, aranha(&["listen", x, y, "--for", "3", "--identify", "--ports", "--out", path.to_str().unwrap()]))
+        }).collect();
+        // Neither on it (a1 an office address, a0 none): the first named a device was heard on
+        // reads it, and says why it cannot be.
+        netns::ip(&["addr", "del", "192.168.0.1/24", "dev", "a0"]);
+        netns::ip(&["addr", "del", "192.168.0.2/24", "dev", "a1"]);
+        netns::ip(&["addr", "add", "10.9.9.1/24", "dev", "a1"]);
+        let off = aranha(&["listen", "a1", "a0", "--for", "3", "--identify", "--ports", "--out", d.join("off.toml").to_str().unwrap()]);
         let (status, o, e) = bench::end(run);
         assert!(status.success(), "the bench: {o}\n{e}");
         assert_eq!(out.status.code(), Some(0), "{}\n{}", text(&out.stdout), text(&out.stderr));
@@ -642,6 +675,20 @@ fn a_scan_with_the_ports_read_draws_the_devices_own_word_on_their_cables() {
         let scan = Scan::read_file(&reversed_path).unwrap();
         let again: Vec<(End, End, Confidence)> = scan.topology.links.iter().map(|l| (l.a.clone(), l.b.clone(), l.confidence)).collect();
         assert_eq!(again, links, "{:#?}", scan.topology);
+        for (first, other, out) in &both {
+            assert_eq!(out.status.code(), Some(0), "{}\n{}", text(&out.stdout), text(&out.stderr));
+            let scan = Scan::read_file(&d.join(format!("both-{first}.toml"))).unwrap();
+            // Each interface sent its Identify; the first named sent the reads too (two devices,
+            // their port and the end of their walk).
+            assert_eq!((scan.stats.interfaces[*first].sent, scan.stats.interfaces[*other].sent), (5, 1), "{first} named first");
+            let got: Vec<(End, End, Confidence)> = scan.topology.links.iter().map(|l| (l.a.clone(), l.b.clone(), l.confidence)).collect();
+            assert_eq!(got, links, "{first} named first");
+        }
+        assert_eq!(off.status.code(), Some(0), "{}", text(&off.stderr));
+        let why = |m: Mac, ip: &str, label: &str| format!("{m} {label:?}: subslot 0x8001 not read: \"a1\" holds no IPv4 address on the network of {ip} (mask 255.255.255.0): the device could not answer it");
+        let said: Vec<&str> = std::str::from_utf8(&off.stderr).unwrap().lines().collect();
+        let counts = ["a1: 3 device(s) answered the Identify".to_string(), "a0: 3 device(s) answered the Identify".to_string()];
+        assert_eq!(said, counts.iter().cloned().chain([why(FIRST, "192.168.0.10", "bomba-1"), why(SECOND, "192.168.0.11", "valvula-1")]).collect::<Vec<_>>());
     });
 }
 
@@ -866,5 +913,76 @@ fn places_taken_or_failing_while_it_listens_leave_everything_as_it_was() {
         assert_eq!(ours(&"l".repeat(250), &[]), Vec::<String>::new());
         let left: Vec<String> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(".l") && n.len() > 200).collect();
         assert_eq!(left, Vec::<String>::new());
+        // The same of characters of three bytes (254 bytes): its names cut at a character's edge.
+        let wide = "中".repeat(83);
+        let long = d.join(format!("{wide}.toml"));
+        assert_eq!(long.file_name().unwrap().len(), 254);
+        let o = aranha(&["listen", "a0", "--for", "1", "--out", long.to_str().unwrap()]);
+        assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+        assert!(Scan::read_file(&long).is_ok() && long.with_extension("pcap").is_file());
+        let left: Vec<String> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(".中")).collect();
+        assert_eq!(left, Vec::<String>::new());
     });
+}
+
+/// A scan or a capture of another user's in a sticky folder (as /tmp is), where only its owner, the
+/// folder's or a privileged user may move or replace it: refused before anything is opened (the
+/// interface named is not there, and never reached), the folder as it was; another user's file in
+/// a plain folder, the run's own user's in a sticky one, and another user's in a sticky folder of
+/// the run's own user (whose owner may move it) pass to the interface. One put there
+/// while it listens: refused, nothing of the run left. The second user is a user namespace's own,
+/// mapped from this user's range of ids (`unshare --map-auto`), and the run that user (`setpriv`,
+/// raw frames by an ambient capability on a link of the namespace's own).
+#[cfg(target_os = "linux")]
+#[test]
+fn another_user_s_file_in_a_sticky_folder_is_refused_before_anything_is_opened() {
+    let script = r#"
+set -eu
+mount -t tmpfs -o mode=755 none /mnt
+mkdir /mnt/bin /mnt/logs && cp "$0" /mnt/bin/veredas-aranha && chmod 755 /mnt/bin/veredas-aranha
+run() { setpriv --reuid=2000 --regid=2000 --clear-groups --inh-caps=+net_raw --ambient-caps=+net_raw /mnt/bin/veredas-aranha "$@"; }
+list() { find "$1" -mindepth 1 -maxdepth 1 -printf '%f %m %n %U %s\n' | sort; }
+baseline() {
+  D=/mnt/$1; mkdir $D; chmod $2 $D
+  printf 'the baseline' > $D/s.toml; printf 'its frames' > $D/s.pcap
+  chown 2000:2000 $D/s.toml $D/s.pcap; chmod 666 $D/s.toml $D/s.pcap
+}
+for case in capture scan plain own folder; do
+  case $case in plain) baseline $case 777;; *) baseline $case 1777;; esac
+  case $case in capture|plain|folder) chown 1000:1000 $D/s.pcap;; scan) chown 1000:1000 $D/s.toml;; esac
+  case $case in folder) chown 2000:2000 $D;; esac
+  before=$(list $D)
+  set +e
+  run listen nosuch0 --for 1 --out $D/s.toml > /mnt/logs/out 2> /mnt/logs/err
+  code=$?
+  set -e
+  echo "$case $code $( [ "$before" = "$(list $D)" ] && echo same || echo changed ) $(cat $D/s.toml) $(cat $D/s.pcap)"
+  head -1 /mnt/logs/err
+done
+ip link add a0 type veth peer name b0 && ip link set a0 up && ip link set b0 up
+baseline late 1777
+set +e
+run listen a0 --for 2 --out $D/s.toml > /mnt/logs/out 2> /mnt/logs/err &
+pid=$!
+sleep 0.8
+rm $D/s.pcap; printf 'theirs' > $D/s.pcap; chown 1000:1000 $D/s.pcap; chmod 666 $D/s.pcap
+then=$(list $D)
+wait $pid
+code=$?
+set -e
+echo "late $code $( [ "$then" = "$(list $D)" ] && echo same || echo changed ) $(cat $D/s.toml) $(cat $D/s.pcap)"
+head -1 /mnt/logs/err
+"#;
+    let out = Command::new("unshare").args(["--map-auto", "--map-root-user", "--net", "--mount", "--fork", "sh", "-c", script, env!("CARGO_BIN_EXE_veredas-aranha")]).output().unwrap();
+    assert!(out.status.success(), "the namespace: {}\n{}", text(&out.stdout), text(&out.stderr));
+    let refusal = |which: &str, file: &str| format!("veredas-aranha: /mnt/{which}/{file}: another user's file in a folder where only its owner may move it (sticky): it could not be replaced");
+    let lines: Vec<String> = text(&out.stdout).lines().map(String::from).collect();
+    assert_eq!(lines.len(), 12, "{}\n{}", text(&out.stdout), text(&out.stderr));
+    assert_eq!(lines[..4], ["capture 2 same the baseline its frames".to_string(), refusal("capture", "s.pcap"), "scan 2 same the baseline its frames".to_string(), refusal("scan", "s.toml")]);
+    // Passed to the interface, which is not there.
+    for (k, case) in [(4, "plain"), (6, "own"), (8, "folder")] {
+        assert_eq!(lines[k], format!("{case} 2 same the baseline its frames"));
+        assert!(lines[k + 1].starts_with("veredas-aranha: nosuch0: "), "{case}: {}", lines[k + 1]);
+    }
+    assert_eq!(lines[10..], ["late 2 same the baseline theirs".to_string(), refusal("late", "s.pcap")]);
 }
