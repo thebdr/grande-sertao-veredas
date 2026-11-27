@@ -415,3 +415,205 @@ fn a_port_s_last_frame_on_an_interface_past_the_capture_is_no_scan() {
     port.on.values_mut().next().unwrap().last.1 = 900;
     assert_eq!(scan.check().unwrap_err().to_string(), format!("not a scan: device {mac} names frame 900, past its capture's last (3)"));
 }
+
+/// The second refute round's cases: another stamp and a class its reader does not take back
+/// refused when written; a misspelt key named, not only the key it stood for; each of the 21 fields
+/// holding two values last heard in one frame refused, and each one's first and last witness, and a
+/// port's leaving, at the capture's last record taken and one past it refused, written and read
+/// alike; a MAC in another spelling and a set out of its order refused where they sit; the devices
+/// giving the listener's fusion again.
+mod round_2 {
+    use super::{DEV, T0, frames, full, sample};
+    use std::time::Duration;
+    use veredas_aranha::listen::{Listener, Options};
+    use veredas_aranha::observe::Class;
+    use veredas_aranha::scan::{Capture, Scan, ScanError};
+    use veredas_aranha::topology::{self, Interface};
+    use veredas_aranha::wire::pcap::Replay;
+
+    /// The 21 fields of the full scan's device and its port, by number: the name the check gives
+    /// each, and whether it is a port's.
+    const FIELDS: [(&str, bool); 21] = [
+        ("name", false),
+        ("alias", false),
+        ("ip", false),
+        ("ip_status", false),
+        ("pn_id", false),
+        ("vendor", false),
+        ("role", false),
+        ("instance", false),
+        ("chassis", false),
+        ("sys_name", false),
+        ("sys_desc", false),
+        ("sys_caps", false),
+        ("mgmt_ips", false),
+        ("arp_ip", false),
+        ("port_mac", true),
+        ("desc", true),
+        ("pn_status", true),
+        ("delays", true),
+        ("mrp", true),
+        ("pvid", true),
+        ("mau_type", true),
+    ];
+
+    /// Field `$i` of the scan's first device (its first port's for a port's), as `$f`, to `$body`.
+    macro_rules! field {
+        ($scan:expr, $i:expr, |$f:ident| $body:expr) => {{
+            let d = &mut $scan.devices[0];
+            let p = d.ports.values_mut().next().unwrap();
+            match $i {
+                0 => { let $f = &mut d.name; $body }
+                1 => { let $f = &mut d.alias; $body }
+                2 => { let $f = &mut d.ip; $body }
+                3 => { let $f = &mut d.ip_status; $body }
+                4 => { let $f = &mut d.pn_id; $body }
+                5 => { let $f = &mut d.vendor; $body }
+                6 => { let $f = &mut d.role; $body }
+                7 => { let $f = &mut d.instance; $body }
+                8 => { let $f = &mut d.chassis; $body }
+                9 => { let $f = &mut d.sys_name; $body }
+                10 => { let $f = &mut d.sys_desc; $body }
+                11 => { let $f = &mut d.sys_caps; $body }
+                12 => { let $f = &mut d.mgmt_ips; $body }
+                13 => { let $f = &mut d.arp_ip; $body }
+                14 => { let $f = &mut p.port_mac; $body }
+                15 => { let $f = &mut p.desc; $body }
+                16 => { let $f = &mut p.pn_status; $body }
+                17 => { let $f = &mut p.delays; $body }
+                18 => { let $f = &mut p.mrp; $body }
+                19 => { let $f = &mut p.pvid; $body }
+                _ => { let $f = &mut p.mau_type; $body }
+            }
+        }};
+    }
+
+    /// What the check says of a scan, written (to_toml) and read (its text as serde writes it).
+    fn refusals(s: &Scan) -> (Option<String>, Option<String>) {
+        let written = s.to_toml().err().map(|e| match e {
+            ScanError::Write(why) => why,
+            other => format!("not a write refusal: {other}"),
+        });
+        let read = Scan::read(&toml::to_string(s).unwrap()).err().map(|e| e.to_string());
+        (written, read)
+    }
+
+    /// Another stamp, and a count by a type whose class reads back as another, are refused when
+    /// written, never written for the reader to refuse.
+    #[test]
+    fn another_stamp_or_a_class_read_back_otherwise_is_refused_when_written() {
+        for (what, change, says) in [
+            ("version 2", (|s: &mut Scan| s.version = 2) as fn(&mut Scan), "its stamp is `veredas-scan` version 2, not `veredas-scan` version 1"),
+            ("version 0", |s: &mut Scan| s.version = 0, "its stamp is `veredas-scan` version 0, not `veredas-scan` version 1"),
+            ("another format", |s: &mut Scan| s.format = "veredas-bench".into(), "its stamp is `veredas-bench` version 1, not `veredas-scan` version 1"),
+            ("LLDP's type as another", |s: &mut Scan| _ = s.stats.by_class.insert(Class::Other(0x88cc), 1), "its count of frames `other:0x88cc` names a type that has a class of its own"),
+        ] {
+            let mut s = sample();
+            change(&mut s);
+            assert_eq!(s.to_toml().map(|_| ()).map_err(|e| e.to_string()), Err(format!("a scan cannot be written: not a scan: {says}")), "{what}");
+        }
+        // A type with no class of its own is counted by it, written and read back.
+        let mut s = sample();
+        s.stats.by_class.insert(Class::Other(0x88b6), 1);
+        assert_eq!(Scan::read(&s.to_toml().unwrap()).unwrap(), s);
+    }
+
+    /// A misspelt key is named, where it stood for a key the reader misses as much as beside one;
+    /// a key inside the capture by its place in the file.
+    #[test]
+    fn a_misspelt_key_is_named_not_only_the_key_it_stood_for() {
+        let text = sample().to_toml().unwrap();
+        for (from, to, named) in [
+            ("tool = ", "Tool = ", "`Tool`"),
+            ("first_frame = 0", "firstframe = 0", "`capture.firstframe`"),
+            ("\nframe = 0\n", "\nfrme = 0\n", "`devices.0.name.0.first.frme`"),
+            ("first_frame = 0\n", "first_frame = 0\ncolour = \"red\"\n", "`capture.colour`"),
+        ] {
+            let edited = text.replacen(from, to, 1);
+            assert_ne!(edited, text, "{to}");
+            match Scan::read(&edited) {
+                Err(ScanError::Unread(k)) => assert_eq!(k, [named], "{to}"),
+                other => panic!("{to}: {other:?}"),
+            }
+        }
+    }
+
+    /// Each of the 21 fields holding two values last heard in one frame: refused, naming the field
+    /// and the frame, written and read alike.
+    #[test]
+    fn each_field_holding_two_values_last_heard_in_one_frame_is_no_scan() {
+        let s = full();
+        let port = s.devices[0].ports.values().next().unwrap().id.clone();
+        for (i, (name, of_port)) in FIELDS.iter().enumerate() {
+            let mut x = s.clone();
+            let frame = field!(x, i, |f| {
+                let c = f.candidates.first().cloned().unwrap_or_else(|| panic!("{name}: the full scan holds no value of it"));
+                let frame = c.last.frame;
+                f.candidates.push(c);
+                frame
+            });
+            let whose = if *of_port { format!("port {port}'s {name}") } else { name.to_string() };
+            let says = format!("not a scan: device {DEV}'s {whose} holds two values last heard in frame {frame}");
+            assert_eq!(refusals(&x), (Some(says.clone()), Some(says)), "{name}");
+        }
+    }
+
+    /// Each field's first and last witness, and a port's leaving, at the capture's last record:
+    /// taken; one past it: refused, naming the device and the frame, written and read alike.
+    #[test]
+    fn each_witness_and_a_leaving_at_the_capture_s_last_taken_and_one_past_refused() {
+        let s = full();
+        let c = s.capture.clone().unwrap();
+        let last = c.first_frame + c.frames - 1;
+        let past = format!("not a scan: device {DEV} names frame {}, past its capture's last ({last})", last + 1);
+        for (i, (name, _)) in FIELDS.iter().enumerate() {
+            for which in ["first", "last"] {
+                for (frame, refused) in [(last, None), (last + 1, Some(past.clone()))] {
+                    let mut x = s.clone();
+                    field!(x, i, |f| {
+                        let c = &mut f.candidates[0];
+                        if which == "first" { c.first.frame = frame } else { c.last.frame = frame }
+                    });
+                    assert_eq!(refusals(&x), (refused.clone(), refused), "{name}'s {which} at {frame}");
+                }
+            }
+        }
+        for (frame, refused) in [(last, None), (last + 1, Some(past.clone()))] {
+            let mut x = s.clone();
+            x.devices[0].ports.values_mut().next().unwrap().leaving = Some((T0, frame));
+            assert_eq!(refusals(&x), (refused.clone(), refused), "a leaving at {frame}");
+        }
+    }
+
+    /// A MAC in another spelling, and a set out of its order, are refused where they sit.
+    #[test]
+    fn a_mac_spelt_otherwise_and_a_set_out_of_order_are_refused_where_they_sit() {
+        let text = sample().to_toml().unwrap();
+        for (from, to, at) in [
+            ("mac = \"02:00:00:00:00:01\"", "mac = \"02-00-00-00-00-01\"", "`devices.0.mac`"),
+            ("macs = [\"02:00:00:00:00:01\"", "macs = [\"02-00-00-00-00-01\"", "`conflicts.0.macs.0`"),
+            ("heard = [\"dcp-heard\", \"lldp-heard\", \"arp-heard\"]", "heard = [\"lldp-heard\", \"dcp-heard\", \"arp-heard\"]", "`devices.0.heard.0`"),
+        ] {
+            let edited = text.replacen(from, to, 1);
+            assert_ne!(edited, text, "{to}");
+            assert_eq!(Scan::read(&edited).map(|_| ()).map_err(|e| e.to_string()), Err(format!("a scan file's {at} is not what its reader keeps: refused, not read otherwise")), "{to}");
+        }
+        let full_text = full().to_toml().unwrap();
+        let upper = full_text.replacen("mac = \"02:00:00:00:00:e1\"", "mac = \"02:00:00:00:00:E1\"", 1);
+        assert_ne!(upper, full_text);
+        assert_eq!(Scan::read(&upper).map(|_| ()).map_err(|e| e.to_string()), Err("a scan file's `stats.interfaces.eth1.mac` is not what its reader keeps: refused, not read otherwise".to_string()));
+    }
+
+    /// A scan's devices give the listener's fusion again, every port and value with them, written
+    /// and read back.
+    #[test]
+    fn a_scan_s_devices_give_the_listener_s_fusion_again() {
+        let l = Listener::start(vec![Box::new(Replay::new("eth1", frames()))], Options::default()).unwrap();
+        assert!(l.until(Duration::from_secs(5), |s| s.stats.interfaces["eth1"].ended.is_some()));
+        let s = l.stop();
+        let t = topology::build(&s.fusion, &[Interface { name: "eth1".into(), mac: None }], &[]);
+        let scan = Scan::new(&s.fusion, &s.stats, &t, T0 + 10_000_000_000, Some(Capture { file: "sample.pcap".into(), first_frame: 0, frames: 4 }));
+        assert_eq!(Scan::read(&scan.to_toml().unwrap()).unwrap().fusion(), s.fusion);
+        assert!(s.fusion.devices.values().any(|d| !d.ports.is_empty()), "a device with a port among them");
+    }
+}

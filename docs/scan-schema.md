@@ -18,7 +18,8 @@ rather than repeating every type.
   nothing took, wherever it sits (`a scan file holds no key `colour`: refused, not ignored`); a key
   missing or of the wrong kind is no scan (`not a scan file: ...`); and what was read is what the
   file holds, written back as TOML's own values, or the file is refused, naming the first place it
-  differs (an element past what its list takes, a table written as a list, a word written as a
+  differs in its keys' order (a table's keys in their alphabet's order, not where the file writes
+  them) (an element past what its list takes, a table written as a list, a word written as a
   table, a repeat a set keeps once: `a scan file's `capture` is not what its reader keeps`).
 - Read whole, it must be a scan: its devices by MAC, each once; no field holding two values last
   heard in one frame (a frame says one value of a field); its topology's links each stored
@@ -54,9 +55,11 @@ rather than repeating every type.
 - `devices`, by MAC (C-141): each with its `mac`; every field of what it said as the list of its
   values, each with the `value`, its `first` and `last` witness and its `count`, the first heard
   first: DCP's `name`, `alias`, `ip` (`ip`, `mask`, `gateway`), `ip_status` (`set`, `conflict`),
-  `pn_id` (vendor and device ids), `vendor`, `role`, `instance`; LLDP's `chassis` (a key by the
+  `pn_id` (vendor and device ids), `vendor`, `role`, `instance` (DCP's device instance, its high
+  and its low byte); LLDP's `chassis` (a key by the
   chassis id's subtype: `mac:...`, `local:...`, `ifname:...`, `net:...` or `other<subtype>:...`,
-  the last two in hex), `sys_name`, `sys_desc`, `sys_caps`, `mgmt_ips` (each PDU's IPv4
+  the last two in hex), `sys_name`, `sys_desc`, `sys_caps` (802.1AB's two words of capability
+  bits: those the system has, then those enabled), `mgmt_ips` (each PDU's IPv4
   management addresses); `arp_ip`; its `ports` by short name, each with its `id`, `port_mac`,
   `desc`, `pn_status` (PROFINET's RTClass 2 and 3 port status, `rtc2` and `rtc3`), `delays`
   (`rx_local`, `rx_remote`, `tx_local`, `tx_remote` and `cable_local`, in nanoseconds), `mrp`
@@ -75,8 +78,10 @@ rather than repeating every type.
 - `topology` (C-145): its `nodes` (`id`: `dev:<mac>`, `if:<name>` or `chassis:<the chassis id's
   text>`; `kind`: `device`, `interface` or `chassis`, `label`, `mac`,
   `ports`, the MRP `rings` its ports are in), `links` (ends `a` and `b`, each a `node` and a `port`,
-  the lesser first; `confidence`: `heard`, `reported` or `confirmed`; `witnesses`), `rings`
-  (`domain`, `members`, `closed`), `components` (node ids, the largest first) and `notes` (what it
+  the lesser first; `confidence`: `heard`, `reported` or `confirmed`; `witnesses`: for a heard
+  link the frames of its port heard on its interface, for a reported or confirmed one the reads
+  that said it), `rings` (`domain`; `members`, the node ids of the devices with a port in it;
+  `closed`, its links among the members one cycle through them all, none of them gone), `components` (node ids, the largest first) and `notes` (what it
   did not draw, and why).
 
 ## An example

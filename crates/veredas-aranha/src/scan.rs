@@ -103,14 +103,22 @@ impl Scan {
         toml::to_string(self).map_err(|e| ScanError::Write(e.to_string()))
     }
 
-    /// What makes it a scan beyond its keys: its devices by MAC, each once; no field holding two
-    /// values last heard in one frame; its topology's links
+    /// What makes it a scan beyond its keys: its stamp `veredas-scan` version 1, and a count by
+    /// another type only for a type with no class of its own; its devices by MAC, each once; no
+    /// field holding two values last heard in one frame; its topology's links
     /// each stored lesser end first and by their ends, each pair of ends once (a link is its two
     /// ends, so one cable is one link); no witness, and no port's last leaving or other frame or last
     /// frame on an interface,
     /// naming a frame past its capture's last record (one before its first is a frame the listener
     /// let go, counted in its stats, which the capture does not hold).
     pub fn check(&self) -> Result<(), ScanError> {
+        // Its stamp the one this reader reads, and every count by a class its reader takes back.
+        if self.format != FORMAT || self.version != VERSION {
+            return Err(ScanError::Invalid(format!("its stamp is `{}` version {}, not `{FORMAT}` version {VERSION}", self.format, self.version)));
+        }
+        if let Some(c) = self.stats.by_class.keys().find(|c| matches!(c, crate::observe::Class::Other(t) if crate::observe::Class::of_ethertype(*t) != **c)) {
+            return Err(ScanError::Invalid(format!("its count of frames `{c}` names a type that has a class of its own")));
+        }
         for pair in self.devices.windows(2) {
             if pair[0].mac >= pair[1].mac {
                 let why = if pair[0].mac == pair[1].mac { "is in it twice" } else { "is out of the order by MAC" };
@@ -151,10 +159,15 @@ impl Scan {
         schema::check(text, NOUN, FORMAT, VERSION)?;
         let de = toml::Deserializer::parse(text).map_err(|e| ScanError::Toml(e.to_string()))?;
         let mut unread = Vec::new();
-        let scan: Scan = serde_ignored::deserialize(de, |path| unread.push(format!("`{path}`"))).map_err(|e| ScanError::Toml(e.to_string()))?;
+        // A key's place as the file holds it (serde_ignored marks an Option's inside with `?`).
+        let place = |path: &serde_ignored::Path| path.to_string().split('.').filter(|s| *s != "?").collect::<Vec<_>>().join(".");
+        let read = serde_ignored::deserialize(de, |path| unread.push(format!("`{}`", place(&path))));
+        // A key nothing took is named even where it stood for one the reader misses (a misspelt
+        // key): that missing key is its consequence, the misspelling its cause.
         if !unread.is_empty() {
             return Err(ScanError::Unread(unread));
         }
+        let scan: Scan = read.map_err(|e| ScanError::Toml(e.to_string()))?;
         // Whole: what was read is what the file holds, written back as TOML's own values.
         let held: toml::Table = text.parse().map_err(|e: toml::de::Error| ScanError::Toml(e.to_string()))?;
         let kept = toml::Value::try_from(&scan).map_err(|e| ScanError::NotWhole(format!("value ({e})")))?;
