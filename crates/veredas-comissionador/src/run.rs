@@ -474,6 +474,15 @@ pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode, confirmed: Option<&s
     let mut seen = BTreeSet::new();
     let read: BTreeSet<String> =
         await_tables.iter().cloned().chain(refs.iter().map(|(t, _, _)| t.clone())).filter(|t| tables.contains_key(t)).collect();
+    // What a replay's window is judged against: each value read, in the order first written, and
+    // each awaited table.
+    let mut refs_read: Vec<(String, String)> = Vec::new();
+    for (t, c, _) in &refs {
+        if !refs_read.iter().any(|(rt, rc)| rt == t && rc == c) {
+            refs_read.push((t.clone(), c.clone()));
+        }
+    }
+    let awaited: BTreeSet<String> = await_tables.iter().cloned().collect();
     for name in await_tables {
         if !tables.contains_key(&name) && seen.insert(name.clone()) {
             problems.push(format!("`{name}` is no table of the session"));
@@ -527,15 +536,26 @@ pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode, confirmed: Option<&s
             problems.push(format!("`{table}` has no column `{column}`, read as `{base}.{column}`"));
         }
     }
-    // A replay whose window opens before the session's store holds a table the test reads, from
-    // the point its sources' start read from: refused, each table named.
+    // A replay whose window opens before the session's store holds what the test reads: a value
+    // read at a moment from its column's point (a source's first value of it) and the table's rows'
+    // (the point its sources' start read from), an awaited table's rows from theirs. Refused, each
+    // named as the test reads it.
     if let RunMode::Replay { from_ms, .. } = mode {
-        for name in &read {
-            if let Some(at) = plant.rows_from(name)
+        let mut judged = BTreeSet::new();
+        let mut judge = |what: String, at: Option<i64>, problems: &mut Vec<String>| {
+            if let Some(at) = at
                 && *from_ms < at
+                && judged.insert(what.clone())
             {
-                problems.push(format!("the window opens at {}, before the session's store holds `{name}`, from {}", eval::time_text(*from_ms), eval::time_text(at)));
+                problems.push(format!("the window opens at {}, before the session's store holds `{what}`, from {}", eval::time_text(*from_ms), eval::time_text(at)));
             }
+        };
+        for (table, column, _) in refs_read.iter().filter(|(t, _)| tables.contains_key(t)).map(|(t, c)| (t, c, ())) {
+            let at = plant.rows_from(table).into_iter().chain(plant.values_from(table, column)).max();
+            judge(format!("{table}.{column}"), at, &mut problems);
+        }
+        for table in awaited.iter().filter(|t| tables.contains_key(*t)) {
+            judge(table.clone(), plant.rows_from(table), &mut problems);
         }
     }
     // Live, a test that writes with the switch off: the run arms it for itself when the person

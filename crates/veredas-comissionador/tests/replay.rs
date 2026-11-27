@@ -215,7 +215,7 @@ fn a_window_before_the_store_holds_a_table_the_test_reads_is_refused() {
     let (from, to) = (now - 30_000, now - 20_000);
     let go = |text: &str| veredas_comissionador::run::run(&checked(&test_of(text)), &p, &RunOptions::replay(from, to), &mut |_| {});
     let e = go("  step c check plc_main.speed == 1.5\n  step r report readings.temp\n").unwrap_err();
-    assert_eq!(e.0, [format!("the window opens at {}, before the session's store holds `plc_main`, from {}", time_text(from), time_text(now - 1_000))]);
+    assert_eq!(e.0, [format!("the window opens at {}, before the session's store holds `plc_main.speed`, from {}", time_text(from), time_text(now - 1_000))]);
     assert!(go("  step r report readings.temp\n").is_ok(), "a table held from before the window refuses nothing");
 }
 

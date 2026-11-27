@@ -262,10 +262,11 @@ Recorded as the build meets them.
   the past is the stamped logs' alone: a file is read from its first line, a family backfills from
   the start, a log without stamps and every OPC UA source and channel read from the session's start.
   A backfill stores no line before the start, so the value at a moment after it may lie in a line
-  it never read: a family's table is held from the first row the family stored of it. The
-  executable tells the plant, table by table, from which moment the store holds its rows (a rule's
-  table its logs' latest; a view not judged), and the binding refuses a window opening before it
-  for a table the test reads.
+  it never read: a family's rows are held from the start, each column's latest value from the
+  family's first row holding one (a row may hold none of a column). The executable tells the plant
+  from which moment the store holds each table's rows and each column's values (a rule's table its
+  logs' latest; a view not judged), and the binding refuses a window opening before it for a value
+  the test reads or a table it awaits.
 - **A word the language reads by its place is no reserved word** (C-201). `max` was reserved for
   `retry <step> max <n>` and is also a built-in call, so `max(a, b)` could not be written. The
   route reads `max` by its place; the reserved list is the reader's and the reference's at once,

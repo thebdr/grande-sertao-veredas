@@ -92,6 +92,12 @@ pub trait Plant {
     fn rows_from(&self, _table: &str) -> Option<i64> {
         None
     }
+    /// From which moment the session's store holds the latest value of `table.column` whole, when
+    /// the embedder said so (a source's first row holding a value of it, past the point its start
+    /// read from): a replay's window opening before it, for a value the test reads, is refused.
+    fn values_from(&self, _table: &str, _column: &str) -> Option<i64> {
+        None
+    }
     /// Whether portal's write switch is armed.
     fn armed(&self) -> bool;
     /// Whether a run may arm the switch for itself: the embedder handed the plant the way.
@@ -128,6 +134,8 @@ pub struct LivePlant {
     /// From which moment the store holds each table's rows whole, by its name in ASCII lower case,
     /// as the embedder said.
     from: BTreeMap<String, i64>,
+    /// From which moment it holds each column's latest value whole, by table and column.
+    values: BTreeMap<(String, String), i64>,
 }
 
 impl LivePlant {
@@ -136,7 +144,7 @@ impl LivePlant {
             .enable_all()
             .build()
             .map_err(|e| PlantError::Store(format!("no runtime for the writes: {e}")))?;
-        Ok(LivePlant { live, runtime, arming: None, also: Vec::new(), from: BTreeMap::new() })
+        Ok(LivePlant { live, runtime, arming: None, also: Vec::new(), from: BTreeMap::new(), values: BTreeMap::new() })
     }
 
     /// The same, with the embedder's way to arm and disarm the session's switch (its session's
@@ -149,27 +157,39 @@ impl LivePlant {
         Ok(p)
     }
 
-    /// The stamp of the oldest row of `table` that `source` gave, read from the oldest page up;
-    /// none when it gave none.
-    pub fn first_from(&self, table: &Table, source: &str) -> Result<Option<i64>, PlantError> {
+    /// For each column of `table`, the stamp of the oldest row `source` gave holding a value of it,
+    /// read from the oldest page up until every column has one; a column it gave no value of left
+    /// out.
+    pub fn first_values(&self, table: &Table, source: &str) -> Result<BTreeMap<String, i64>, PlantError> {
+        let mut first = BTreeMap::new();
         let (_, total) = self.page(table, &RowsQuery { from_ms: None, to_ms: None, limit: 1, offset: 0 })?;
         let mut end = usize::try_from(total).unwrap_or(usize::MAX);
-        while end > 0 {
+        while end > 0 && first.len() < table.columns.len() {
             let start = end.saturating_sub(PAGE);
             let (rows, _) = self.page(table, &RowsQuery { from_ms: None, to_ms: None, limit: end - start, offset: start })?;
-            // A page newest first: its oldest row from `source` is the last of them.
-            if let Some(r) = rows.iter().rev().find(|r| r.source == source) {
-                return Ok(Some(r.time_ms));
+            // A page newest first: its rows walked from the last, the oldest.
+            for r in rows.iter().rev().filter(|r| r.source == source) {
+                for (column, value) in &r.columns {
+                    if value.is_some() && !first.contains_key(column) {
+                        first.insert(column.clone(), r.time_ms);
+                    }
+                }
             }
             end = start;
         }
-        Ok(None)
+        Ok(first)
     }
 
     /// The plant told from which moment the session's store holds each table's rows whole (the
     /// point its sources' start read from), so a replay over a window before it is refused.
     pub fn with_rows_from(mut self, from: BTreeMap<String, i64>) -> LivePlant {
         self.from = from.into_iter().map(|(t, at)| (t.to_ascii_lowercase(), at)).collect();
+        self
+    }
+
+    /// The plant told from which moment the store holds each column's latest value whole.
+    pub fn with_values_from(mut self, values: BTreeMap<(String, String), i64>) -> LivePlant {
+        self.values = values.into_iter().map(|((t, c), at)| ((t.to_ascii_lowercase(), c), at)).collect();
         self
     }
 
@@ -339,6 +359,10 @@ impl Plant for LivePlant {
 
     fn rows_from(&self, table: &str) -> Option<i64> {
         self.from.get(&table.to_ascii_lowercase()).copied()
+    }
+
+    fn values_from(&self, table: &str, column: &str) -> Option<i64> {
+        self.values.get(&(table.to_ascii_lowercase(), column.to_string())).copied()
     }
 
     fn can_arm(&self) -> bool {

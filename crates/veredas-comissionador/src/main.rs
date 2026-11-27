@@ -312,6 +312,7 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
             (rule.name.trim().to_ascii_lowercase(), read)
         })
         .collect();
+    let start_ms = config.start.map(|t| t.and_utc().timestamp_millis());
     let session = match Session::start(config) {
         Ok(s) => std::rc::Rc::new(s),
         Err(e) => {
@@ -384,26 +385,35 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
             return 4;
         }
     };
+    // A family backfilled from the start holds its rows from the start, and each column's latest
+    // value from its first row holding one (a value before it lies in a line the start did not
+    // read); a family that gave none of a column, from the start.
     let mut rows_from: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    let mut values_from: std::collections::BTreeMap<(String, String), i64> = std::collections::BTreeMap::new();
     for table in plant.tables().unwrap_or_default() {
         let name = table.name.to_ascii_lowercase();
         if !bases.contains(&name) {
             continue;
         }
-        let at = match ruled.get(&name) {
-            None => begun_ms,
-            Some(read) => read
-                .iter()
-                .filter_map(|(id, at)| match at {
-                    Some(at) => Some(*at),
-                    None => plant.first_from(&table, id).ok().flatten(),
-                })
-                .max()
-                .unwrap_or(i64::MIN),
+        let Some(read) = ruled.get(&name) else {
+            rows_from.insert(name, begun_ms);
+            continue;
         };
-        rows_from.insert(name, at);
+        let start = start_ms.unwrap_or(begun_ms);
+        let rows = read.iter().map(|(_, at)| at.unwrap_or(start)).max().unwrap_or(i64::MIN);
+        rows_from.insert(name.clone(), rows);
+        let families: Vec<std::collections::BTreeMap<String, i64>> =
+            read.iter().filter(|(_, at)| at.is_none()).map(|(id, _)| plant.first_values(&table, id).unwrap_or_default()).collect();
+        if families.is_empty() {
+            continue;
+        }
+        for column in &table.columns {
+            let firsts = families.iter().map(|f| f.get(&column.name).copied().unwrap_or(start).max(start));
+            let at = read.iter().filter_map(|(_, at)| *at).chain(firsts).max().unwrap_or(start);
+            values_from.insert((name.clone(), column.name.clone()), at);
+        }
     }
-    let plant = plant.with_rows_from(rows_from);
+    let plant = plant.with_rows_from(rows_from).with_values_from(values_from);
     let result = run(c, &plant, mode, &mut |e| match e {
         Event::StepEnded(s) => {
             let outcome = s.outcome.map(|o| o.to_string()).unwrap_or_else(|| "cut short".to_string());
