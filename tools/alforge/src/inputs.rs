@@ -316,15 +316,33 @@ impl Workspace<'_> {
         let dirs: BTreeSet<&str> = used.iter().map(|m| m.dir.as_str()).collect();
         // Every file rustc reads as Rust from these packages: a test folder a module of one at a
         // package's top can reach is not left out.
-        let rust = self.read_as_rust(&used)?;
         let mut left: Vec<String> = Vec::new();
         for m in &used {
             // A package nested in another a build uses: the outer one's modules (`imp.rs` beside
             // `imp/`, an inline `mod imp {}`) and build script can read its test folders.
             let nested = dirs.iter().any(|d| *d != m.dir && m.dir.starts_with(&prefix(d)));
             if !nested {
-                left.extend(left_out(self.tree, m, &dirs, &rust));
+                left.extend(left_out(self.tree, m, &dirs));
             }
+        }
+        // Then what rustc may read as Rust from everything not left out, until it reaches no
+        // folder left out: a test folder a module, a `#[path]` or an `include!` reaches is the
+        // package's like the rest, and so is every test folder of a package one of whose files at
+        // its top rustc may read.
+        loop {
+            let reached = self.read_as_rust(&used, &left)?;
+            let kept: Vec<String> = left
+                .iter()
+                .filter(|f| {
+                    let top = f.rsplitn(3, '/').nth(2).unwrap_or_default().to_string();
+                    reached.iter().any(|r| format!("{r}/").starts_with(f.as_str()) || Path::new(r).parent() == Some(Path::new(&top)))
+                })
+                .cloned()
+                .collect();
+            if kept.is_empty() {
+                break;
+            }
+            left.retain(|f| !kept.contains(f));
         }
         // A package's folder without its test folders and without the packages a build uses
         // inside it, each of which has a key of its own.
@@ -350,9 +368,14 @@ impl Workspace<'_> {
         // What cargo reads of the workspace's own manifest to build it (docs/questions.md Q442,
         // ruled 2026-11-26 "Only what cargo reads for it").
         named.extend(self.manifest_parts(&used)?);
-        // Files outside those folders their sources name.
+        // Files outside those folders their sources name, and every module file rustc may read
+        // from what is not left out that lies outside them (a `mod x;` of a file a `#[path]`
+        // names there).
         let folders: Vec<String> = used.iter().map(|m| format!("{}/", m.dir)).collect();
-        for path in self.named_outside(&used, &folders, &left)? {
+        let inside = |path: &str| folders.iter().any(|f| path.starts_with(f.as_str())) && !left.iter().any(|l| format!("{path}/").starts_with(l.as_str()));
+        let mut outside = self.named_outside(&used, &folders, &left)?;
+        outside.extend(self.read_as_rust(&used, &left)?.into_iter().filter(|p| !inside(p) && self.tree.join(p).is_file()));
+        for path in outside {
             let id = self.object(&path)?;
             named.insert(path, id);
         }
@@ -473,41 +496,49 @@ impl Workspace<'_> {
         Ok(out)
     }
 
-    /// What rustc may read as Rust from the packages `used`: every `.rs` file in their folders
-    /// (`walked`), and every file or folder their sources (but those of their top test folders)
-    /// and the files their targets start from name as Rust (`#[path]`, `include!`), in turn,
-    /// wherever it lies (`named`).
-    fn read_as_rust(&self, used: &[&Member]) -> Result<Reached, String> {
-        let mut walked: Vec<String> = Vec::new();
+    /// Every file and folder rustc may read as Rust from the packages `used`, `left` left out:
+    /// every `.rs` file in their folders but in `left`, every file a target starts from, and, in
+    /// turn, every file or folder one of them names as Rust (`#[path]`, `include!`) and every file
+    /// a `mod x;` of one may be, wherever it lies (a module's file beside it or in its own folder,
+    /// `x.rs` or `x/mod.rs`, inside its inline modules' folders: both ways rustc reads a file, as
+    /// a `mod.rs` or not).
+    fn read_as_rust(&self, used: &[&Member], left: &[String]) -> Result<BTreeSet<String>, String> {
         let mut files: Vec<String> = Vec::new();
         for m in used {
-            let mut here = Vec::new();
-            walk(self.tree, &m.dir, &[], &mut here).map_err(|e| format!("{}'s sources do not read: {e}", m.dir))?;
-            let top = prefix(&m.dir);
-            files.extend(here.iter().filter(|f| !TEST_FOLDERS.iter().any(|t| f.starts_with(&format!("{top}{t}/")))).cloned());
-            walked.extend(here);
+            walk(self.tree, &m.dir, left, &mut files).map_err(|e| format!("{}'s sources do not read: {e}", m.dir))?;
             files.extend(m.sources.iter().filter_map(|s| normal(Path::new(s))));
         }
-        let mut names: BTreeSet<String> = BTreeSet::new();
-        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut reached: BTreeSet<String> = BTreeSet::new();
         let mut i = 0;
         while i < files.len() {
             let file = files[i].clone();
             i += 1;
-            if !seen.insert(file.clone()) {
+            if !reached.insert(file.clone()) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(self.tree.join(&file)) else { continue };
             let from = Path::new(&file).parent().unwrap_or(Path::new(""));
             for (lit, rust) in named(&text) {
                 if let Some(path) = normal(&from.join(&lit)).filter(|_| rust) {
-                    names.insert(path.clone());
-                    files.push(path);
+                    if self.tree.join(&path).is_dir() {
+                        reached.insert(path);
+                    } else {
+                        files.push(path);
+                    }
+                }
+            }
+            let stem = Path::new(&file).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            for module in declared(&text) {
+                for base in [from.to_path_buf(), from.join(&stem)] {
+                    for candidate in [base.join(format!("{module}.rs")), base.join(&module).join("mod.rs")] {
+                        if let Some(path) = normal(&candidate).filter(|p| self.tree.join(p).is_file()) {
+                            files.push(path);
+                        }
+                    }
                 }
             }
         }
-        names.extend(used.iter().flat_map(|m| m.sources.iter().filter_map(|s| normal(Path::new(s)))));
-        Ok(Reached { walked: walked.into_iter().collect(), named: names })
+        Ok(reached)
     }
 
     /// The files outside `folders`, or inside a folder `left` leaves out, that the Rust sources of
@@ -520,7 +551,7 @@ impl Workspace<'_> {
         for m in used {
             walk(self.tree, &m.dir, left, &mut files).map_err(|e| format!("{}'s sources do not read: {e}", m.dir))?;
         }
-        let inside = |path: &str| folders.iter().any(|f| path.starts_with(f.as_str())) && !left.iter().any(|l| path.starts_with(l.as_str()));
+        let inside = |path: &str| folders.iter().any(|f| path.starts_with(f.as_str())) && !left.iter().any(|l| format!("{path}/").starts_with(l.as_str()));
         // Every Rust file a target starts from or a source names is read, wherever it lies.
         let mut scanned: BTreeSet<String> = files.iter().cloned().collect();
         for m in used {
@@ -591,27 +622,14 @@ fn prefix(dir: &str) -> String {
     if dir.is_empty() { String::new() } else { format!("{dir}/") }
 }
 
-/// What rustc may read as Rust from the packages a build uses ([`Workspace::read_as_rust`]).
-struct Reached {
-    walked: BTreeSet<String>,
-    named: BTreeSet<String>,
-}
-
-/// The top folders of a package (`crates/x/tests/`) holding its tests, benches and examples alone,
-/// which its folder's identity leaves out: each that the commit holds, that no target that ships (a
-/// library, an executable, a build script) starts in, that holds no package a build uses (`dirs`)
-/// and nothing a source outside the test folders names as Rust (a `#[path]` to a file or a module
-/// folder there), in a package without a build script and with no file rustc may read as Rust at
-/// its top, whose modules rustc could read from those folders: a crate root, a `mod.rs`, a file a
-/// `#[path]` or an `include!` names there (`mod examples;` in it is `examples/mod.rs`). A package
-/// nested in another a build uses leaves none out (its caller's decision).
-fn left_out(tree: &Path, m: &Member, dirs: &BTreeSet<&str>, rust: &Reached) -> Vec<String> {
+/// The top folders of a package (`crates/x/tests/`) that may hold its tests, benches and examples
+/// alone, before what rustc may read decides ([`Workspace::read_as_rust`]): each that the commit
+/// holds, that no target that ships (a library, an executable, a build script) starts in and that
+/// holds no package a build uses (`dirs`), in a package without a build script.
+fn left_out(tree: &Path, m: &Member, dirs: &BTreeSet<&str>) -> Vec<String> {
     // A build script may read anything in its package's folder (IronCalc's xlsx lists its
     // `tests/` to write code), so none of it is what only the tests read.
     if m.build_script {
-        return Vec::new();
-    }
-    if rust.walked.iter().chain(&rust.named).any(|f| Path::new(f).parent() == Some(Path::new(&m.dir))) {
         return Vec::new();
     }
     let top = prefix(&m.dir);
@@ -621,8 +639,52 @@ fn left_out(tree: &Path, m: &Member, dirs: &BTreeSet<&str>, rust: &Reached) -> V
         .filter(|f| tree.join(f).is_dir())
         .filter(|f| !m.sources.iter().any(|s| normal(Path::new(s)).is_some_and(|p| p.starts_with(f.as_str()))))
         .filter(|f| !dirs.iter().any(|d| format!("{d}/").starts_with(f.as_str())))
-        .filter(|f| !rust.named.iter().any(|n| format!("{n}/").starts_with(f.as_str())))
         .collect()
+}
+
+/// The modules a Rust source declares by `mod x;`, each as its path below the file's own module
+/// folder (`x`, or `a/x` inside an inline `mod a { … }`), read from the tokens as rustc lexes them.
+pub fn declared(text: &str) -> Vec<String> {
+    fn inner(ts: proc_macro2::TokenStream, prefix: &str, out: &mut Vec<String>) {
+        use proc_macro2::{Delimiter, TokenTree};
+        let tts: Vec<TokenTree> = ts.into_iter().collect();
+        let mut i = 0;
+        while i < tts.len() {
+            match &tts[i] {
+                TokenTree::Ident(id) if id == "mod" => {
+                    if let Some(TokenTree::Ident(name)) = tts.get(i + 1) {
+                        let name = name.to_string().trim_start_matches("r#").to_string();
+                        let path = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+                        match tts.get(i + 2) {
+                            Some(TokenTree::Punct(p)) if p.as_char() == ';' => out.push(path),
+                            // An inline module: its body's modules lie in its own folder.
+                            Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
+                                inner(g.stream(), &path, out);
+                                i += 3;
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => inner(g.stream(), prefix, out),
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+    let mut lf = text.replace("\r\n", "\n");
+    if let Some(rest) = lf.strip_prefix('\u{feff}') {
+        lf = rest.to_string();
+    }
+    if is_shebang(&lf) {
+        lf = lf.find('\n').map(|i| lf[i..].to_string()).unwrap_or_default();
+    }
+    let mut out = Vec::new();
+    if let Ok(ts) = lf.parse::<proc_macro2::TokenStream>() {
+        inner(ts, "", &mut out);
+    }
+    out
 }
 
 /// The feature resolver cargo builds the workspace with: the workspace's `resolver`, else the root

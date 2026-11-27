@@ -2492,3 +2492,87 @@ fn a_bin_only_the_toolchain_its_folder_names_builds_is_not_shipped() {
         assert_eq!((h.bins.len(), names(&h.unshipped)), (0, "orcl-front-driver".to_string()));
     }
 }
+
+/// Round 29's real forms: a module a kept file reaches by a plain `mod x;` in a test folder, which
+/// in turn reaches another (`examples/common/mod.rs` declaring `mod table;`, whose `include!` of a
+/// file at the top declares `pub mod tests;`), and a `#[path]` naming a test folder on an inline
+/// module inside such a module. What rustc may read is followed through `mod` declarations, both
+/// ways it reads a file, until no test folder left out is reached: each charges the package.
+#[test]
+fn round_twenty_nine_modules_followed_into_test_folders_until_none_is_reached() {
+    let pins = |release: &str, commit: &str| -> (PathBuf, Manifest) {
+        let text = format!(
+            "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
+             [[component]]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nbins = [\"veredas-portal\"]\n\n\
+             [tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+        );
+        (PathBuf::from(format!("{release}.toml")), manifest::load(&text).unwrap())
+    };
+    type Form = (&'static str, Vec<(&'static str, &'static str)>, &'static str);
+    let forms: [Form; 2] = [
+        (
+            "an include at the top declaring the tests' module",
+            vec![
+                ("examples/common/mod.rs", "mod table;\npub fn word() -> &'static str { table::tests::WORD }\n"),
+                ("examples/common/table.rs", "include!(\"../../table.in\");\n"),
+                ("table.in", "pub mod tests;\n"),
+                ("tests/mod.rs", "pub const WORD: &str = \"one\";\n"),
+            ],
+            "tests/mod.rs",
+        ),
+        (
+            "a #[path] naming the tests' folder on an inline module",
+            vec![
+                ("examples/common/mod.rs", "mod table;\npub fn word() -> &'static str { table::fixtures::common::WORD }\n"),
+                ("examples/common/table.rs", "#[path = \"../../tests\"]\npub mod fixtures {\n    pub mod common;\n}\n"),
+                ("examples/demo.rs", "mod common;\nfn main() { println!(\"{}\", common::word()); }\n"),
+                ("tests/common/mod.rs", "pub const WORD: &str = \"one\";\n"),
+                ("tests/words.rs", "mod common;\n#[test]\nfn word() { assert_eq!(common::WORD, \"one\"); }\n"),
+            ],
+            "tests/common/mod.rs",
+        ),
+    ];
+    for (what, files, changed) in forms {
+        let r = Repo::new();
+        r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-portal\"]\n");
+        r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+        r.write("crates/veredas-portal/src/main.rs", "#[path = \"../examples/common/mod.rs\"]\nmod common;\nfn main() { println!(\"{}\", common::word()); }\n");
+        for (f, t) in &files {
+            r.write(&format!("crates/veredas-portal/{f}"), t);
+        }
+        let c1 = r.commit(what);
+        let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
+        let named = &held["veredas-portal"].inputs.as_ref().unwrap().0;
+        assert!(!named.contains_key("crates/veredas-portal/tests/") && !named.contains_key("crates/veredas-portal/examples/"), "{what}: {named:?}");
+        r.write(&format!("crates/veredas-portal/{changed}"), "pub const WORD: &str = \"two\";\n");
+        let c2 = r.commit("the word changed");
+        assert_eq!(
+            manifest::check_together(r.path(), &[pins("2.0.0", &c1), pins("2.0.1", &c2)]).unwrap(),
+            ["veredas-portal 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (crates/veredas-portal/): a version names everything its build reads"],
+            "{what}"
+        );
+    }
+    // A module a file outside the folders declares (a `#[path]` file, read as a `mod.rs`): charged
+    // as a file of its own, which round 29's answer lets the scan reach.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-portal\"]\n");
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    r.write("crates/veredas-portal/src/main.rs", "#[path = \"../../../docs/outer.rs\"]\nmod outer;\nfn main() { println!(\"{}\", outer::helper::H); }\n");
+    r.write("docs/outer.rs", "pub mod helper;\n");
+    r.write("docs/helper.rs", "pub const H: u8 = 1;\n");
+    let c1 = r.commit("a module beside an outside file");
+    let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
+    assert!(held["veredas-portal"].inputs.as_ref().unwrap().0.contains_key("docs/helper.rs"));
+    r.write("docs/helper.rs", "pub const H: u8 = 2;\n");
+    let c2 = r.commit("the helper changed");
+    assert_eq!(
+        manifest::check_together(r.path(), &[pins("2.0.0", &c1), pins("2.0.1", &c2)]).unwrap(),
+        ["veredas-portal 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (docs/helper.rs): a version names everything its build reads"]
+    );
+    // The declarations read from the tokens: inline modules' folders, raw names, a `mod` a comment or
+    // a string holds no declaration.
+    assert_eq!(
+        alforge::inputs::declared("mod a;\npub mod b { mod c; pub(crate) mod d { mod e; } }\nmod r#f;\n// mod g;\nconst S: &str = \"mod h;\";\nmod i {}\n"),
+        ["a", "b/c", "b/d/e", "f"]
+    );
+}
