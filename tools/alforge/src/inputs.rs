@@ -679,8 +679,86 @@ pub fn declared(text: &str) -> Option<Vec<String>> {
         lf = lf.find('\n').map(|i| lf[i..].to_string()).unwrap_or_default();
     }
     let mut out = Vec::new();
-    inner(lf.parse::<proc_macro2::TokenStream>().ok()?, "", &mut out);
+    inner(lexed(&lf)?, "", &mut out);
     Some(out)
+}
+
+/// A text's tokens as rustc lexes it in every edition, or `None`: proc-macro2 reads a raw C string
+/// (`cr"…"`, `cr#"…"#`) in every edition, where rustc's 2015 and 2018 read `cr`, then a `#` and a
+/// plain string that may end elsewhere, so a text holding one is read as one that does not lex.
+fn lexed(text: &str) -> Option<proc_macro2::TokenStream> {
+    fn raw_c(ts: proc_macro2::TokenStream) -> bool {
+        ts.into_iter().any(|t| match t {
+            proc_macro2::TokenTree::Literal(l) => {
+                let s = l.to_string();
+                s.starts_with("cr\"") || s.starts_with("cr#")
+            }
+            proc_macro2::TokenTree::Group(g) => raw_c(g.stream()),
+            _ => false,
+        })
+    }
+    let ts = text.parse::<proc_macro2::TokenStream>().ok()?;
+    (!raw_c(ts.clone())).then_some(ts)
+}
+
+/// Whether a dependency's platform (`target` in cargo's metadata: a `cfg(…)` expression, or a
+/// target's own name) holds for the target `target`, whose configuration `cfg` is as `rustc --print
+/// cfg --target <target>` says it (`unix`, `target_os="linux"`), as cargo reads it: `all`, `any`,
+/// `not`, a name, a name and its value, `true` and `false`.
+pub fn platform_holds(spec: &str, target: &str, cfg: &[(String, Option<String>)]) -> bool {
+    fn expr(s: &mut &str, cfg: &[(String, Option<String>)]) -> Option<bool> {
+        *s = s.trim_start();
+        let end = s.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(s.len());
+        let name = s[..end].to_string();
+        *s = s[end..].trim_start();
+        if name.is_empty() {
+            return None;
+        }
+        if let Some(rest) = s.strip_prefix('(') {
+            *s = rest;
+            let mut values = Vec::new();
+            loop {
+                *s = s.trim_start();
+                if let Some(rest) = s.strip_prefix(')') {
+                    *s = rest;
+                    break;
+                }
+                values.push(expr(s, cfg)?);
+                *s = s.trim_start();
+                if let Some(rest) = s.strip_prefix(',') {
+                    *s = rest;
+                }
+            }
+            return match name.as_str() {
+                "all" => Some(values.iter().all(|v| *v)),
+                "any" => Some(values.iter().any(|v| *v)),
+                "not" if values.len() == 1 => Some(!values[0]),
+                _ => None,
+            };
+        }
+        if let Some(rest) = s.strip_prefix('=') {
+            let rest = rest.trim_start().strip_prefix('"')?;
+            let close = rest.find('"')?;
+            let value = rest[..close].to_string();
+            *s = &rest[close + 1..];
+            return Some(cfg.iter().any(|(n, v)| *n == name && v.as_deref() == Some(value.as_str())));
+        }
+        Some(match name.as_str() {
+            "true" => true,
+            "false" => false,
+            _ => cfg.iter().any(|(n, v)| *n == name && v.is_none()),
+        })
+    }
+    match spec.trim().strip_prefix("cfg(").and_then(|r| r.strip_suffix(')')) {
+        Some(inner) => {
+            let mut s = inner;
+            let held = expr(&mut s, cfg);
+            // An expression it cannot read holds, as a dependency it may build: the bin is
+            // required, never dropped by a misreading.
+            held.filter(|_| s.trim().is_empty()).unwrap_or(true)
+        }
+        None => spec.trim() == target,
+    }
 }
 
 /// The feature resolver cargo builds the workspace with: the workspace's `resolver`, else the root
@@ -761,7 +839,7 @@ pub fn named(text: &str) -> Vec<(String, bool)> {
     if is_shebang(&lf) {
         lf = lf.find('\n').map(|i| lf[i..].to_string()).unwrap_or_default();
     }
-    match lf.parse::<proc_macro2::TokenStream>() {
+    match lexed(&lf).ok_or(()) {
         Ok(ts) => {
             let mut all = Vec::new();
             tokens(ts, &mut all);
@@ -775,10 +853,10 @@ pub fn named(text: &str) -> Vec<(String, bool)> {
             out
         }
         Err(_) => {
-            let mut out: Vec<(String, bool)> = literals_in(&lf).into_iter().map(|p| (p, true)).collect();
+            let mut out: Vec<(String, bool)> = literals_in(&lf);
             for l in literals_in(&uncommented(&lf)) {
-                if !out.iter().any(|(p, _)| *p == l) {
-                    out.push((l, true));
+                if !out.iter().any(|(p, _)| *p == l.0) {
+                    out.push(l);
                 }
             }
             out
@@ -962,8 +1040,9 @@ fn uncommented(text: &str) -> String {
     out
 }
 
-fn literals_in(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
+fn literals_in(text: &str) -> Vec<(String, bool)> {
+    let mut out: Vec<String> = Vec::new();
+    let mut data: Vec<String> = Vec::new();
     // `#[cfg_attr(<predicate>, path = "…")]`: each `path =` the attribute's parentheses hold.
     let mut rest = text;
     while let Some(at) = rest.find("cfg_attr") {
@@ -993,7 +1072,9 @@ fn literals_in(text: &str) -> Vec<String> {
         let inner = &open[..end];
         let mut scan = inner;
         while let Some(p) = scan.find("path") {
-            let before = inner[..inner.len() - scan.len() + p].trim_end();
+            let before = &inner[..inner.len() - scan.len() + p];
+            // A raw identifier (`r#path`) is the same key.
+            let before = before.strip_suffix("r#").unwrap_or(before).trim_end();
             scan = &scan[p + "path".len()..];
             if !(before.ends_with(',') || before.ends_with('(') || before.is_empty()) {
                 continue;
@@ -1010,7 +1091,8 @@ fn literals_in(text: &str) -> Vec<String> {
         if let Some(lit) = rest
             .trim_start()
             .strip_prefix('[')
-            .and_then(|s| s.trim_start().strip_prefix("path"))
+            .map(|s| s.trim_start())
+            .and_then(|s| s.strip_prefix("r#").unwrap_or(s).strip_prefix("path"))
             .and_then(|s| s.trim_start().strip_prefix('='))
             .and_then(|s| literal(s.trim_start()))
         {
@@ -1034,7 +1116,17 @@ fn literals_in(text: &str) -> Vec<String> {
             }
         }
     }
-    out
+    // `debugger_visualizer(gdb_script_file = "…")` or `natvis_file`: data rustc embeds.
+    for key in ["gdb_script_file", "natvis_file"] {
+        let mut rest = text;
+        while let Some(at) = rest.find(key) {
+            rest = &rest[at + key.len()..];
+            if let Some(lit) = rest.trim_start().strip_prefix('=').and_then(|s| literal(s.trim_start())) {
+                data.push(lit);
+            }
+        }
+    }
+    out.into_iter().map(|p| (p, true)).chain(data.into_iter().map(|p| (p, false))).collect()
 }
 
 /// The string literal `s` starts with, unescaped as Rust reads it (`\\`, `\"`, `\n`, `\t`, `\r`,

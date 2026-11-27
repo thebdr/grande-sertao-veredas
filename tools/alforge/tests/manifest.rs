@@ -2795,3 +2795,108 @@ fn round_thirty_two_a_patch_beside_a_forks_namesake_features_cargo_never_meets_a
     let out = cargo().args(["build", "--offline", "--locked", "-q", "-p", "veredas-portal"]).env("CARGO_TARGET_DIR", target.path()).current_dir(r.path()).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 }
+
+/// Round 33's real forms: a required feature of a dependency of another platform alone (cargo meets
+/// it for no build of the release's target); a raw C string (`cr#"…"#`), which proc-macro2 reads in
+/// every edition and rustc's 2018 does not, hiding an include and a `#[path]` module; and the text
+/// reading of a file that does not lex, a raw `r#path`, one inside `cfg_attr` and a debugger's
+/// script among its names.
+#[test]
+fn round_thirty_three_another_platforms_feature_a_raw_c_string_in_2018_and_what_the_text_reading_names() {
+    let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let pkg = |name: &str, edition: &str, rest: &str| format!("[package]\nname = \"{name}\"\nversion = \"2.0.0\"\nedition = \"{edition}\"\n{rest}");
+
+    // A feature of a dependency for Windows alone, by path and of the registry, beside one for
+    // unix: the first two never built on the release's target, the last shipped.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
+    r.write(
+        "crates/veredas-portal/Cargo.toml",
+        &pkg(
+            "veredas-portal",
+            "2024",
+            "\n[target.'cfg(windows)'.dependencies]\nveredas-win = { path = \"../veredas-win\" }\nwindows-sys = { version = \"=0.59.0\" }\n\n\
+             [target.'cfg(all(unix, target_os = \"linux\", not(target_env = \"musl\")))'.dependencies]\nveredas-unix = { path = \"../veredas-unix\" }\n\n\
+             [[bin]]\nname = \"veredas-portal\"\npath = \"src/main.rs\"\n\n\
+             [[bin]]\nname = \"servico\"\npath = \"src/main.rs\"\nrequired-features = [\"veredas-win/svc\"]\n\n\
+             [[bin]]\nname = \"registo\"\npath = \"src/main.rs\"\nrequired-features = [\"windows-sys/Win32_System_Services\"]\n\n\
+             [[bin]]\nname = \"unix\"\npath = \"src/main.rs\"\nrequired-features = [\"veredas-unix/svc\"]\n",
+        ),
+    );
+    r.write("crates/veredas-portal/src/main.rs", "fn main() {}\n");
+    for p in ["veredas-win", "veredas-unix"] {
+        r.write(&format!("crates/{p}/Cargo.toml"), &pkg(p, "2024", "\n[features]\nsvc = []\n"));
+        r.write(&format!("crates/{p}/src/lib.rs"), "\n");
+    }
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let c = r.commit("features of another platform's dependencies");
+    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    let portal = &held["veredas-portal"];
+    assert_eq!(portal.bins.iter().map(String::as_str).collect::<Vec<_>>(), ["unix", "veredas-portal"]);
+    let never: Vec<(&str, &str)> = portal.never.iter().map(|(b, f)| (b.as_str(), f.as_str())).collect();
+    assert_eq!(never, [("registo", "windows-sys/Win32_System_Services"), ("servico", "veredas-win/svc")]);
+    // Cargo's own build of the bins with the features they need: those two alone.
+    let target = tempfile::tempdir().unwrap();
+    let out = cargo()
+        .args(["build", "--offline", "--locked", "-q", "-p", "veredas-portal@2.0.0", "--bins"])
+        .args(alforge::builder::feature_args("veredas-portal", &portal.features.iter().cloned().collect::<Vec<_>>()))
+        .env("CARGO_TARGET_DIR", target.path())
+        .current_dir(r.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    for (bin, built) in [("veredas-portal", true), ("unix", true), ("servico", false), ("registo", false)] {
+        assert_eq!(target.path().join(format!("debug/{bin}")).is_file(), built, "{bin}");
+    }
+    // Platforms read as cargo reads them.
+    let linux = [("unix", None), ("target_os", Some("linux")), ("target_env", Some("gnu")), ("target_pointer_width", Some("64"))].map(|(n, v)| (n.to_string(), v.map(String::from)));
+    let t = "x86_64-unknown-linux-gnu";
+    for (spec, holds) in [
+        ("cfg(windows)", false),
+        ("cfg(unix)", true),
+        ("cfg(not(windows))", true),
+        ("cfg(any(windows, target_os = \"macos\"))", false),
+        ("cfg(all(unix, target_pointer_width = \"64\"))", true),
+        ("cfg(target_env = \"musl\")", false),
+        ("x86_64-pc-windows-gnu", false),
+        ("x86_64-unknown-linux-gnu", true),
+        ("cfg(true)", true),
+    ] {
+        assert_eq!(alforge::inputs::platform_holds(spec, t, &linux), holds, "{spec}");
+    }
+
+    // Two forks of edition 2018 outside the folders, used by portal: one whose raw C string hides
+    // an include and a `#[path]` module from proc-macro2 and not from rustc; one that does not lex
+    // (`'a#b`), naming a module by `r#path`, one by `cfg_attr(…, r#path = …)` and a debugger's script.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\nexclude = [\"forks\"]\n");
+    r.write("crates/veredas-portal/Cargo.toml", &pkg("veredas-portal", "2024", "\n[dependencies]\nviejo = { path = \"../../forks/viejo\" }\nviejo-dois = { path = \"../../forks/viejo-dois\" }\n"));
+    r.write("crates/veredas-portal/src/main.rs", "fn main() { println!(\"{} {}\", viejo::WORD, viejo_dois::word()); }\n");
+    r.write("forks/viejo/Cargo.toml", &pkg("viejo", "2018", "\n[workspace]\n"));
+    let hiding = "macro_rules! eat { ($($t:tt)*) => {}; }\neat!(cr#\"a\");\npub const WORD: &str = include_str!(\"../../comum/palavras.txt\");\n#[path = \"../../comum/outer.rs\"]\nmod outer;\neat!(\"z\"#);\n";
+    r.write("forks/viejo/src/lib.rs", hiding);
+    r.write("forks/viejo-dois/Cargo.toml", &pkg("viejo-dois", "2018", "\n[workspace]\n"));
+    r.write(
+        "forks/viejo-dois/src/lib.rs",
+        "#![debugger_visualizer(gdb_script_file = \"../../comum/printers.py\")]\nmacro_rules! eat { ($($t:tt)*) => {}; }\neat!('a#b);\n#[r#path = \"../../comum/regras.rs\"]\nmod regras;\n#[cfg_attr(all(), r#path = \"../../comum/outro.rs\")]\nmod outro;\npub fn word() -> &'static str { regras::W }\n",
+    );
+    r.write("forks/comum/palavras.txt", "first");
+    r.write("forks/comum/outer.rs", "\n");
+    r.write("forks/comum/regras.rs", "pub const W: &str = \"rule\";\n");
+    r.write("forks/comum/outro.rs", "\n");
+    r.write("forks/comum/printers.py", "# a gdb script\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let c = r.commit("forks of 2018");
+    // Rustc's 2018 builds it, reading each.
+    let target = tempfile::tempdir().unwrap();
+    let out = cargo().args(["build", "--offline", "--locked", "-q", "-p", "veredas-portal@2.0.0"]).env("CARGO_TARGET_DIR", target.path()).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(alforge::inputs::declared(hiding), None);
+    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    let named = &held["veredas-portal"].inputs.as_ref().unwrap().0;
+    for k in ["forks/comum/palavras.txt", "forks/comum/outer.rs", "forks/comum/regras.rs", "forks/comum/outro.rs", "forks/comum/printers.py"] {
+        assert!(named.contains_key(k), "{k}: {named:?}");
+    }
+}

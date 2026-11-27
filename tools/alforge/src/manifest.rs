@@ -427,6 +427,23 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
             }
         }
         let workspace = inputs::Workspace { root, commit, tree: &tree, members, unread };
+        // The release's target as rustc configures it (`unix`, `target_os="linux"`), which a
+        // dependency's platform (`[target.'cfg(windows)'.dependencies]`) is read against.
+        let printed = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+            .args(["--print", "cfg", "--target", crate::components::TARGET])
+            .current_dir(&tree)
+            .stdin(Stdio::null())
+            .output()?;
+        if !printed.status.success() {
+            return Ok(Some(format!("commit {commit}: rustc cannot say the configuration of {}: {}", crate::components::TARGET, String::from_utf8_lossy(&printed.stderr).trim())));
+        }
+        let target_cfg: Vec<(String, Option<String>)> = String::from_utf8_lossy(&printed.stdout)
+            .lines()
+            .map(|l| match l.split_once('=') {
+                Some((n, v)) => (n.to_string(), Some(v.trim_matches('"').to_string())),
+                None => (l.to_string(), None),
+            })
+            .collect();
         for pkg in meta["packages"].as_array().into_iter().flatten() {
             let manifest = PathBuf::from(pkg["manifest_path"].as_str().unwrap_or_default());
             let Some(dir) = manifest.parent().and_then(from_root).filter(|d| d.starts_with("crates/")) else { continue };
@@ -440,9 +457,16 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
             // for the package (an optional dependency's own when no `dep:` hides it), or a
             // feature of one of its normal or build dependencies (`dep/feature`), as that
             // dependency's metadata names it for one by path, as cargo's own resolve answers for
-            // one of the registry or git. A dev-dependency is in no build of the bins.
+            // one of the registry or git. A dev-dependency is in no build of the bins, nor one of
+            // another platform than the release's target alone.
             let defined: BTreeSet<String> = pkg["features"].as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
-            let dependencies: Vec<&serde_json::Value> = pkg["dependencies"].as_array().into_iter().flatten().filter(|d| d["kind"].as_str() != Some("dev")).collect();
+            let dependencies: Vec<&serde_json::Value> = pkg["dependencies"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|d| d["kind"].as_str() != Some("dev"))
+                .filter(|d| d["target"].as_str().is_none_or(|t| inputs::platform_holds(t, crate::components::TARGET, &target_cfg)))
+                .collect();
             let named = |d: &serde_json::Value| d["rename"].as_str().or_else(|| d["name"].as_str()).unwrap_or_default().to_string();
             let defines = |f: &str| -> Result<bool, String> {
                 let Some((d, feature)) = f.split_once('/') else { return Ok(defined.contains(f)) };
