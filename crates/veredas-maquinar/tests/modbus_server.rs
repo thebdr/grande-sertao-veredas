@@ -2996,3 +2996,131 @@ mod round_10 {
         assert_eq!(server.bits(Table::DiscreteInput, 0, 4).unwrap(), [false; 4]);
     }
 }
+
+/// Refute round 11's probes (the critic's, `~/.cache/veredas/critic-c110-r11/probes`), kept as
+/// pins: a coil switched off by 05, a bit read's padding beside set bits, the configuration's
+/// refusals for every table and type, and the bench's status line by its numbers.
+mod round_11 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::path::Path;
+    use std::time::Duration;
+
+    use tokio_modbus::Slave;
+    use tokio_modbus::client::Writer;
+    use veredas_maquinar::bench;
+    use veredas_maquinar::modbus::*;
+
+    use super::{config, refused, runtime, wait};
+
+    fn connect(addr: SocketAddr) -> TcpStream {
+        let s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s.set_nodelay(true).unwrap();
+        s
+    }
+
+    fn frame(transaction: u16, pdu: &[u8]) -> Vec<u8> {
+        let mut f = Vec::new();
+        f.extend_from_slice(&transaction.to_be_bytes());
+        f.extend_from_slice(&0u16.to_be_bytes());
+        f.extend_from_slice(&(pdu.len() as u16 + 1).to_be_bytes());
+        f.push(1);
+        f.extend_from_slice(pdu);
+        f
+    }
+
+    fn ask(s: &mut TcpStream, t: u16, pdu: &[u8]) -> Vec<u8> {
+        s.write_all(&frame(t, pdu)).unwrap();
+        let mut h = [0u8; 7];
+        s.read_exact(&mut h).unwrap();
+        let mut answer = vec![0u8; usize::from(u16::from_be_bytes([h[4], h[5]])) - 1];
+        s.read_exact(&mut answer).unwrap();
+        assert_eq!(u16::from_be_bytes([h[0], h[1]]), t);
+        answer
+    }
+
+    /// 05 with 0x0000 echoed and the coil off, raw and through tokio-modbus (every 05 the test
+    /// asked wrote FF00: one that left the coil as it was passed).
+    #[test]
+    fn a_coil_switched_off_by_05_reads_off() {
+        let server = start(&config("port = 0\ncoils = 2\n")).unwrap();
+        server.set_bits(Table::Coil, 0, &[true, true]).unwrap();
+        let mut c = connect(server.addr);
+        assert_eq!(ask(&mut c, 1, &[0x05, 0x00, 0x00, 0x00, 0x00]), [0x05, 0x00, 0x00, 0x00, 0x00], "the echo");
+        assert_eq!(server.bits(Table::Coil, 0, 2).unwrap(), [false, true]);
+        let addr = server.addr;
+        runtime().block_on(async {
+            let mut ctx = tokio_modbus::client::tcp::connect_slave(addr, Slave(1)).await.unwrap();
+            ctx.write_single_coil(1, false).await.unwrap().unwrap();
+        });
+        assert_eq!(server.bits(Table::Coil, 0, 2).unwrap(), [false, false]);
+    }
+
+    /// Every bit of both tables set: a read of 3 from 0 is 0x07 and of 10 from 5 is FF 03, the bits
+    /// past the quantity 0 (the specification pads the last byte with zeros; every read ending
+    /// mid-byte met 0 bits after it, so packing the table's next bits passed).
+    #[test]
+    fn the_unused_bits_of_a_bit_read_s_last_byte_are_zero_whatever_follows() {
+        let server = start(&config("port = 0\ncoils = 16\ndiscrete_inputs = 16\n")).unwrap();
+        server.set_bits(Table::Coil, 0, &[true; 16]).unwrap();
+        server.set_bits(Table::DiscreteInput, 0, &[true; 16]).unwrap();
+        let mut c = connect(server.addr);
+        let got: Vec<Vec<u8>> = [[0x01, 0, 0, 0, 3], [0x01, 0, 5, 0, 10], [0x02, 0, 0, 0, 3], [0x02, 0, 5, 0, 10]].iter().enumerate().map(|(t, pdu)| ask(&mut c, t as u16, pdu)).collect();
+        assert_eq!(got, [vec![0x01, 1, 0x07], vec![0x01, 2, 0xFF, 0x03], vec![0x02, 1, 0x07], vec![0x02, 2, 0xFF, 0x03]]);
+    }
+
+    /// Each table's size past 65536, a bool in a holding register, a point past a given coil,
+    /// discrete-input or input-register table, and `words` on an i16: refused by their text (one
+    /// table or type of each was pinned; the others were taken, two of them panicking after).
+    #[test]
+    fn every_table_and_type_s_refusal_is_named() {
+        let mut got: Vec<String> = ["coils", "discrete_inputs", "input_registers", "holding_registers"].iter().map(|key| refused(&format!("{key} = 65537"))).collect();
+        got.extend(
+            [
+                "points = [ { name = \"a\", table = \"holding-register\", address = 0, type = \"bool\" } ]",
+                "coils = 2\npoints = [ { name = \"a\", table = \"coil\", address = 2 } ]",
+                "discrete_inputs = 2\npoints = [ { name = \"a\", table = \"discrete-input\", address = 2 } ]",
+                "input_registers = 3\npoints = [ { name = \"a\", table = \"input-register\", address = 2, type = \"f32\" } ]",
+                "points = [ { name = \"a\", table = \"holding-register\", address = 0, type = \"i16\", words = \"low-first\" } ]",
+            ]
+            .map(refused),
+        );
+        assert_eq!(
+            got,
+            [
+                "modbus.coils is 65537, over the 65536 addresses a table can hold",
+                "modbus.discrete_inputs is 65537, over the 65536 addresses a table can hold",
+                "modbus.input_registers is 65537, over the 65536 addresses a table can hold",
+                "modbus.holding_registers is 65537, over the 65536 addresses a table can hold",
+                "modbus.points[0] (`a`): a holding-register holds a number (u16, i16, u32, i32 or f32), not a bool",
+                "modbus.points: point `a` (bool at 2) is past the end of the coil table (coils = 2)",
+                "modbus.points: point `a` (bool at 2) is past the end of the discrete-input table (discrete_inputs = 2)",
+                "modbus.points: point `a` (f32 at 2) is past the end of the input-register table (input_registers = 3)",
+                "modbus.points[0] (`a`): `words` orders the two registers of a u32, i32 or f32, not a i16",
+            ]
+        );
+    }
+
+    /// Through the bench: three requests answered, one exception and one withheld while silent,
+    /// the client still connected: the server's line says 1, 3, 1 and 1 (its numbers were pinned
+    /// as zeros, so a line always saying 0 answered passed).
+    #[test]
+    fn the_bench_s_status_line_counts_what_the_server_did() {
+        let spec = bench::load("format = \"veredas-bench\"\nversion = 1\n[[modbus]]\nname = \"m\"\nport = 0\nholding_registers = 2\n", Path::new(".")).unwrap();
+        let plant = bench::Bench::start(spec).unwrap();
+        let server = plant.modbus("m").unwrap();
+        let addr = server.addr;
+        let mut c = connect(addr);
+        assert_eq!(ask(&mut c, 1, &[0x06, 0, 0, 0, 9]), [0x06, 0, 0, 0, 9]);
+        assert_eq!(ask(&mut c, 2, &[0x03, 0, 0, 0, 2]), [0x03, 4, 0, 9, 0, 0]);
+        assert_eq!(ask(&mut c, 3, &[0x03, 0, 1, 0, 1]), [0x03, 2, 0, 0]);
+        assert_eq!(ask(&mut c, 4, &[0x03, 0, 2, 0, 1]), [0x83, 0x02]);
+        server.set_silent(true);
+        c.write_all(&frame(5, &[0x03, 0, 0, 0, 1])).unwrap();
+        assert!(wait(Duration::from_secs(5), || server.status().unanswered == 1), "{:?}", server.status());
+        let lines = plant.lines();
+        plant.stop();
+        assert_eq!(lines, [format!("modbus m: {addr} 1 connection(s), 3 request(s) answered, 1 exception(s), 1 unanswered")]);
+    }
+}
