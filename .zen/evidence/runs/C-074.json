@@ -10,15 +10,15 @@
     "opc_server"
   ],
   "exitCode": 0,
-  "outputSha": "1ed9333e15a7384f03fb7c6897b9754b14d486c84a48e263bc00011304d3bdd7",
-  "outputTail": "test a_write_handed_to_the_caller_has_landed_already ... ok\ntest each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_callers_application ... ok\ntest the_guard_refuses_another_wire_type_and_counts_it_and_the_access_levels_hold ... ok\ntest a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands ... ok\ntest a_clients_writes_land_and_are_handed_to_the_caller_in_the_order_they_landed ... ok\ntest writes_past_those_kept_land_and_are_counted_not_kept ... ok\ntest it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clients ... ok\ntest a_user_by_name_and_password_is_accepted_and_the_password_never_shows ... ok\ntest the_callers_limits_on_one_read_and_on_sessions_hold ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.27s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.30s\n     Running tests/opc_server.rs (target/debug/build/veredas-core/9192722ae9836d7f/out/opc_server-9192722ae9836d7f)",
-  "ranAt": "2026-11-27T10:54:14.656Z",
-  "headCommit": "205b5f5988912adf11067db2802ab1633e36446e",
+  "outputSha": "dd52b371dff5c82c435dcf9b792995f66a63c269b919e00a9e51270a9be05eeb",
+  "outputTail": "test writes_past_those_kept_land_and_are_counted_not_kept ... ok\ntest the_callers_folder_and_variables_browse_and_poll_and_what_the_caller_sets_is_read ... ok\ntest each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_callers_application ... ok\ntest a_clients_writes_land_and_are_handed_to_the_caller_in_the_order_they_landed ... ok\ntest a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands ... ok\ntest a_write_handed_to_the_caller_has_landed_already ... ok\ntest it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clients ... ok\ntest a_user_by_name_and_password_is_accepted_and_the_password_never_shows ... ok\ntest the_callers_limits_on_one_read_and_on_sessions_hold ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.40s\n\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.45s\n     Running tests/opc_server.rs (target/debug/build/veredas-core/9192722ae9836d7f/out/opc_server-9192722ae9836d7f)",
+  "ranAt": "2026-11-27T12:14:00.304Z",
+  "headCommit": "d5d897e940d5108aa97c32b8a53774aa4636b5bf",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_server.rs",
       "file": "crates/veredas-core/tests/opc_server.rs",
-      "fileSha": "803141e6844f7ebfdcb17c17e56f27d95bec8218867a04ea66fc4365b304a6ae"
+      "fileSha": "0cf33472239e197cd7da7c12d236fec9892b1fbbb25f6a238542e14cae9e9a4e"
     }
   ]
 }
