@@ -445,8 +445,9 @@ impl Lowerer<'_> {
         };
         let name = || self.defs.call_name(def, &args, Some(&instance));
         if Defs::program_crate(&instance.def.krate()) {
+            // a foreign function the program declares has no MIR to lower, whatever the flags its crate was built with
             return match instance.kind {
-                InstanceKind::Item => Ok(Callee::Function(self.function_of(instance))),
+                InstanceKind::Item if !instance.is_foreign_item() => Ok(Callee::Function(self.function_of(instance))),
                 _ => Err(self.refuse(Refused::Call, name(), at)),
             };
         }

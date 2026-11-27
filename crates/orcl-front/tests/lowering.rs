@@ -1239,44 +1239,129 @@ fn an_output_path_holding_an_equals_sign_is_written_whole() {
     assert!(file.exists(), "the file at the path given");
 }
 
+/// `orcl-std`'s folder, as cargo names its sources to the compiler: no `..` in its path.
+fn orcl_std_dir() -> PathBuf {
+    here().parent().unwrap().join("orcl-std")
+}
+
+/// The package `name` in `work`: the conformance program `name` its library, `orcl-std` its dependency, a workspace
+/// of its own.
+fn package(work: &Path, name: &str) -> PathBuf {
+    let package = work.join(name);
+    fs::create_dir_all(package.join("src")).unwrap();
+    fs::copy(program(name), package.join("src/lib.rs")).unwrap();
+    let orcl_std = orcl_std_dir().display().to_string();
+    let manifest = format!(
+        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n\
+         [dependencies]\norcl-std = {{ path = {orcl_std:?} }}\n\n[workspace]\n"
+    );
+    fs::write(package.join("Cargo.toml"), manifest).unwrap();
+    package
+}
+
+/// Cargo's build of the package `name` in `work` (`package`), into the target directory `target` under `work`:
+/// plainly, or, when `wrapped` gives the program's file and revision, with the driver as `RUSTC_WRAPPER` and the
+/// environment naming the program `name`, its file and its revision.
+fn cargo_build(work: &Path, name: &str, target: &str, wrapped: Option<(&Path, &str)>) -> Output {
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .args(["build", "--offline", "--manifest-path"])
+        .arg(work.join(name).join("Cargo.toml"))
+        // a cargo home of the test's own and a target it names: no other build's lock, cache or configuration
+        .env("CARGO_HOME", work.join("cargo-home"))
+        .env("CARGO_TARGET_DIR", work.join(target))
+        .env("RUSTUP_TOOLCHAIN", nightly())
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("ORCL_FRONT_PROGRAM")
+        .env_remove("ORCL_FRONT_OUT")
+        .env_remove("ORCL_FRONT_REVISION");
+    if let Some((file, revision)) = wrapped {
+        command
+            .env("RUSTC_WRAPPER", env!("CARGO_BIN_EXE_orcl-front-driver"))
+            .env("LD_LIBRARY_PATH", library_path())
+            .env("ORCL_FRONT_PROGRAM", name)
+            .env("ORCL_FRONT_OUT", file)
+            .env("ORCL_FRONT_REVISION", revision);
+    }
+    command.output().unwrap()
+}
+
 #[test]
 fn under_cargo_a_bin_of_the_program_s_name_is_compiled_and_the_library_alone_lowered() {
     // cargo, the driver its `RUSTC_WRAPPER` and the environment naming the program, builds a package whose library is
     // the program and whose bin, of the same crate name, uses it: the library is lowered and its file written, the bin
     // compiled and not lowered, and the build succeeds
     let work = fresh("package");
-    let package = work.join("lines");
-    fs::create_dir_all(package.join("src")).unwrap();
-    fs::copy(program("lines"), package.join("src/lib.rs")).unwrap();
+    let package = package(&work, "lines");
     fs::write(package.join("src/main.rs"), "fn main() {\n    let _ = lines::Lines::default();\n}\n").unwrap();
-    let orcl_std = here().join("../orcl-std").display().to_string();
-    let manifest = format!(
-        "[package]\nname = \"lines\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n\
-         [dependencies]\norcl-std = {{ path = {orcl_std:?} }}\n\n[workspace]\n"
-    );
-    fs::write(package.join("Cargo.toml"), manifest).unwrap();
     let file = work.join("lines.orclb");
-    let out = Command::new(env!("CARGO"))
-        .args(["build", "--offline", "--manifest-path"])
-        .arg(package.join("Cargo.toml"))
-        // a cargo home and a target of the package's own: no other build's lock, cache or configuration
-        .env("CARGO_HOME", work.join("cargo-home"))
-        .env("CARGO_TARGET_DIR", work.join("target"))
-        .env("RUSTUP_TOOLCHAIN", nightly())
-        .env("RUSTC_WRAPPER", env!("CARGO_BIN_EXE_orcl-front-driver"))
-        .env_remove("RUSTC_WORKSPACE_WRAPPER")
-        .env("LD_LIBRARY_PATH", library_path())
-        .env("ORCL_FRONT_PROGRAM", "lines")
-        .env("ORCL_FRONT_OUT", &file)
-        .env("ORCL_FRONT_REVISION", "cargo")
-        .output()
-        .unwrap();
+    let out = cargo_build(&work, "lines", "target", Some((&file, "cargo")));
     assert!(out.status.success(), "the package's build: {}", String::from_utf8_lossy(&out.stderr));
     assert!(work.join("target/debug/lines").exists(), "the bin built");
     let (header, code) = file::read(&fs::read(&file).unwrap()).unwrap();
     assert_eq!(header.revision, "cargo");
     let alone = lower_in("package-alone", "lines", &program("lines")).result.unwrap().1;
     assert_eq!((&code.types, &code.functions), (&alone.types, &alone.functions), "the program, as lowered alone");
+}
+
+/// Under cargo, the environment naming another revision and file with no source changed: every crate depends on the
+/// driver's variables, so cargo compiles the program's crate again and the new path holds the new revision.
+#[test]
+fn under_cargo_a_new_revision_is_written() {
+    let work = fresh("cargo-revision");
+    package(&work, "lines");
+    let first = work.join("first.orclb");
+    let out = cargo_build(&work, "lines", "target", Some((&first, "first")));
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(file::read(&fs::read(&first).unwrap()).unwrap().0.revision, "first");
+    let second = work.join("second.orclb");
+    let out = cargo_build(&work, "lines", "target", Some((&second, "second")));
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(second.exists(), "the second build succeeded and wrote no file at the path it was given");
+    assert_eq!(file::read(&fs::read(&second).unwrap()).unwrap().0.revision, "second");
+}
+
+/// The rule a wrapped build keeps, a target directory of its own: after a plain build of the package in another, the
+/// wrapped build compiles every crate with the driver's flags, the conveyor calling into `orcl-std`, and writes the
+/// program file.
+#[test]
+fn under_cargo_a_wrapped_build_in_a_target_of_its_own_after_a_plain_one_writes_the_file() {
+    let work = fresh("cargo-plain-first");
+    package(&work, "conveyor");
+    let out = cargo_build(&work, "conveyor", "plain", None);
+    assert!(out.status.success(), "the plain build: {}", String::from_utf8_lossy(&out.stderr));
+    let file = work.join("conveyor.orclb");
+    let out = cargo_build(&work, "conveyor", "wrapped", Some((&file, "after-plain")));
+    assert!(out.status.success(), "the wrapped build: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(file.exists(), "the wrapped build succeeded and wrote no program file: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(file::read(&fs::read(&file).unwrap()).unwrap().0.revision, "after-plain");
+}
+
+/// What the rule keeps away: a wrapped build sharing a plain build's target directory, the program's source touched,
+/// compiles the program's crate with the driver against the `orcl-std` the plain build left, which cargo finds fresh
+/// and which holds no MIR. The lowering is refused naming that likely cause, at the function's own name and place,
+/// and no file is written.
+#[test]
+fn under_cargo_a_wrapped_build_sharing_a_plain_build_s_target_refuses_naming_the_likely_cause() {
+    let work = fresh("cargo-shared-target");
+    let package = package(&work, "conveyor");
+    let out = cargo_build(&work, "conveyor", "target", None);
+    assert!(out.status.success(), "the plain build: {}", String::from_utf8_lossy(&out.stderr));
+    let lib = package.join("src/lib.rs");
+    let mut text = fs::read_to_string(&lib).unwrap();
+    text.push_str("// touched\n");
+    fs::write(&lib, text).unwrap();
+    let file = work.join("conveyor.orclb");
+    let out = cargo_build(&work, "conveyor", "target", Some((&file, "shared")));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(!out.status.success(), "the wrapped build in the plain build's target succeeded: {stderr}");
+    let edges = orcl_std_dir().join("src/edges.rs");
+    let (line, column) = place_of(&edges, "pub fn scan(&mut self, clk: bool)");
+    let words = "a crate built without the front end's flags, likely a target directory shared with a plain build";
+    let wanted = format!("error: orcl-front: {}:{line}:{column}: {words}: `RTrig::scan`", edges.display());
+    assert!(stderr.lines().any(|l| l == wanted), "wanted\n{wanted}\ngot\n{stderr}");
+    assert!(!file.exists(), "no file written");
 }
 
 /// The 1-based line and column where `snippet` first stands in `source`.
@@ -1659,6 +1744,12 @@ fn a_call_that_does_not_return_is_refused_where_it_is_called() {
 #[test]
 fn a_call_out_of_the_program_s_crates_and_core_is_refused_by_name_where_it_is_called() {
     refused("call", &at("call", "std::thread::yield_now()", "a call the interpreter cannot make", "std::thread::yield_now"));
+}
+
+#[test]
+fn a_call_into_a_foreign_function_of_the_program_s_crate_is_refused_where_it_is_called() {
+    // the function has no MIR whatever the flags: the call is refused, never taken for a crate built without them
+    refused("foreign", &at("foreign", "abs(*i)", "a call the interpreter cannot make", "foreign::abs"));
 }
 
 #[test]

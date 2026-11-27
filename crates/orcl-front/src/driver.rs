@@ -11,12 +11,25 @@
 //! one the compiler gives the crate itself, from its file or its own `crate_name` attribute. Built as anything else,
 //! a bin of the program's name (cargo's bin target of a package beside its library), its own tests (`--test`) or a
 //! procedural macro, it is compiled and nothing is lowered or written.
+//!
+//! Every crate it compiles depends on the driver's three variables, `ORCL_FRONT_PROGRAM`, `ORCL_FRONT_OUT` and
+//! `ORCL_FRONT_REVISION`: the compiler's dep-info file names each with the value it holds (`# env-dep:`), as
+//! clippy-driver names `CLIPPY_ARGS`, and cargo, which reads that file back, rebuilds the crates when one of them
+//! changes, so a new revision or output path is written with no source changed. A crate cargo finds fresh it never
+//! compiles at all: one built plainly, without the driver's flags, in a target directory a wrapped build shares is
+//! reused as it is, and the wrapped build writes nothing or meets a function without MIR. So a wrapped build runs in
+//! a target directory of its own, never shared with a plain build, and a function of the program's crates without
+//! MIR is refused naming that likely cause.
 use std::process::ExitCode;
 
 use orcl_interp::{Limits, Machine};
 use orcl_interp::file::{self, Header};
+use rustc_driver::{Callbacks, Compilation};
+use rustc_interface::interface::{Compiler, Config};
 use rustc_middle::ty::TyCtxt;
-use rustc_public::CompilerError;
+use rustc_public::rustc_internal;
+use rustc_session::Session;
+use rustc_span::Symbol;
 use rustc_span::def_id::LOCAL_CRATE;
 use rustc_structures::CrateType;
 
@@ -140,10 +153,6 @@ impl Invocation {
     }
 }
 
-struct Plain;
-
-impl rustc_driver::Callbacks for Plain {}
-
 /// What the driver's own check of a lowered program lets the interpreter's loader lay out: no region, no stack, and
 /// room for the program's largest value and result up to 2^24 slots (512 MiB at 32 bytes a slot), far past what an
 /// ORCL program holds and short of what would hurt the machine the driver runs on.
@@ -167,9 +176,12 @@ fn program_file(tcx: TyCtxt<'_>, job: &Job) -> Result<Option<Vec<u8>>, Error> {
     Ok(Some(file::write(&header, &program)))
 }
 
+/// A program file's bytes and the path they are written to.
+type ProgramFile = (Vec<u8>, String);
+
 /// The program file's bytes and where they go, for the crate the compiler holds when it is the program's crate and
 /// built as a library, or nothing for any other crate.
-fn lowered(tcx: TyCtxt<'_>, lowers: &Lowers) -> Result<Option<(Vec<u8>, String)>, Error> {
+fn lowered(tcx: TyCtxt<'_>, lowers: &Lowers) -> Result<Option<ProgramFile>, Error> {
     let job = match lowers {
         Lowers::Nothing => return Ok(None),
         Lowers::Named(job) => job.clone(),
@@ -184,19 +196,53 @@ fn lowered(tcx: TyCtxt<'_>, lowers: &Lowers) -> Result<Option<(Vec<u8>, String)>
     Ok(program_file(tcx, &job)?.map(|bytes| (bytes, job.out)))
 }
 
+/// The driver's variables, each with the value the environment gives it (none when it is unset or not Unicode), as
+/// the environment the crate depends on: the compiler writes them into its dep-info file, which cargo reads back.
+fn track(sess: &Session) {
+    let mut depends = sess.env_depinfo.borrow_mut();
+    for (_, var) in [PROGRAM, OUT, REVISION] {
+        depends.insert((Symbol::intern(var), std::env::var(var).ok().map(|v| Symbol::intern(&v))));
+    }
+}
+
+/// What the driver asks of the compiler for every crate: the environment the crate depends on and, once the crate is
+/// analysed, its program file, lowered through `rustc_public` when the crate is the program's.
+struct Front<'a> {
+    lowers: &'a Lowers,
+    /// What the lowering made: the file and where it goes, nothing for a crate not lowered, or why no file is written.
+    lowered: Option<Result<Option<ProgramFile>, Error>>,
+}
+
+impl Callbacks for Front<'_> {
+    fn config(&mut self, config: &mut Config) {
+        config.track_state = Some(Box::new(track));
+    }
+
+    fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
+        if matches!(self.lowers, Lowers::Nothing) {
+            return Compilation::Continue;
+        }
+        let lowers = self.lowers;
+        // `rustc_public` refuses only to run inside itself, which the driver never asks of it
+        let lowered =
+            rustc_internal::run(tcx, || lowered(tcx, lowers)).unwrap_or_else(|e| Err(Error::Lowering(e.to_string())));
+        let go_on = lowered.is_ok();
+        self.lowered = Some(lowered);
+        if go_on { Compilation::Continue } else { Compilation::Stop }
+    }
+}
+
 fn compile_and_lower(rustc: &[String], lowers: &Lowers) -> Result<(), Error> {
-    let result = rustc_public::run_with_tcx!(rustc, |tcx| match lowered(tcx, lowers) {
-        Ok(file) => std::ops::ControlFlow::Continue(file),
-        Err(e) => std::ops::ControlFlow::Break(e),
-    });
-    let (bytes, out) = match result {
-        Ok(Some(file)) => file,
-        Ok(None) => return Ok(()),
-        Err(CompilerError::Interrupted(e)) => return Err(e),
+    let mut front = Front { lowers, lowered: None };
+    let compiled = rustc_driver::catch_fatal_errors(|| rustc_driver::compiler_entrypoint(rustc, &mut front));
+    let (bytes, out) = match (compiled, front.lowered) {
+        (Ok(()), Some(Ok(Some(file)))) => file,
+        (Ok(()), Some(Ok(None))) => return Ok(()),
+        (Ok(()), Some(Err(e))) => return Err(e),
         // the command line naming no crate, the compiler ended before its analysis (a `--print`, `--emit=dep-info`
         // alone): no crate built and none named, as with rustc alone
-        Err(CompilerError::Skipped) if matches!(lowers, Lowers::ByCompiler { .. }) => return Ok(()),
-        Err(_) => return Err(Error::Compile),
+        (Ok(()), None) if matches!(lowers, Lowers::ByCompiler { .. }) => return Ok(()),
+        _ => return Err(Error::Compile),
     };
     std::fs::write(&out, bytes).map_err(|e| Error::Write { path: out, error: e.to_string() })
 }
@@ -211,11 +257,9 @@ pub fn main() -> ExitCode {
         }
     };
     match &invocation.lowers {
-        Lowers::Nothing => {
-            rustc_driver::catch_with_exit_code(|| {
-                rustc_driver::compiler_entrypoint(&invocation.rustc, &mut Plain);
-            })
-        }
+        Lowers::Nothing => rustc_driver::catch_with_exit_code(|| {
+            rustc_driver::compiler_entrypoint(&invocation.rustc, &mut Front { lowers: &Lowers::Nothing, lowered: None });
+        }),
         lowers => match compile_and_lower(&invocation.rustc, lowers) {
             Ok(()) => ExitCode::SUCCESS,
             Err(Error::Compile) => ExitCode::FAILURE,

@@ -34,11 +34,12 @@ pub enum Refused {
     Terminator,
     /// A call into core outside the closed list (`docs/questions.md` Q227).
     CoreCall,
-    /// A call the interpreter cannot make: into a crate that is neither the program's nor core, through a pointer or
-    /// a trait object.
+    /// A call the interpreter cannot make: into a crate that is neither the program's nor core, into a foreign
+    /// function, through a pointer or a trait object.
     Call,
-    /// A function of the program's crates whose MIR the compiler did not keep (a crate built without
-    /// `-Zalways-encode-mir`).
+    /// A function of the program's crates whose MIR the compiler did not keep: a crate built without the front end's
+    /// flags (`-Zalways-encode-mir`), likely `orcl-std` reused by cargo from a plain build in the target directory a
+    /// wrapped build shares.
     NoBody,
     /// A crate that is no program: not one non-generic `orcl_std::Program` implementation, or no `Default` of its
     /// state.
@@ -56,7 +57,7 @@ impl Refused {
             Refused::Terminator => "a terminator the interpreter does not have",
             Refused::CoreCall => "a call into core outside the list",
             Refused::Call => "a call the interpreter cannot make",
-            Refused::NoBody => "a function without MIR",
+            Refused::NoBody => "a crate built without the front end's flags, likely a target directory shared with a plain build",
             Refused::Program => "no program",
         }
     }
