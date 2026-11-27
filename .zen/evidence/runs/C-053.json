@@ -10,15 +10,15 @@
     "tables"
   ],
   "exitCode": 0,
-  "outputSha": "cf091a8b55ea242c7c70f7ef54f6ae67efde7cc5b698d824377d5e1efd5fb51d",
-  "outputTail": "\nrunning 1 test\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal has been running for over 60 seconds\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 156.26s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s\n     Running tests/tables.rs (target/debug/build/veredas-supervisao/aa73752103b32520/out/tables-aa73752103b32520)",
-  "ranAt": "2026-11-25T10:14:17.655Z",
-  "headCommit": "255bf55e381e0f470072f0fca46f15cd5e18e130",
+  "outputSha": "1bb670bd29a881aada16ccdd06fde92508f432ee6424625dc08001f2d4c9edb8",
+  "outputTail": "\nrunning 1 test\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal has been running for over 60 seconds\ntest a_sessions_tables_rows_series_and_windows_read_through_its_portal ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 183.26s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s\n     Running tests/tables.rs (target/debug/build/veredas-supervisao/d62abf5763e383a5/out/tables-d62abf5763e383a5)",
+  "ranAt": "2026-11-27T09:35:12.124Z",
+  "headCommit": "50eb9cdd5b9487eb3f04ee6b6bc4aba0fedb6b8b",
   "tests": [
     {
       "name": "crates/veredas-supervisao/tests/tables.rs",
       "file": "crates/veredas-supervisao/tests/tables.rs",
-      "fileSha": "552f79ec5f873c7b19adfd00154b52e5b854bac6b3d747b190653d9be58af527"
+      "fileSha": "0bb95292fbe91079d63b7130430735185f4e8d02d8ba6636e8bec2705675f14d"
     }
   ]
 }
