@@ -945,6 +945,8 @@ struct Watched<'a> {
     plant: &'a LivePlant,
     read: std::cell::RefCell<Vec<String>>,
     stop_on_latest: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// How often a value's reading asked the stop once it was raised.
+    asked: std::cell::Cell<usize>,
 }
 
 impl veredas_comissionador::plant::Plant for Watched<'_> {
@@ -972,7 +974,11 @@ impl veredas_comissionador::plant::Plant for Watched<'_> {
         if let Some(s) = &self.stop_on_latest {
             s.store(true, Ordering::SeqCst);
         }
-        self.plant.latest_until(table, column, at, stop)
+        let asked = &self.asked;
+        self.plant.latest_until(table, column, at, &|| {
+            asked.set(asked.get() + 1);
+            stop()
+        })
     }
     fn armed(&self) -> bool {
         self.plant.armed()
@@ -1042,11 +1048,22 @@ fn a_reading_the_tester_stops_ends_the_run_on_the_stop() {
     let bench = plant(dir.path());
     let (s, first, last) = empty_column(dir.path(), &bench, 3_000);
     let p = LivePlant::new(s.live()).unwrap();
-    for body in ["  step r read m.z -> v\n", "  step c check m.z == 1\n", "  step w wait m.z == 1 timeout 1s\n"] {
+    // The stop asked once its raised, before the reading's first page, the reading then ended on it
+    // (round 7: a runner deaf to it read twenty pages on); no criterion and no reported item kept of a
+    // value the stop left unread (round 7: a check kept `error` beside a value under which it held).
+    let bodies = [
+        "  step r read m.z -> v\n",
+        "  step c check m.z == 1\n",
+        "  step w wait m.z == 1 timeout 1s\n",
+        "  step b branch m.z {\n    1 -> stop pass\n    else -> stop fail\n  }\n",
+        "  step p report m.z, \"after\"\n",
+    ];
+    for body in bodies {
         for opts in [RunOptions::live(), RunOptions::replay(first, last + 2_000)] {
-            let watched = Watched { plant: &p, read: Default::default(), stop_on_latest: Some(opts.stop.clone()) };
+            let watched = Watched { plant: &p, read: Default::default(), stop_on_latest: Some(opts.stop.clone()), asked: Default::default() };
             let r = veredas_comissionador::run::run(&checked(&test_of(body)), &watched, &opts, &mut |_| {}).unwrap();
             assert_eq!((r.verdict, r.reason.as_str(), r.steps.last().map(|s| s.outcome)), (RunVerdict::Aborted, "stopped by the tester", Some(None)), "{body} {:?}", opts.mode);
+            assert_eq!((watched.asked.get(), r.criteria.len(), r.reported.len()), (1, 0, 0), "{body} {:?}", opts.mode);
         }
     }
 }
@@ -1060,7 +1077,7 @@ fn a_wait_reads_each_table_it_names_once() {
     let (s, first, last) = empty_column(dir.path(), &bench, 1_000);
     let p = LivePlant::new(s.live()).unwrap();
     for cond in ["m.x == 3 and b.y == 1 and m.z == 1", "m.x == 3 and m.z == 1 and b.y == 1"] {
-        let watched = Watched { plant: &p, read: Default::default(), stop_on_latest: None };
+        let watched = Watched { plant: &p, read: Default::default(), stop_on_latest: None, asked: Default::default() };
         let text = format!("{HEAD}test \"t\" {{\n  id T\n  modes replay\n  step w wait {cond} timeout 2s\n}}\n");
         let r = veredas_comissionador::run::run(&checked(&text), &watched, &RunOptions::replay(first, last + 3_000), &mut |_| {}).unwrap();
         assert_eq!(r.verdict, RunVerdict::Aborted, "{cond}");

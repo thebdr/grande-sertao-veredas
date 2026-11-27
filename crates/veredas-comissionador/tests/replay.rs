@@ -238,6 +238,32 @@ fn a_write_that_failed_live_replays_not_sent_and_passing() {
 }
 
 #[test]
+fn a_live_run_the_tester_stopped_replays_to_its_own_verdict() {
+    // Refute round 7 (C-203): a live run the tester stopped ended on the stop, which its window does
+    // not hold: replayed, it reaches the verdict the test gives. The claim is narrowed to live runs
+    // that ended on their own verdict, not the tester's stop.
+    use veredas_comissionador::run::Event;
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    let c = checked(&test_of("  step a check plc_main.level == 0.9\n  step b report \"done\"\n"));
+    let p = veredas_comissionador::plant::LivePlant::new(s.live()).unwrap();
+    let opts = RunOptions::live();
+    let stop = opts.stop.clone();
+    let live = veredas_comissionador::run::run(&c, &p, &opts, &mut |e| {
+        if let Event::StepEnded(r) = e
+            && r.step == "a"
+        {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    })
+    .unwrap();
+    assert_eq!((live.verdict, live.reason.as_str()), (RunVerdict::Aborted, "stopped by the tester"), "{:?}", steps(&live));
+    let (r, _) = run_with(&c, s.live(), &RunOptions::replay(live.start_ms, live.end_ms)).unwrap();
+    assert_eq!((r.verdict, r.decided_at.as_deref()), (RunVerdict::Passed, Some("b")), "{:?}", steps(&r));
+}
+
+#[test]
 fn a_replay_reads_the_plant_right_after_a_write_as_it_stood_before_it() {
     // The same lag, with a loose bound: an await right after the write takes a row stamped before
     // the write in the replay, where the live one took one after the plant's answer, and a read

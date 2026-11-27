@@ -613,6 +613,9 @@ struct AtEnv<'a> {
     /// The tester's stop, looked at between the pages of a reading: a stopped reading a fault the
     /// run then takes for the stop.
     stop: Option<&'a AtomicBool>,
+    /// Whether a reading ended on the stop: the evaluation's fault is then the stop, its criterion
+    /// or reported item not taken.
+    stopped: bool,
 }
 
 impl Env for AtEnv<'_> {
@@ -631,6 +634,10 @@ impl Env for AtEnv<'_> {
         match self.plant.latest_until(t, column, self.at, &stop) {
             Ok(Some((_, v))) => Ok(v),
             Ok(None) => Err(missing()),
+            Err(PlantError::Stopped) => {
+                self.stopped = true;
+                Err(EvalError::Fault(PlantError::Stopped.to_string()))
+            }
             Err(e) => Err(EvalError::Fault(e.to_string())),
         }
     }
@@ -716,7 +723,7 @@ pub fn run(c: &Checked, plant: &dyn Plant, opts: &RunOptions, listener: &mut dyn
     // The constants, in order.
     let mut vars = Scope::new();
     for (name, e) in c.test.lets() {
-        let mut env = AtEnv { plant, tables: &tables, vars: &vars, at: start, cache: None, stop: None };
+        let mut env = AtEnv { plant, tables: &tables, vars: &vars, at: start, cache: None, stop: None, stopped: false };
         match eval::eval(e, &mut env) {
             Ok(v) => {
                 vars.insert(name.value.clone(), v);
@@ -933,8 +940,10 @@ impl Runner<'_> {
         if has_plant(e) {
             self.settle(self.clock)?;
         }
-        let mut env = AtEnv { plant: self.plant, tables: &self.tables, vars: scope, at: self.clock, cache: None, stop: Some(&self.stop) };
-        Ok(eval::eval(e, &mut env))
+        let mut env = AtEnv { plant: self.plant, tables: &self.tables, vars: scope, at: self.clock, cache: None, stop: Some(&self.stop), stopped: false };
+        let value = eval::eval(e, &mut env);
+        // A reading the stop ended is the stop, before anything is judged or reported of it.
+        if env.stopped { Err(Halt::Stopped) } else { Ok(value) }
     }
 
     fn measured(&self, e: &Expr, scope: &Scope) -> R<Vec<String>> {
@@ -1023,7 +1032,7 @@ impl Runner<'_> {
         }
         let stop_flag = self.stop.clone();
         let holds = |plant: &dyn Plant, tables: &HashMap<String, Table>, cache: &HashMap<(String, String), Option<Value>>, at: i64| {
-            let mut env = AtEnv { plant, tables, vars: scope, at, cache: Some(cache), stop: Some(&*stop_flag) };
+            let mut env = AtEnv { plant, tables, vars: scope, at, cache: Some(cache), stop: Some(&*stop_flag), stopped: false };
             match eval::eval(cond, &mut env) {
                 Ok(Value::Bool(b)) => Ok(b),
                 Ok(other) => Err(format!("a wait takes a truth value, not {}", other.kind())),
@@ -1034,7 +1043,11 @@ impl Runner<'_> {
         match holds(self.plant, &self.tables, &cache, t0) {
             Ok(true) => return Ok(Waited::At(t0)),
             Ok(false) => {}
-            Err(f) => return Ok(Waited::Fault(f)),
+            Err(f) => {
+                // A condition the stop ended is the stop, not the wait's fault.
+                self.check_stop()?;
+                return Ok(Waited::Fault(f));
+            }
         }
         let names: Vec<String> = {
             // Each table once, in the order first named: a table named again later read once.
@@ -1082,7 +1095,10 @@ impl Runner<'_> {
                     match holds(self.plant, &self.tables, &cache, row.time_ms) {
                         Ok(true) => return Ok(Waited::At(row.time_ms)),
                         Ok(false) => {}
-                        Err(f) => return Ok(Waited::Fault(f)),
+                        Err(f) => {
+                            self.check_stop()?;
+                            return Ok(Waited::Fault(f));
+                        }
                     }
                 }
                 cursor = upto;
@@ -1128,8 +1144,13 @@ impl Runner<'_> {
                     let ok = match filter {
                         None => Ok(true),
                         Some(f) => {
-                            let mut env = AtEnv { plant: self.plant, tables: &self.tables, vars: scope, at, cache: None, stop: Some(&self.stop) };
-                            match eval::eval(f, &mut env) {
+                            let mut env = AtEnv { plant: self.plant, tables: &self.tables, vars: scope, at, cache: None, stop: Some(&self.stop), stopped: false };
+                            let judged = eval::eval(f, &mut env);
+                            if env.stopped {
+                                restore(scope, bind, before);
+                                return Err(Halt::Stopped);
+                            }
+                            match judged {
                                 Ok(Value::Bool(b)) => Ok(b),
                                 Ok(other) => Err(format!("`where` takes a truth value, not {}", other.kind())),
                                 Err(EvalError::NoValue(_)) => Ok(false),
