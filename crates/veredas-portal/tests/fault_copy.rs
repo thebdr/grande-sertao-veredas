@@ -74,14 +74,19 @@ fn at_a_fault_the_window_is_written_to_the_drive_with_the_fault_record() {
     let written = files(&copies);
     assert_eq!(written.len(), 3, "{written:?}");
     // Each copy named for its fault's second, `.fault` for the first in a second and `.fault-1`
-    // on for the next, in the order the faults came (read off the copy that holds all three); the
-    // counters naming the newest.
-    let whole = written.iter().map(|f| copies.join(f)).max_by_key(|f| count(f, "SELECT count(*) FROM controller_faults")).unwrap();
-    let conn = duckdb::Connection::open(&whole).unwrap();
-    let mut stmt = conn.prepare("SELECT index_ms FROM controller_faults ORDER BY seq").unwrap();
-    let faults: Vec<i64> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
-    drop(stmt);
-    drop(conn);
+    // on for the next, in the order the faults came, read off every copy (each holds its own
+    // fault's record; the first fault may have left the one-second window by the time the next
+    // two come, as it did once under the whole suite's load, so no single copy need hold all
+    // three); the counters naming the newest.
+    let mut by_seq = std::collections::BTreeMap::new();
+    for f in &written {
+        let conn = duckdb::Connection::open(copies.join(f)).unwrap();
+        let mut stmt = conn.prepare("SELECT seq, index_ms FROM controller_faults").unwrap();
+        for (seq, ms) in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).unwrap().map(Result::unwrap) {
+            by_seq.insert(seq, ms);
+        }
+    }
+    let faults: Vec<i64> = by_seq.into_values().collect();
     assert_eq!(faults.len(), 3);
     let mut names: Vec<String> = Vec::new();
     for (i, ms) in faults.iter().enumerate() {
