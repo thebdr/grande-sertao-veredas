@@ -128,6 +128,19 @@ fn a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together() {
         assert!(files.iter().any(|x| x == f), "the bundle holds no {f}");
     }
     assert!(files.iter().any(|f| f.starts_with("licenses/crates/serde-") && f.contains("LICENSE")), "a crate's own licence files");
+    // At any depth and whole folders of them (C-294's first refute round): ring's once_cell texts,
+    // crc-catalog's `LICENSES/`, IronCalc's notices, KDDockWidgets' every text, Qt's own SBOM.
+    for (start, end) in [
+        ("licenses/crates/ring-", "/src/polyfill/once_cell/LICENSE-MIT"),
+        ("licenses/crates/crc-catalog-", "/LICENSES/MIT.txt"),
+        ("licenses/components/ironcalc_base/", "THIRD-PARTY-NOTICES.md"),
+        ("licenses/kddockwidgets/", "LICENSES/MIT.txt"),
+        ("licenses/qt/sbom/", "qtbase-6.12.0.spdx.json"),
+        ("licenses/qt/sbom/", "qtdeclarative-6.12.0.spdx.json"),
+    ] {
+        assert!(files.iter().any(|f| f.starts_with(start) && f.ends_with(end)), "the bundle holds no {start}…{end}");
+    }
+    assert!(!third.contains("| none shipped |") || third.lines().filter(|l| l.ends_with("| none shipped |")).all(|l| !l.contains("tokio-modbus")), "tokio-modbus ships its texts");
     let manifest_text = std::fs::read_to_string(&c.manifest_path).unwrap();
     assert_eq!(std::fs::read_to_string(c.extracted.join("release.toml")).unwrap(), manifest_text);
     // The component list in the bundle and beside it: `alforge components`'s for the commit and

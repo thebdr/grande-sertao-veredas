@@ -219,11 +219,15 @@ beside its manifest, the copyright holder thebdr; Oficina is `GPL-3.0-or-later` 
   crate cargo resolves for them. Every member states its licence since 2026-11-26, and every
   package the list holds at HEAD states one (C-294).
 - **The bundle carries `licenses/`**, made from the component list:
-  - for each component and each package by path, the licence files of its top folder (`LICENSE*`,
-    `COPYING*`, `NOTICE*` and the like) as git stores them, in `components/<name>/`;
-  - for each crate, the licence files its vendored sources ship, in `crates/<name>-<version>/`;
-  - with Oficina's window, Qt's texts (Debian's own LGPL-3, GPL-2 and GPL-3) and KDDockWidgets'
-    (its `LICENSE.txt` and GPL texts), and where their sources are (Q446);
+  - for each component and each package by path, its licence files and notices at any depth of its
+    folder (`LICENSE*`, `COPYING*`, `*NOTICE*`, `THIRD-PARTY*` and the like, and every file of a
+    `LICENSES/` folder) as git stores them, in `components/<name>/`;
+  - for each crate, the same of what its vendored sources ship, in `crates/<name>-<version>/`;
+  - with Oficina's window, Qt's texts (Debian's own LGPL-3, GPL-2 and GPL-3) and Qt's own SPDX
+    documents of the modules the bundle carries, which name the third-party code inside Qt (PCRE2,
+    double-conversion, libpng, libjpeg, HarfBuzz, md4c) and its licences, and KDDockWidgets' (its
+    `LICENSE.txt` and every file of its `LICENSES/`), and where their sources are (Q446). Whether a
+    bundle carries the texts of the licences Qt's documents name, and ICU 73's, is Q450;
   - `THIRD-PARTY.md`: every entry with its version, its licence, its source and the files kept.
 - **The tester machine carries the bundle whole:** `/opt/veredas/current/licenses/`, beside the docs
   on the desktop. Its Debian system carries Debian's own (`/usr/share/doc/*/copyright`).

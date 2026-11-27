@@ -236,9 +236,15 @@ pub fn after_build(
     }
     // What the release carries of its licences (crate::licences, Q35): the component list's every
     // entry, the vendored crates' files the build kept, Qt's and KDDockWidgets' texts.
-    let kdd_doc = recipe.builder.qt.as_ref().and_then(|q| builder::qt_folders(q).ok()).map(|(_, deps)| deps.join("share/doc/KDDockWidgets-qt6"));
+    let folders = recipe.builder.qt.as_ref().and_then(|q| builder::qt_folders(q).ok());
+    let kdd_doc = folders.as_ref().map(|(_, deps)| deps.join("share/doc/KDDockWidgets-qt6"));
+    // Qt's own SPDX documents of the modules the staged window loads (docs/questions.md Q450).
+    let qt_docs = match &folders {
+        Some((qt, _)) if built.out.join("qt").is_dir() => crate::licences::qt_documents(&qt.join("sbom"), &built.out.join("qt"))?,
+        _ => Vec::new(),
+    };
     let _ = std::fs::remove_dir_all(built.out.join("licenses"));
-    crate::licences::assemble(sbom, root, commit, &work.join("vendored-licences"), kdd_doc.as_deref(), Path::new("/usr/share/common-licenses"), &built.out.join("licenses"))?;
+    crate::licences::assemble(sbom, root, commit, &work.join("vendored-licences"), kdd_doc.as_deref(), Path::new("/usr/share/common-licenses"), &qt_docs, &built.out.join("licenses"))?;
     let bins: Vec<String> = held.values().flat_map(|h| h.bins.iter().cloned()).collect();
     let components: Vec<String> = held.keys().cloned().collect();
     let packed = bundle::assemble(recipe, root, commit, name, &built.out.join("bin"), &bins, &components, text, sbom, work)?;
