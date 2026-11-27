@@ -5,7 +5,8 @@ Every run of a test (`docs/test-schema.md`) ends in an acceptance report, whatev
 `runs/<id, lowercased>/<nnnn>/`, numbered from `0001` in the order the runs were kept (`10000`
 after `9999`): the exact text of the test that ran (`test.test`), every function file it used
 (`functions/<n>.fn`), the rows of every table it read over its window (`evidence/<table>.csv`),
-and `report.toml`, written last, so a folder that holds a report holds a whole run; once the
+and `report.toml`, written last, every file on the disk before it, so a folder that holds a report
+holds a whole run, a power cut included; once the
 report has been changed, `report.lock` too, an empty file the engine locks while it reads, judges
 and writes the report, so two changes never cross. `veredas_comissionador::record` keeps a run
 (`keep`), reads a report back (`read`), lists a test's runs newest first, each with its report or

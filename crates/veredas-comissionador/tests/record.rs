@@ -465,7 +465,8 @@ Every run of a test (`docs/test-schema.md`) ends in an acceptance report, whatev
 `runs/<id, lowercased>/<nnnn>/`, numbered from `0001` in the order the runs were kept (`10000`
 after `9999`): the exact text of the test that ran (`test.test`), every function file it used
 (`functions/<n>.fn`), the rows of every table it read over its window (`evidence/<table>.csv`),
-and `report.toml`, written last, so a folder that holds a report holds a whole run; once the
+and `report.toml`, written last, every file on the disk before it, so a folder that holds a report
+holds a whole run, a power cut included; once the
 report has been changed, `report.lock` too, an empty file the engine locks while it reads, judges
 and writes the report, so two changes never cross. `veredas_comissionador::record` keeps a run
 (`keep`), reads a report back (`read`), lists a test's runs newest first, each with its report or
@@ -778,3 +779,46 @@ fn a_device_s_name_and_a_name_past_the_bound_take_their_place_numbers() {
     }
     assert!(record::device_name("nul.csv") && record::device_name("Com9") && !record::device_name("com10") && !record::device_name("nully"));
 }
+
+// ---- refute round 7 ------------------------------------------------------------------------
+
+#[test]
+#[cfg(target_os = "linux")]
+fn every_file_of_a_run_is_on_the_disk_before_its_report_names_it() {
+    // Nothing a run's keeping wrote was synced, so a power cut could leave a report over files the
+    // disk never held. Watched under strace: each file of the run synced, and the folders naming
+    // them, before the report's `.part` is moved into place, the run's folder synced after.
+    let strace = Path::new("/usr/bin/strace");
+    if !strace.exists() {
+        eprintln!("no strace on this machine: the order of the syncs is not watched here");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let base = veredas_portal::serve::store_now_ms() - 3_600_000;
+    let stamp = |at: i64| chrono::DateTime::from_timestamp_millis(at).unwrap().naive_utc().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+    let log: String = (0..10).map(|i| format!("{} temp={}.0\n", stamp(base + i * 1000), 20 + i)).collect();
+    std::fs::write(dir.path().join("plant.log"), log).unwrap();
+    let project = "format = \"veredas-project\"\nversion = 1\nname = \"the log\"\n\n[session]\nstart = { last_hours = 2 }\n\n[[log]]\nid = \"plant\"\nfile = \"plant.log\"\ntimestamp = { pattern = \"^(?P<ts>\\\\S+ \\\\S+)\", formats = [\"%Y-%m-%d %H:%M:%S%.3f\"] }\n\n[[rule]]\nname = \"readings\"\npattern = \"temp=(?P<temp>[0-9.]+)\"\nscope = \"plant\"\ntypes = { temp = \"float\" }\n";
+    std::fs::write(dir.path().join("project.toml"), project).unwrap();
+    std::fs::write(dir.path().join("t.test"), test_of("  step w wait readings.temp >= 25.0 timeout 1min\n  step r report readings.temp\n")).unwrap();
+    let (from, to) = (veredas_comissionador::eval::time_text(base - 500), veredas_comissionador::eval::time_text(base + 9_500));
+    let trace = dir.path().join("trace.log");
+    let o = std::process::Command::new(strace)
+        .current_dir(dir.path())
+        .args(["-f", "-y", "-e", "trace=fsync,rename,renameat,renameat2", "-o"])
+        .arg(&trace)
+        .arg(env!("CARGO_BIN_EXE_veredas-comissionador"))
+        .args(["replay", "t.test", "--project", "project.toml", "--from", &from, "--to", &to])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", String::from_utf8_lossy(&o.stderr));
+    let calls: Vec<String> = std::fs::read_to_string(&trace).unwrap().lines().map(str::to_string).collect();
+    let moved = calls.iter().position(|l| l.contains("rename") && l.contains("report.toml.part\"")).unwrap_or_else(|| panic!("no move of the report: {calls:?}"));
+    let synced = |what: &str| calls.iter().position(|l| l.contains("fsync(") && l.contains(&format!("{what}>")));
+    let run = "runs/t/0001";
+    for what in [format!("{run}/test.test"), format!("{run}/evidence/readings.csv"), format!("{run}/evidence"), format!("{run}/report.toml.part")] {
+        assert!(synced(&what).is_some_and(|at| at < moved), "`{what}` synced before the report is moved into place: {calls:?}");
+    }
+    assert!(calls[moved + 1..].iter().any(|l| l.contains("fsync(") && l.contains(&format!("{run}>"))), "the run's folder synced after: {calls:?}");
+}
+

@@ -401,32 +401,60 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
         }
     };
     report.run.number = number;
-    let write = |name: &str, text: &str| -> Result<(), RecordError> {
+    // Every file on the disk, and the folders that name them, before the report names them.
+    let mut folders = vec![folder.clone()];
+    let write = |name: &str, text: &str, folders: &mut Vec<PathBuf>| -> Result<(), RecordError> {
         let p = folder.join(name);
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent).map_err(io(parent))?;
+            if !folders.iter().any(|f| f == parent) {
+                folders.push(parent.to_path_buf());
+            }
         }
-        std::fs::write(&p, text).map_err(io(&p))
+        write_synced(&p, text.as_bytes()).map_err(io(&p))
     };
-    write(TEST_FILE, &c.text)?;
+    write(TEST_FILE, &c.text, &mut folders)?;
     for (f, u) in report.test.functions.iter().zip(&c.files) {
-        write(&f.file, &u.text)?;
+        write(&f.file, &u.text, &mut folders)?;
     }
     for (e, csv) in report.evidence.iter().zip(&csvs) {
-        write(&e.file, csv)?;
+        write(&e.file, csv, &mut folders)?;
+    }
+    for f in folders.iter().rev() {
+        sync_folder(f).map_err(io(f))?;
     }
     write_report(&folder, &report)?;
     Ok(folder)
 }
 
-/// Write a report into its folder: beside it first, then moved into place, so a reader never
-/// meets half a report.
+/// Write a file and wait for the disk to hold it.
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+/// Wait for the disk to hold a folder's names. On Unix only: Windows opens no folder as a file,
+/// and its file system journals a rename's names itself.
+fn sync_folder(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    std::fs::File::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+/// Write a report into its folder: beside it first, on the disk, then moved into place and the
+/// folder's names on the disk, so a reader never meets half a report, nor a report whose files a
+/// power cut emptied.
 fn write_report(folder: &Path, report: &Report) -> Result<(), RecordError> {
     let text = toml::to_string(report).map_err(|e| RecordError::NotAReport { path: folder.display().to_string(), reason: e.to_string() })?;
     let tmp = folder.join("report.toml.part");
-    std::fs::write(&tmp, &text).map_err(io(&tmp))?;
+    write_synced(&tmp, text.as_bytes()).map_err(io(&tmp))?;
     let path = folder.join(REPORT_FILE);
-    std::fs::rename(&tmp, &path).map_err(io(&path))
+    std::fs::rename(&tmp, &path).map_err(io(&path))?;
+    sync_folder(folder).map_err(io(folder))
 }
 
 /// A moment of the Unix clock on the store's axis: the plant's local wall clock at that moment, as
