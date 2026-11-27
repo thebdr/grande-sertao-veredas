@@ -10,15 +10,15 @@
     "opc_server"
   ],
   "exitCode": 0,
-  "outputSha": "102a86e655a52eae2acb96925872562bfab84e5df19eeee726cbbe7df7d87485",
-  "outputTail": "   Compiling rsa v0.9.10\n   Compiling async-opcua-types v0.19.0\n   Compiling tokio-util v0.7.20\n   Compiling ethernetip-core v0.1.1\n   Compiling ethernetip-connections v0.1.1\n   Compiling tokio-modbus v0.17.0\n   Compiling async-opcua-crypto v0.19.0\n   Compiling async-opcua-nodes v0.19.0\n   Compiling async-opcua-core-namespace v0.19.0\n   Compiling async-opcua-core v0.19.0\n   Compiling async-opcua-client v0.19.0\n   Compiling async-opcua-server v0.19.0\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 10s\n     Running tests/opc_server.rs (target/debug/build/veredas-core/9192722ae9836d7f/out/opc_server-9192722ae9836d7f)",
-  "ranAt": "2026-11-27T06:56:04.051Z",
-  "headCommit": "378dc724433d76a08d673395adfeb5ab48275729",
+  "outputSha": "f42d8cce7010b5c855f0c902c9a093cf7b8d7cd76230ce84eb2e8af74a56fc17",
+  "outputTail": "test each_type_is_its_wire_type_a_neighbour_is_refused_and_discovery_shows_the_callers_application ... ok\ntest a_write_with_an_index_range_or_no_value_is_refused_and_nothing_lands ... ok\ntest writes_past_those_kept_land_and_are_counted_not_kept ... ok\ntest a_clients_writes_land_and_are_handed_to_the_caller_in_the_order_they_landed ... ok\ntest it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clients ... ok\ntest a_user_by_name_and_password_is_accepted_and_the_password_never_shows ... ok\ntest the_callers_limits_on_one_read_and_on_sessions_hold ... ok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.61s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n   Compiling veredas-core v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/core-cbd060/crates/veredas-core)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.06s\n     Running tests/opc_server.rs (target/debug/build/veredas-core/9192722ae9836d7f/out/opc_server-9192722ae9836d7f)",
+  "ranAt": "2026-11-27T08:29:51.554Z",
+  "headCommit": "de094eb7dff5ecfcff1fe7d068dfe7bc2123a8e9",
   "tests": [
     {
       "name": "crates/veredas-core/tests/opc_server.rs",
       "file": "crates/veredas-core/tests/opc_server.rs",
-      "fileSha": "9a463b4077263c7de098ad06bf167ac467308ccb839e01b2771aae725b04c487"
+      "fileSha": "b320b2594d0acdf1d779a43cd16d259ed7e4d1aadd06d1033bdb6bc9939d6db5"
     }
   ]
 }
