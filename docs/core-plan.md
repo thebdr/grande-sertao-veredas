@@ -298,8 +298,10 @@ taken whole (`maquinar-answers-2026-11-22.md` on the shared notes folder). Into 
   port it got (port 0 included). The application URI and name, the data namespace and the folder
   (node id and browse name) are the caller's, and core names no component. A namespace equal to the
   application URI is refused by name: the diagnostics node manager would claim its index, and every
-  read would come back `BadNodeIdUnknown`. Anonymous access is always accepted, plus optionally one
-  user by name and password, the password hidden in `Debug`. `max_sessions` and
+  read would come back `BadNodeIdUnknown`; so is OPC UA's own namespace, index 0, for the same
+  reason. The folder is a FolderType. Anonymous access is always accepted, plus optionally one
+  user by name and password, the password hidden in `Debug`; an empty name and `ANONYMOUS`, which
+  the stack refuses after the bind, are refused before it. `max_sessions` and
   `max_nodes_per_read` are optional knobs.
 - **A variable:** a string id, a browse name, a type (int as Int32, float as Double, bool, text),
   an access (read, write-only, read-write) and an initial value; `parse_value`, `render_value`, and

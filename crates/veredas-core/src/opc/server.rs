@@ -29,7 +29,7 @@ use opcua_server::node_manager::memory::{SimpleNodeManager, simple_node_manager}
 use opcua_server::{ServerBuilder, ServerEndpoint, ServerHandle, ServerUserToken};
 use opcua_types::{
     DataEncoding, DataTypeId, DataValue, NodeId, NumericRange, ObjectId, StatusCode,
-    TimestampsToReturn, Variant, VariableTypeId,
+    TimestampsToReturn, VariableTypeId, Variant,
 };
 use serde::Deserialize;
 use tokio::net::TcpListener;
@@ -37,6 +37,9 @@ use tokio::net::TcpListener;
 /// How many client writes wait for the caller at most; past that, a new one is counted in
 /// [`ServerStatus::writes_dropped`] and not kept (the value has landed all the same).
 pub const WRITES_KEPT: usize = 4096;
+
+/// OPC UA's own namespace, index 0 on every server.
+const OPC_UA_NAMESPACE: &str = "http://opcfoundation.org/UA/";
 
 /// What a server serves and how.
 #[derive(Clone, Debug, PartialEq)]
@@ -239,6 +242,13 @@ pub enum ServerError {
     /// nodes plainly there.
     #[error("the data namespace {0} is the application's URI; give it a URI of its own")]
     NamespaceIsApplication(String),
+    /// The data namespace is OPC UA's own, index 0: the variables' node ids would be taken as
+    /// OPC UA's, and every read would come back `BadNodeIdUnknown`.
+    #[error("the data namespace {0} is OPC UA's own; give it a URI of its own")]
+    NamespaceIsOpcUa(String),
+    /// A user the stack cannot take, refused before the bind rather than by the stack after it.
+    #[error("user `{name}`: {reason}")]
+    User { name: String, reason: String },
     /// A variable or the folder that cannot be served, with its id.
     #[error("variable `{id}`: {reason}")]
     Variable { id: String, reason: String },
@@ -492,6 +502,24 @@ fn check(spec: &ServerSpec) -> Result<(), ServerError> {
     if spec.namespace.trim() == spec.application_uri.trim() {
         return Err(ServerError::NamespaceIsApplication(spec.namespace.clone()));
     }
+    if spec.namespace.trim() == OPC_UA_NAMESPACE {
+        return Err(ServerError::NamespaceIsOpcUa(spec.namespace.clone()));
+    }
+    if let Some(user) = &spec.user {
+        let reason = if user.name.is_empty() {
+            Some("the name is empty")
+        } else if user.name == opcua_server::ANONYMOUS_USER_TOKEN_ID {
+            Some("the anonymous token's id, which the stack reserves")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(ServerError::User {
+                name: user.name.clone(),
+                reason: reason.to_string(),
+            });
+        }
+    }
     let refuse = |id: &str, reason: &str| {
         Err(ServerError::Variable {
             id: id.to_string(),
@@ -602,6 +630,7 @@ fn populate(nodes: &SimpleNodeManager, ns: u16, spec: &ServerSpec) {
     let folder = NodeId::new(ns, spec.folder.id.as_str());
     let name = spec.folder.name.as_str();
     ObjectBuilder::new(&folder, name, name)
+        .is_folder()
         .organized_by(ObjectId::ObjectsFolder)
         .insert(&mut *space);
     for v in &spec.variables {
