@@ -1,0 +1,18 @@
+{
+  "clause": "C-294",
+  "verdict": "holds",
+  "ranAt": "2026-11-27T13:34:34.784Z",
+  "headCommit": "35e9d1818b46088004dcd1c7046c0040b8fbc9b5",
+  "tests": [
+    {
+      "name": "tools/alforge/tests/licences.rs",
+      "file": "tools/alforge/tests/licences.rs",
+      "symbolSha": "6d4c1bbf864da646936f9eb85854365d06ced03977405cbf92e4ea00d80cafb5"
+    },
+    {
+      "name": "tools/alforge/tests/bundle.rs",
+      "file": "tools/alforge/tests/bundle.rs",
+      "symbolSha": "fe1e8544e9c9113217ebd6df6fe9879f7ae2bcc79db67e422d57b5d2a00d6c08"
+    }
+  ]
+}

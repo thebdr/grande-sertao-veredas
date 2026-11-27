@@ -599,7 +599,7 @@ It is P-022's update, the release C-290 states and C-291 cuts.
 It is Q35's ruling held at every cut; the list it reads is C-295's, the bundle C-291's.
 - **Verification:** automated → tools/alforge/tests/licences.rs, tools/alforge/tests/bundle.rs | the names of licence files (a font's among them, Rust sources not); an entry stating no licence named, an empty or blank one stating none; the file a `license-file` names carried for a package by path inside its folder and outside it, beside a file of the same name, and a missing file, a folder or a path outside the repository named; a nested package's files left to it; the vendored crates' licence files kept and nothing else, a `license-file` of any name and one brought from outside among them; glam 0.33.12, half 2.7.1 and sha1_smol 1.0.1 vendored by the machine's own `cargo vendor` with their `ATTRIBUTION.md`, `.reuse/dep5` and `AUTHORS`; a component's font licence `OFL.txt`; the root's own package's licence file listed, checked and carried; a real suite's list (a component, a fork by path, a crate locked offline, the recipe's Qt) made into `licenses/` and every file and row read back, Qt's texts missing refused; the cut stopping on a component that states no licence, an empty one, and a licence file the commit does not hold, nothing built. The cut's own trial (tools/alforge/tests/cut.rs, C-291) carries this repository's.
 - **Evidence:** .zen/evidence/C-294.md
-- **Status:** pending verification
+- **Status:** verified
 
 ## C-295: The component list: a commit's CycloneDX document, the same from `alforge components` and from the cut, carried in every bundle
 - **Date:** 2026-11-26
