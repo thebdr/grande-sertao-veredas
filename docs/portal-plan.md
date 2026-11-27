@@ -444,6 +444,14 @@ Recorded as the port meets them.
   moved away while its writer still writes (the follower still reads it). The watch is set on the
   open file's own descriptor (`/proc/self/fd/N`), which inotify follows to the file however it is
   named (C-036).
+- **A flood overflows the watch's queue.** A neighbour making names flat out outruns the reader
+  (inotify's queue holds 16 384 events here); every overflow asking for a listing listed a whole
+  family a hundred times a second. An overflow wakes the loop only (writes may be among the
+  events lost); the reader walks its folders again (rebuilding their watches) and asks for one
+  listing 50 ms after the last overflow (the listing five seconds after the last at least, a
+  listing of thousands being the follower's cost), timed from the overflow, not from silence,
+  which a neighbour's trickle never gives. On Windows notify
+  reports no overflow of its buffer at all (C-035, C-036).
 - **An arm after the read misses the write between.** The family's live loop armed its watch (a
   thread spawned) after reading: a line written between the read and the arm made no event and
   waited a poll. Every loop keeps its watch before its read (C-036).

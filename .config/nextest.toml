@@ -37,7 +37,7 @@ threads-required = 'num-cpus'
 # flat out, so the kernel's event queue overflows: C-035, C-036), so their load lands on no other
 # test's timing, and their own bounds are judged on a machine they have to themselves.
 [[profile.default.overrides]]
-filter = 'package(veredas-portal) & (test(a_quiet_file_beside_a_flood_of_names) | test(a_quiet_family_beside_a_flood_of_names) | test(an_overflow_lists_once_the_flood_is_over))'
+filter = 'package(veredas-portal) & (test(a_quiet_file_beside_a_flood_of_names) | test(a_quiet_family_beside_a_flood_of_names) | test(an_overflow_lists_once_the_flood_is_over) | test(folders_moved_out_during_an_overflow))'
 threads-required = 'num-cpus'
 
 # The tests that drive a headless browser run two at a time: on CI's runner (four cores) the whole

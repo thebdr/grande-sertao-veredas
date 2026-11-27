@@ -151,7 +151,13 @@ impl Watch {
     /// How many times the kernel's queue overflowed under this watch (Linux; a test's precondition).
     #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn overflows(&self) -> u64 {
-        self.armed.as_ref().and_then(|a| a.backend.as_ref()).map_or(0, |b| b.overflows())
+        self.armed.as_ref().and_then(|a| a.backend.as_ref()).map_or(0, |b| b.overflows().0)
+    }
+
+    /// How many times the folders were walked after an overflow (Linux; a test's clock).
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn resyncs(&self) -> u64 {
+        self.armed.as_ref().and_then(|a| a.backend.as_ref()).map_or(0, |b| b.overflows().1)
     }
 
     /// Whether the armed watch lost a folder it was set on: armed again at the next keep.
@@ -272,8 +278,10 @@ mod backend {
         | libc::IN_ONLYDIR;
     /// The followed file's writes: a write, a truncation, a close after writing.
     const FILE_MASK: u32 = libc::IN_MODIFY | libc::IN_CLOSE_WRITE;
-    /// How long the queue stays quiet after an overflow before the folders are walked again.
-    const QUIET_MS: i32 = 50;
+    /// How long after the last overflow the folders are walked again.
+    const QUIET: std::time::Duration = std::time::Duration::from_millis(50);
+    /// How far apart two listings asked for after overflows are at least.
+    const LIST_SPACING: std::time::Duration = std::time::Duration::from_secs(5);
     /// How long the reader waits after a batch before reading the next.
     const COALESCE: std::time::Duration = std::time::Duration::from_millis(10);
     /// The events that may change the names a folder holds.
@@ -295,8 +303,9 @@ mod backend {
         top_gone: AtomicBool,
         /// The folders the watch was set on, walked again after the queue overflowed.
         tops: Vec<PathBuf>,
-        /// How many times the kernel's queue overflowed.
+        /// How many times the kernel's queue overflowed, and the folders were walked after it.
         overflows: std::sync::atomic::AtomicU64,
+        resyncs: std::sync::atomic::AtomicU64,
     }
 
     pub(crate) struct Backend {
@@ -335,7 +344,13 @@ mod backend {
         /// whether the watch was set, and whether a member's name stands in what it watched (a
         /// folder born or moved into the tree asks for a listing only then).
         fn add_tree(&self, path: &Path, rel: &str, depth: usize) -> (bool, bool) {
+            self.add_tree_seen(path, rel, depth, &mut Vec::new())
+        }
+
+        /// `add_tree`, noting each folder's watch in `seen`.
+        fn add_tree_seen(&self, path: &Path, rel: &str, depth: usize, seen: &mut Vec<i32>) -> (bool, bool) {
             let Some(wd) = self.add(path, FOLDER_MASK) else { return (false, false) };
+            seen.push(wd);
             if let Ok(mut roles) = self.roles.lock() {
                 roles.insert(wd, Role::Folder(path.to_path_buf(), rel.to_string(), depth));
             }
@@ -349,13 +364,42 @@ mod backend {
                     let Some(n) = name.to_str() else { continue };
                     let sub = if rel.is_empty() { n.to_string() } else { format!("{rel}/{n}") };
                     match e.file_type() {
-                        Ok(t) if t.is_dir() => members |= self.add_tree(&e.path(), &sub, depth + 1).1,
+                        Ok(t) if t.is_dir() => members |= self.add_tree_seen(&e.path(), &sub, depth + 1, seen).1,
                         Ok(t) if t.is_file() => members |= matches!(&self.interest, Interest::Family(spec) if spec.names(&sub)),
                         _ => {}
                     }
                 }
             }
             (true, members)
+        }
+
+        /// After an overflow, the folders as they stand now: walked again, a folder born while
+        /// events were lost watched, a folder moved out or removed while they were lost watched no
+        /// more (its events lost, a member's name made in it still woke the loop and listed the
+        /// tree, C-036's eighth idle-cost round), a top folder not found again the watch's end.
+        /// The file's watch is kept.
+        fn resync(&self) {
+            self.resyncs.fetch_add(1, Ordering::Relaxed);
+            let mut seen = Vec::new();
+            for top in &self.tops {
+                self.add_tree_seen(top, "", 0, &mut seen);
+            }
+            let Ok(mut roles) = self.roles.lock() else { return };
+            let lost: Vec<(i32, usize)> = roles
+                .iter()
+                .filter_map(|(wd, r)| match r {
+                    Role::Folder(_, _, depth) if !seen.contains(wd) => Some((*wd, *depth)),
+                    _ => None,
+                })
+                .collect();
+            for (wd, depth) in lost {
+                roles.remove(&wd);
+                if depth == 0 {
+                    self.top_gone.store(true, Ordering::Release);
+                }
+                // SAFETY: a watch descriptor of this inotify instance.
+                let _ = unsafe { libc::inotify_rm_watch(self.fd.as_raw_fd(), wd) };
+            }
         }
 
         /// Read one batch of events: whether to wake the loop, whether a name may have changed,
@@ -479,16 +523,48 @@ mod backend {
     fn read_loop(inner: Arc<Inner>, stop: OwnedFd, wake: Sender<()>, renamed: Arc<AtomicBool>) {
         // Ten milliseconds of a busy folder's names fit in one read.
         let mut buf = vec![0u8; 64 * 1024];
-        // After an overflow, the folders are walked again and listed once the queue has been quiet
-        // a moment: a folder born while events were lost is watched, and the names lost are
-        // listed, once, not at every overflow of a flood.
-        let mut resync_due = false;
+        // After an overflow, the folders are walked again and listed once no overflow has come
+        // for a moment: a folder born or gone while events were lost is watched or dropped, and
+        // the names lost are listed, once, not at every overflow of a flood. Timed from the last
+        // overflow, not from silence: a neighbour's trickle of names put it off for good (C-036's
+        // eighth idle-cost round).
+        // The listing a walk asks for is spaced five seconds apart: a flood whose overflows pause
+        // now and then walks at every pause (the reader's cost), but a listing of a family of
+        // thousands is the follower's (45 ms in a test build). A walk that comes sooner leaves its
+        // listing pending, asked for when it falls due.
+        let mut last_overflow: Option<std::time::Instant> = None;
+        let mut last_listing: Option<std::time::Instant> = None;
+        let mut listing_pending = false;
         loop {
+            let resync_in = last_overflow.map(|t| QUIET.saturating_sub(t.elapsed()));
+            let listing_in = |last: Option<std::time::Instant>| last.map_or(std::time::Duration::ZERO, |l| LIST_SPACING.saturating_sub(l.elapsed()));
+            if resync_in == Some(std::time::Duration::ZERO) {
+                last_overflow = None;
+                inner.resync();
+                listing_pending = true;
+            }
+            if listing_pending && listing_in(last_listing).is_zero() {
+                listing_pending = false;
+                last_listing = Some(std::time::Instant::now());
+                renamed.store(true, Ordering::Release);
+                if wake.send(()).is_err() {
+                    return;
+                }
+                continue;
+            }
+            let pending_in = listing_pending.then(|| listing_in(last_listing));
+            let resync_in = match (last_overflow.and(resync_in), pending_in) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
             let mut fds = [
                 libc::pollfd { fd: inner.fd.as_raw_fd(), events: libc::POLLIN, revents: 0 },
                 libc::pollfd { fd: stop.as_raw_fd(), events: libc::POLLIN, revents: 0 },
             ];
-            let timeout = if resync_due { QUIET_MS } else { -1 };
+            let timeout = match resync_in {
+                Some(d) => i32::try_from(d.as_millis()).unwrap_or(i32::MAX - 1) + 1,
+                None => -1,
+            };
             // SAFETY: two pollfd entries in a live array.
             let n = unsafe { libc::poll(fds.as_mut_ptr(), 2, timeout) };
             if n < 0 {
@@ -498,15 +574,7 @@ mod backend {
                 return;
             }
             if n == 0 {
-                resync_due = false;
-                for top in &inner.tops {
-                    inner.add_tree(top, "", 0);
-                }
-                renamed.store(true, Ordering::Release);
-                if wake.send(()).is_err() {
-                    return;
-                }
-                continue;
+                continue; // the walk, at the loop's top
             }
             if fds[1].revents != 0 || fds[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
                 return;
@@ -524,7 +592,9 @@ mod backend {
                 return;
             }
             let (w, r, o) = inner.handle(buf.get(..got as usize).unwrap_or_default());
-            resync_due |= o;
+            if o {
+                last_overflow = Some(std::time::Instant::now());
+            }
             if r {
                 renamed.store(true, Ordering::Release);
             }
@@ -562,6 +632,7 @@ mod backend {
                 top_gone: AtomicBool::new(false),
                 tops: folders.to_vec(),
                 overflows: std::sync::atomic::AtomicU64::new(0),
+                resyncs: std::sync::atomic::AtomicU64::new(0),
             });
             // The followed path's folder or nothing; a link's target's folder, if it can be.
             for (i, f) in folders.iter().enumerate() {
@@ -582,10 +653,11 @@ mod backend {
             self.inner.top_gone.load(Ordering::Acquire)
         }
 
-        /// How many times the kernel's queue overflowed (a test's precondition).
+        /// How many times the kernel's queue overflowed, and the folders were walked after it (a
+        /// test's precondition and its clock).
         #[cfg(test)]
-        pub(crate) fn overflows(&self) -> u64 {
-            self.inner.overflows.load(Ordering::Relaxed)
+        pub(crate) fn overflows(&self) -> (u64, u64) {
+            (self.inner.overflows.load(Ordering::Relaxed), self.inner.resyncs.load(Ordering::Relaxed))
         }
 
         /// Watch the file the follower reads for its writes, through its own descriptor
@@ -994,12 +1066,77 @@ mod tests {
         assert!(watch.listing_due(), "its member, a folder down, asks for a listing");
     }
 
+    /// Flood the folder with names from `writers` threads until `stop`.
+    fn flood(dir: &Path, writers: usize, stop: &Arc<AtomicBool>) -> Vec<std::thread::JoinHandle<()>> {
+        (0..writers)
+            .map(|t| {
+                let (dir, stop) = (dir.to_path_buf(), Arc::clone(stop));
+                std::thread::spawn(move || {
+                    let mut n = 0u64;
+                    while !stop.load(Ordering::Relaxed) {
+                        let p = dir.join(format!("spool_{t}_{n}.tmp"));
+                        if std::fs::write(&p, "").and_then(|()| std::fs::remove_file(&p)).is_err() {
+                            break;
+                        }
+                        n += 1;
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Wait for the kernel's queue to have overflowed under the watch (a test's precondition).
+    fn overflowed(watch: &Watch) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while watch.overflows() == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(watch.overflows() > 0, "the flood overflowed the kernel's queue");
+    }
+
+    /// After a flood: every overflow's wake, and any listing a walk during it asked for, taken as
+    /// they come; then, once a walk has run after the last overflow (a walk needs 50 ms without one,
+    /// so none runs between an overflow and its being seen here), whether it asked for a listing
+    /// and woke the loop, a wake only that walk sends by then (nothing the tests flood with is a
+    /// name the watch wants).
+    fn the_walk_lists_and_wakes(watch: &Watch, rx: &Receiver<()>) -> (bool, bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut last = watch.overflows();
+        let mut walks = watch.resyncs();
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            let now = watch.overflows();
+            if now != last {
+                last = now;
+                while rx.try_recv().is_ok() {}
+                let _ = watch.listing_due();
+                walks = watch.resyncs();
+                continue;
+            }
+            if watch.resyncs() > walks {
+                // The walk's listing, perhaps put off (five seconds after the last at least),
+                // then its wake.
+                let listed_by = std::time::Instant::now() + Duration::from_secs(6);
+                while std::time::Instant::now() < listed_by {
+                    if watch.listing_due() {
+                        return (true, rx.recv_timeout(Duration::from_millis(200)).is_ok());
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                return (false, false);
+            }
+        }
+        (false, false)
+    }
+
     /// A flood of names that overflows the kernel's queue wakes the loop (a write to the file read
-    /// may be among what is lost) but asks for no listing while it lasts; once the queue is quiet,
-    /// the folders are walked again and one listing is asked for, so a folder born in a recursive
+    /// may be among what is lost) and asks for a listing five seconds apart at most while it
+    /// lasts; once no overflow has come for a moment, whatever a neighbour still trickles (a name every 20 ms), the folders are
+    /// walked again, the loop woken and one listing asked for, so a folder born in a recursive
     /// tree while events were lost is watched: a member made in each of twenty folders born
-    /// during the flood wakes the loop and asks for a listing. Each overflow listed the family,
-    /// and a folder whose birth was lost was never watched (C-036's seventh idle-cost round).
+    /// during the flood wakes the loop and asks for a listing. Each overflow listed the family, a
+    /// folder whose birth was lost was never watched (C-036's seventh idle-cost round), and the
+    /// walk waited for a silence a trickle never gave (its eighth).
     #[test]
     fn an_overflow_lists_once_the_flood_is_over_and_watches_what_was_born_in_it() {
         let top = tempfile::tempdir().unwrap();
@@ -1009,46 +1146,86 @@ mod tests {
         watch.keep_on_family(&spec, None);
         settle(&rx);
         let _ = watch.listing_due();
-        let stop = Arc::new(AtomicBool::new(false));
-        let flood: Vec<_> = (0..8)
-            .map(|t| {
-                let (dir, stop) = (top.path().to_path_buf(), Arc::clone(&stop));
-                std::thread::spawn(move || {
-                    let mut n = 0u64;
-                    while !stop.load(Ordering::Relaxed) {
-                        let p = dir.join(format!("spool_{t}_{n}.tmp"));
-                        // A failed test removes the folder under the flood: it stops there.
-                        if std::fs::write(&p, "").and_then(|()| std::fs::remove_file(&p)).is_err() {
-                            break;
-                        }
-                        n += 1;
+        let stop_trickle = Arc::new(AtomicBool::new(false));
+        let trickle = {
+            let (dir, stop) = (top.path().to_path_buf(), Arc::clone(&stop_trickle));
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let p = dir.join("status.lock");
+                    if std::fs::write(&p, "").and_then(|()| std::fs::remove_file(&p)).is_err() {
+                        break;
                     }
-                })
+                    std::thread::sleep(Duration::from_millis(20));
+                }
             })
-            .collect();
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while watch.overflows() == 0 && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert!(watch.overflows() > 0, "the flood overflowed the kernel's queue");
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let flooding = flood(top.path(), 8, &stop);
+        overflowed(&watch);
+        let mut listed = 0;
         for i in 1..=20 {
             std::fs::create_dir(top.path().join(format!("d{i}"))).unwrap();
             std::thread::sleep(Duration::from_millis(30));
+            listed += usize::from(watch.listing_due());
         }
         assert!(watch.overflows() > 1, "the queue overflowed while the folders were born");
-        assert!(!watch.listing_due(), "no listing asked for while the flood lasts");
+        assert!(listed <= 1, "a listing five seconds apart at most while the flood lasts ({listed} in 600 ms)");
         stop.store(true, Ordering::Relaxed);
-        for f in flood {
+        for f in flooding {
             f.join().unwrap();
         }
-        std::thread::sleep(Duration::from_millis(500));
-        assert!(watch.listing_due(), "one listing once the flood is over");
+        let (listed, woke) = the_walk_lists_and_wakes(&watch, &rx);
+        assert!(listed, "one listing asked for once the flood is over, the trickle going on");
+        assert!(woke, "and the loop woken for it");
         for i in 1..=20 {
             settle(&rx);
             let _ = watch.listing_due();
             std::fs::write(top.path().join(format!("d{i}/app_1.log")), "").unwrap();
             assert!(woken(&rx), "a member made in d{i}, born during the flood");
             assert!(watch.listing_due(), "and a listing asked for (d{i})");
+        }
+        stop_trickle.store(true, Ordering::Relaxed);
+        trickle.join().unwrap();
+    }
+
+    /// Folders moved out of a recursive tree while a flood overflows the kernel's queue (their
+    /// moves lost) are watched no more once the folders are walked again after it: a member's name
+    /// made in each of twenty wakes nothing and asks for no listing. The walk only added watches,
+    /// and nine of twenty still woke the loop and listed the tree (C-036's eighth idle-cost round).
+    #[test]
+    fn folders_moved_out_during_an_overflow_are_watched_no_more_after_it() {
+        let root = tempfile::tempdir().unwrap();
+        let top = root.path().join("top");
+        let out = root.path().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        for i in 1..=20 {
+            std::fs::create_dir_all(top.join(format!("d{i}"))).unwrap();
+        }
+        let spec = FamilySpec::new(&top, r"d\d+/app_(?P<idx>\d+)\.log", None, ActiveMode::NewestByOrder).unwrap().with_recursive(true);
+        let (tx, rx) = channel();
+        let mut watch = Watch::new(true, tx);
+        watch.keep_on_family(&spec, None);
+        settle(&rx);
+        let _ = watch.listing_due();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flooding = flood(&top, 8, &stop);
+        overflowed(&watch);
+        for i in 1..=20 {
+            std::fs::rename(top.join(format!("d{i}")), out.join(format!("d{i}"))).unwrap();
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        stop.store(true, Ordering::Relaxed);
+        for f in flooding {
+            f.join().unwrap();
+        }
+        let (listed, woke) = the_walk_lists_and_wakes(&watch, &rx);
+        assert!(listed && woke, "the walk after the flood, its listing and its wake");
+        for i in 1..=20 {
+            settle(&rx);
+            let _ = watch.listing_due();
+            std::fs::write(out.join(format!("d{i}/app_1.log")), "").unwrap();
+            assert!(quiet(&rx), "a member's name made in d{i}, moved out during the flood, wakes nothing");
+            assert!(!watch.listing_due(), "and asks for no listing (d{i})");
         }
     }
 
