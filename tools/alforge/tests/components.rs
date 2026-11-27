@@ -93,11 +93,17 @@ fn a_commit_lists_its_components_its_packages_by_path_and_its_crates_with_their_
     assert_eq!((m["component"]["name"].as_str(), m["component"]["version"].as_str(), m["component"]["bom-ref"].as_str()), (Some("veredas"), Some("2.0.0"), Some("veredas@2.0.0")));
     assert_eq!(m["component"]["properties"][0], serde_json::json!({ "name": "veredas:commit", "value": c }));
     assert_eq!(m["tools"]["components"][0]["name"], "alforge");
+    // A name-based UUID of version 5, as CycloneDX 1.6's pattern takes one (versions 1 to 5, RFC
+    // 4122's variant): `^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`.
     let serial = doc["serialNumber"].as_str().unwrap();
+    assert_eq!(serial, alforge::components::serial("2.0.0", &c));
     let uuid = serial.strip_prefix("urn:uuid:").unwrap();
-    let groups: Vec<usize> = uuid.split('-').map(str::len).collect();
-    assert_eq!(groups, [8, 4, 4, 4, 12], "{serial}");
+    let groups: Vec<&str> = uuid.split('-').collect();
+    assert_eq!(groups.iter().map(|g| g.len()).collect::<Vec<_>>(), [8, 4, 4, 4, 12], "{serial}");
     assert!(uuid.chars().all(|x| x == '-' || x.is_ascii_hexdigit() && !x.is_ascii_uppercase()), "{serial}");
+    assert!(groups[2].starts_with('5') && groups[3].starts_with(['8', '9', 'a', 'b']), "{serial}");
+    // RFC 4122's own version 5 of the URL namespace and the name (Python's `uuid.uuid5` agrees).
+    assert_eq!(alforge::components::serial("2.0.0", "0123456789abcdef0123456789abcdef01234567"), "urn:uuid:f517fd32-73ff-5a08-a3d3-aca088a26325");
 
     // Each component, at its version, by its licence; portal ships its executable.
     let portal = entry(&doc, "veredas-portal@2.0.3");
@@ -154,6 +160,11 @@ fn a_commit_lists_its_components_its_packages_by_path_and_its_crates_with_their_
     assert_eq!(out.status.code(), Some(1));
     let out = run(&["components"]);
     assert_eq!(out.status.code(), Some(1));
+    // A flag where the commit goes is a usage error, never a commit's name.
+    let out = run(&["components", "--release"]);
+    assert_eq!(out.status.code(), Some(1));
+    let out = run(&["components", "--release", "2.0.0"]);
+    assert_eq!(out.status.code(), Some(1));
 }
 
 #[test]
@@ -201,6 +212,14 @@ fn this_repositorys_head_lists_every_component_and_every_crate_its_versions_name
     let q = recipe.builder.qt.unwrap();
     let qt = listed.iter().find(|c| c["name"] == "qt").unwrap();
     assert_eq!((qt["version"].as_str(), qt["purl"].as_str()), (Some(q.version.as_str()), Some(format!("pkg:generic/qt@{}", q.version).as_str())));
+    // Its CPE in CycloneDX's own field, as advisories name the product.
+    assert_eq!(qt["cpe"], format!("cpe:2.3:a:qt:qt:{}:*:*:*:*:*:*:*", q.version));
+    // What only another platform, a test's dependency or a weak feature nothing turns on would
+    // reach is not listed (cargo's feature resolver: `arrow-array`'s wasm32-only `ahash` feature
+    // reaches `const-random`, `rust_decimal`'s `borsh?/std` reaches no `borsh`).
+    for gone in ["const-random", "tiny-keccak", "borsh", "quinn"] {
+        assert!(!listed.iter().any(|c| c["name"] == gone), "{gone} is compiled by no build of the target");
+    }
     assert_eq!(qt["licenses"], serde_json::json!([{ "expression": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only" }]));
     let kdd = listed.iter().find(|c| c["name"] == "kddockwidgets").unwrap();
     assert_eq!((kdd["version"].as_str(), kdd["licenses"].clone()), (Some(q.kddockwidgets.as_str()), serde_json::json!([{ "expression": "GPL-2.0-only OR GPL-3.0-only" }])));
@@ -208,4 +227,37 @@ fn this_repositorys_head_lists_every_component_and_every_crate_its_versions_name
     assert_eq!(release["dependsOn"], serde_json::json!([format!("pkg:generic/kddockwidgets@{}", q.kddockwidgets), format!("pkg:generic/qt@{}", q.version)]));
     // Ábaco uses the IronCalc fork kept in the tree, by path.
     assert!(listed.iter().any(|c| c["properties"].as_array().is_some_and(|p| p.iter().any(|x| x["value"] == "forks/ironcalc/base"))));
+}
+
+/// The list follows what cargo's own builds compile (its feature resolver, normal and build edges,
+/// for the release's target): a dependency of another platform that is also a test's, and a
+/// feature a test's dependency alone turns on, list nothing (round 1's forms); and a commit holding
+/// no lock file for the crates it uses is refused, as C-290 and the cut refuse it.
+#[test]
+fn what_no_build_of_the_target_compiles_is_not_listed_and_an_unpinned_crate_refused() {
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/veredas-core\"]\n");
+    r.write(
+        "crates/veredas-core/Cargo.toml",
+        "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n\
+         [dependencies]\nserde = { version = \"1\", default-features = false }\n\n[target.'cfg(windows)'.dependencies]\nitoa = \"1\"\n\n\
+         [dev-dependencies]\nitoa = \"1\"\nserde = { version = \"1\", features = [\"derive\"] }\n",
+    );
+    r.write("crates/veredas-core/src/lib.rs", "\n");
+    let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into())).args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let c = r.commit("a test's and another platform's dependencies");
+    let doc: Value = serde_json::from_str(&alforge::components::list(r.path(), &c, None).unwrap()).unwrap();
+    let names: Vec<&str> = doc["components"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"serde") && names.contains(&"veredas-core"), "{names:?}");
+    for gone in ["itoa", "serde_derive", "syn", "quote", "proc-macro2"] {
+        assert!(!names.contains(&gone), "{gone}: {names:?}");
+    }
+    let core = doc["dependencies"].as_array().unwrap().iter().find(|d| d["ref"] == "veredas-core@2.1.0").unwrap();
+    assert!(core["dependsOn"].as_array().unwrap().iter().all(|d| d.as_str().unwrap().contains("/serde")), "{core}");
+    // No lock file to pin its crates: refused, as the cut refuses it, whatever this machine's cache.
+    r.git(&["rm", "-q", "Cargo.lock"]);
+    let c = r.commit("no lock file");
+    let e = alforge::components::list(r.path(), &c, None).unwrap_err();
+    assert!(e.to_string().starts_with("veredas-core's build inputs do not read: veredas-core depends on `") && e.to_string().ends_with("` and the commit holds no Cargo.lock to pin it"), "{e}");
 }

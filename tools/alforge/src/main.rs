@@ -36,7 +36,9 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("check") if args.len() == 1 => std::process::exit(check()),
         Some("cut") => std::process::exit(cut(&args[1..])),
-        Some("components") if args.len() == 2 || (args.len() == 4 && args[2] == "--release") => std::process::exit(components(&args[1], args.get(3).map(String::as_str))),
+        Some("components") if !args.get(1).is_some_and(|c| c.starts_with('-')) && (args.len() == 2 || (args.len() == 4 && args[2] == "--release")) => {
+            std::process::exit(components(&args[1], args.get(3).map(String::as_str)))
+        }
         Some("maquina") if args.len() == 2 => std::process::exit(maquina(&args[1])),
         Some("prova") if args.len() == 2 => std::process::exit(prova(&args[1])),
         _ => {

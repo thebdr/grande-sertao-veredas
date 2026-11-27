@@ -44,6 +44,8 @@ struct Entry {
     version: String,
     licence: Licence,
     purl: Option<String>,
+    /// Its CPE, CycloneDX's own field for the name advisories give a product (Qt's).
+    cpe: Option<String>,
     sha256: Option<String>,
     properties: Vec<(String, String)>,
 }
@@ -95,7 +97,7 @@ pub fn purl(name: &str, version: &str, source: &str) -> String {
 /// (`cargo metadata --all-features --filter-platform <target> --offline`, `--locked` to the lock
 /// file the commit holds, in its tree,
 /// written out as git stores it), by cargo's id: what any build of a member may compile there.
-fn resolve_packages(root: &Path, commit: &str, target: &str) -> Result<BTreeMap<String, Package>, ListError> {
+fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]) -> Result<BTreeMap<String, Package>, ListError> {
     let parent = crate::cache::dir()?.join("tmp");
     std::fs::create_dir_all(&parent)?;
     let scratch = tempfile::Builder::new().prefix("alforge-list-").tempdir_in(&parent)?;
@@ -107,7 +109,7 @@ fn resolve_packages(root: &Path, commit: &str, target: &str) -> Result<BTreeMap<
     // Held to its lock file; a commit without one depends on no crate (C-290 refuses one that
     // would), so cargo's resolve of its packages by path is the whole of it.
     let manifest = tree.join("Cargo.toml").display().to_string();
-    let mut argv = vec!["cargo", "metadata", "--format-version", "1", "--all-features", "--filter-platform", target, "--offline", "--manifest-path", &manifest];
+    let mut argv = vec!["cargo", "metadata", "--format-version", "1", "--all-features", "--offline", "--manifest-path", &manifest];
     if tree.join("Cargo.lock").is_file() {
         argv.push("--locked");
     }
@@ -121,19 +123,6 @@ fn resolve_packages(root: &Path, commit: &str, target: &str) -> Result<BTreeMap<
     }
     let meta: Value = serde_json::from_slice(&out.stdout).map_err(|e| refused(format!("commit {commit}: cargo's metadata does not read: {e}")))?;
     let base = PathBuf::from(meta["workspace_root"].as_str().unwrap_or_default());
-    let mut deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for n in meta["resolve"]["nodes"].as_array().into_iter().flatten() {
-        let id = n["id"].as_str().unwrap_or_default().to_string();
-        // A normal (`kind` null) or build dependency goes into what ships; a test's never does.
-        let on = n["deps"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|d| d["dep_kinds"].as_array().into_iter().flatten().any(|k| k["kind"].as_str() != Some("dev")))
-            .filter_map(|d| d["pkg"].as_str().map(str::to_string))
-            .collect();
-        deps.insert(id, on);
-    }
     let mut found = BTreeMap::new();
     for p in meta["packages"].as_array().into_iter().flatten() {
         let s = |k: &str| p[k].as_str().map(str::to_string);
@@ -151,7 +140,70 @@ fn resolve_packages(root: &Path, commit: &str, target: &str) -> Result<BTreeMap<
             (None, None) => Licence::None,
         };
         let dir = if source.is_none() { dir } else { None };
-        found.insert(id.clone(), Package { name, version, source, dir, licence, deps: deps.remove(&id).unwrap_or_default() });
+        found.insert(id.clone(), Package { name, version, source, dir, licence, deps: BTreeSet::new() });
+    }
+    // What the components' builds compile, as cargo's own feature resolver has it (`cargo tree`
+    // with normal and build edges alone, for the target, every feature of theirs on): a
+    // dependency of another platform alone, the features a test's dependency alone asks for and a
+    // weak feature (`dep?/f`) nothing else turns on reach nothing, as no build compiles them.
+    // Each node by its name, version and source, as cargo prints it.
+    let mut tree_argv: Vec<String> = ["cargo", "tree", "--offline", "--all-features", "--target", target, "-e", "normal,build", "--prefix", "depth", "--format", "{p}", "--manifest-path", &manifest].iter().map(|s| s.to_string()).collect();
+    if argv.contains(&"--locked") {
+        tree_argv.push("--locked".into());
+    }
+    for c in components {
+        tree_argv.extend(["-p".to_string(), c.to_string()]);
+    }
+    let words: Vec<&str> = tree_argv.iter().map(String::as_str).collect();
+    let out = crate::cut::suite_command(&tree, &parent, &words, std::env::vars_os()).stdin(std::process::Stdio::null()).output()?;
+    if !out.status.success() {
+        let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
+        let reason: Vec<&str> = why.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        return Err(refused(format!("commit {commit}: cargo cannot tree its packages offline: {}", reason.join(" / "))));
+    }
+    let by_name: BTreeMap<(String, String), Vec<String>> = found.iter().fold(BTreeMap::new(), |mut m, (id, p)| {
+        m.entry((p.name.clone(), p.version.clone())).or_insert_with(Vec::new).push(id.clone());
+        m
+    });
+    let identify = |line: &str| -> Result<String, ListError> {
+        let line = line.trim_end_matches(" (*)").trim_end_matches(" (proc-macro)").trim_end_matches(" (*)");
+        let (head, paren) = match line.split_once(" (") {
+            Some((h, rest)) => (h, Some(rest.trim_end_matches(')'))),
+            None => (line, None),
+        };
+        let (name, version) = head.split_once(" v").ok_or_else(|| refused(format!("commit {commit}: cargo tree printed `{line}`")))?;
+        let ids = by_name.get(&(name.to_string(), version.to_string())).cloned().unwrap_or_default();
+        let fits = |id: &&String| {
+            let p = &found[*id];
+            match (paren, &p.source) {
+                (None, Some(src)) => src == CRATES_IO,
+                (Some(path), None) => path.starts_with('/'),
+                (Some(url), Some(src)) => !url.starts_with('/') && src.contains(url.split('#').next().unwrap_or(url)),
+                (None, None) => false,
+            }
+        };
+        let picked: Vec<&String> = if ids.len() == 1 { ids.iter().collect() } else { ids.iter().filter(fits).collect() };
+        match picked.as_slice() {
+            [one] => Ok((*one).clone()),
+            _ => Err(refused(format!("commit {commit}: cargo tree printed `{line}`, which names {} of its packages", picked.len()))),
+        }
+    };
+    let mut stack: Vec<String> = Vec::new();
+    let mut edges: Vec<(String, String)> = Vec::new();
+    for raw in String::from_utf8_lossy(&out.stdout).lines() {
+        let digits = raw.len() - raw.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let Ok(depth) = raw[..digits].parse::<usize>() else { continue };
+        let id = identify(&raw[digits..])?;
+        stack.truncate(depth);
+        if let Some(parent_id) = stack.last() {
+            edges.push((parent_id.clone(), id.clone()));
+        }
+        stack.push(id);
+    }
+    for (from, to) in edges {
+        if let Some(p) = found.get_mut(&from) {
+            p.deps.insert(to);
+        }
     }
     Ok(found)
 }
@@ -168,16 +220,23 @@ fn commit_time(root: &Path, commit: &str) -> Result<String, ListError> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The document's serial number: a UUID of the release and the commit, so one commit and release
-/// give one document.
-fn serial(release: &str, commit: &str) -> String {
-    let h = crate::cache::sha256_text(&format!("veredas component list\n{release}\n{commit}\n"));
-    let mut b: Vec<char> = h[..32].chars().collect();
-    // Version 8 (RFC 9562, a name of its own), variant 10.
-    b[12] = '8';
-    b[16] = ['8', '9', 'a', 'b'][usize::from_str_radix(&b[16].to_string(), 16).unwrap_or(0) % 4];
-    let s: String = b.into_iter().collect();
-    format!("urn:uuid:{}-{}-{}-{}-{}", &s[..8], &s[8..12], &s[12..16], &s[16..20], &s[20..32])
+/// The document's serial number: a name-based UUID of RFC 4122's version 5 (SHA-1 of the URL
+/// namespace and a name made of the release and the commit), so one commit and release give one
+/// document, and CycloneDX 1.6's own pattern (versions 1 to 5) takes it.
+pub fn serial(release: &str, commit: &str) -> String {
+    use sha1::{Digest, Sha1};
+    // RFC 4122's namespace for URLs, 6ba7b811-9dad-11d1-80b4-00c04fd430c8.
+    const URL: [u8; 16] = [0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8];
+    let mut h = Sha1::new();
+    h.update(URL);
+    h.update(format!("urn:veredas:components:{release}:{commit}").as_bytes());
+    let d = h.finalize();
+    let mut b = [0u8; 16];
+    b.copy_from_slice(&d[..16]);
+    b[6] = (b[6] & 0x0f) | 0x50;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let x: String = b.iter().map(|v| format!("{v:02x}")).collect();
+    format!("urn:uuid:{}-{}-{}-{}-{}", &x[..8], &x[8..12], &x[12..16], &x[16..20], &x[20..32])
 }
 
 /// The target a release is built for, whose resolve the list follows.
@@ -193,7 +252,14 @@ pub fn list(root: &Path, commit: &str, release: Option<&str>) -> Result<String, 
     if !refusals.is_empty() {
         return Err(refused(refusals.join("\n")));
     }
-    let packages = resolve_packages(root, commit, TARGET)?;
+    // What C-290 and the cut refuse, the list refuses: a component whose inputs do not read (a
+    // crate no lock file pins among them).
+    let unread: Vec<String> = held.values().filter_map(|h| h.inputs.as_ref().err().map(|why| format!("{}'s build inputs do not read: {why}", h.name))).collect();
+    if !unread.is_empty() {
+        return Err(refused(unread.join("\n")));
+    }
+    let names: Vec<&str> = held.keys().map(String::as_str).collect();
+    let packages = resolve_packages(root, commit, TARGET, &names)?;
     let lock_text = git::show(root, commit, "Cargo.lock").map_err(|e| refused(e.to_string()))?.unwrap_or_default();
     let lock = inputs::parse_lock(&lock_text).map_err(|e| refused(format!("commit {commit}: {e}")))?;
     // Each component's package, by its folder.
@@ -245,7 +311,7 @@ pub fn list(root: &Path, commit: &str, release: Option<&str>) -> Result<String, 
         };
         let on: BTreeSet<String> = p.deps.iter().filter(|d| reached.contains(d.as_str())).filter_map(|d| packages.get(d).map(reference)).collect();
         depends.entry(bom_ref.clone()).or_default().extend(on);
-        entries.insert(bom_ref.clone(), Entry { bom_ref, kind, name: p.name.clone(), version: p.version.clone(), licence: p.licence.clone(), purl: purl_of, sha256, properties });
+        entries.insert(bom_ref.clone(), Entry { bom_ref, kind, name: p.name.clone(), version: p.version.clone(), licence: p.licence.clone(), purl: purl_of, cpe: None, sha256, properties });
     }
 
     // Qt and KDDockWidgets, which the bundle carries for Oficina's window (docs/questions.md Q446),
@@ -260,11 +326,8 @@ pub fn list(root: &Path, commit: &str, release: Option<&str>) -> Result<String, 
             ("kddockwidgets", q.kddockwidgets.as_str(), "GPL-2.0-only OR GPL-3.0-only", None),
         ] {
             let bom_ref = format!("pkg:generic/{name}@{version}");
-            let mut properties = vec![("veredas:carried".to_string(), "lib/qt".to_string())];
-            if let Some(c) = cpe {
-                properties.push(("veredas:cpe".to_string(), c));
-            }
-            entries.insert(bom_ref.clone(), Entry { bom_ref: bom_ref.clone(), kind: "library", name: name.to_string(), version: version.to_string(), licence: Licence::Expression(licence.to_string()), purl: Some(bom_ref.clone()), sha256: None, properties });
+            let properties = vec![("veredas:carried".to_string(), "lib/qt".to_string())];
+            entries.insert(bom_ref.clone(), Entry { bom_ref: bom_ref.clone(), kind: "library", name: name.to_string(), version: version.to_string(), licence: Licence::Expression(licence.to_string()), purl: Some(bom_ref.clone()), cpe, sha256: None, properties });
             depends.entry(bom_ref.clone()).or_default();
             carried.push(bom_ref);
         }
@@ -281,6 +344,9 @@ pub fn list(root: &Path, commit: &str, release: Option<&str>) -> Result<String, 
             }
             if let Some(p) = &e.purl {
                 c["purl"] = json!(p);
+            }
+            if let Some(cpe) = &e.cpe {
+                c["cpe"] = json!(cpe);
             }
             if let Some(h) = &e.sha256 {
                 c["hashes"] = json!([{ "alg": "SHA-256", "content": h }]);
