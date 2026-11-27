@@ -515,7 +515,10 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
             ether::ETHERTYPE_LLDP => {
                 // 802.1AB's nearest-bridge group address alone, as PROFINET sends LLDP: a frame to
                 // another address is not this port's neighbour (a card takes every group here).
-                if frame.dst != Mac::LLDP_MULTICAST {
+                // From one station, untagged or of VLAN 0, as the rest of the device takes a frame
+                // (round 7: one of VLAN 5, from a group or from the zero MAC became the neighbour,
+                // the last two naming that address as the peer's MAC).
+                if frame.dst != Mac::LLDP_MULTICAST || frame.src.is_multicast() || frame.src == Mac([0; 6]) || frame.vlan.is_some_and(|t| t.id != 0) {
                     continue;
                 }
                 if let Ok(pdu) = lldp::decode(frame.payload) {
@@ -543,15 +546,12 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                 }
                 let plain: Vec<u8> = if frame.vlan.is_some() { [&received.bytes[..12], &received.bytes[16..]].concat() } else { received.bytes.clone() };
                 let suite = shared.lock().identity.ip.clone();
-                let address = suite.as_ref().map(|s| s.ip).unwrap_or(Ipv4Addr::UNSPECIFIED);
-                // The subnet's broadcast is no host's either.
-                let subnet_broadcast = suite.as_ref().filter(|s| !s.mask.is_unspecified()).map(|s| Ipv4Addr::from(u32::from(s.ip) | !u32::from(s.mask)));
-                if let Some(reply) = ip::arp_reply(&plain, mac, address) {
+                let (address, mask) = suite.as_ref().map(|s| (s.ip, s.mask)).unwrap_or((Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED));
+                if let Some(reply) = ip::arp_reply(&plain, mac, address, mask) {
                     shared.lock().status.arp_answered += 1;
                     let _ = link.send(&reply);
                 } else if frame.dst == mac
-                    && let Some((peer_mac, peer_ip, peer_port, payload)) = ip::udp_to(&plain, address, PNIO_PORT)
-                    && Some(peer_ip) != subnet_broadcast
+                    && let Some((peer_mac, peer_ip, peer_port, payload)) = ip::udp_to(&plain, address, mask, PNIO_PORT)
                 {
                     let answered = std::cell::Cell::new(false);
                     let records = |read: &ReadRequest| {

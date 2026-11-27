@@ -18,6 +18,9 @@ use veredas_aranha::wire::raw::{Options, RawLink};
 use veredas_maquinar::profinet::ip;
 use veredas_maquinar::profinet::*;
 
+/// The mask of the tests' subnet, 192.168.0.0/24.
+const M24: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
+
 const DEVICE: &str = "interface = \"b0\"\nstation = \"io-device-1\"\nvendor_id = 7\ndevice_id = 9\nip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\nport = \"port-002\"\norder_id = \"6ES7 bench\"\nserial_number = \"SN-0001\"\nhello = false\nlldp_interval_ms = 0\n";
 
 fn config(text: &str) -> ProfinetConfig {
@@ -212,26 +215,26 @@ fn a_frame_it_must_not_take_is_not_answered() {
     let me = Ipv4Addr::new(192, 168, 0, 10);
     let peer = (Mac([0x02, 0, 0, 0, 0, 0x01]), Ipv4Addr::new(192, 168, 0, 1), 50000);
     let good = ip::udp_frame((mac, me, PNIO_PORT), peer, 7, b"hello");
-    assert_eq!(ip::udp_to(&good, me, PNIO_PORT), Some((peer.0, peer.1, peer.2, b"hello".to_vec())));
+    assert_eq!(ip::udp_to(&good, me, crate::M24, PNIO_PORT), Some((peer.0, peer.1, peer.2, b"hello".to_vec())));
     // A fragment, a damaged header checksum, a damaged UDP checksum, another protocol: refused.
     let mut fragment = good.clone();
     fragment[14 + 6] |= 0x20;
-    assert_eq!(ip::udp_to(&fragment, me, PNIO_PORT), None);
+    assert_eq!(ip::udp_to(&fragment, me, crate::M24, PNIO_PORT), None);
     let mut header = good.clone();
     header[14 + 10] ^= 0xFF;
-    assert_eq!(ip::udp_to(&header, me, PNIO_PORT), None);
+    assert_eq!(ip::udp_to(&header, me, crate::M24, PNIO_PORT), None);
     let mut udp = good.clone();
     udp[14 + 20 + 8] ^= 0x01;
-    assert_eq!(ip::udp_to(&udp, me, PNIO_PORT), None);
+    assert_eq!(ip::udp_to(&udp, me, crate::M24, PNIO_PORT), None);
     // A UDP checksum of 0 means none was computed: taken.
     let mut none = good.clone();
     none[14 + 20 + 6] = 0;
     none[14 + 20 + 7] = 0;
-    assert!(ip::udp_to(&none, me, PNIO_PORT).is_some());
+    assert!(ip::udp_to(&none, me, crate::M24, PNIO_PORT).is_some());
     let mut tcp = good.clone();
     tcp[14 + 9] = 6;
-    assert_eq!(ip::udp_to(&tcp, me, PNIO_PORT), None);
-    assert_eq!(ip::udp_to(&good, Ipv4Addr::UNSPECIFIED, PNIO_PORT), None);
+    assert_eq!(ip::udp_to(&tcp, me, crate::M24, PNIO_PORT), None);
+    assert_eq!(ip::udp_to(&good, Ipv4Addr::UNSPECIFIED, crate::M24, PNIO_PORT), None);
     // ARP: a request for its address is answered from its MAC to the asker; any other is not.
     let mut ask = vec![0xFF; 6];
     ask.extend_from_slice(&peer.0.0);
@@ -240,14 +243,14 @@ fn a_frame_it_must_not_take_is_not_answered() {
     ask.extend_from_slice(&peer.1.octets());
     ask.extend_from_slice(&[0; 6]);
     ask.extend_from_slice(&me.octets());
-    let reply = ip::arp_reply(&ask, mac, me).unwrap();
+    let reply = ip::arp_reply(&ask, mac, me, crate::M24).unwrap();
     let mut expected = [&peer.0.0[..], &mac.0, &[0x08, 0x06, 0, 1, 0x08, 0, 6, 4, 0, 2], &mac.0, &me.octets(), &peer.0.0, &peer.1.octets()].concat();
     expected.resize(60, 0);
     assert_eq!(reply, expected, "the whole reply, byte for byte");
-    assert_eq!(ip::arp_reply(&ask, mac, Ipv4Addr::new(192, 168, 0, 11)), None);
+    assert_eq!(ip::arp_reply(&ask, mac, Ipv4Addr::new(192, 168, 0, 11), crate::M24), None);
     let mut answer_op = ask.clone();
     answer_op[21] = 2;
-    assert_eq!(ip::arp_reply(&answer_op, mac, me), None, "a reply is not answered");
+    assert_eq!(ip::arp_reply(&answer_op, mac, me, crate::M24), None, "a reply is not answered");
 }
 
 #[test]
@@ -588,10 +591,10 @@ mod round_1 {
         last[14 + 6] = 0x00;
         last[14 + 7] = 0x01;
         refix_ip(&mut last);
-        let r_last = ip::udp_to(&last, me, PNIO_PORT);
+        let r_last = ip::udp_to(&last, me, crate::M24, PNIO_PORT);
         // A datagram addressed to 0.0.0.0, to a device that holds no address.
         let zero = ip::udp_frame((mac, Ipv4Addr::UNSPECIFIED, PNIO_PORT), peer, 7, b"hello");
-        let r_zero = ip::udp_to(&zero, Ipv4Addr::UNSPECIFIED, PNIO_PORT);
+        let r_zero = ip::udp_to(&zero, Ipv4Addr::UNSPECIFIED, crate::M24, PNIO_PORT);
         // An ARP request for 0.0.0.0, to a device that holds no address.
         let mut ask = vec![0xFF; 6];
         ask.extend_from_slice(&peer.0.0);
@@ -600,11 +603,11 @@ mod round_1 {
         ask.extend_from_slice(&peer.1.octets());
         ask.extend_from_slice(&[0; 6]);
         ask.extend_from_slice(&[0, 0, 0, 0]);
-        let r_arp0 = ip::arp_reply(&ask, mac, Ipv4Addr::UNSPECIFIED);
+        let r_arp0 = ip::arp_reply(&ask, mac, Ipv4Addr::UNSPECIFIED, crate::M24);
         // The ARP reply's fixed bytes and its padding.
         let mut ask_me = ask.clone();
         ask_me[38..42].copy_from_slice(&me.octets());
-        let reply = ip::arp_reply(&ask_me, mac, me).unwrap();
+        let reply = ip::arp_reply(&ask_me, mac, me, crate::M24).unwrap();
         // A payload whose UDP checksum sums to 0: it must travel as 0xFFFF (RFC 768).
         let mut found = None;
         for x in 0..=0xFFFFu16 {
@@ -1271,7 +1274,7 @@ mod round_4 {
         f.extend(iph);
         f.extend(udp);
         f.resize(f.len().max(60), 0);
-        assert_eq!(ip::udp_to(&f, me, PNIO_PORT), Some((peer.0, peer.1, peer.2, payload)));
+        assert_eq!(ip::udp_to(&f, me, crate::M24, PNIO_PORT), Some((peer.0, peer.1, peer.2, payload)));
     }
 
     #[test]
@@ -1722,7 +1725,7 @@ mod round_6 {
         let mut f = ip::udp_frame((mac, ME, PNIO_PORT), peer, 7, &[b'x'; 40]);
         f[14 + 20 + 6] = 0;
         f[14 + 20 + 7] = 0;
-        assert!(ip::udp_to(&f, ME, PNIO_PORT).is_some(), "whole, it is taken");
+        assert!(ip::udp_to(&f, ME, crate::M24, PNIO_PORT).is_some(), "whole, it is taken");
         let mut ip_cut = f.clone();
         let total = u16::from_be_bytes([ip_cut[16], ip_cut[17]]) + 8;
         ip_cut[16..18].copy_from_slice(&total.to_be_bytes());
@@ -1736,6 +1739,278 @@ mod round_6 {
         let mut udp_cut = f.clone();
         let len = u16::from_be_bytes([udp_cut[38], udp_cut[39]]) + 8;
         udp_cut[38..40].copy_from_slice(&len.to_be_bytes());
-        assert_eq!((ip::udp_to(&ip_cut, ME, PNIO_PORT), ip::udp_to(&udp_cut, ME, PNIO_PORT)), (None, None));
+        assert_eq!((ip::udp_to(&ip_cut, ME, crate::M24, PNIO_PORT), ip::udp_to(&udp_cut, ME, crate::M24, PNIO_PORT)), (None, None));
+    }
+}
+
+/// Refute round 7's probes (the critic's, `~/.cache/veredas/critic-c116-r7/probes`), kept as pins:
+/// no subnet broadcast at /31 or /32; ARP and the datagram side judging a sender alike; ARP's
+/// frame source apart from its sender's hardware address; the short-header guards; LLDP from one
+/// station, untagged or of VLAN 0; an IPv4 header's version and length.
+mod round_7 {
+    use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::lldp::{self, ChassisId, LldpPdu, PortId};
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::profinet::record::INDEX_IM0;
+    use veredas_aranha::profinet::rpc::{self, ByteOrder, PNIO_PORT, PnioStatus, ReadRequest, ResponseArgs, RpcPdu, Uuid};
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::ip;
+    use veredas_maquinar::profinet::*;
+
+    use super::round_2::{DEVICE, config};
+
+    const ME: Ipv4Addr = Ipv4Addr::new(192, 168, 0, 10);
+    const HOST: Ipv4Addr = Ipv4Addr::new(192, 168, 0, 1);
+    const GROUP: Mac = Mac([0x01, 0x00, 0x5E, 0x00, 0x00, 0x01]);
+    const ZERO: Mac = Mac([0; 6]);
+    const M24: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
+
+    fn device(mask: &str) -> ProfinetConfig {
+        config(&DEVICE.replace("255.255.255.0", mask))
+    }
+
+    fn run(args: &[&str]) {
+        let out = std::process::Command::new(args[0]).args(&args[1..]).output().unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// The kernel's own address on a0, its transmit checksums computed.
+    fn host(cidr: &str) {
+        run(&["ip", "addr", "add", cidr, "dev", "a0"]);
+        run(&["ethtool", "-K", "a0", "tx", "off"]);
+    }
+
+    /// A kernel UDP read of I&M0 from `from` to 192.168.0.10: its status, or none within a second.
+    fn kernel_read(from: &str, seq: u16) -> Option<PnioStatus> {
+        let s = UdpSocket::bind((from, 0)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        s.send_to(&read_payload(seq), (ME, PNIO_PORT)).unwrap();
+        let mut buf = [0u8; 4096];
+        let (n, f) = s.recv_from(&mut buf).ok()?;
+        assert_eq!(f, SocketAddr::from((ME, PNIO_PORT)));
+        let a = RpcPdu::decode(&buf[..n]).unwrap();
+        Some(ResponseArgs::decode(&a.body, a.byte_order()).unwrap().status)
+    }
+
+    fn read_payload(seq: u16) -> Vec<u8> {
+        rpc::read_implicit(ByteOrder::Little, Uuid::pnio_object(1, 9, 7), Uuid([seq as u8; 16]), u32::from(seq), &ReadRequest::implicit(seq, 0, SUBSLOT_DAP, INDEX_IM0, 4096), 4160).unwrap().encode().unwrap()
+    }
+
+    fn all(iface: &str) -> RawLink {
+        RawLink::open_with(iface, Options { ethertype: None, promiscuous: true, outgoing: false }).unwrap()
+    }
+
+    /// Every frame heard from `src` within `ms`.
+    fn from(raw: &RawLink, src: Mac, ms: u64) -> Vec<Vec<u8>> {
+        let until = Instant::now() + Duration::from_millis(ms);
+        let mut out = Vec::new();
+        while Instant::now() < until {
+            if let Ok(Some(r)) = raw.recv(Duration::from_millis(20))
+                && r.bytes.len() >= 14
+                && r.bytes[6..12] == src.0
+            {
+                out.push(r.bytes);
+            }
+        }
+        out
+    }
+
+    fn mac(b: &[u8]) -> Mac {
+        Mac(b[..6].try_into().unwrap())
+    }
+
+    fn arp_request(dst: Mac, src: Mac, sha: Mac, spa: Ipv4Addr, tpa: Ipv4Addr) -> Vec<u8> {
+        let mut f = dst.0.to_vec();
+        f.extend_from_slice(&src.0);
+        f.extend_from_slice(&[0x08, 0x06, 0, 1, 0x08, 0, 6, 4, 0, 1]);
+        f.extend_from_slice(&sha.0);
+        f.extend_from_slice(&spa.octets());
+        f.extend_from_slice(&[0; 6]);
+        f.extend_from_slice(&tpa.octets());
+        f.resize(60, 0);
+        f
+    }
+
+    /// ARP replies among `frames`: (Ethernet destination, target hardware, target address).
+    fn arp_replies(frames: &[Vec<u8>]) -> Vec<(Mac, Mac, Ipv4Addr)> {
+        frames
+            .iter()
+            .filter(|f| f.len() >= 42 && f[12..14] == [0x08, 0x06] && f[20..22] == [0, 2])
+            .map(|f| (mac(&f[0..6]), mac(&f[32..38]), Ipv4Addr::new(f[38], f[39], f[40], f[41])))
+            .collect()
+    }
+
+    fn checksum(bytes: &[u8]) -> u16 {
+        let mut acc: u32 = bytes.chunks(2).map(|c| u32::from(u16::from_be_bytes([c[0], *c.get(1).unwrap_or(&0)]))).sum();
+        while acc > 0xFFFF {
+            acc = (acc & 0xFFFF) + (acc >> 16);
+        }
+        !(acc as u16)
+    }
+
+    /// The IPv4 header's checksum written anew over its first `ihl` bytes.
+    fn refix_ip(f: &mut [u8], ihl: usize) {
+        f[24] = 0;
+        f[25] = 0;
+        let c = checksum(&f[14..14 + ihl]);
+        f[24..26].copy_from_slice(&c.to_be_bytes());
+    }
+
+    /// A datagram to the device from `src`, its UDP checksum computed.
+    fn datagram(src: Ipv4Addr) -> Vec<u8> {
+        ip::udp_frame((Mac([0x02, 0, 0, 0, 0, 0x10]), ME, PNIO_PORT), (Mac([0x02, 0, 0, 0, 0, 0x01]), src, 50000), 7, &[b'x'; 40])
+    }
+
+    /// The subnet's broadcast is the address with every host bit set, none at /31 (RFC 3021) or /32
+    /// or for no mask; at 192.168.0.10/31 its only peer, 192.168.0.11, the kernel at /31 beside
+    /// it, reads I&M0 (the device took .11 for the broadcast and refused it); at /32 and at /30
+    /// the peer's read answered too.
+    #[test]
+    fn a_slash_31_peer_is_a_host_and_its_read_is_answered() {
+        let b = |mask: [u8; 4]| ip::subnet_broadcast(ME, Ipv4Addr::from(mask));
+        assert_eq!(
+            [b([255, 255, 255, 0]), b([255, 255, 255, 252]), b([255, 255, 255, 254]), b([255, 255, 255, 255]), b([0, 0, 0, 0]), b([255, 0, 0, 0])],
+            [Some(Ipv4Addr::new(192, 168, 0, 255)), Some(Ipv4Addr::new(192, 168, 0, 11)), None, None, None, Some(Ipv4Addr::new(192, 255, 255, 255))]
+        );
+        let at = |mask: [u8; 4]| ip::udp_to(&datagram(Ipv4Addr::new(192, 168, 0, 11)), ME, Ipv4Addr::from(mask), PNIO_PORT).is_some();
+        assert_eq!((at([255, 255, 255, 254]), at([255, 255, 255, 252])), (true, false), ".11 a host at /31, the broadcast at /30");
+        netns::isolated("round_7::a_slash_31_peer_is_a_host_and_its_read_is_answered", &[("a0", "b0")], || {
+            run(&["ethtool", "-K", "a0", "tx", "off"]);
+            for (n, (mask, cidr, from)) in [("255.255.255.254", "192.168.0.11/31", "192.168.0.11"), ("255.255.255.255", "192.168.0.1/24", "192.168.0.1"), ("255.255.255.252", "192.168.0.9/30", "192.168.0.9")].into_iter().enumerate() {
+                run(&["ip", "addr", "flush", "dev", "a0"]);
+                run(&["ip", "addr", "add", cidr, "dev", "a0"]);
+                let dev = start(&device(mask)).unwrap();
+                assert_eq!(kernel_read(from, n as u16 + 1), Some(PnioStatus::OK), "the device at {mask}, the peer {cidr}");
+                assert_eq!(dev.status().reads, 1, "{mask}");
+            }
+        });
+    }
+
+    /// The senders no host has, as a host's stack takes none (the kernel at 192.168.0.10/24 on the
+    /// same frames answered the host and the probe alone): an ARP request from each is not answered
+    /// or counted (the subnet's broadcast, the loopback, 0/8, 240/4 and the device's own address
+    /// were) and a datagram from each is not taken; the host and, for ARP, the RFC 5227 probe are.
+    #[test]
+    fn arp_and_the_datagram_side_take_a_sender_alike() {
+        let senders = [
+            ("the host 192.168.0.1", HOST, true),
+            ("the subnet's broadcast 192.168.0.255", Ipv4Addr::new(192, 168, 0, 255), false),
+            ("the loopback 127.0.0.1", Ipv4Addr::new(127, 0, 0, 1), false),
+            ("this network's 0.1.2.3", Ipv4Addr::new(0, 1, 2, 3), false),
+            ("its own 192.168.0.10", ME, false),
+            ("the reserved 240.0.0.1", Ipv4Addr::new(240, 0, 0, 1), false),
+            ("a group's 224.0.0.1", Ipv4Addr::new(224, 0, 0, 1), false),
+            ("the broadcast", Ipv4Addr::BROADCAST, false),
+        ];
+        let taken: Vec<(&str, bool)> = senders.iter().map(|(what, src, _)| (*what, ip::udp_to(&datagram(*src), ME, M24, PNIO_PORT).is_some())).collect();
+        assert_eq!(taken, senders.iter().map(|(what, _, host)| (*what, *host)).collect::<Vec<_>>(), "datagrams");
+        netns::isolated("round_7::arp_and_the_datagram_side_take_a_sender_alike", &[("a0", "b0")], move || {
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = all("a0");
+            let me = raw.mac();
+            let mut got = Vec::new();
+            for (what, spa, host) in senders.iter().copied().chain([("an RFC 5227 probe", Ipv4Addr::UNSPECIFIED, true)]) {
+                let before = dev.status().arp_answered;
+                raw.send(&arp_request(Mac::BROADCAST, me, me, spa, ME)).unwrap();
+                let replies = arp_replies(&from(&raw, dev.mac, 300)).len();
+                got.push((what, replies, dev.status().arp_answered - before, host));
+            }
+            let wrong: Vec<_> = got.iter().filter(|(_, replies, counted, host)| (*replies, *counted) != if *host { (1, 1) } else { (0, 0) }).collect();
+            assert!(wrong.is_empty(), "(sender, replies, counted, a host): {wrong:?}");
+        });
+    }
+
+    /// An ARP request in a group's frame or the zero MAC's with a unicast sender hardware address,
+    /// and one from a host's frame with the zero sender hardware address: none answered or counted
+    /// (round 6's pin paired the two, so the hardware address's check alone caught it); the host's
+    /// whole one answered.
+    #[test]
+    fn arp_s_frame_source_and_sender_hardware_address_are_each_judged() {
+        netns::isolated("round_7::arp_s_frame_source_and_sender_hardware_address_are_each_judged", &[("a0", "b0")], || {
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = all("a0");
+            let me = raw.mac();
+            let mut got = Vec::new();
+            for (what, src, sha) in [("a group's frame", GROUP, me), ("the zero MAC's frame", ZERO, me), ("the zero sender hardware address", me, ZERO), ("the host", me, me)] {
+                let before = dev.status().arp_answered;
+                raw.send(&arp_request(Mac::BROADCAST, src, sha, HOST, ME)).unwrap();
+                got.push((what, arp_replies(&from(&raw, dev.mac, 300)), dev.status().arp_answered - before));
+            }
+            assert_eq!(got, [("a group's frame", vec![], 0), ("the zero MAC's frame", vec![], 0), ("the zero sender hardware address", vec![], 0), ("the host", vec![(me, me, HOST)], 1)]);
+        });
+    }
+
+    /// A datagram whose IPv4 total length leaves four bytes of UDP header, one whose UDP length is
+    /// 4, one of IPv4 version 6 and one whose header length is 16 bytes: none taken, none
+    /// panicking (without the guards the first two panicked the device's thread); on the wire, the
+    /// device still answers a kernel read after the first two.
+    #[test]
+    fn a_header_too_short_or_of_another_version_is_not_taken_and_the_device_goes_on() {
+        let good = datagram(HOST);
+        assert!(ip::udp_to(&good, ME, M24, PNIO_PORT).is_some(), "whole, it is taken");
+        let mut ip_short = good.clone();
+        ip_short[16..18].copy_from_slice(&24u16.to_be_bytes());
+        refix_ip(&mut ip_short, 20);
+        let mut udp_short = good.clone();
+        udp_short[38..40].copy_from_slice(&4u16.to_be_bytes());
+        udp_short[40] = 0;
+        udp_short[41] = 0;
+        let mut v6 = good.clone();
+        v6[14] = 0x65;
+        refix_ip(&mut v6, 20);
+        // A header of 16 bytes to 10.0.136.148, whose last two bytes are the port's: read from its
+        // 16th byte on, the address and what follows it are a whole UDP header to 34964, from
+        // port 2560, of the length left and no checksum (without the header length's check it
+        // was taken).
+        let odd = Ipv4Addr::new(10, 0, 136, 148);
+        let mut ihl16 = vec![0x02, 0, 0, 0, 0, 0x10, 0x02, 0, 0, 0, 0, 0x01, 0x08, 0x00, 0x44, 0, 0, 32, 0, 1, 0, 0, 64, 17, 0, 0, 10, 0, 0, 1];
+        ihl16.extend_from_slice(&odd.octets());
+        ihl16.extend_from_slice(&[0, 16, 0, 0]);
+        ihl16.extend_from_slice(&[b'x'; 8]);
+        refix_ip(&mut ihl16, 16);
+        let taken: Vec<_> = [(&ip_short, ME), (&udp_short, ME), (&v6, ME), (&ihl16, odd)].into_iter().map(|(f, to)| std::panic::catch_unwind(|| ip::udp_to(f, to, M24, PNIO_PORT).is_some()).map_err(|_| "panicked")).collect();
+        assert_eq!(taken, [Ok(false), Ok(false), Ok(false), Ok(false)], "an IPv4 length of 24, a UDP length of 4, version 6, a header of 16 bytes");
+        netns::isolated("round_7::a_header_too_short_or_of_another_version_is_not_taken_and_the_device_goes_on", &[("a0", "b0")], move || {
+            host("192.168.0.1/24");
+            let dev = start(&config(DEVICE)).unwrap();
+            assert_eq!(kernel_read("192.168.0.1", 1), Some(PnioStatus::OK), "before");
+            let raw = all("a0");
+            for mut f in [ip_short.clone(), udp_short.clone()] {
+                f[0..6].copy_from_slice(&dev.mac.0);
+                f[6..12].copy_from_slice(&raw.mac().0);
+                raw.send(&f).unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            assert_eq!(kernel_read("192.168.0.1", 2), Some(PnioStatus::OK), "after the short headers");
+            assert_eq!(dev.status().reads, 2);
+        });
+    }
+
+    /// LLDP to the nearest-bridge group tagged VLAN 5, from a group and from the zero MAC: no
+    /// neighbour (each became it, the last two naming that address as the peer's MAC); one tagged
+    /// VLAN 0 is read as untagged and heard, its peer's MAC the sender's.
+    #[test]
+    fn lldp_is_taken_from_one_station_untagged_or_of_vlan_0() {
+        netns::isolated("round_7::lldp_is_taken_from_one_station_untagged_or_of_vlan_0", &[("a0", "b0")], || {
+            let dev = start(&config(DEVICE)).unwrap();
+            let raw = all("a0");
+            let me = raw.mac();
+            let mut got = Vec::new();
+            for (n, (what, src, tci)) in [("VLAN 5", me, Some(0x0005u16)), ("a group's frame", GROUP, None), ("the zero MAC's frame", ZERO, None), ("VLAN 0", me, Some(0xC000))].into_iter().enumerate() {
+                let mut f = lldp::frame(me, &LldpPdu::new(ChassisId::Local { id: format!("switch-{n}") }, PortId::Local { id: "port-003".into() }, 120)).unwrap();
+                f[6..12].copy_from_slice(&src.0);
+                if let Some(t) = tci {
+                    let t = t.to_be_bytes();
+                    f.splice(12..12, [0x81, 0x00, t[0], t[1]]);
+                }
+                raw.send(&f).unwrap();
+                std::thread::sleep(Duration::from_millis(300));
+                got.push((what, dev.neighbour().map(|p| (p.chassis_id, p.mac))));
+            }
+            assert_eq!(got, [("VLAN 5", None), ("a group's frame", None), ("the zero MAC's frame", None), ("VLAN 0", Some(("switch-3".to_string(), me)))]);
+        });
     }
 }

@@ -33,9 +33,28 @@ fn be16(f: &[u8], at: usize) -> u16 {
     u16::from_be_bytes([f[at], f[at + 1]])
 }
 
-/// The answer to an ARP request for `ip`, broadcast or to `mac`: a reply from `mac`, padded to the
-/// least frame. `None` for any other frame.
-pub fn arp_reply(frame: &[u8], mac: Mac, ip: Ipv4Addr) -> Option<Vec<u8>> {
+/// The broadcast of the subnet `ip`/`mask`: none for a mask of 0.0.0.0 (none given), nor at /31
+/// (RFC 3021: two hosts and no broadcast, as Linux makes none) or /32 (round 7: at /31 the peer's
+/// own address was taken for the broadcast and its reads refused).
+pub fn subnet_broadcast(ip: Ipv4Addr, mask: Ipv4Addr) -> Option<Ipv4Addr> {
+    let m = u32::from(mask);
+    (m != 0 && m.leading_ones() < 31).then(|| Ipv4Addr::from(u32::from(ip) | !m))
+}
+
+/// An address no host on the link sends from, as a host's stack takes none (RFC 1122 3.2.1.3;
+/// Linux's martian sources): this network (0.0.0.0/8), the loopback (127.0.0.0/8), a group
+/// (224.0.0.0/4), the reserved block with the broadcast (240.0.0.0/4), the subnet's broadcast, and
+/// the device's own address (another station's frame claiming it). The ARP and the UDP side judge a
+/// sender alike (round 7: ARP answered the subnet's broadcast, the loopback, 0/8, 240/4 and the
+/// device's own address, which the datagram side or the kernel refuse).
+fn no_host(a: Ipv4Addr, own: Ipv4Addr, mask: Ipv4Addr) -> bool {
+    let first = a.octets()[0];
+    first == 0 || first == 127 || first >= 224 || a == own || Some(a) == subnet_broadcast(own, mask)
+}
+
+/// The answer to an ARP request for `ip` (of the subnet `mask` gives), broadcast or to `mac`: a
+/// reply from `mac`, padded to the least frame. `None` for any other frame.
+pub fn arp_reply(frame: &[u8], mac: Mac, ip: Ipv4Addr, mask: Ipv4Addr) -> Option<Vec<u8>> {
     if frame.len() < 42 || be16(frame, 12) != ETHERTYPE_ARP {
         return None;
     }
@@ -53,11 +72,11 @@ pub fn arp_reply(frame: &[u8], mac: Mac, ip: Ipv4Addr) -> Option<Vec<u8>> {
         return None;
     }
     let (sha, spa) = (mac_at(a, 8), &a[14..18]);
-    // A sender no host is (the broadcast or a group address) gets no answer, as a host's stack
-    // gives none; 0.0.0.0, an RFC 5227 probe, does. The answer goes to the sender's hardware
-    // address, so a group or the all-zero one gets none either: no answer goes to a group.
+    // A sender no host is gets no answer, as a host's stack gives none; 0.0.0.0, an RFC 5227
+    // probe, does. The answer goes to the sender's hardware address, so a group or the all-zero one
+    // gets none either: no answer goes to a group.
     let sender = Ipv4Addr::new(spa[0], spa[1], spa[2], spa[3]);
-    if sender.is_broadcast() || sender.is_multicast() || sha.is_multicast() || sha == Mac([0; 6]) {
+    if (!sender.is_unspecified() && no_host(sender, ip, mask)) || sha.is_multicast() || sha == Mac([0; 6]) {
         return None;
     }
     let mut out = Vec::with_capacity(60);
@@ -97,10 +116,10 @@ fn udp_checksum(src: Ipv4Addr, dst: Ipv4Addr, udp: &[u8]) -> u16 {
     if c == 0 { 0xFFFF } else { c }
 }
 
-/// A UDP datagram an IPv4 frame carries to `ip`:`port`: the sender's MAC, address and port and the
-/// payload. `None` for a frame of another kind, a fragment, another address or port, or a header
-/// or UDP checksum that does not hold.
-pub fn udp_to(frame: &[u8], ip: Ipv4Addr, port: u16) -> Option<(Mac, Ipv4Addr, u16, Vec<u8>)> {
+/// A UDP datagram an IPv4 frame carries to `ip`:`port` (of the subnet `mask` gives): the sender's
+/// MAC, address and port and the payload. `None` for a frame of another kind, a fragment, another
+/// address or port, a sender no host is, or a header or UDP checksum that does not hold.
+pub fn udp_to(frame: &[u8], ip: Ipv4Addr, mask: Ipv4Addr, port: u16) -> Option<(Mac, Ipv4Addr, u16, Vec<u8>)> {
     if frame.len() < 14 + 20 + 8 || be16(frame, 12) != ETHERTYPE_IPV4 || ip.is_unspecified() {
         return None;
     }
@@ -115,9 +134,8 @@ pub fn udp_to(frame: &[u8], ip: Ipv4Addr, port: u16) -> Option<(Mac, Ipv4Addr, u
         return None;
     }
     let src = Ipv4Addr::new(p[12], p[13], p[14], p[15]);
-    // From a host (RFC 1122 3.2.1.3: a datagram from no host's address is dropped): not the
-    // unspecified address, a broadcast, a group or the loopback.
-    if src.is_unspecified() || src.is_broadcast() || src.is_multicast() || src.is_loopback() {
+    // From a host (RFC 1122 3.2.1.3: a datagram from no host's address is dropped).
+    if no_host(src, ip, mask) {
         return None;
     }
     let u = &p[ihl..total];
