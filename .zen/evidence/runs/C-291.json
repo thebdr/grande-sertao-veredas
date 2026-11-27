@@ -19,20 +19,20 @@
     "cut"
   ],
   "exitCode": 0,
-  "outputSha": "9537baa75c6a332e37b3ab9825d198b8d5709782e7ac14c37bab2e0e196462c1",
-  "outputTail": "        SLOW [>1080.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1140.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1200.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1260.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1320.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1380.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1440.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1500.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1560.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1620.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1680.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1740.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        PASS [1752.727s] (43/43) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n────────────\n     Summary [1758.350s] 43 tests run: 43 passed (1 slow), 0 skipped",
-  "ranAt": "2026-11-27T11:28:03.344Z",
-  "headCommit": "f7cf62b21d9278f9bf69842debd953ec23905dd4",
+  "outputSha": "bd6f5cd8671626c82b1a8ce834c1cb1962a5f92e1a34c2aede56d0ccd589c47c",
+  "outputTail": "        SLOW [>1380.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1440.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1500.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1560.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1620.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1680.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1740.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1800.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1860.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1920.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1980.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>2040.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        PASS [2070.273s] (44/44) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n────────────\n     Summary [2076.239s] 44 tests run: 44 passed (1 slow), 0 skipped",
+  "ranAt": "2026-11-27T14:26:24.807Z",
+  "headCommit": "b54356673b626aa30be9fcb396cbaf24b21e16a0",
   "tests": [
     {
       "name": "tools/alforge/tests/bundle.rs",
       "file": "tools/alforge/tests/bundle.rs",
-      "fileSha": "bfa92e4048c7732d3fb1b25effeb3ae4d069990018c911386cb2ccfc33f3132f"
+      "fileSha": "fe1e8544e9c9113217ebd6df6fe9879f7ae2bcc79db67e422d57b5d2a00d6c08"
     },
     {
       "name": "tools/alforge/tests/trace.rs",
       "file": "tools/alforge/tests/trace.rs",
-      "fileSha": "4592399997929724cbbee6fc9192c3394571467f772c1483ad9857f5d9521122"
+      "fileSha": "e6e4d6bab3e5e4f2e9c0e50420bab7129e83ed2b6e501967c0e30e5d1614de95"
     },
     {
       "name": "tools/alforge/tests/cut.rs",
