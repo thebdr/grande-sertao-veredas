@@ -1533,3 +1533,49 @@ fn a_random_anchor_reading_a_row_no_real_run_reads_is_the_same_however_deep_it_r
         }
     }
 }
+
+#[test]
+fn a_recursion_through_lambda_calls_computes_the_same_whoever_reads_its_cell_first() {
+    // the round at 66cb471a: fork change 44 counted a cell's LAMBDA calls and names from the
+    // outermost one in whichever cell read it first, so `Soma(15)`, which alone computes in every
+    // build, was `#NUM!` behind a reader read before it or at the end of cells reading each other
+    // through names, in a debug build (fork change 44, refined: each formula's run counts its own)
+    let dir = tempfile::tempdir().unwrap();
+    let source = corpus_dir(&baseline()).join("calc_tests/LOGICAL/LAMBDA.xlsx");
+    let part = sheet_part(&source, "Sheet1");
+    let mut names = String::from(
+        r#"<definedName name="Soma">_xlfn.LAMBDA(_xlpm.n,IF(_xlpm.n&lt;=0,0,_xlpm.n+Soma(_xlpm.n-1)))</definedName><definedName name="Rd">Sheet1!$B$1+0</definedName>"#,
+    );
+    for i in 1..=48 {
+        names.push_str(&format!(r#"<definedName name="Nome_{i}">Sheet1!$A${}+0</definedName>"#, i + 1));
+    }
+    let named = dir.path().join("named.xlsx");
+    rewrite_part(&source, &named, "xl/workbook.xml", |text| text.replacen("<definedNames>", &format!("<definedNames>{names}"), 1));
+    let sheet_data = regex::Regex::new(r"(?s)<sheetData>.*?</sheetData>|<sheetData/>").unwrap();
+    let dimension = regex::Regex::new(r"<dimension[^>]*/>").unwrap();
+    let cell = |at: &str, f: &str| format!(r#"<c r="{at}"><f>{f}</f><v>120</v></c>"#);
+    let chain: String = (1..=48)
+        .map(|i| format!(r#"<row r="{i}">{}</row>"#, cell(&format!("A{i}"), &format!("Nome_{i}"))))
+        .chain(std::iter::once(format!(r#"<row r="49">{}</row>"#, cell("A49", "Soma(15)"))))
+        .collect();
+    for (book, rows, cells) in [
+        ("a reader after it", format!(r#"<row r="1">{}{}</row>"#, cell("B1", "Soma(15)"), cell("C1", "Rd")), 2),
+        ("a reader before it", format!(r#"<row r="1">{}{}{}</row>"#, cell("A1", "Rd"), cell("B1", "Soma(15)"), cell("C1", "Rd")), 3),
+        ("48 cells reading it through names", chain, 49),
+    ] {
+        let planted = dir.path().join("planted.xlsx");
+        rewrite_part(&named, &planted, &part, |text| {
+            let text = dimension.replace(text, "").to_string();
+            sheet_data.replace(&text, regex::NoExpand(&format!("<sheetData>{rows}</sheetData>"))).to_string()
+        });
+        let mut probe = Probe::default();
+        for links in [LinksMode::Cached, LinksMode::Linked] {
+            let mut o = options(links);
+            o.max_examples = 1_000;
+            let report = run_file(&planted, &o, &mut probe);
+            let m = report.measure().unwrap();
+            let missed: Vec<String> = report.examples.values().flatten().map(|e| format!("{} {} {}", e.reference, e.expected, e.actual)).collect();
+            assert_eq!((m.formula_cells, m.matched), (cells, cells), "{book}, {links:?}: {missed:?}");
+        }
+    }
+}

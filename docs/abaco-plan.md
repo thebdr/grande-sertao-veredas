@@ -358,10 +358,13 @@ own to close in a fork change of its own:
   and `ISOWEEKNUM` cells of an empty one.
 - **A recursion through LAMBDA calls or names stops short of Excel's:** a LAMBDA's call and a
   defined name's formula run inside one formula, where the evaluator's unwind cannot come, so
-  change 44 bounds them at 512 KiB of stack, `#NUM!` beyond (Excel's own error past its limit, which
-  lies thousands of calls deep): a one-parameter recursion computes to 17 calls in a debug build
-  and 125 in a release one (measured 2026-11-27, on a 2 MB thread), and a name read inside itself
-  is `#NUM!` at once where it aborted the process. The patcher refuses such a `#NUM!` where an edit
+  change 44 bounds them at 512 KiB of stack, each formula's run counting its own (44b), `#NUM!`
+  beyond (Excel's own error past its limit, which lies thousands of calls deep): `Soma(n)`, a
+  one-parameter recursion, computes to n = 17 in a debug build and 125 in a release one whichever
+  cell reads it first, a chain of names reading one another to some 20 and 200 (measured
+  2026-11-27, on a 2 MB thread), and a name read inside itself is `#NUM!` at once where it aborted
+  the process. The bound turns on the build's frames, so near it a formula's value can differ
+  between builds. The patcher refuses such a `#NUM!` where an edit
   wrote or the edits brought it (C-223's twenty-sixth round); no workbook of the corpus goes so deep.
 
 ## On this machine
