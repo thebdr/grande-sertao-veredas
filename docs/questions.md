@@ -3536,6 +3536,13 @@ driver by naming it.
 
 **Reversible?** Yes: the manifest's `bins` say what each release ships.
 
+**The rule as (a) is built** (C-291's refute round 23, 2026-11-27): it is read from the package's
+folder and the bin, never from a build. A bin with required features in a folder that names its own
+toolchain is not shipped, even one the suite's stable toolchain builds (a second tool behind an
+ordinary feature); a bin there with no required feature is built with the suite's toolchain, and
+the cut stops where that toolchain cannot build it. A ruling of (a) may say whether the rule stays
+so, or reads "only another toolchain builds it" by trying the build.
+
 ---
 
 ## Q450 - Which texts does a bundle carry for the third-party code inside the Qt it ships?

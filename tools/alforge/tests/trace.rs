@@ -62,6 +62,11 @@ fn log() -> String {
         r#"105 openat2(AT_FDCWD</build/src/crates/veredas-portal>, "x.h", {flags=O_RDONLY|O_CLOEXEC, resolve=RESOLVE_BENEATH}, 24) = 3</build/src/crates/veredas-portal/x.h>"#,
         r#"105 +++ exited with 0 +++"#,
         r#"103 --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=105, si_uid=0, si_status=0} ---"#,
+        // The build script running cargo itself (`$CARGO metadata`, as the `cargo_metadata` crate
+        // does): a program of the build, its reads judged (C-291's round 23).
+        r#"103 vfork() = 106"#,
+        r#"106 execve("/opt/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/bin/cargo", ["cargo", "metadata", "--no-deps"], 0x7ffd /* 40 vars */) = 0"#,
+        r#"106 openat(AT_FDCWD</build/src/crates/veredas-portal>, "/build/src/crates/veredas-outro/Cargo.toml", O_RDONLY|O_CLOEXEC) = 3</build/src/crates/veredas-outro/Cargo.toml>"#,
     ]
     .join("\n")
         + "\n"
@@ -72,6 +77,7 @@ fn a_traced_build_names_what_each_process_but_cargo_opened_to_read() {
     let reads = trace::reads(&log(), SRC);
     let rustc = "/opt/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/bin/rustc";
     let script = "/build/src/target/release/build/veredas-portal/1111222233334444/out/build_script_build";
+    let cargo = "/opt/rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/bin/cargo";
     let read = |program: &str, path: &str| Read { program: program.to_string(), path: path.to_string() };
     assert_eq!(
         reads,
@@ -97,6 +103,8 @@ fn a_traced_build_names_what_each_process_but_cargo_opened_to_read() {
             read("/usr/bin/cc", "/usr/include/stdio.h"),
             read("/usr/bin/cc", "/build/src/crates/veredas-outro/include/x.h"),
             read("/usr/bin/cc", "/build/src/crates/veredas-portal/x.h"),
+            read(cargo, cargo),
+            read(cargo, "/build/src/crates/veredas-outro/Cargo.toml"),
         ]
     );
 
@@ -118,6 +126,7 @@ fn a_traced_build_names_what_each_process_but_cargo_opened_to_read() {
         trace::outside(&reads, SRC, VENDOR, &inputs, &packages),
         [
             "rustc read /build/vendor/serde-1.0.199/src/lib.rs",
+            "cargo read crates/veredas-outro/Cargo.toml",
             "cc read crates/veredas-outro/include/x.h",
             "build_script_build read crates/veredas-portal/tests",
             "ferramenta read docs/ferramenta",
@@ -148,4 +157,69 @@ fn the_tracer_follows_every_process_and_shows_each_file_as_the_kernel_opened_it(
     assert!(trace::STRACE.ends_with(" -o"));
     // A log naming nothing reads as nothing.
     assert_eq!(trace::reads("", SRC), Vec::<Read>::new());
+}
+
+/// A real build traced on this machine as the builder traces it (C-291's round 23): a member's
+/// build script runs cargo itself (`$CARGO metadata`, as the `cargo_metadata` crate does) and
+/// writes what it read of the workspace into its executable. That cargo's reads are judged as any
+/// program's, and refused against the version, which names them not; the builder's own cargo reads
+/// every member's manifest unjudged.
+#[test]
+fn a_cargo_a_build_script_runs_is_judged_as_any_program() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("repo");
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git").arg("-C").arg(&root).args(["-c", "user.name=alforge", "-c", "user.email=alforge@example.invalid", "-c", "commit.gpgsign=false"]).args(args).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    std::fs::create_dir_all(&root).unwrap();
+    git(&["init", "-q", "-b", "main"]);
+    write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
+    write("crates/veredas-a/Cargo.toml", "[package]\nname = \"veredas-a\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    write(
+        "crates/veredas-a/build.rs",
+        "fn main() {\n    let cargo = std::env::var(\"CARGO\").unwrap();\n    let manifest = format!(\"{}/../../Cargo.toml\", std::env::var(\"CARGO_MANIFEST_DIR\").unwrap());\n    \
+         let out = std::process::Command::new(cargo).args([\"metadata\", \"--no-deps\", \"--offline\", \"--format-version\", \"1\", \"--manifest-path\", &manifest]).output().unwrap();\n    \
+         let text = String::from_utf8(out.stdout).unwrap();\n    let n = text.matches(\"\\\"version\\\":\\\"\").count();\n    println!(\"cargo::rustc-env=MEMBERS={n}\");\n}\n",
+    );
+    write("crates/veredas-a/src/main.rs", "fn main() { println!(\"{}\", env!(\"MEMBERS\")); }\n");
+    write("crates/veredas-b/Cargo.toml", "[package]\nname = \"veredas-b\"\nversion = \"2.0.0\"\nedition = \"2024\"\n");
+    write("crates/veredas-b/src/lib.rs", "\n");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let out = std::process::Command::new(&cargo).args(["generate-lockfile", "--offline"]).current_dir(&root).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "a build script running cargo"]);
+    let c = git(&["rev-parse", "HEAD"]);
+    let held = alforge::manifest::components_at(&root, &c, &mut Vec::new()).unwrap();
+    let a = &held["veredas-a"];
+    let inputs = a.inputs.as_ref().unwrap();
+    assert!(!inputs.0.contains_key("crates/veredas-b/") && !inputs.0.contains_key("crates/veredas-b/Cargo.toml"), "{inputs:?}");
+
+    // Traced as the builder traces a build, its target folder its own.
+    let log = d.path().join("a.trace");
+    let mut words: Vec<String> = trace::STRACE.split_whitespace().map(String::from).collect();
+    words.push(log.display().to_string());
+    let out = std::process::Command::new(&words[0])
+        .args(&words[1..])
+        .args([&cargo, "build", "--offline", "--locked", "-p", "veredas-a@2.0.0", "--bins"])
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let text = std::fs::read_to_string(&log).unwrap();
+    let src = root.canonicalize().unwrap().display().to_string();
+    let reads = trace::reads(&text, &src);
+    let refused = trace::outside(&reads, &src, &d.path().join("vendor").display().to_string(), inputs, &a.packages);
+    // That cargo reads the root's manifest whole (the version names the parts cargo reads for the
+    // component), lists the members' folder for its glob and reads the other member's manifest:
+    // each refused, so the cut stops on such a build.
+    assert_eq!(refused, ["cargo read Cargo.toml", "cargo read crates", "cargo read crates/veredas-b/Cargo.toml"], "{refused:?}");
 }

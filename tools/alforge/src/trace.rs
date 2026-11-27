@@ -7,8 +7,10 @@
 //! build script's undeclared read, a header the C compiler includes and a file a proc-macro reads
 //! are judged too.
 //!
-//! Cargo's own reads are its resolution, pinned by `--locked` (every member's manifest to load the
-//! workspace, the lock, the vendored sums), and are left out. What lies outside the tree and the
+//! The reads of the cargo the builder starts (and of its threads) are its resolution, pinned by
+//! `--locked` (every member's manifest to load the workspace, the lock, the vendored sums), and are
+//! left out; a cargo a build script starts (`$CARGO metadata`, as the `cargo_metadata` crate runs
+//! it) is a program of the build, judged as any other. What lies outside the tree and the
 //! vendored sources (the toolchain, the system's headers and libraries, Qt) is the builder's, not a
 //! version's. A file read without being opened (a kernel ring's, `io_uring`) is in no trace, and a
 //! file whose existence alone a build looks at (`stat`) is not judged.
@@ -108,13 +110,17 @@ fn is_cargo(program: &str) -> bool {
     Path::new(program).file_name().is_some_and(|n| n == "cargo")
 }
 
-/// Every file a traced build's process other than cargo opened to read (not one opened to write
-/// alone, nor an `O_PATH` handle), and every program started, from strace's log `trace` of a build
-/// started in `cwd`; a call strace cut in two (`<unfinished ...>`, `<... resumed>`) read whole.
+/// Every file a traced build's process other than the builder's cargo opened to read (not one
+/// opened to write alone, nor an `O_PATH` handle), and every program started, from strace's log
+/// `trace` of a build started in `cwd`; a call strace cut in two (`<unfinished ...>`,
+/// `<... resumed>`) read whole. The builder's cargo is the process traced first and what it starts
+/// by `clone` or `fork` (its threads) until one of them runs another program: a cargo a build
+/// script runs is not it.
 pub fn reads(trace: &str, cwd: &str) -> Vec<Read> {
     let mut program: BTreeMap<String, String> = BTreeMap::new();
     let mut folder: BTreeMap<String, String> = BTreeMap::new();
     let mut pending: BTreeMap<String, String> = BTreeMap::new();
+    let mut builders: BTreeMap<String, bool> = BTreeMap::new();
     let mut out = Vec::new();
     let mut first = true;
     for raw in trace.lines() {
@@ -122,6 +128,7 @@ pub fn reads(trace: &str, cwd: &str) -> Vec<Read> {
         let pid = pid.to_string();
         if first {
             folder.insert(pid.clone(), cwd.to_string());
+            builders.insert(pid.clone(), true);
             first = false;
         }
         let rest = rest.trim_start();
@@ -145,11 +152,13 @@ pub fn reads(trace: &str, cwd: &str) -> Vec<Read> {
         let ret = line[eq + 3..].trim();
         let here = folder.get(&pid).cloned().unwrap_or_else(|| cwd.to_string());
         let running = program.get(&pid).cloned().unwrap_or_default();
+        let builder = builders.get(&pid).copied().unwrap_or(false);
         match name {
             "clone" | "clone3" | "fork" | "vfork" => {
                 if let Some(child) = ret.split_whitespace().next().filter(|c| c.bytes().all(|b| b.is_ascii_digit())) {
                     program.insert(child.to_string(), running);
                     folder.insert(child.to_string(), here);
+                    builders.insert(child.to_string(), builder);
                 }
             }
             "execve" | "execveat" => {
@@ -158,7 +167,11 @@ pub fn reads(trace: &str, cwd: &str) -> Vec<Read> {
                 if let Some((path, _)) = first_string(args) {
                     let path = resolved(&base, &path);
                     program.insert(pid.clone(), path.clone());
-                    if !is_cargo(&path) {
+                    // The builder's cargo stays it through rustup's proxy; a process that runs
+                    // anything else, and all it starts, is the build's.
+                    let still = builder && is_cargo(&path);
+                    builders.insert(pid.clone(), still);
+                    if !still {
                         out.push(Read { program: path.clone(), path });
                     }
                 }
@@ -177,7 +190,7 @@ pub fn reads(trace: &str, cwd: &str) -> Vec<Read> {
                 let Some(path) = fd_path(ret) else { continue };
                 let flags = first_string(args).map(|(_, after)| after.to_string()).unwrap_or_default();
                 let writes_only = flags.contains("O_WRONLY");
-                if writes_only || flags.contains("O_PATH") || is_cargo(&running) {
+                if writes_only || flags.contains("O_PATH") || builder {
                     continue;
                 }
                 out.push(Read { program: running, path });
