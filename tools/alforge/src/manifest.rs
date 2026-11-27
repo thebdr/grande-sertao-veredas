@@ -201,6 +201,9 @@ pub struct Held {
     /// folder names a toolchain of its own (`rust-toolchain`), which alone builds them, as ORCL's
     /// front end's driver needs its pinned nightly (docs/questions.md Q449, taken meanwhile).
     pub unshipped: BTreeSet<String>,
+    /// Its `bin` targets cargo never builds, by the required feature the package does not define
+    /// (cargo warns and leaves such a bin out of every build): no release ships one.
+    pub never: BTreeMap<String, String>,
     /// Its library target's name (`veredas_core`), if it has one: what the cut builds of a
     /// component that ships no executable, to hold that build too to its inputs.
     pub lib: Option<String>,
@@ -429,10 +432,25 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
             // features only the toolchain its package's folder names builds (Q449).
             // DECISION PENDING (Q449)
             let own_toolchain = ["rust-toolchain", "rust-toolchain.toml"].iter().any(|f| tree.join(&dir).join(f).is_file());
-            let (mut bins, mut features, mut unshipped) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+            // A required feature the package defines (an optional dependency's own name among
+            // them), or a dependency's (`dep/feature`, `dep?/feature`) of one it has.
+            let defined: BTreeSet<String> = pkg["features"].as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
+            let dependencies: Vec<&serde_json::Value> = pkg["dependencies"].as_array().into_iter().flatten().collect();
+            let named = |d: &&serde_json::Value| d["rename"].as_str().or_else(|| d["name"].as_str()).unwrap_or_default().to_string();
+            let optional: BTreeSet<String> = dependencies.iter().filter(|d| d["optional"].as_bool() == Some(true)).map(named).collect();
+            let deps: BTreeSet<String> = dependencies.iter().map(named).collect();
+            let defines = |f: &str| match f.split_once('/') {
+                Some((d, _)) => defined.contains(d.trim_end_matches('?')) || deps.contains(d.trim_end_matches('?')),
+                None => defined.contains(f) || optional.contains(f),
+            };
+            let (mut bins, mut features, mut unshipped, mut never) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new(), BTreeMap::new());
             for t in pkg["targets"].as_array().into_iter().flatten().filter(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "bin"))) {
                 let Some(b) = t["name"].as_str() else { continue };
                 let required: Vec<String> = t["required-features"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
+                if let Some(f) = required.iter().find(|f| !defines(f)) {
+                    never.insert(b.to_string(), f.clone());
+                    continue;
+                }
                 if own_toolchain && !required.is_empty() {
                     unshipped.insert(b.to_string());
                     continue;
@@ -450,7 +468,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                 Ok((i, p)) => (Ok(i), p),
                 Err(e) => (Err(e), inputs::Packages::default()),
             };
-            held.insert(name.clone(), Held { dir, name, version, bins, features, unshipped, lib, inputs, packages });
+            held.insert(name.clone(), Held { dir, name, version, bins, features, unshipped, never, lib, inputs, packages });
         }
         Ok(None)
     })();
@@ -529,7 +547,9 @@ pub fn check(root: &Path, m: &Manifest) -> Result<Vec<String>, CheckError> {
             refusals.push(format!("{} builds `{b}` at {c} and the manifest does not ship it", x.name));
         }
         for b in listed.difference(&h.bins) {
-            if h.unshipped.contains(b) {
+            if let Some(f) = h.never.get(b) {
+                refusals.push(format!("{}'s `{b}` requires `{f}`, which the package does not define: cargo builds it never at {c}", x.name));
+            } else if h.unshipped.contains(b) {
                 refusals.push(format!("{}'s `{b}` needs a feature only the toolchain its folder names builds at {c}: a release does not ship it (docs/questions.md Q449)", x.name));
             } else {
                 refusals.push(format!("{} builds no `{b}` at {c}", x.name));

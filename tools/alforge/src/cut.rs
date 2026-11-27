@@ -391,6 +391,9 @@ pub fn cut(root: &Path, o: &Options) -> Result<Cut, CutError> {
         for b in &h.unshipped {
             eprintln!("alforge: {}'s `{b}` needs a feature only the toolchain its folder names builds: not shipped (docs/questions.md Q449)", h.name);
         }
+        for (b, f) in &h.never {
+            eprintln!("alforge: {}'s `{b}` requires `{f}`, which the package does not define: cargo builds it never, not shipped", h.name);
+        }
     }
     // Planned with every bin, each built with the features its executables need (Q443).
     let real = format!("{SUITE}; then {ALONE}");

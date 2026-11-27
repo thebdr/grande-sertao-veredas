@@ -2613,3 +2613,70 @@ fn round_thirty_a_folder_an_inline_modules_path_names_is_read_whole() {
         r.git(&["reset", "-q", "--hard", &c1]);
     }
 }
+
+/// Round 31's real forms: a module reached by a plain `mod x;` outside the package folders whose
+/// data files (`include_str!`, `include_bytes!` into a left-out test folder) went unread, now read
+/// by the one reading that follows modules; and a bin requiring a feature its package does not
+/// define, which cargo builds never (it warns), so no release ships it and naming it is refused.
+#[test]
+fn round_thirty_one_a_modules_data_outside_the_folders_and_a_bin_cargo_never_builds() {
+    let pins = |names: &[(&str, &str)], release: &str, commit: &str| -> (PathBuf, Manifest) {
+        let comps: String = names.iter().map(|(n, b)| format!("[[component]]\nname = \"{n}\"\nversion = \"2.0.0\"\n{b}\n")).collect();
+        let text = format!(
+            "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n{comps}\
+             [tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+        );
+        (PathBuf::from(format!("{release}.toml")), manifest::load(&text).unwrap())
+    };
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n");
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nveredas-core = { path = \"../veredas-core\" }\n");
+    r.write("crates/veredas-portal/src/main.rs", "#[path = \"../../../shared/outer.rs\"]\nmod outer;\nfn main() { println!(\"{} {}\", outer::inner::TEXT, veredas_core::ROWS.len()); }\n");
+    r.write("shared/outer.rs", "pub mod inner;\n");
+    r.write("shared/inner.rs", "pub const TEXT: &str = include_str!(\"word.txt\");\n");
+    r.write("shared/word.txt", "one");
+    r.write("crates/veredas-core/Cargo.toml", "[package]\nname = \"veredas-core\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"../../shared/core.rs\"\n");
+    r.write("shared/core.rs", "pub mod table;\npub use table::ROWS;\n");
+    r.write("shared/table.rs", "pub const ROWS: &[u8] = include_bytes!(\"../crates/veredas-core/tests/rows.bin\");\n");
+    r.write("crates/veredas-core/tests/rows.bin", "one");
+    r.write("crates/veredas-core/tests/rows.rs", "#[test]\nfn rows() {}\n");
+    let c1 = r.commit("modules outside the folders reading data");
+    let both = [("veredas-core", ""), ("veredas-portal", "bins = [\"veredas-portal\"]")];
+    let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
+    let named = &held["veredas-portal"].inputs.as_ref().unwrap().0;
+    for k in ["shared/inner.rs", "shared/word.txt", "shared/table.rs", "crates/veredas-core/tests/rows.bin"] {
+        assert!(named.contains_key(k), "{k}: {named:?}");
+    }
+    assert_eq!(named["crates/veredas-core/tests/"], alforge::inputs::LEFT_OUT);
+    for (file, charged) in [("shared/word.txt", vec!["veredas-portal 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (shared/word.txt): a version names everything its build reads"]), (
+        "crates/veredas-core/tests/rows.bin",
+        vec![
+            "veredas-core 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (crates/veredas-core/tests/rows.bin): a version names everything its build reads",
+            "veredas-portal 2.0.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (crates/veredas-core/tests/rows.bin): a version names everything its build reads",
+        ],
+    )] {
+        r.write(file, "two");
+        let c = r.commit(file);
+        assert_eq!(manifest::check_together(r.path(), &[pins(&both, "2.0.0", &c1), pins(&both, "2.0.1", &c)]).unwrap(), charged, "{file}");
+        r.git(&["reset", "-q", "--hard", &c1]);
+    }
+
+    // A bin requiring a feature its package does not define: never built, never shipped.
+    r.write("crates/veredas-portal/Cargo.toml", "[package]\nname = \"veredas-portal\"\nversion = \"2.0.0\"\nedition = \"2024\"\n\n[dependencies]\nveredas-core = { path = \"../veredas-core\" }\n\n[[bin]]\nname = \"veredas-portal\"\npath = \"src/main.rs\"\n\n[[bin]]\nname = \"dead\"\npath = \"src/dead.rs\"\nrequired-features = [\"nope\"]\n");
+    r.write("crates/veredas-portal/src/dead.rs", "fn main() {}\n");
+    let c = r.commit("a bin cargo never builds");
+    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    let portal = &held["veredas-portal"];
+    assert_eq!((portal.bins.iter().map(String::as_str).collect::<Vec<_>>(), portal.never.get("dead").map(String::as_str), portal.features.len()), (vec!["veredas-portal"], Some("nope"), 0));
+    let check = |bins: &str| manifest::check(r.path(), &pins(&[("veredas-core", ""), ("veredas-portal", bins)], "2.0.0", &c).1).unwrap();
+    assert_eq!(check("bins = [\"veredas-portal\"]"), Vec::<String>::new());
+    assert_eq!(
+        check("bins = [\"dead\", \"veredas-portal\"]"),
+        [format!("veredas-portal's `dead` requires `nope`, which the package does not define: cargo builds it never at {c}")]
+    );
+    // Cargo's own reading: the release build makes no `dead`.
+    let target = tempfile::tempdir().unwrap();
+    let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into())).args(["build", "--offline", "-q", "-p", "veredas-portal", "--bins"]).env("CARGO_TARGET_DIR", target.path()).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(target.path().join("debug/veredas-portal").is_file() && !target.path().join("debug/dead").exists());
+}
