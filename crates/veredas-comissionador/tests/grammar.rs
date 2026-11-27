@@ -2181,8 +2181,9 @@ wait that timed out to `fail_log`, `on pass -> report` skips what lies between. 
 routed once per step. A branch routes its `pass` by its arms, so a branch takes no `on pass`.
 
 A run ends **passed**, **failed** or **aborted**: aborted when the plant did not let the test
-judge it (a timeout or an error no route takes), when the tester stops the run, or, in a replay,
-when the stored window ends before a step's outcome.
+judge it (a timeout or an error no route takes), when the tester stops the run, when the store does
+not answer a reading (whatever the action, the step cut short with no outcome, no route taken),
+or, in a replay, when the stored window ends before a step's outcome.
 
 ### The layout
 

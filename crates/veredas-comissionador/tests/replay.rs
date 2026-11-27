@@ -264,6 +264,50 @@ fn a_live_run_the_tester_stopped_replays_to_its_own_verdict() {
 }
 
 #[test]
+fn a_row_stored_late_in_the_live_run_is_met_by_its_replay() {
+    // Refute round 8 (C-203): a row the store held more than the settle after its stamp is missed
+    // live (C-202's limit: the live wait had passed its stamp) and met by the replay of the run's
+    // window. The claim is narrowed to live runs that met no row stored late; pinned here.
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, false, 4));
+    let c = checked(&test_of("  step w wait readings.temp > 30.0 timeout 3s\n"));
+    let writer = {
+        let d = dir.path().to_path_buf();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1500));
+            log_line(&d, 1000, "40.0");
+        })
+    };
+    let (live, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    writer.join().unwrap();
+    assert_eq!((live.verdict, steps(&live)[0].as_str()), (RunVerdict::Aborted, "w #1 timeout: readings.temp > 30.0 did not hold within 3s"), "{:?}", steps(&live));
+    let (r, _) = run_with(&c, s.live(), &RunOptions::replay(live.start_ms, live.end_ms)).unwrap();
+    assert_eq!(r.verdict, RunVerdict::Passed, "{:?}", steps(&r));
+}
+
+#[test]
+fn a_window_is_judged_per_value_read_and_per_table_awaited() {
+    // Refute round 8 (C-203): the plant told a column's point alone (`with_values_from`) refuses a
+    // window before it for that value read; a table awaited is judged by its rows' point; a column
+    // reached through an awaited row is no value read at a moment, not judged by its column's.
+    use veredas_comissionador::eval::time_text;
+    use veredas_comissionador::plant::LivePlant;
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, false, 4));
+    let now = veredas_portal::serve::store_now_ms();
+    let (from, to) = (now - 30_000, now - 20_000);
+    let held = now - 1_000;
+    let go = |p: &LivePlant, text: &str| veredas_comissionador::run::run(&checked(&test_of(text)), p, &RunOptions::replay(from, to), &mut |_| {});
+    let values = LivePlant::new(s.live()).unwrap().with_values_from([(("plc_main".to_string(), "speed".to_string()), held)].into_iter().collect());
+    assert_eq!(go(&values, "  step c check plc_main.speed == 1.5\n").unwrap_err().0, [format!("the window opens at {}, before the session's store holds `plc_main.speed`, from {}", time_text(from), time_text(held))]);
+    assert!(go(&values, "  step a await plc_main timeout 1s -> p\n    on timeout -> stop pass\n  step r report p.speed\n").is_ok(), "a column through an awaited row is no value read at a moment");
+    let rows = LivePlant::new(s.live()).unwrap().with_rows_from([("plc_main".to_string(), held)].into_iter().collect());
+    assert_eq!(go(&rows, "  step a await plc_main timeout 1s -> p\n").unwrap_err().0, [format!("the window opens at {}, before the session's store holds `plc_main`, from {}", time_text(from), time_text(held))]);
+}
+
+#[test]
 fn a_replay_reads_the_plant_right_after_a_write_as_it_stood_before_it() {
     // The same lag, with a loose bound: an await right after the write takes a row stamped before
     // the write in the replay, where the live one took one after the plant's answer, and a read

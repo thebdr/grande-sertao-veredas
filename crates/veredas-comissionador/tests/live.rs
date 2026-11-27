@@ -947,6 +947,8 @@ struct Watched<'a> {
     stop_on_latest: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// How often a value's reading asked the stop once it was raised.
     asked: std::cell::Cell<usize>,
+    /// Whether a value's reading fails, the store not answering.
+    fail: bool,
 }
 
 impl veredas_comissionador::plant::Plant for Watched<'_> {
@@ -968,9 +970,15 @@ impl veredas_comissionador::plant::Plant for Watched<'_> {
         self.plant.rows_until(table, after, upto, stop)
     }
     fn latest(&self, table: &veredas_comissionador::plant::Table, column: &str, at: i64) -> Result<Option<(i64, Value)>, veredas_comissionador::plant::PlantError> {
+        if self.fail {
+            return Err(veredas_comissionador::plant::PlantError::Store("injected".to_string()));
+        }
         self.plant.latest(table, column, at)
     }
     fn latest_until(&self, table: &veredas_comissionador::plant::Table, column: &str, at: i64, stop: &dyn Fn() -> bool) -> Result<Option<(i64, Value)>, veredas_comissionador::plant::PlantError> {
+        if self.fail {
+            return Err(veredas_comissionador::plant::PlantError::Store("injected".to_string()));
+        }
         if let Some(s) = &self.stop_on_latest {
             s.store(true, Ordering::SeqCst);
         }
@@ -1060,11 +1068,34 @@ fn a_reading_the_tester_stops_ends_the_run_on_the_stop() {
     ];
     for body in bodies {
         for opts in [RunOptions::live(), RunOptions::replay(first, last + 2_000)] {
-            let watched = Watched { plant: &p, read: Default::default(), stop_on_latest: Some(opts.stop.clone()), asked: Default::default() };
+            let watched = Watched { plant: &p, read: Default::default(), stop_on_latest: Some(opts.stop.clone()), asked: Default::default(), fail: false };
             let r = veredas_comissionador::run::run(&checked(&test_of(body)), &watched, &opts, &mut |_| {}).unwrap();
             assert_eq!((r.verdict, r.reason.as_str(), r.steps.last().map(|s| s.outcome)), (RunVerdict::Aborted, "stopped by the tester", Some(None)), "{body} {:?}", opts.mode);
             assert_eq!((watched.asked.get(), r.criteria.len(), r.reported.len()), (1, 0, 0), "{body} {:?}", opts.mode);
         }
+    }
+}
+
+#[test]
+fn a_store_that_does_not_answer_aborts_the_run_whatever_the_action() {
+    // Refute round 8: a store fault aborted a read and a wait, the step cut short, but became a
+    // check's routable `error` (the run then passing by its `on error` line) and a report's item.
+    // In every action now it aborts the run on the store, the step with no outcome, nothing judged.
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, false, 4));
+    let p = LivePlant::new(s.live()).unwrap();
+    let bodies = [
+        "  step r read plc_main.level -> v\n    on error -> stop pass\n",
+        "  step c check plc_main.level > 0.5\n    on error -> stop pass\n",
+        "  step p report plc_main.level\n    on error -> stop pass\n",
+        "  step w wait plc_main.level > 0.5 timeout 1s\n    on error -> stop pass\n",
+    ];
+    for body in bodies {
+        let watched = Watched { plant: &p, read: Default::default(), stop_on_latest: None, asked: Default::default(), fail: true };
+        let r = veredas_comissionador::run::run(&checked(&test_of(body)), &watched, &RunOptions::live(), &mut |_| {}).unwrap();
+        assert_eq!((r.verdict, r.reason.as_str(), r.steps.last().map(|s| s.outcome)), (RunVerdict::Aborted, "the store did not answer: the store: injected", Some(None)), "{body}");
+        assert_eq!((r.criteria.len(), r.reported.len()), (0, 0), "{body}");
     }
 }
 
@@ -1077,7 +1108,7 @@ fn a_wait_reads_each_table_it_names_once() {
     let (s, first, last) = empty_column(dir.path(), &bench, 1_000);
     let p = LivePlant::new(s.live()).unwrap();
     for cond in ["m.x == 3 and b.y == 1 and m.z == 1", "m.x == 3 and m.z == 1 and b.y == 1"] {
-        let watched = Watched { plant: &p, read: Default::default(), stop_on_latest: None, asked: Default::default() };
+        let watched = Watched { plant: &p, read: Default::default(), stop_on_latest: None, asked: Default::default(), fail: false };
         let text = format!("{HEAD}test \"t\" {{\n  id T\n  modes replay\n  step w wait {cond} timeout 2s\n}}\n");
         let r = veredas_comissionador::run::run(&checked(&text), &watched, &RunOptions::replay(first, last + 3_000), &mut |_| {}).unwrap();
         assert_eq!(r.verdict, RunVerdict::Aborted, "{cond}");
