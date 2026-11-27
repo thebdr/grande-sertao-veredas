@@ -14,20 +14,20 @@
     "binary(tail_file) | test(tail::watch::)"
   ],
   "exitCode": 0,
-  "outputSha": "e699e17495c780ef8e0c19168a3622c371e8696e74daca5cb3880d1dce3d6744",
-  "outputTail": "        PASS [   0.701s] (34/46) veredas-portal::tail_file a_head_under_four_bytes_decides_with_what_follows_it\n        PASS [   0.740s] (35/46) veredas-portal::tail_file a_utf16_file_tailed_from_its_end_emits_the_first_new_line_and_skips_a_torn_one\n        PASS [   0.775s] (36/46) veredas-portal::tail_file a_short_head_that_proves_no_mark_is_text_from_before_the_attach_and_never_emitted\n        PASS [   0.870s] (37/46) veredas-portal::tail_file a_file_unreadable_at_the_start_is_told_from_its_replacement_by_the_directory_entry\n        PASS [   1.045s] (38/46) veredas-portal::tail_file a_start_returns_attached_so_a_line_written_right_after_is_read\n        PASS [   1.074s] (39/46) veredas-portal tail::watch::tests::a_family_watch_wakes_for_its_members_and_lists_on_their_names\n        PASS [   1.548s] (40/46) veredas-portal tail::watch::tests::a_file_watch_wakes_for_its_name_alone\n        PASS [   1.833s] (41/46) veredas-portal::tail_file a_file_in_a_folder_denying_search_at_the_start_is_read_whole_when_it_opens\n        PASS [   2.006s] (42/46) veredas-portal::tail_file a_retired_file_found_shorter_than_what_was_read_is_reread_from_its_top\n        PASS [   3.195s] (43/46) veredas-portal::tail_file a_tail_without_a_watcher_polls_at_its_interval_and_reads_the_file_when_it_comes\n        PASS [   8.194s] (44/46) veredas-portal::tail_file a_busy_neighbour_costs_a_quiet_follower_nothing\n        PASS [  14.219s] (45/46) veredas-portal::tail_file following_a_quiet_file_costs_almost_no_processor_time\n        PASS [  15.713s] (46/46) veredas-portal::tail_file the_watcher_follows_a_link_and_a_folder_made_anew\n────────────\n     Summary [  16.065s] 46 tests run: 46 passed, 53 skipped",
-  "ranAt": "2026-11-27T09:45:03.855Z",
-  "headCommit": "991f2018f3bbf8c0b266b72287fe270d237364db",
+  "outputSha": "725bde0c54eb16e3d8acbab5277ebeaf3b11fdf49fb359f8d08646d8ef2103d5",
+  "outputTail": "        PASS [   0.666s] (34/46) veredas-portal::tail_file a_head_under_four_bytes_decides_with_what_follows_it\n        PASS [   0.740s] (35/46) veredas-portal::tail_file a_utf16_file_tailed_from_its_end_emits_the_first_new_line_and_skips_a_torn_one\n        PASS [   0.772s] (36/46) veredas-portal::tail_file a_short_head_that_proves_no_mark_is_text_from_before_the_attach_and_never_emitted\n        PASS [   0.877s] (37/46) veredas-portal::tail_file a_file_unreadable_at_the_start_is_told_from_its_replacement_by_the_directory_entry\n        PASS [   0.898s] (38/46) veredas-portal::tail_file a_start_returns_attached_so_a_line_written_right_after_is_read\n        PASS [   1.092s] (39/46) veredas-portal tail::watch::tests::a_family_watch_wakes_for_its_members_and_lists_on_their_names\n        PASS [   1.597s] (40/46) veredas-portal tail::watch::tests::a_file_watch_wakes_for_its_name_alone\n        PASS [   1.833s] (41/46) veredas-portal::tail_file a_file_in_a_folder_denying_search_at_the_start_is_read_whole_when_it_opens\n        PASS [   2.001s] (42/46) veredas-portal::tail_file a_retired_file_found_shorter_than_what_was_read_is_reread_from_its_top\n        PASS [   3.152s] (43/46) veredas-portal::tail_file a_tail_without_a_watcher_polls_at_its_interval_and_reads_the_file_when_it_comes\n        PASS [   8.206s] (44/46) veredas-portal::tail_file a_busy_neighbour_costs_a_quiet_follower_nothing\n        PASS [   9.195s] (45/46) veredas-portal::tail_file following_a_quiet_file_costs_almost_no_processor_time\n        PASS [  22.195s] (46/46) veredas-portal::tail_file the_watcher_follows_a_link_and_a_folder_made_anew\n────────────\n     Summary [  22.476s] 46 tests run: 46 passed, 53 skipped",
+  "ranAt": "2026-11-27T11:14:17.133Z",
+  "headCommit": "37fa160ba2bba40d7c5f795174aea67a5edb36bb",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/tail_file.rs",
       "file": "crates/veredas-portal/tests/tail_file.rs",
-      "fileSha": "81da6eb2bb8a809c2e3e61b0ee78160b73d73b002ca9f86a33acb0be72d4f00b"
+      "fileSha": "bc0dee7a274f7209ebfcfc3b6a93fae1530add51f7637dd8daa4bb06cfd3aa7c"
     },
     {
       "name": "crates/veredas-portal/src/tail/watch.rs",
       "file": "crates/veredas-portal/src/tail/watch.rs",
-      "fileSha": "4953bc6cdfefcbd77e5db8c84ef35be79c1f6615ec17ed34c6bc60b136448139"
+      "fileSha": "15b77eafaad30f5954e862a0d21d0239fdb9c16dfeff6dd4b8988c1559ffa220"
     }
   ]
 }
