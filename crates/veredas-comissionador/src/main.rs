@@ -280,35 +280,36 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
     // The session's start on the store's axis.
     let begun_at = chrono::Local::now().naive_local();
     let config = loaded.session_config(begun_at);
-    // A session's store is fresh, so it holds each table's rows from the point its sources' start
-    // reads from, as portal reads them: a log's, the project's start in the past given, from it
-    // for a family's backfill and whole for a file read from its first line, and from the
-    // session's start for a log with no stamps or a live start; a rule's table from the latest of
-    // the logs it reads; every other table of the session's own (an OPC UA source's, a channel's)
-    // from the session's start. A view is not judged: its sources are its SELECT's. A replay's
-    // window opening before it is refused.
+    // A session's store is fresh, so it holds each table's rows whole from the point its sources
+    // give them from, as portal reads them: with the project's start in the past, a file read from
+    // its first line whole, and a family's backfill from the first row it stored of the table (the
+    // value at a moment before it lies in a line the start did not read; a family that stored none
+    // of the table's rows taken for none of its sources); a log with no stamps or a live start from
+    // the session's start; a rule's table from the latest of the logs it reads; every other table
+    // of the session's own (an OPC UA source's, a channel's) from the session's start. A view is
+    // not judged: its sources are its SELECT's. A replay's window opening before it is refused.
     let begun_ms = begun_at.and_utc().timestamp_millis();
-    let logs: std::collections::BTreeMap<&str, i64> = loaded
+    let logs: std::collections::BTreeMap<String, Option<i64>> = loaded
         .logs
         .iter()
         .map(|l| {
             let at = match (config.start, l.timestamp.is_some(), &l.kind) {
-                (Some(_), true, LogKind::File { .. }) => i64::MIN,
-                (Some(t), true, LogKind::Family { .. }) => t.and_utc().timestamp_millis(),
-                _ => begun_ms,
+                (Some(_), true, LogKind::File { .. }) => Some(i64::MIN),
+                (Some(_), true, LogKind::Family { .. }) => None,
+                _ => Some(begun_ms),
             };
-            (l.id.trim(), at)
+            (l.id.trim().to_string(), at)
         })
         .collect();
-    let ruled: std::collections::BTreeMap<String, i64> = loaded
+    let ruled: std::collections::BTreeMap<String, Vec<(String, Option<i64>)>> = loaded
         .rules
         .iter()
-        .filter_map(|rule| {
-            let at = match rule.scope.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some(id) => logs.get(id).copied(),
-                None => logs.values().copied().max(),
-            }?;
-            Some((rule.name.trim().to_ascii_lowercase(), at))
+        .map(|rule| {
+            let read: Vec<(String, Option<i64>)> = match rule.scope.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(id) => logs.get(id).map(|at| vec![(id.to_string(), *at)]).unwrap_or_default(),
+                None => logs.iter().map(|(id, at)| (id.clone(), *at)).collect(),
+            };
+            (rule.name.trim().to_ascii_lowercase(), read)
         })
         .collect();
     let session = match Session::start(config) {
@@ -374,25 +375,35 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
         let s = session.clone();
         Box::new(move |on| s.set_writes_armed(on))
     };
-    let rows_from: std::collections::BTreeMap<String, i64> = live
-        .store
-        .list_tables()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|t| t.kind == TableKind::Base)
-        .map(|t| {
-            let name = t.name.to_ascii_lowercase();
-            let at = ruled.get(&name).copied().unwrap_or(begun_ms);
-            (name, at)
-        })
-        .collect();
-    let plant = match LivePlant::with_arming(live, arming, replies).map(|p| p.with_rows_from(rows_from)) {
+    let bases: std::collections::BTreeSet<String> =
+        live.store.list_tables().unwrap_or_default().into_iter().filter(|t| t.kind == TableKind::Base).map(|t| t.name.to_ascii_lowercase()).collect();
+    let plant = match LivePlant::with_arming(live, arming, replies) {
         Ok(p) => p,
         Err(e) => {
             tell!("{e}");
             return 4;
         }
     };
+    let mut rows_from: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for table in plant.tables().unwrap_or_default() {
+        let name = table.name.to_ascii_lowercase();
+        if !bases.contains(&name) {
+            continue;
+        }
+        let at = match ruled.get(&name) {
+            None => begun_ms,
+            Some(read) => read
+                .iter()
+                .filter_map(|(id, at)| match at {
+                    Some(at) => Some(*at),
+                    None => plant.first_from(&table, id).ok().flatten(),
+                })
+                .max()
+                .unwrap_or(i64::MIN),
+        };
+        rows_from.insert(name, at);
+    }
+    let plant = plant.with_rows_from(rows_from);
     let result = run(c, &plant, mode, &mut |e| match e {
         Event::StepEnded(s) => {
             let outcome = s.outcome.map(|o| o.to_string()).unwrap_or_else(|| "cut short".to_string());

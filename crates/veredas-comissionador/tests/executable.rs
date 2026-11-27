@@ -481,7 +481,8 @@ fn a_window_opening_before_the_session_s_start_is_refused() {
         assert_eq!((code, stdout.len(), dir.path().join("runs").exists(), stderr.len()), (4, 0, false, 1), "{stderr:?}");
         let opens = format!("the run is refused: the window opens at {t0}, before the session's store holds `readings`, from ");
         if family {
-            assert_eq!(stderr[0], format!("{opens}{at}.000"));
+            // Held from the first row the family's backfill stored: its newer member's line.
+            assert_eq!(stderr[0], format!("{opens}{}", veredas_comissionador::eval::time_text(base + 2_400_000)));
         } else {
             assert!(stderr[0].starts_with(&opens), "{stderr:?}");
         }
@@ -509,6 +510,52 @@ fn a_window_opening_before_the_session_s_start_is_refused() {
     let (code, stdout, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9]));
     assert_eq!((code, stdout.first().map(String::as_str)), (0, Some("w #1 pass: readings.temp >= 25.0 held after 5500ms")), "{stdout:?} {stderr:?}");
     assert_eq!(record::read(&dir.path().join("runs/t/0001")).unwrap().evidence[0].rows, 6);
+}
+
+// ---- refute round 7 ------------------------------------------------------------------------
+
+#[test]
+fn a_family_s_backfill_holds_its_table_from_the_first_row_it_stored() {
+    // A family backfilled from a start two hours back stores no line stamped before it, so the value
+    // at a window opening after the start may lie in a line it never read: its table is held from
+    // the first row the family stored. A window before it is refused, the table named (it passed on
+    // another log's stale value, or aborted with no value); a window after it replays.
+    let t = (veredas_portal::serve::store_now_ms() - 7_200_000) / 1000 * 1000;
+    let start = veredas_comissionador::eval::time_text(t);
+    let start = &start[..19];
+    let timestamp = "timestamp = { pattern = \"^(?P<ts>\\\\S+ \\\\S+)\", formats = [\"%Y-%m-%d %H:%M:%S%.3f\"] }";
+    let family = format!("\n[[log]]\nid = \"plant\"\ndir = \"fam\"\npattern = \"plant(?P<idx>\\\\d+)\\\\.log\"\n{timestamp}\n");
+    let file = format!("\n[[log]]\nid = \"other\"\nfile = \"a.log\"\n{timestamp}\n");
+    let rule = "\n[[rule]]\nname = \"readings\"\npattern = \"temp=(?P<temp>[0-9.]+)\"\ntypes = { temp = \"float\" }\n";
+    let first = t + 3_600_000;
+    let run = |logs: &str, family_lines: String, file_lines: Option<String>, test: &str, from: i64, to: i64| {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("fam")).unwrap();
+        std::fs::write(dir.path().join("fam/plant1.log"), family_lines).unwrap();
+        if let Some(lines) = file_lines {
+            std::fs::write(dir.path().join("a.log"), lines).unwrap();
+        }
+        let project = format!("format = \"veredas-project\"\nversion = 1\nname = \"the log\"\n\n[session]\nstart = \"{start}\"\n{logs}{rule}");
+        std::fs::write(dir.path().join("project.toml"), project).unwrap();
+        std::fs::write(dir.path().join("t.test"), test_of(test)).unwrap();
+        let (from, to) = (veredas_comissionador::eval::time_text(from), veredas_comissionador::eval::time_text(to));
+        let o = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &from, "--to", &to]));
+        (o, dir.path().join("runs").exists(), from)
+    };
+    // The family's 30.0 a minute before the start, its next line an hour after; beside it a file read
+    // whole whose 10.0 is half an hour before the start: a window a minute after the start.
+    let lines = stamped(t - 60_000, "30.0") + &stamped(first, "31.0");
+    let ((code, stdout, stderr), kept, from) = run(&(family.clone() + &file), lines, Some(stamped(t - 1_800_000, "10.0")), "  step c check readings.temp < 20.0\n  step r report readings.temp\n", t + 60_000, t + 600_000);
+    assert_eq!((code, stdout.len(), kept), (4, 0, false), "{stdout:?} {stderr:?}");
+    let held = veredas_comissionador::eval::time_text(first);
+    assert_eq!(stderr, [format!("the run is refused: the window opens at {from}, before the session's store holds `readings`, from {held}")]);
+    // The family alone, a window opening at the start: refused the same (it aborted, no value yet).
+    let lines = stamped(t - 60_000, "30.0") + &stamped(first, "10.0");
+    let ((code, _, stderr), kept, from) = run(&family, lines.clone(), None, "  step c check readings.temp == 30.0\n", t, t + 600_000);
+    assert_eq!((code, kept, stderr), (4, false, vec![format!("the run is refused: the window opens at {from}, before the session's store holds `readings`, from {held}")]));
+    // A window after the family's first stored row replays, its value the family's.
+    let ((code, stdout, stderr), _, _) = run(&family, lines, None, "  step c check readings.temp == 10.0\n", first + 1_000, first + 10_000);
+    assert_eq!((code, stdout.first().map(String::as_str)), (0, Some("c #1 pass: readings.temp == 10.0: pass")), "{stdout:?} {stderr:?}");
 }
 
 #[test]

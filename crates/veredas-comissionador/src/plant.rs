@@ -149,6 +149,23 @@ impl LivePlant {
         Ok(p)
     }
 
+    /// The stamp of the oldest row of `table` that `source` gave, read from the oldest page up;
+    /// none when it gave none.
+    pub fn first_from(&self, table: &Table, source: &str) -> Result<Option<i64>, PlantError> {
+        let (_, total) = self.page(table, &RowsQuery { from_ms: None, to_ms: None, limit: 1, offset: 0 })?;
+        let mut end = usize::try_from(total).unwrap_or(usize::MAX);
+        while end > 0 {
+            let start = end.saturating_sub(PAGE);
+            let (rows, _) = self.page(table, &RowsQuery { from_ms: None, to_ms: None, limit: end - start, offset: start })?;
+            // A page newest first: its oldest row from `source` is the last of them.
+            if let Some(r) = rows.iter().rev().find(|r| r.source == source) {
+                return Ok(Some(r.time_ms));
+            }
+            end = start;
+        }
+        Ok(None)
+    }
+
     /// The plant told from which moment the session's store holds each table's rows whole (the
     /// point its sources' start read from), so a replay over a window before it is refused.
     pub fn with_rows_from(mut self, from: BTreeMap<String, i64>) -> LivePlant {

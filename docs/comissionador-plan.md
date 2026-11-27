@@ -261,9 +261,11 @@ Recorded as the build meets them.
   so a session started for a replay holds only what its start reads, and the project's start in
   the past is the stamped logs' alone: a file is read from its first line, a family backfills from
   the start, a log without stamps and every OPC UA source and channel read from the session's start.
-  The executable tells the plant, table by table, from which moment the store holds its rows (a
-  rule's table its logs' latest; a view not judged), and the binding refuses a window opening
-  before it for a table the test reads.
+  A backfill stores no line before the start, so the value at a moment after it may lie in a line
+  it never read: a family's table is held from the first row the family stored of it. The
+  executable tells the plant, table by table, from which moment the store holds its rows (a rule's
+  table its logs' latest; a view not judged), and the binding refuses a window opening before it
+  for a table the test reads.
 - **A word the language reads by its place is no reserved word** (C-201). `max` was reserved for
   `retry <step> max <n>` and is also a built-in call, so `max(a, b)` could not be written. The
   route reads `max` by its place; the reserved list is the reader's and the reference's at once,
