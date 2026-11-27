@@ -319,8 +319,15 @@ its clauses recorded, refuted and verified. Push at the end of each phase.
   Its seventh refute round taught that one engine step per scene step makes a long step coarse
   (a body falling through a body, a mover through a body, a part held at a seam at 50 to 100 ms):
   the world steps its engine 4 ms at a time at most, a mover carried over those substeps, so a
-  scene's step chooses how often its models and readers meet it, not how well it is solved; the
-  cost of a second of scene is the same at every step.
+  scene's step chooses how often its models and readers meet it, not how well it is solved; a
+  second of scene costs least at a step that is a multiple of 4 ms (a 5 ms step is two substeps of
+  2.5 ms, a 1 ms step four times the work of 4 ms). Its eighth round taught that the engine's own
+  contacts give way under a stack's load (ten cartons at a gravity of 19, forty at 9.81, thirty
+  trays sank through one another and the floor): the world sets Rapier's contact softness at
+  120 Hz between bodies and 240 Hz against a fixed part, four times its defaults, so every stack
+  measured stands, a resting body sinks some thousandths of a millimetre, and depths are alike at
+  every step; Rapier stays tuned for parts of a centimetre and more, stacks of 5 mm parts sinking
+  into themselves.
 - **`reflexo`'s first half, as designed before its code** (2026-11-22). Ready-made models that make
   a bench device behave as the machine behind it: a model reads what a controller wrote to the
   device (its outputs) and writes what the controller reads (its inputs), and moves a `fisica`

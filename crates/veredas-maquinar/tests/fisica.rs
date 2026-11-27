@@ -1176,7 +1176,8 @@ mod round_2 {
 
     #[test]
     fn a_body_rests_on_a_fixed_part_within_a_tenth_of_a_millimetre_and_sinks_into_a_lighter_one() {
-        // On the floor, whatever its mass and size: 0.07 mm deep.
+        // On the floor, whatever its mass and size: 0.004 mm deep (0.07 at the engine's own
+        // contact stiffness, before round 8).
         for (mass, size) in [(1.0, 0.2), (100000.0, 0.2), (5.0, 0.02), (100000.0, 1.0)] {
             let half = size / 2.0;
             let mut w = world(&format!(
@@ -1187,7 +1188,7 @@ mod round_2 {
             let deep = half - w.body("box").unwrap().at[2];
             assert!((0.0..1e-4).contains(&deep), "{mass} kg of {size} m: {deep} m deep");
         }
-        // On a 1 kg box: ten times its mass sinks 2.6 mm into it, a hundred times 26 mm.
+        // On a 1 kg box: ten times its mass sinks 0.19 mm into it, a hundred times 1.7 mm.
         let on_light = |top: f64| {
             let mut w = world(&format!(
                 "[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
@@ -1199,7 +1200,7 @@ mod round_2 {
             0.2 - (h - l)
         };
         let (ten, hundred) = (on_light(10.0), on_light(100.0));
-        assert!((0.002..0.0035).contains(&ten) && (0.02..0.035).contains(&hundred), "{ten} m, {hundred} m");
+        assert!((0.00015..0.00025).contains(&ten) && (0.0015..0.002).contains(&hundred), "{ten} m, {hundred} m");
     }
 
     #[test]
@@ -1447,7 +1448,7 @@ mod round_3 {
 
     #[test]
     fn the_depth_a_body_rests_grows_with_gravity() {
-        // 0.07 mm at 9.81 m/s² (pinned in round 2), ten times that at gravity 100, whatever the step.
+        // 0.004 mm at 9.81 m/s² (pinned in round 2), ten times that at gravity 100, whatever the step.
         let depth = |step_ms: u32, gravity: f64| {
             let mut w = world(&format!("step_ms = {step_ms}\ngravity = {gravity}\n[[fixed]]\nname = \"floor\"\nsize = [40.0, 40.0, 0.2]\nat = [0.0, 0.0, -0.1]\n[[body]]\nname = \"box\"\nsize = [0.2, 0.2, 0.2]\nat = [0.0, 0.0, 0.11]\n"));
             steps(&mut w, u64::from(5000 / step_ms));
@@ -1455,11 +1456,11 @@ mod round_3 {
         };
         for step_ms in [1, 4, 10, 100] {
             let d = depth(step_ms, 9.81);
-            assert!((0.00005..0.0001).contains(&d), "{step_ms} ms at 9.81: {d}");
+            assert!((0.000003..0.000006).contains(&d), "{step_ms} ms at 9.81: {d}");
         }
         for step_ms in [4, 10] {
             let d = depth(step_ms, 100.0);
-            assert!((0.0006..0.0008).contains(&d), "{step_ms} ms at 100: {d}");
+            assert!((0.00004..0.00005).contains(&d), "{step_ms} ms at 100: {d}");
         }
     }
 
@@ -1537,7 +1538,7 @@ mod round_4 {
         let exact = 9000.0 - 9.81 / 2.0;
         let z = w.body("ball").unwrap().at[2];
         assert!((z - exact).abs() <= 9.81 * 0.004 / 2.0 + 1e-4, "{z} against {exact}");
-        // A 0.2 m box on floors whose tops are from 0 to 9000 m up: 0.05 to 0.1 mm deep on each.
+        // A 0.2 m box on floors whose tops are from 0 to 9000 m up: 0.003 to 0.006 mm deep on each.
         for top in [0.0f64, 8.0, 10.0, 20.0, 50.0, 1000.0, 9000.0] {
             let mut w = world(&format!(
                 "[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [3000.0, -4000.0, {}]\n[[body]]\nname = \"box\"\nsize = [0.2, 0.2, 0.2]\nat = [3000.0, -4000.0, {}]\n",
@@ -1546,7 +1547,7 @@ mod round_4 {
             ));
             steps(&mut w, 1250);
             let depth = top + 0.1 - w.body("box").unwrap().at[2];
-            assert!((0.00005..0.0001).contains(&depth), "on a floor at {top} m: {depth} m deep");
+            assert!((0.000003..0.000006).contains(&depth), "on a floor at {top} m: {depth} m deep");
         }
     }
 
@@ -1690,13 +1691,13 @@ mod round_5 {
 
     #[test]
     fn a_stack_s_contacts_sink_with_the_load_above_them() {
-        // Two equal bodies: the lower 0.14 mm into the floor (twice a body alone), the upper 0.5 mm
-        // into it; ten times the mass on top: 0.7 mm and 2.7 mm.
+        // Two equal bodies: the lower 0.009 mm into the floor (twice a body alone), the upper
+        // 0.035 mm into it; ten times the mass on top: 0.048 mm and 0.19 mm.
         let (floor, upper, _) = stack(1.0);
-        assert!((0.0001..0.0002).contains(&floor) && (0.0004..0.0006).contains(&upper), "{floor} {upper}");
+        assert!((0.000007..0.00001).contains(&floor) && (0.00003..0.00004).contains(&upper), "{floor} {upper}");
         let (floor, upper, _) = stack(10.0);
-        assert!((0.0006..0.0009).contains(&floor) && (0.002..0.0035).contains(&upper), "{floor} {upper}");
-        // Five equal cartons: the lowest 0.34 mm into the floor, each less into the one under it.
+        assert!((0.00004..0.000055).contains(&floor) && (0.00017..0.00021).contains(&upper), "{floor} {upper}");
+        // Five equal cartons: the lowest 0.02 mm into the floor, each less into the one under it.
         let mut text = String::from("[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n");
         for i in 0..5 {
             text += &format!("[[body]]\nname = \"c{i}\"\nsize = [0.3, 0.3, 0.3]\nat = [0.0, 0.0, {}]\nmass = 2.5\n", 0.15 + 0.3005 * f64::from(i));
@@ -1705,24 +1706,28 @@ mod round_5 {
         steps(&mut w, 1500);
         let z: Vec<f64> = (0..5).map(|i| w.body(&format!("c{i}")).unwrap().at[2]).collect();
         let into: Vec<f64> = (1..5).map(|i| 0.3 - (z[i] - z[i - 1])).collect();
-        assert!((0.00025..0.00045).contains(&(0.15 - z[0])), "the lowest {} m into the floor", 0.15 - z[0]);
+        assert!((0.000015..0.00003).contains(&(0.15 - z[0])), "the lowest {} m into the floor", 0.15 - z[0]);
         assert!(into.windows(2).all(|w| w[0] > w[1]) && into.iter().all(|d| *d > 0.0), "each into the one under it {into:?}");
     }
 
     #[test]
-    fn a_body_a_thousand_times_the_mass_under_it_sinks_through_to_the_floor() {
-        // Past about 300 times the mass the upper sinks through the lower one; at 1000 its bottom
+    fn a_body_ten_thousand_times_the_mass_under_it_sinks_through_to_the_floor() {
+        // A thousand times the mass rests on the lower one, 17 mm into it; at ten thousand times
+        // (300 times before round 8's stiffer contacts) the upper sinks through it and its bottom
         // rests on what lies beneath, the floor.
-        let (_, _, bottom) = stack(1000.0);
+        let (_, upper, bottom) = stack(1000.0);
+        assert!((0.015..0.02).contains(&upper) && (0.175..0.185).contains(&bottom), "a thousand times: {upper} m into it, its bottom {bottom} m up");
+        let (_, _, bottom) = stack(10000.0);
         assert!(bottom.abs() < 0.001, "the upper's bottom {bottom} m above the floor");
     }
 
     #[test]
     fn a_body_alone_rests_deeper_the_flatter_it_is() {
-        // (size, lowest and highest depth in metres) at 4 and 20 ms: a cube 0.07 mm, a tall box less,
-        // a carton more, all within 0.12 mm and none above the floor by more than 0.01 mm.
+        // (size, lowest and highest depth in metres) at 4 and 20 ms: a cube 0.004 mm, a tall box
+        // less, a carton and a flat box more, all within 0.008 mm and none above the floor by more
+        // than 0.002 mm.
         for step_ms in [4u32, 20] {
-            for (size, lo, hi) in [([0.2f64, 0.2, 0.2], 0.00006, 0.00008), ([0.2, 0.2, 1.0], 0.000015, 0.00003), ([0.3, 0.4, 0.2], 0.00008, 0.00011), ([0.2, 0.2, 0.05], 0.00005, 0.00012), ([0.05, 0.05, 2.0], -0.00001, 0.00003)] {
+            for (size, lo, hi) in [([0.2f64, 0.2, 0.2], 0.000004, 0.0000046), ([0.2, 0.2, 1.0], 0.000001, 0.0000016), ([0.3, 0.4, 0.2], 0.0000055, 0.0000063), ([0.2, 0.2, 0.05], 0.000007, 0.0000076), ([0.05, 0.05, 2.0], -0.000002, 0.000002)] {
                 let half = size[2] / 2.0;
                 let mut w = world(&format!(
                     "step_ms = {step_ms}\n[[fixed]]\nname = \"floor\"\nsize = [40.0, 40.0, 0.2]\nat = [0.0, 0.0, -0.1]\n[[body]]\nname = \"box\"\nsize = [{}, {}, {}]\nat = [0.0, 0.0, {}]\n",
@@ -1760,8 +1765,8 @@ mod round_6 {
     const FLOOR: &str = "[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n";
 
     /// Ten equal 2.5 kg cartons of 0.3 m, stacked: at a 50 ms step they collapsed into one another
-    /// and through the floor. At every step now, the lowest 0.5 to 1 mm into the floor, each up to
-    /// 6 mm into the one under it, the top within 30 mm of 3 m.
+    /// and through the floor. At every step now, the lowest 0.04 to 0.046 mm into the floor, each
+    /// up to 0.4 mm into the one under it, the top within 2 mm of 3 m (round 8's contacts).
     #[test]
     fn a_column_of_ten_cartons_stands_at_every_step() {
         let mut wrong = Vec::new();
@@ -1775,7 +1780,7 @@ mod round_6 {
             let z: Vec<f64> = (0..10).map(|i| w.body(&format!("c{i}")).unwrap().at[2]).collect();
             let floor = 0.15 - z[0];
             let into: Vec<f64> = (1..10).map(|i| 0.3 - (z[i] - z[i - 1])).collect();
-            if !(0.0005..=0.001).contains(&floor) || into.iter().any(|d| !(0.0..=0.006).contains(d)) || z[9] + 0.15 < 2.97 {
+            if !(0.00004..=0.000046).contains(&floor) || into.iter().any(|d| !(0.0..=0.0004).contains(d)) || z[9] + 0.15 < 2.998 {
                 wrong.push(format!("{step_ms} ms: floor {floor:.5} m, each {into:.4?}, top {:.4}", z[9] + 0.15));
             }
         }
@@ -1818,19 +1823,20 @@ mod round_6 {
         (0.1 - l, 0.2 - (h - l), h - 0.1)
     }
 
-    /// At every step the depths 4 ms gives: ten times the mass on top, the lower 0.6 to 0.9 mm into
-    /// the floor and the upper 2 to 3.5 mm into it (at 100 ms it had sunk through at ten times);
-    /// a thousand times, the upper's bottom on the floor, the lower pressed 35 to 50 mm into it.
+    /// At every step the depths 4 ms gives: ten times the mass on top, the lower 0.04 to 0.055 mm
+    /// into the floor and the upper 0.17 to 0.21 mm into it (at 100 ms it had sunk through at ten
+    /// times); a thousand times, the upper 15 to 20 mm into the lower and the lower 4 to 4.6 mm into
+    /// the floor, its bottom 0.175 to 0.185 m up (round 8's contacts: it had sunk through).
     #[test]
     fn two_boxes_stack_alike_at_every_step() {
         let mut wrong = Vec::new();
         for step_ms in [1u32, 4, 20, 50, 100] {
             let (floor, upper, _) = stack(step_ms, 10.0);
-            if !(0.0006..=0.0009).contains(&floor) || !(0.002..=0.0035).contains(&upper) {
+            if !(0.00004..=0.000055).contains(&floor) || !(0.00017..=0.00021).contains(&upper) {
                 wrong.push(format!("{step_ms} ms, ten times: floor {floor:.5}, upper {upper:.5}"));
             }
-            let (floor, _, bottom) = stack(step_ms, 1000.0);
-            if bottom.abs() > 0.001 || !(0.035..=0.05).contains(&floor) {
+            let (floor, upper, bottom) = stack(step_ms, 1000.0);
+            if !(0.175..=0.185).contains(&bottom) || !(0.004..=0.0046).contains(&floor) || !(0.015..=0.02).contains(&upper) {
                 wrong.push(format!("{step_ms} ms, a thousand times: floor {floor:.5}, bottom {bottom:.5}"));
             }
         }
@@ -2196,5 +2202,233 @@ mod round_7 {
         assert!(e.starts_with("not a scene file: TOML parse error at line 3, column 11") && e.contains("step_ms = \"4\""), "{e}");
         let e = fisica::load("format = \"veredas-cena\"\nversion = 1\n[[body]]\nname = \"b\"\nsize = [1.0, 1.0, 1.0]\n").unwrap_err().to_string();
         assert!(e.contains("missing field `at`"), "{e}");
+    }
+}
+
+/// C-114's eighth refute round: the critic's probes (`~/.cache/veredas/critic-c114-r8/probes`), kept
+/// as pins: stacks standing however tall and heavy (the contacts' stiffness), the reference's beam
+/// and a mover's velocity at steps of several substeps, high drops onto a thin mover's table (the
+/// sweep), rebounds from high within their bounds, small parts dropped onto a thin body, and a
+/// blade pushing at 3 m/s.
+mod round_8 {
+    use veredas_maquinar::fisica::{self, Placement, World};
+
+    fn world(body: &str) -> World {
+        World::new(&fisica::load(&format!("format = \"veredas-cena\"\nversion = 1\n{body}")).unwrap()).unwrap()
+    }
+
+    fn steps(w: &mut World, n: u64) {
+        for _ in 0..n {
+            w.step();
+        }
+    }
+
+    /// A column of `n` boxes of `size` and `mass` on a fixed floor after 6 s at 4 ms: its lowest
+    /// centre and its top.
+    fn column(gravity: f64, n: usize, size: [f64; 3], mass: f64) -> (f64, f64) {
+        let h = size[2];
+        let mut text = format!("gravity = {gravity}\n[[fixed]]\nname = \"floor\"\nsize = [4.0, 4.0, 0.2]\nat = [0.0, 0.0, -0.1]\n");
+        for i in 0..n {
+            text += &format!("[[body]]\nname = \"c{i}\"\nsize = [{}, {}, {h}]\nat = [0.0, 0.0, {}]\nmass = {mass}\n", size[0], size[1], h / 2.0 + (h + 0.0005) * i as f64);
+        }
+        let mut w = world(&text);
+        steps(&mut w, 1500);
+        let z: Vec<f64> = (0..n).map(|i| w.body(&format!("c{i}")).unwrap().at[2]).collect();
+        (z.iter().cloned().fold(f64::MAX, f64::min), z[n - 1] + h / 2.0)
+    }
+
+    /// Ten cartons at gravities of 19 and 100, fifty at 9.81, thirty flat trays and ten parts of
+    /// 2 cm: each column standing, its lowest on the floor and its top within 2 % of its height
+    /// (at the engine's own contact stiffness ten cartons at 19, forty at 9.81, thirty trays and
+    /// ten 2 cm parts sank through one another, the cartons through the floor to -108 m).
+    #[test]
+    fn stacks_stand_however_tall_and_heavy() {
+        let mut wrong = Vec::new();
+        for (what, gravity, n, size, mass) in [
+            ("ten cartons at 19", 19.0, 10usize, [0.3, 0.3, 0.3], 2.5),
+            ("ten cartons at 100", 100.0, 10, [0.3, 0.3, 0.3], 2.5),
+            ("fifty cartons", 9.81, 50, [0.3, 0.3, 0.3], 2.5),
+            ("thirty trays", 9.81, 30, [0.6, 0.4, 0.05], 1.0),
+            ("ten 2 cm parts", 9.81, 10, [0.02, 0.02, 0.02], 0.008),
+        ] {
+            let (lowest, top) = column(gravity, n, size, mass);
+            let height = n as f64 * size[2];
+            if lowest < size[2] / 2.0 - 0.001 || top < height * 0.98 {
+                wrong.push(format!("{what}: lowest centre {lowest:.4} m, top {top:.4} m of {height:.3}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// The reference's scene at 20, 50 and 100 ms (5, 13 and 25 substeps): B1 entered once,
+    /// between 3.0 and 3.25 s, and left once (a sensor keeping only the first or the last
+    /// substep's events saw nothing at those steps and passed every test).
+    #[test]
+    fn the_reference_s_beam_sees_the_carton_at_long_steps() {
+        let doc = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/cena-schema.md")).unwrap();
+        let start = doc.find("```toml\n").unwrap() + 8;
+        let text = doc[start..start + doc[start..].find("```").unwrap()].to_string();
+        let mut wrong = Vec::new();
+        for step_ms in [20u32, 50, 100] {
+            let mut w = World::new(&fisica::load(&text.replace("step_ms = 4", &format!("step_ms = {step_ms}"))).unwrap()).unwrap();
+            let mut b1 = Vec::new();
+            for _ in 0..(6000 / step_ms) {
+                w.step();
+                for e in w.take_events() {
+                    if e.sensor == "B1" {
+                        b1.push((w.time().as_secs_f64(), e.entered));
+                    }
+                }
+            }
+            if b1.len() != 2 || !b1[0].1 || b1[1].1 || !(3.0..3.25).contains(&b1[0].0) {
+                wrong.push(format!("{step_ms} ms: {b1:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A blade swept at 1.5 m/s at 8, 20, 50 and 100 ms: each pose reached at the next step within
+    /// 10 µm, its velocity read back within 1 mm/s of 1.5, 0 once held (a carriage off by one
+    /// substep read 3 m/s with every pose exact, and passed).
+    #[test]
+    fn a_mover_s_velocity_is_its_stroke_s_at_long_steps() {
+        let mut wrong = Vec::new();
+        for step_ms in [8u32, 20, 50, 100] {
+            let mut w = world(&format!("step_ms = {step_ms}\ngravity = 0\n[[mover]]\nname = \"blade\"\nsize = [0.05, 1.0, 0.4]\nat = [-1.0, 0.0, 0.2]\n"));
+            let dt = f64::from(step_ms) / 1000.0;
+            let (mut pose, mut speed) = (0.0f64, 0.0f64);
+            for i in 1..=20u32 {
+                let x = -1.0 + 1.5 * dt * f64::from(i);
+                w.place("blade", Placement::at([x, 0.0, 0.2])).unwrap();
+                w.step();
+                let b = w.body("blade").unwrap();
+                pose = pose.max((b.at[0] - x).abs());
+                speed = speed.max((b.velocity[0] - 1.5).abs());
+            }
+            w.step();
+            let held = w.body("blade").unwrap().velocity;
+            if pose > 1e-5 || speed > 1e-3 || held != [0.0; 3] {
+                wrong.push(format!("{step_ms} ms: pose off {pose:.3e} m, velocity off {speed:.4} m/s, held {held:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// A 2 cm part from 300 m onto a mover's table 1 cm thick and a 0.1 m box from 1000 m onto one
+    /// 2 cm thick, at 4 and 100 ms: each at rest on the table, never below its top (unswept, each
+    /// passed straight through).
+    #[test]
+    fn high_drops_onto_a_thin_mover_s_table_rest_on_it() {
+        let mut wrong = Vec::new();
+        for step_ms in [4u32, 100] {
+            for (size, thick, drop) in [(0.02f64, 0.01f64, 300.0f64), (0.1, 0.02, 1000.0)] {
+                let mut w = world(&format!(
+                    "step_ms = {step_ms}\n[[fixed]]\nname = \"ground\"\nsize = [4000.0, 4000.0, 0.2]\nat = [0.0, 0.0, -5.1]\n[[mover]]\nname = \"t\"\nsize = [2.0, 2.0, {thick}]\nat = [0.0, 0.0, {}]\n\
+                     [[body]]\nname = \"b\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\nmass = 2.5\n",
+                    1.0 - thick / 2.0,
+                    1.0 + size / 2.0 + drop
+                ));
+                let total = (((2.0 * drop / 9.81).sqrt() + drop / 400.0 + 3.0) * 1000.0 / f64::from(step_ms)) as u64;
+                let mut lowest = f64::MAX;
+                for _ in 0..total {
+                    w.step();
+                    lowest = lowest.min(w.body("b").unwrap().at[2] - size / 2.0);
+                }
+                let rest = w.body("b").unwrap().at[2] - size / 2.0 - 1.0;
+                if rest.abs() > 0.005 || lowest < 1.0 - 0.005 {
+                    wrong.push(format!("{step_ms} ms, {size} m from {drop} m: rests {rest:.4} m off the table, its bottom as low as {lowest:.3}"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// At 4 ms, parts of 2 cm and 0.3 m dropped onto a fixed floor: from 1000 m rebounding under
+    /// 5 m/s, from 9000 m (the 400 m/s cap) under 16 m/s, each at rest on the floor at the end (only
+    /// the 1 m rebound was pinned; the clause said under 1 m/s from 5 to 1000 m).
+    #[test]
+    fn rebounds_from_high_stay_within_their_bounds() {
+        let mut wrong = Vec::new();
+        for size in [0.02f64, 0.3] {
+            for (height, bound) in [(1000.0f64, 5.0f64), (9000.0, 16.0)] {
+                let half = size / 2.0;
+                let mut w = world(&format!("[[fixed]]\nname = \"floor\"\nsize = [200.0, 200.0, 1.0]\nat = [0.0, 0.0, -0.5]\n[[body]]\nname = \"b\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\n", half + height));
+                let total = (((2.0 * height / 9.81).sqrt().min(45.0) + height / 400.0 + 3.0) * 250.0) as u64;
+                let (mut up, mut hit) = (0.0f64, false);
+                for _ in 0..total {
+                    w.step();
+                    let b = w.body("b").unwrap();
+                    hit |= b.at[2] < half + 0.01;
+                    if hit {
+                        up = up.max(b.velocity[2]);
+                    }
+                }
+                let rest = w.body("b").unwrap().at[2] - half;
+                if !hit || up >= bound || rest.abs() > 0.002 {
+                    wrong.push(format!("{size} m from {height} m: rebound {up:.2} m/s, rests {rest:.4} m"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// Parts of 2 mm to 5 cm dropped 0.3 to 5 m onto a tray 3 mm to 1 cm thick lying across two
+    /// rails: each at rest on the tray (only 0.1 and 0.3 m boxes were pinned; past 7 m a part of
+    /// 2 cm or less can pass through a body as thin as itself, which the clause says).
+    #[test]
+    fn small_parts_dropped_up_to_5_m_onto_a_thin_body_rest_on_it() {
+        let mut through = Vec::new();
+        for (size, thick) in [(0.002f64, 0.003f64), (0.005, 0.005), (0.01, 0.005), (0.02, 0.01), (0.05, 0.005)] {
+            for drop in [0.3f64, 1.0, 3.0, 5.0] {
+                let mut w = world(&format!(
+                    "[[fixed]]\nname = \"floor\"\nsize = [20.0, 20.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
+                     [[fixed]]\nname = \"rail_a\"\nsize = [0.2, 1.2, 1.0]\nat = [-0.9, 0.0, 0.5]\n\
+                     [[fixed]]\nname = \"rail_b\"\nsize = [0.2, 1.2, 1.0]\nat = [0.9, 0.0, 0.5]\n\
+                     [[body]]\nname = \"tray\"\nsize = [2.0, 1.0, {thick}]\nat = [0.0, 0.0, {}]\nmass = 2\n\
+                     [[body]]\nname = \"b\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\nmass = 0.01\n",
+                    1.0 + thick / 2.0,
+                    1.0 + thick + size / 2.0 + drop
+                ));
+                steps(&mut w, 1000);
+                let (b, t) = (w.body("b").unwrap(), w.body("tray").unwrap());
+                let off = b.at[2] - size / 2.0 - (t.at[2] + thick / 2.0);
+                if off.abs() > 0.005 {
+                    through.push(format!("a {size} m part from {drop} m onto a {thick} m tray: {off:.4} m off it"));
+                }
+            }
+        }
+        assert!(through.is_empty(), "{through:#?}");
+    }
+
+    /// A blade of 5 mm and of 5 cm swept at 3 m/s across boxes of 5 mm to 0.1 m, at 4 and 100 ms:
+    /// each box ahead of the blade (only 0.5 and 1.5 m/s were pinned; from 5 m/s a blade passes
+    /// parts of 2 cm and less, which the clause says).
+    #[test]
+    fn a_blade_at_3_m_s_pushes_every_part_ahead_of_it() {
+        let mut passed = Vec::new();
+        for step_ms in [4u32, 100] {
+            for blade in [0.005f64, 0.05] {
+                for size in [0.005f64, 0.01, 0.02, 0.05, 0.1] {
+                    let mut w = world(&format!(
+                        "step_ms = {step_ms}\n[[fixed]]\nname = \"floor\"\nsize = [20.0, 10.0, 0.2]\nat = [0.0, 0.0, -0.1]\n\
+                         [[mover]]\nname = \"blade\"\nsize = [{blade}, 1.0, 0.4]\nat = [-1.0, 0.0, 0.2]\n\
+                         [[body]]\nname = \"box\"\nsize = [{size}, {size}, {size}]\nat = [0.0, 0.0, {}]\nmass = 0.5\n",
+                        size / 2.0
+                    ));
+                    steps(&mut w, u64::from(500 / step_ms));
+                    let dt = f64::from(step_ms) / 1000.0;
+                    for i in 1..=(2.0 / (3.0 * dt)).ceil() as u32 {
+                        w.place("blade", Placement::at([(-1.0 + 3.0 * dt * f64::from(i)).min(1.0), 0.0, 0.2])).unwrap();
+                        w.step();
+                    }
+                    let (b, c) = (w.body("blade").unwrap(), w.body("box").unwrap());
+                    let ahead = c.at[0] - size / 2.0 - (b.at[0] + blade / 2.0);
+                    if ahead < -0.001 {
+                        passed.push(format!("{step_ms} ms, a {blade} m blade, a {size} m box: {ahead:.4} m ahead"));
+                    }
+                }
+            }
+        }
+        assert!(passed.is_empty(), "{passed:#?}");
     }
 }

@@ -75,11 +75,16 @@ surrounding whitespace; `at` (required, in metres, each coordinate within 10000 
 `yaw`, `pitch` and `roll` (`0`, degrees, any finite value). Boxes have a `size` (required, each
 side from 0.001 to 10000 m: the engine rests a smaller part sunk into what it lies on). A contact's
 friction is the mean of its two parts' frictions; a body falling onto a part rebounds a little
-(from 1 m some 5 mm, from up to 1000 m some 6 cm), and no body moves faster than 400 m/s, the
-engine's cap. The world computes in double precision, so a part far from the origin moves as one
-near it, and alike at every step: the engine steps 4 ms at a time at most (a step of 100 ms is 25
-of them), a mover carried to its pose evenly over them, and a body is swept against the fixed
-parts and movers, so stacks stand, drops land and movers push at 100 ms as at 4.
+(from 1 m some 5 mm, from up to 5 m some 3 cm; from higher more, erratically, so a part dropped
+hundreds of metres may bounce off a small table), and no body moves faster than 400 m/s, the
+engine's cap. Contacts are four times as stiff as the engine's own: a body rests some thousandths
+of a millimetre into what it lies on, and a stack stands at any gravity the file takes, fifty
+cartons or thirty trays high; parts of 5 mm or less stacked sink into one another, and a part of
+2 cm or less falling more than some 7 m can pass through a body as thin as itself (bodies are not
+swept against bodies). The world computes in double precision, so a part far from the origin moves
+as one near it, and alike at every step: the engine steps 4 ms at a time at most (a step of 100 ms
+is 25 of them), a mover carried to its pose evenly over them, and a body is swept against the fixed
+parts and movers, so stacks stand, drops land and movers push (to 3 m/s) at 100 ms as at 4.
 
 **A fixed shape** (`[[fixed]]`): a box that never moves, a floor, a guide, a chute's side.
 - `friction` (`0.6`): 0 to 10.

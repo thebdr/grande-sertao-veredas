@@ -174,6 +174,10 @@ fn half(size: [f64; 3]) -> (f64, f64, f64) {
     (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0)
 }
 
+/// The natural frequency of a contact between two bodies, in hertz (one against a fixed part twice
+/// it), as Rapier's contact softness takes it.
+const CONTACT_HZ: f64 = 120.0;
+
 impl World {
     /// A world holding the scene's parts, at step 0. The scene is checked first.
     pub fn new(scene: &Scene) -> Result<World, FisicaError> {
@@ -186,6 +190,14 @@ impl World {
         // prediction distance cross a fixed part whole at a long step (7 of 840 drops at 10 to
         // 100 ms; C-114's fourth refute round), which continuous collision detection did not change.
         w.integration_parameters.contact_recycling = false;
+        // Contacts four times as stiff as the engine's defaults (30 Hz between bodies, 60 against a
+        // fixed part): with the defaults a stack's contacts gave way under the load above them, so
+        // ten cartons at a gravity of 19, forty at 9.81, thirty flat trays or ten parts of 2 cm
+        // and less sank through one another and through a fixed floor (C-114's eighth refute
+        // round); a contact now sinks some hundredths of a millimetre and every stack measured
+        // stands, at less cost (a stack's chaos made the engine work).
+        w.integration_parameters.contact_softness.natural_frequency = CONTACT_HZ;
+        w.integration_parameters.static_contact_softness.natural_frequency = 2.0 * CONTACT_HZ;
         let ground = w.insert_body(RigidBodyBuilder::fixed());
         let (ctx, collisions) = channel();
         let (ftx, forces) = channel();
