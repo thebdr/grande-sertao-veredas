@@ -1901,3 +1901,131 @@ mod round_8 {
         assert_eq!(seen, [(0x12, 0x0012), (0x18, 0x0012)]);
     }
 }
+
+/// Refute round 9's probes (the critic's, `~/.cache/veredas/critic-c113-r9/probes`), kept as pins:
+/// a frame from any source answered with its destination kept; a silence judged by when a frame
+/// arrived, at both its edges; the bounds accepted on the outputs as on the inputs.
+mod round_9 {
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::ethercat::*;
+
+    const SEGMENT: &str = "interface = \"b0\"\ndevices = [ { name = \"d0\" }, { name = \"d1\" }, { name = \"d2\", inputs = [ { index = 0x6000, subindex = 1, bits = 8 } ] } ]\n";
+
+    /// A frame of one BRD of 1 byte at `ado`, from `src` to `dst`, its datagram index `idx`.
+    fn brd(dst: [u8; 6], src: [u8; 6], idx: u8, ado: u16) -> Vec<u8> {
+        let mut body = vec![7u8, idx];
+        body.extend_from_slice(&(u32::from(ado) << 16).to_le_bytes());
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&[0, 0, 0, 0, 0]);
+        let mut f = dst.to_vec();
+        f.extend_from_slice(&src);
+        f.extend_from_slice(&0x88A4u16.to_be_bytes());
+        f.extend_from_slice(&((body.len() as u16) | 0x1000).to_le_bytes());
+        f.extend(body);
+        f.resize(60, 0);
+        f
+    }
+
+    /// The next EtherCAT frame heard within `wait`.
+    fn next(link: &RawLink, wait: Duration) -> Option<Vec<u8>> {
+        let started = Instant::now();
+        while started.elapsed() < wait {
+            if let Some(r) = link.recv(Duration::from_millis(50)).unwrap()
+                && r.bytes.len() >= 16
+                && r.bytes[12..14] == [0x88, 0xA4]
+            {
+                return Some(r.bytes);
+            }
+        }
+        None
+    }
+
+    fn open(iface: &str) -> RawLink {
+        RawLink::open_with(iface, Options { ethertype: Some(0x88A4), promiscuous: true, outgoing: false }).unwrap()
+    }
+
+    /// From ethercrab's source, SOEM's group source 01:01:.., the zero source, a source already
+    /// locally administered, a0's own MAC (IgH's on a veth), the broadcast source, and to a
+    /// unicast destination: each answered by the three devices (a working counter of 3, the ESC
+    /// type 0x11 at register 0 read), its source's locally administered bit set and its destination as sent
+    /// (skipping a group, a zero or a locally administered source, or answering to the source,
+    /// passed every test, which sent from ethercrab's source alone).
+    #[test]
+    fn a_frame_from_any_source_is_answered_and_its_destination_kept() {
+        netns::isolated("round_9::a_frame_from_any_source_is_answered_and_its_destination_kept", &[("a0", "b0")], || {
+            let _segment = start(&toml::from_str(SEGMENT).unwrap()).unwrap();
+            let link = open("a0");
+            let own = link.mac().0;
+            let bc = [0xFFu8; 6];
+            let cases: [([u8; 6], [u8; 6]); 7] = [
+                (bc, [0x10; 6]),
+                (bc, [0x01; 6]),
+                (bc, [0x00; 6]),
+                (bc, [0x02, 0x10, 0x10, 0x10, 0x10, 0x10]),
+                (bc, own),
+                (bc, [0xFF; 6]),
+                ([0x00, 0x11, 0x22, 0x33, 0x44, 0x55], [0x10; 6]),
+            ];
+            let mut wrong = Vec::new();
+            for (i, (dst, src)) in cases.iter().enumerate() {
+                link.send(&brd(*dst, *src, i as u8, 0x0000)).unwrap();
+                let got = next(&link, Duration::from_millis(1500)).map(|f| (f[0..6].to_vec(), f[6..12].to_vec(), f[16 + 10], u16::from_le_bytes([f[16 + 11], f[16 + 12]])));
+                let mut back = *src;
+                back[0] |= 0x02;
+                if got != Some((dst.to_vec(), back.to_vec(), 0x11, 3)) {
+                    wrong.push(format!("from {src:02x?} to {dst:02x?}: {got:02x?}"));
+                }
+            }
+            assert!(wrong.is_empty(), "{wrong:#?}");
+        });
+    }
+
+    /// A frame seen arrive on the segment's wire (a second socket on b0 hears it in the same pass)
+    /// while the segment is silent, the silence then lifted: never answered, 20 times; and one
+    /// that arrived while it spoke, a silence then set: answered, 20 times (the thread judged a
+    /// frame when it woke to read it: 200 of 200 of the first answered, 188 of 200 of the second
+    /// dropped).
+    #[test]
+    fn a_silence_judges_a_frame_by_when_it_arrived() {
+        netns::isolated("round_9::a_silence_judges_a_frame_by_when_it_arrived", &[("a0", "b0")], || {
+            let segment = start(&toml::from_str(SEGMENT).unwrap()).unwrap();
+            let link = open("a0");
+            let observer = open("b0");
+            let (mut late, mut lost) = (0, 0);
+            for round in 0..20u16 {
+                segment.set_silent(true);
+                link.send(&brd([0xFF; 6], [0x10; 6], round as u8, 0x0F00 + round)).unwrap();
+                assert!(next(&observer, Duration::from_secs(2)).is_some(), "the frame on b0");
+                segment.set_silent(false);
+                if next(&link, Duration::from_millis(100)).is_some() {
+                    late += 1;
+                }
+                while observer.recv(Duration::ZERO).unwrap().is_some() {}
+            }
+            for round in 0..20u16 {
+                segment.set_silent(false);
+                link.send(&brd([0xFF; 6], [0x10; 6], round as u8, 0x0F00 + round)).unwrap();
+                assert!(next(&observer, Duration::from_secs(2)).is_some(), "the frame on b0");
+                segment.set_silent(true);
+                if next(&link, Duration::from_millis(500)).is_none() {
+                    lost += 1;
+                }
+                while observer.recv(Duration::ZERO).unwrap().is_some() {}
+            }
+            let s = segment.status();
+            assert_eq!((late, lost, s.dropped, s.frames), (0, 0, 20, 20), "{s:?}");
+        });
+    }
+
+    /// The bounds accepted on the outputs as on the inputs: 255 entries of a bit out and 128 of 64
+    /// bits in (outputs held to 254 entries passed).
+    #[test]
+    fn the_bounds_are_accepted_both_ways() {
+        let entries = |n: usize, bits: u8| (0..n).map(|i| format!("{{ index = 0x7000, subindex = {}, bits = {bits} }}", i % 256)).collect::<Vec<_>>().join(", ");
+        let cfg: EthercatConfig = toml::from_str(&format!("interface = \"b0\"\ndevices = [ {{ name = \"d\", outputs = [ {} ], inputs = [ {} ] }} ]\n", entries(255, 1), entries(128, 64))).unwrap();
+        assert_eq!(validate(&cfg).map_err(|e| e.to_string()), Ok(()));
+    }
+}

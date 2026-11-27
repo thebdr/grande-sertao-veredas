@@ -149,14 +149,19 @@ pub struct EthercatStatus {
 struct State {
     segment: Vec<Esc>,
     status: EthercatStatus,
+    /// Answering nothing, as a segment whose cable was pulled.
+    silent: bool,
 }
 
 #[allow(dead_code)]
 struct Shared {
     state: Mutex<State>,
-    silent: AtomicBool,
     stop: AtomicBool,
     started: std::time::Instant,
+    /// The raw link, read under the state's lock: a frame is judged as the segment stands when it
+    /// is read, and `set_silent` judges what waits before it changes the silence.
+    #[cfg(target_os = "linux")]
+    link: veredas_aranha::wire::raw::RawLink,
 }
 
 impl Shared {
@@ -228,9 +233,16 @@ impl EthercatHandle {
         Ok(())
     }
 
-    /// Answer nothing (true), as a segment whose cable was pulled; false answers again.
+    /// Answer nothing (true), as a segment whose cable was pulled; false answers again. A frame
+    /// that arrived before the call is judged as the segment stood: what waits in the kernel is
+    /// answered or dropped first (round 9: the thread judged a frame when it woke to read it, so a
+    /// frame that arrived while silent was answered after the lift, 200 of 200, and one that
+    /// arrived before a silence dropped, 188 of 200).
     pub fn set_silent(&self, silent: bool) {
-        self.shared.silent.store(silent, Ordering::SeqCst);
+        let mut state = self.shared.lock();
+        #[cfg(target_os = "linux")]
+        while take_one(&self.shared, &mut state) {}
+        state.silent = silent;
     }
 
     pub fn status(&self) -> EthercatStatus {
@@ -289,13 +301,13 @@ pub fn start(cfg: &EthercatConfig) -> Result<EthercatHandle, EthercatError> {
     let link = RawLink::open_with(&cfg.interface, Options { ethertype: Some(esc::ETHERTYPE), promiscuous: true, outgoing: false })
         .map_err(|e| EthercatError::Link(e.to_string()))?;
     let shared = Arc::new(Shared {
-        state: Mutex::new(State { segment: segment(cfg), status: EthercatStatus::default() }),
-        silent: AtomicBool::new(false),
+        state: Mutex::new(State { segment: segment(cfg), status: EthercatStatus::default(), silent: false }),
         stop: AtomicBool::new(false),
         started: std::time::Instant::now(),
+        link,
     });
     let worker = Arc::clone(&shared);
-    let thread = std::thread::Builder::new().name("maquinar-ethercat".into()).spawn(move || run(link, worker)).map_err(EthercatError::Thread)?;
+    let thread = std::thread::Builder::new().name("maquinar-ethercat".into()).spawn(move || run(worker)).map_err(EthercatError::Thread)?;
     Ok(EthercatHandle {
         interface: cfg.interface.clone(),
         names: cfg.devices.iter().map(|d| d.name.clone()).collect(),
@@ -305,11 +317,27 @@ pub fn start(cfg: &EthercatConfig) -> Result<EthercatHandle, EthercatError> {
     })
 }
 
+/// The segment's thread: each frame read and judged under the state's lock (the link has no wait
+/// without a read, so an empty read waits a millisecond outside it).
 #[cfg(target_os = "linux")]
-fn run(link: veredas_aranha::wire::raw::RawLink, shared: Arc<Shared>) {
-    use std::time::Duration;
+fn run(shared: Arc<Shared>) {
     while !shared.stop.load(Ordering::SeqCst) {
-        let Ok(Some(received)) = link.recv(Duration::from_millis(5)) else { continue };
+        let took = {
+            let mut state = shared.lock();
+            take_one(&shared, &mut state)
+        };
+        if !took {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+}
+
+/// One frame read from the link, if one waits, and judged as the segment stands: passed through
+/// the devices and sent back, or dropped while silent. False when none waited.
+#[cfg(target_os = "linux")]
+fn take_one(shared: &Shared, state: &mut State) -> bool {
+    let Ok(Some(received)) = shared.link.recv(std::time::Duration::ZERO) else { return false };
+    {
         let mut frame = received.bytes;
         // One IEEE 802.1Q tag taken out and put back on the answer, its contents not evaluated, as
         // an ESC does (ESC datasheet I, "EtherCAT Protocol"); the frame then read as an untagged one.
@@ -319,20 +347,19 @@ fn run(link: veredas_aranha::wire::raw::RawLink, shared: Arc<Shared>) {
             frame.drain(12..16);
         }
         if frame.len() < 14 + 2 || u16::from_be_bytes([frame[12], frame[13]]) != esc::ETHERTYPE {
-            continue;
+            return true;
         }
-        if shared.silent.load(Ordering::SeqCst) {
-            shared.lock().status.dropped += 1;
-            continue;
+        if state.silent {
+            state.status.dropped += 1;
+            return true;
         }
         let payload = &frame[14..];
         let Some(mut datagrams) = esc::parse(payload) else {
-            shared.lock().status.unreadable += 1;
-            continue;
+            state.status.unreadable += 1;
+            return true;
         };
         let now = shared.started.elapsed().as_nanos() as u64;
         let out = {
-            let mut state = shared.lock();
             esc::process(&mut state.segment, &mut datagrams, now);
             state.status.frames += 1;
             state.status.datagrams += datagrams.len() as u64;
@@ -346,6 +373,7 @@ fn run(link: veredas_aranha::wire::raw::RawLink, shared: Arc<Shared>) {
             }
             out
         };
-        let _ = link.send(&out);
+        let _ = shared.link.send(&out);
     }
+    true
 }
