@@ -184,7 +184,10 @@ impl Browser {
             std::thread::sleep(Duration::from_millis(100));
         };
         let mut ws = TcpStream::connect(addr).unwrap();
-        ws.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+        // A browser that answers nothing for two minutes fails the test rather than holding it; 30 s
+        // fell short on the shared machine under a heavy build (a page's call answered later, the
+        // test red with `WouldBlock`, three times on 2026-11-26 and 27).
+        ws.set_read_timeout(Some(Duration::from_secs(120))).unwrap();
         write!(ws, "GET {page} HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").unwrap();
         let mut head = Vec::new();
         let mut b = [0u8; 1];
