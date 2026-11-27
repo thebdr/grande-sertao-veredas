@@ -35,6 +35,9 @@ mod shapes;
 #[allow(dead_code)]
 #[path = "programs/sound.rs"]
 mod sound;
+#[allow(dead_code)]
+#[path = "programs/zst_const.rs"]
+mod zst_const;
 
 use std::fmt::Debug;
 use std::fs;
@@ -45,8 +48,8 @@ use std::time::Duration;
 
 use orcl_interp::file::{self, Header};
 use orcl_interp::{
-    Arg, BinOp, Check, ErrorKind, FunctionId, Int, Limits, Machine, Program as Code, ProgramError, RegionId, Scalar,
-    Terminator, Type, TypeId,
+    Arg, BinOp, Check, Const, ErrorKind, FunctionId, Int, Limits, Machine, Operand, Program as Code, ProgramError,
+    RegionId, Scalar, Terminator, Type, TypeId, Value,
 };
 use orcl_runtime::{Image, Interpreted, Io, Regions, RunState, Task, TaskConfig, TaskProgram, VirtualClock};
 use orcl_std::Program;
@@ -377,6 +380,8 @@ image!(sound::Outputs {
 });
 image!(faults::Inputs { sel: u8, a: i32, b: i32, idx: u8, c: u8, sh: u32 });
 image!(faults::Outputs { v: i32, w: u8 });
+image!(zst_const::Inputs { a: u8 });
+image!(zst_const::Outputs { v: u8 });
 
 // Inputs drawn from a scan's index, the same for the native program and its lowered twin.
 
@@ -665,6 +670,49 @@ fn ordinary_control_code_runs_lowered_as_natively() {
     }
     both(&outputs, "the nested match's guarded arm", |o| o.nested == 1);
     both(&outputs, "a time held past its preset", |o| o.since_ms);
+}
+
+/// Every constant a lowered program's statements and terminators hold.
+fn constants(code: &Code) -> impl Iterator<Item = &Const> {
+    let blocks = code.functions.iter().flat_map(|f| f.blocks.iter());
+    blocks.flat_map(|b| {
+        let mut operands: Vec<&Operand> = Vec::new();
+        for s in &b.statements {
+            match &s.value {
+                Value::Use(o) | Value::Unary(_, o) | Value::Cast(o, _) => operands.push(o),
+                Value::Binary(_, x, y) | Value::Checked(_, x, y) => operands.extend([x, y]),
+                Value::Aggregate(_, _, parts) => operands.extend(parts),
+                Value::Discriminant(_) | Value::Ref(..) => {}
+            }
+        }
+        match &b.terminator {
+            Terminator::SwitchInt { value: o, .. } | Terminator::Assert { cond: o, .. } => operands.push(o),
+            Terminator::Call { args, .. } => operands.extend(args),
+            Terminator::Goto(_) | Terminator::Return { .. } | Terminator::Unreachable { .. } => {}
+        }
+        operands.into_iter().filter_map(|o| match o {
+            Operand::Const(c) => Some(c),
+            _ => None,
+        })
+    })
+}
+
+#[test]
+fn constants_of_no_byte_hold_a_one_variant_enum_s_discriminant_and_run_lowered_as_natively() {
+    // `const ONLY: Only = Only::One`, an array, a structure and a tuple of such: rustc evaluates each to a constant of
+    // no byte; the interpreter holds each such enum in one slot, its discriminant
+    let (_, code) = lower("zst_const", &program("zst_const")).result.unwrap_or_else(|e| panic!("zst_const: {e}"));
+    let only = code.types.iter().position(|t| matches!(t, Type::Enum { name, .. } if name == "Only")).unwrap();
+    let constants: Vec<&Const> =
+        constants(&code).filter(|c| !c.slots.is_empty() && c.slots.iter().all(|s| *s == discriminant(0))).collect();
+    let mut sizes: Vec<usize> = constants.iter().map(|c| c.slots.len()).collect();
+    sizes.sort_unstable();
+    sizes.dedup();
+    assert_eq!(sizes, [1, 2, 3], "an enum, a structure and a tuple of two, an array of three: {constants:?}");
+    assert!(constants.iter().any(|c| c.ty.0 as usize == only), "the enum's own constant");
+    let inputs = |k: u64| zst_const::Inputs { a: mix(k, 1) as u8 };
+    let outputs = conform("zst_const", zst_const::ZstConst::default(), "ZstConst", &inputs, 200);
+    both(&outputs, "an odd sum", |o| o.v % 2 == 1);
 }
 
 #[test]

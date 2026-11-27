@@ -1,7 +1,8 @@
 //! Constants, decoded from the bytes the compiler evaluated them to, by their type's layout: an integer's bytes in
 //! the target's order, a float's bits, a `Duration`'s seconds and nanoseconds, a structure's fields at their
-//! offsets, an enum's variant from its tag (direct or in a niche) and that variant's fields. A shared reference to a
-//! constant (a promoted `&State::Stopping`) is the constant it refers to, which the body holds in a local of its own.
+//! offsets, an enum's variant from its tag (direct or in a niche) and that variant's fields; a constant of no byte
+//! likewise, from none, so a one-variant enum still holds its discriminant. A shared reference to a constant (a
+//! promoted `&State::Stopping`) is the constant it refers to, which the body holds in a local of its own.
 use std::ops::Range;
 
 use orcl_interp::{Const, Scalar, Type, TypeId};
@@ -9,7 +10,7 @@ use rustc_public::abi::{FieldsShape, LayoutShape, Primitive, TagEncoding, Varian
 use rustc_public::mir::Mutability;
 use rustc_public::mir::alloc::GlobalAlloc;
 use rustc_public::CrateDefType;
-use rustc_public::ty::{Allocation, ConstantKind, MirConst, RigidTy, Span, Ty, TyConstKind, TyKind};
+use rustc_public::ty::{Allocation, ConstantKind, MirConst, ProvenanceMap, RigidTy, Span, Ty, TyConstKind, TyKind};
 
 use crate::error::{Refusal, Refused};
 use crate::lower::Lowerer;
@@ -32,21 +33,31 @@ impl Lowerer<'_> {
     pub(crate) fn constant(&mut self, c: &MirConst, at: Span) -> Result<Lit, Refusal> {
         let ty = c.ty();
         match c.kind() {
-            ConstantKind::ZeroSized => {
-                let id = self.ty(ty, at)?;
-                Ok(Lit::Value(Const { ty: id, slots: Vec::new() }))
-            }
+            ConstantKind::ZeroSized => self.zero_sized(ty, at),
             ConstantKind::Allocated(alloc) => self.allocated(ty, alloc, at),
             ConstantKind::Ty(tc) => match tc.kind() {
                 TyConstKind::Value(t, alloc) => self.allocated(*t, alloc, at),
-                TyConstKind::ZSTValue(t) => {
-                    let id = self.ty(*t, at)?;
-                    Ok(Lit::Value(Const { ty: id, slots: Vec::new() }))
-                }
+                TyConstKind::ZSTValue(t) => self.zero_sized(*t, at),
                 _ => Err(self.bad_const("a constant not evaluated", at)),
             },
             ConstantKind::Unevaluated(_) | ConstantKind::Param(_) => Err(self.bad_const("a constant not evaluated", at)),
         }
+    }
+
+    /// A constant of no byte: a one-variant fieldless enum, a unit structure, `()`, or an array, a tuple or a structure
+    /// made only of such. rustc gives it no allocation, but the interpreter holds each such enum in a slot, its
+    /// discriminant; so it is decoded by its type as any other constant, from no bytes, an enum's variant read from
+    /// its layout, and holds the slots the interpreter gives its type.
+    fn zero_sized(&mut self, ty: Ty, at: Span) -> Result<Lit, Refusal> {
+        let id = self.ty(ty, at)?;
+        let none = Allocation {
+            bytes: Vec::new(),
+            provenance: ProvenanceMap { ptrs: Vec::new() },
+            align: 1,
+            mutability: Mutability::Not,
+        };
+        let slots = self.decode(ty, id, &none, 0, at)?;
+        Ok(Lit::Value(Const { ty: id, slots }))
     }
 
     fn allocated(&mut self, ty: Ty, alloc: &Allocation, at: Span) -> Result<Lit, Refusal> {
