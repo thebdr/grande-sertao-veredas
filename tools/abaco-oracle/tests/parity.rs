@@ -1539,7 +1539,9 @@ fn a_recursion_through_lambda_calls_computes_the_same_whoever_reads_its_cell_fir
     // the round at 66cb471a: fork change 44 counted a cell's LAMBDA calls and names from the
     // outermost one in whichever cell read it first, so `Soma(15)`, which alone computes in every
     // build, was `#NUM!` behind a reader read before it or at the end of cells reading each other
-    // through names, in a debug build (fork change 44, refined: each formula's run counts its own)
+    // through names, in a debug build (fork change 44, refined: each formula's run counts its own);
+    // and the confirmation at 75d19232: the clause's floor, `Soma(17)` (153), computing behind every
+    // reader in the build the suite runs (to 18 there, 104 in this workspace's release build)
     let dir = tempfile::tempdir().unwrap();
     let source = corpus_dir(&baseline()).join("calc_tests/LOGICAL/LAMBDA.xlsx");
     let part = sheet_part(&source, "Sheet1");
@@ -1553,14 +1555,14 @@ fn a_recursion_through_lambda_calls_computes_the_same_whoever_reads_its_cell_fir
     rewrite_part(&source, &named, "xl/workbook.xml", |text| text.replacen("<definedNames>", &format!("<definedNames>{names}"), 1));
     let sheet_data = regex::Regex::new(r"(?s)<sheetData>.*?</sheetData>|<sheetData/>").unwrap();
     let dimension = regex::Regex::new(r"<dimension[^>]*/>").unwrap();
-    let cell = |at: &str, f: &str| format!(r#"<c r="{at}"><f>{f}</f><v>120</v></c>"#);
+    let cell = |at: &str, f: &str| format!(r#"<c r="{at}"><f>{f}</f><v>153</v></c>"#);
     let chain: String = (1..=48)
         .map(|i| format!(r#"<row r="{i}">{}</row>"#, cell(&format!("A{i}"), &format!("Nome_{i}"))))
-        .chain(std::iter::once(format!(r#"<row r="49">{}</row>"#, cell("A49", "Soma(15)"))))
+        .chain(std::iter::once(format!(r#"<row r="49">{}</row>"#, cell("A49", "Soma(17)"))))
         .collect();
     for (book, rows, cells) in [
-        ("a reader after it", format!(r#"<row r="1">{}{}</row>"#, cell("B1", "Soma(15)"), cell("C1", "Rd")), 2),
-        ("a reader before it", format!(r#"<row r="1">{}{}{}</row>"#, cell("A1", "Rd"), cell("B1", "Soma(15)"), cell("C1", "Rd")), 3),
+        ("a reader after it", format!(r#"<row r="1">{}{}</row>"#, cell("B1", "Soma(17)"), cell("C1", "Rd")), 2),
+        ("a reader before it", format!(r#"<row r="1">{}{}{}</row>"#, cell("A1", "Rd"), cell("B1", "Soma(17)"), cell("C1", "Rd")), 3),
         ("48 cells reading it through names", chain, 49),
     ] {
         let planted = dir.path().join("planted.xlsx");
