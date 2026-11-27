@@ -1452,7 +1452,7 @@ fn a_function_of_a_crate_built_without_the_front_end_s_flags_is_refused_naming_t
     assert_eq!(out.status.code(), Some(1), "{stderr}");
     let edges = orcl_std_dir().join("src/edges.rs");
     let (line, column) = place_of(&edges, "pub fn scan(&mut self, clk: bool)");
-    let words = "a crate built without the front end's flags, likely a target directory shared with a plain build";
+    let words = "a crate built without the front end's flags, by rustc alone or outside the front end";
     let wanted = format!("error: orcl-front: {}:{line}:{column}: {words}: `RTrig::scan`", edges.display());
     assert!(stderr.lines().any(|l| l == wanted), "wanted\n{wanted}\ngot\n{stderr}");
     assert!(!file.exists(), "no file written");

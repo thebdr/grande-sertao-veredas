@@ -57,7 +57,7 @@ impl Refused {
             Refused::Terminator => "a terminator the interpreter does not have",
             Refused::CoreCall => "a call into core outside the list",
             Refused::Call => "a call the interpreter cannot make",
-            Refused::NoBody => "a crate built without the front end's flags, likely a target directory shared with a plain build",
+            Refused::NoBody => "a crate built without the front end's flags, by rustc alone or outside the front end",
             Refused::Program => "no program",
         }
     }
