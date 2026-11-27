@@ -1,13 +1,13 @@
 {
   "clause": "C-201",
   "verdict": "refuted",
-  "ranAt": "2026-11-27T10:49:24.243Z",
-  "headCommit": "9f246255b799f76daac5a9eac12a5b3d0b1a25be",
+  "ranAt": "2026-11-27T14:33:59.935Z",
+  "headCommit": "e1e8f848949ff21c6bcd751ea7eb4638485e4c35",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/grammar.rs",
       "file": "crates/veredas-comissionador/tests/grammar.rs",
-      "symbolSha": "751ff9269b3b0450cc7418405b413832b3b627094cd6dc80e4e79fdc8da0ccb3"
+      "symbolSha": "ed759a99427919c0fd04a8d0bbe9efe9969e5cfae3f782789f63d9d4ec2df073"
     }
   ]
 }
