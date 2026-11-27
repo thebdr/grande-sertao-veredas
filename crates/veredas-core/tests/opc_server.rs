@@ -159,26 +159,22 @@ fn value_of(node: opcua_types::NodeId) -> opcua_types::ReadValueId {
     }
 }
 
-/// A port held at `addr` by a socket bound without SO_REUSEADDR and never listening, so a
-/// connection there is refused and no other socket can listen there while it is held; and a
-/// server started from `spec` on that same port at its own host (tried again on a port its host
-/// has taken already). A port the system chooses for one loopback address can be one another
-/// socket listens on at another, so a check that a host finds nothing holds only so.
-fn start_beside_held(mut spec: ServerSpec, addr: &str) -> (socket2::Socket, Server) {
+/// A server started from `spec` (its port 0) on a port the system chooses at its own host, and
+/// that port held at `addr` by a socket bound without SO_REUSEADDR and never listening, so a
+/// connection there is refused and no other socket can listen there while it is held; tried
+/// again, server and all, when the port is taken at `addr`. A port the system chooses at one
+/// loopback address can be one another socket uses at another, so a check that a host finds
+/// nothing at a port holds only so; and a port chosen at port 0 is none another test holds, so
+/// the server takes no other test's port.
+fn start_then_hold(spec: &ServerSpec, addr: &str) -> (Server, socket2::Socket) {
+    assert_eq!(spec.port, 0);
     for _ in 0..20 {
+        let server = Server::start(spec).unwrap();
         let held =
             socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
-        let at: std::net::SocketAddr = format!("{addr}:0").parse().unwrap();
-        held.bind(&at.into()).unwrap();
-        spec.port = held.local_addr().unwrap().as_socket().unwrap().port();
-        match Server::start(&spec) {
-            Ok(server) => return (held, server),
-            Err(ServerError::Bind { source, .. })
-                if source.kind() == std::io::ErrorKind::AddrInUse =>
-            {
-                continue;
-            }
-            Err(e) => panic!("{e:?}"),
+        let at: std::net::SocketAddr = format!("{addr}:{}", server.port).parse().unwrap();
+        if held.bind(&at.into()).is_ok() {
+            return (server, held);
         }
     }
     panic!("no port free at both hosts in twenty tries");
@@ -1145,6 +1141,9 @@ fn a_spec_that_cannot_be_served_is_refused_by_name_before_anything_binds() {
     // be the bind's error instead.
     let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let taken_port = taken.local_addr().unwrap().port();
+    // Taken at IPv6's loopback too, where the machine has one, so an IPv6 host's refusal is
+    // seen to come before the bind there as well.
+    let _taken_v6 = std::net::TcpListener::bind(("::1", taken_port)).ok();
     let refused = |s: &ServerSpec| {
         let mut s = s.clone();
         s.port = taken_port;
@@ -1174,13 +1173,23 @@ fn a_spec_that_cannot_be_served_is_refused_by_name_before_anything_binds() {
         refused(&s),
         "the data namespace http://opcfoundation.org/UA/ is OPC UA's own; give it a URI of its own"
     );
-    let mut s = spec();
-    s.bind = "::1".into();
-    assert_eq!(
-        refused(&s),
-        "host `::1`: an IPv6 address, which the endpoint's URL cannot carry; give an IPv4 address \
-         or a name"
-    );
+    for host in [
+        "::1",
+        "0:0:0:0:0:0:0:1",
+        "::",
+        "fe80::1",
+        "::ffff:127.0.0.1",
+    ] {
+        let mut s = spec();
+        s.bind = host.into();
+        assert_eq!(
+            refused(&s),
+            format!(
+                "host `{host}`: an IPv6 address, which the endpoint's URL cannot carry; give an \
+                 IPv4 address or a name"
+            )
+        );
+    }
     for (name, why) in [
         ("", "the name is empty"),
         (
@@ -1298,7 +1307,7 @@ fn it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clien
     );
     // Bound on the host it was given alone: another loopback address finds nothing at its port
     // (that port held there, never listening, so nothing else can be found there either).
-    let (_held, alone) = start_beside_held(spec(), "127.0.0.2");
+    let (alone, _held) = start_then_hold(&spec(), "127.0.0.2");
     let elsewhere = std::net::TcpStream::connect_timeout(
         &format!("127.0.0.2:{}", alone.port).parse().unwrap(),
         // Windows answers a refused loopback connection after its own retries, about 2 s.
@@ -1348,7 +1357,7 @@ fn it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clien
     // at that port (held there, never listening) finds nothing.
     let mut s = spec();
     s.bind = "127.0.0.2".into();
-    let (_held, server) = start_beside_held(s, "127.0.0.1");
+    let (server, _held) = start_then_hold(&s, "127.0.0.1");
     let there = format!("opc.tcp://127.0.0.2:{}/", server.port);
     assert_eq!(server.endpoint_url, there);
     let urls = advertised(&server);
@@ -1372,6 +1381,43 @@ fn it_advertises_the_port_it_bound_and_a_stop_frees_the_port_and_drops_its_clien
     assert_eq!(read[0].value, Some(Variant::Int32(3)));
     let elsewhere = std::net::TcpStream::connect_timeout(
         &format!("127.0.0.1:{}", server.port).parse().unwrap(),
+        Duration::from_secs(10),
+    );
+    assert_eq!(
+        elsewhere.map(|_| ()).map_err(|e| e.kind()),
+        Err(std::io::ErrorKind::ConnectionRefused)
+    );
+    drop(server);
+
+    // A name as the host, `localhost`: bound where it resolves (127.0.0.1 here, ::1 first on
+    // Windows), advertised by its name at every URL, read there by a client, and 127.0.0.2 at
+    // that port (held there, never listening) finds nothing.
+    let mut s = spec();
+    s.bind = "localhost".into();
+    let (server, _held) = start_then_hold(&s, "127.0.0.2");
+    let there = format!("opc.tcp://localhost:{}/", server.port);
+    assert_eq!(server.endpoint_url, there);
+    let urls = advertised(&server);
+    assert!(!urls.is_empty());
+    assert!(urls.iter().all(|u| *u == there), "{urls:?}");
+    let read = block(async {
+        let mut client = raw_client();
+        let (session, handle) = raw_session(&mut client, &server).await;
+        let read = session
+            .read(
+                &[value_of(server.node_id("count"))],
+                opcua_types::TimestampsToReturn::Neither,
+                0.0,
+            )
+            .await
+            .unwrap();
+        let _ = session.disconnect().await;
+        handle.abort();
+        read
+    });
+    assert_eq!(read[0].value, Some(Variant::Int32(3)));
+    let elsewhere = std::net::TcpStream::connect_timeout(
+        &format!("127.0.0.2:{}", server.port).parse().unwrap(),
         Duration::from_secs(10),
     );
     assert_eq!(

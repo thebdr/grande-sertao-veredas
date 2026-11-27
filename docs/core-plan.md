@@ -333,8 +333,10 @@ Recorded as the port meets them.
   write with no value never reaches a write callback: the stack answers `BadTypeMismatch` first.
 - **A port the system chooses on one loopback address may be in use on another.** With
   SO_REUSEADDR (tokio and std set it on Unix), Linux can give a port 0 bind on 127.0.0.2 a port
-  another socket listens on at 127.0.0.1. A test that a host finds nothing at a port holds that
-  port there first, bound without reuse and never listening (C-074's `start_beside_held`).
+  another socket listens on at 127.0.0.1; and a bind with SO_REUSEADDR at an explicit port shares
+  it with another test's hold made with SO_REUSEADDR at the same address (portal's `HeldPort`). A
+  test that a host finds nothing at a port starts its server at port 0, then holds that port at
+  the other address, bound without reuse and never listening (C-074's `start_then_hold`).
 - **A server's read limit refuses a poll whole.** With `max_nodes_per_read` below a worker's tag
   count, every poll fails and the worker drops its session; a test of the limit polls within it.
 
