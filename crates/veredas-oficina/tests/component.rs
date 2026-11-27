@@ -463,13 +463,15 @@ fn listening(pid: u32) -> Vec<String> {
 /// 65535: the driver's own executable started with the variable unset, `0`, below 0, above 65535
 /// (which would wrap to a port of the system's choosing or another one), written in hexadecimal,
 /// and not a number stays up and listens on no TCP port (read from `/proc` on Linux; elsewhere
-/// Spix's own default port, 9000, refuses).
+/// Spix's own default port, 9000, and 4321, where the tried values would land, refuse).
 #[test]
 fn the_driver_listens_only_on_a_port_named() {
     let platform = std::env::var("OFICINA_TEST_PLATFORM").unwrap_or_else(|_| "offscreen".to_string());
     // A port followed by anything (`4321x`, `4321.5`, `4321 x`) names none either: a reader that
-    // takes a decimal prefix would open 4321.
-    for value in [None, Some("0"), Some("-1"), Some("65536"), Some("70000"), Some("0x10E1"), Some("4321x"), Some("4321.5"), Some("4321 x"), Some("not-a-port")] {
+    // takes a decimal prefix would open 4321. Nor does a negative number that wraps to 4321 under
+    // unsigned negation (strtoul's and stoul's way), on 64 bits and on 32 (Windows' `long`).
+    let values = [None, Some("0"), Some("-1"), Some("65536"), Some("70000"), Some("0x10E1"), Some("4321x"), Some("4321.5"), Some("4321 x"), Some("-18446744073709547295"), Some("-4294962975"), Some("not-a-port")];
+    for value in values {
         let mut command = Command::new(env!("CARGO_BIN_EXE_veredas-oficina"));
         command.env("QT_QPA_PLATFORM", &platform).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         match value {
@@ -482,7 +484,11 @@ fn the_driver_listens_only_on_a_port_named() {
         #[cfg(target_os = "linux")]
         let listens = listening(child.id());
         #[cfg(not(target_os = "linux"))]
-        let listens: Vec<String> = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], 9000)), Duration::from_secs(1)).map(|_| vec!["9000".to_string()]).unwrap_or_default();
+        let listens: Vec<String> = [9000u16, 4321]
+            .into_iter()
+            .filter(|port| TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], *port)), Duration::from_secs(1)).is_ok())
+            .map(|port| port.to_string())
+            .collect();
         let _ = child.kill();
         let _ = child.wait();
         assert!(running, "the driver's executable stayed up with OFICINA_SPIX_PORT {value:?}");
