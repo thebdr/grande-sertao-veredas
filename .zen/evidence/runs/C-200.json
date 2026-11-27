@@ -10,15 +10,15 @@
     "package(veredas-comissionador) & binary(component) | package(leis) & binary(real_tree)"
   ],
   "exitCode": 0,
-  "outputSha": "25028022c58c9d8f743880f5138a460135b5661e316a65db1c3452419b1bdf98",
-  "outputTail": "    Starting 12 tests across 2 binaries (155 binaries skipped)\n        PASS [   0.004s] ( 1/12) veredas-comissionador::component the_plant_s_arming_is_named_where_the_run_arms_and_disarms_alone\n        PASS [   0.004s] ( 2/12) veredas-comissionador::component the_reading_finds_every_refused_form\n        PASS [   0.005s] ( 3/12) veredas-comissionador::component the_session_s_store_is_reached_by_its_readers_alone\n        PASS [   0.019s] ( 4/12) veredas-comissionador::component the_rule_of_targets_refuses_what_it_should\n        PASS [   0.022s] ( 5/12) veredas-comissionador::component its_members_are_core_and_portal_at_most\n        PASS [   0.027s] ( 6/12) veredas-comissionador::component its_library_and_executable_are_built_from_its_src_folder_alone\n        PASS [   0.028s] ( 7/12) veredas-comissionador::component comissionador_is_one_library_and_one_executable_named_for_it\n        PASS [   0.034s] ( 8/12) veredas-comissionador::component its_normal_dependencies_are_the_reviewed_ones\n        PASS [   0.058s] ( 9/12) veredas-comissionador::component files_are_reached_where_the_engine_keeps_its_own\n        PASS [   0.084s] (10/12) veredas-comissionador::component portal_is_reached_through_what_the_engine_takes_from_it_alone\n        PASS [   0.292s] (11/12) leis::real_tree the_real_tree_obeys_every_law\n        PASS [   0.388s] (12/12) veredas-comissionador::component its_sources_reach_the_plant_through_portal_alone_and_arm_the_switch_in_one_place\n────────────\n     Summary [   0.389s] 12 tests run: 12 passed, 0 skipped",
-  "ranAt": "2026-11-27T00:28:47.252Z",
-  "headCommit": "0bae76020b1511c5a1d42648732eb9f9cdb9c0da",
+  "outputSha": "f3d689b90e4e0698025650cc1a09ba27694dd3288347050f47f70ed5bfdbadd4",
+  "outputTail": "    Starting 12 tests across 2 binaries (156 binaries skipped)\n        PASS [   0.011s] ( 1/12) veredas-comissionador::component the_reading_finds_every_refused_form\n        PASS [   0.019s] ( 2/12) veredas-comissionador::component the_rule_of_targets_refuses_what_it_should\n        PASS [   0.021s] ( 3/12) veredas-comissionador::component the_session_s_store_is_reached_by_its_readers_alone\n        PASS [   0.021s] ( 4/12) veredas-comissionador::component the_plant_s_arming_is_named_where_the_run_arms_and_disarms_alone\n        PASS [   0.031s] ( 5/12) veredas-comissionador::component its_library_and_executable_are_built_from_its_src_folder_alone\n        PASS [   0.033s] ( 6/12) veredas-comissionador::component comissionador_is_one_library_and_one_executable_named_for_it\n        PASS [   0.042s] ( 7/12) veredas-comissionador::component its_normal_dependencies_are_the_reviewed_ones\n        PASS [   0.045s] ( 8/12) veredas-comissionador::component its_members_are_core_and_portal_at_most\n        PASS [   0.090s] ( 9/12) veredas-comissionador::component portal_is_reached_through_what_the_engine_takes_from_it_alone\n        PASS [   0.124s] (10/12) veredas-comissionador::component files_are_reached_where_the_engine_keeps_its_own\n        PASS [   0.462s] (11/12) veredas-comissionador::component its_sources_reach_the_plant_through_portal_alone_and_arm_the_switch_in_one_place\n        PASS [   0.490s] (12/12) leis::real_tree the_real_tree_obeys_every_law\n────────────\n     Summary [   0.491s] 12 tests run: 12 passed, 0 skipped",
+  "ranAt": "2026-11-27T08:04:24.468Z",
+  "headCommit": "bc17f3a052bfc113fcd68bbe00a63be29bfdbe8c",
   "tests": [
     {
       "name": "crates/veredas-comissionador/tests/component.rs",
       "file": "crates/veredas-comissionador/tests/component.rs",
-      "fileSha": "7442a8537d98738acd3c20b4d34808a8314c8ee744095765cabde75760b4f62d"
+      "fileSha": "7923be315e385e49560673361dbc93645c240d5fc1f36f505b22060a6a45fb0a"
     },
     {
       "name": "tools/leis/tests/real_tree.rs",
