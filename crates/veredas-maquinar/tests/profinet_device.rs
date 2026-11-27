@@ -2124,8 +2124,11 @@ mod round_8 {
         None
     }
 
-    /// A DCP PDU of these blocks, each `(option, suboption, data)`.
-    fn raw_pdu(frame_id: u16, service: u8, xid: u32, delay: u16, blocks: &[(u8, u8, Vec<u8>)]) -> Vec<u8> {
+    /// A DCP block as a test writes it: its option, its suboption, its data.
+    type RawBlock = (u8, u8, Vec<u8>);
+
+    /// A DCP PDU of these blocks.
+    fn raw_pdu(frame_id: u16, service: u8, xid: u32, delay: u16, blocks: &[RawBlock]) -> Vec<u8> {
         let mut data = Vec::new();
         for (o, s, d) in blocks {
             data.extend_from_slice(&[*o, *s]);
@@ -2265,7 +2268,7 @@ mod round_8 {
             let ctl = link("a0", ether::ETHERTYPE_PROFINET);
             let me = ctl.mac();
             let _dev = start(&config(DEVICE)).unwrap();
-            let cases: Vec<(&str, Vec<(u8, u8, Vec<u8>)>, bool)> = vec![
+            let cases: Vec<(&str, Vec<RawBlock>, bool)> = vec![
                 ("its name, another device id", vec![(2, 2, b"io-device-1".to_vec()), (2, 3, vec![0, 8, 0, 9])], false),
                 ("another device id, its name", vec![(2, 3, vec![0, 8, 0, 9]), (2, 2, b"io-device-1".to_vec())], false),
                 ("another name, all", vec![(2, 2, b"io-device-2".to_vec()), (0xFF, 0xFF, vec![])], false),
