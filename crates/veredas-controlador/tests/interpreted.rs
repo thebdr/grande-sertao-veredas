@@ -1307,3 +1307,67 @@ fn a_stop_from_startup_keeps_the_last_make_s_reason() {
     assert_eq!(text(&c), r#"STOP command(id=101, source="oficina") sim() no_realtime()"#);
     assert_eq!(c.load_error(), Some(&MakeError::State));
 }
+
+// The sixteenth refute round's tests (the critic's probes, adopted): a warm start from STOP 104 shown warm, and a
+// scan's 507 keeping the faulted program and its exchange on the program's own periods.
+
+// R16-M1, R16-M2: a warm start from STOP 104 shows its own reason, warm, after a first power-on and a power cycle
+// with no program, for a source that never makes the program and one mended since, and after a mended run.
+#[test]
+fn a_warm_start_with_no_program_shows_warm() {
+    for (kind, source) in never_and_mended() {
+        let mut c = Controller::power_on_from(config(), SIM, Restart::First, source).unwrap();
+        assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()", "{kind}");
+        c.start(StartupReason::Warm, OFICINA, &Key).unwrap();
+        assert_eq!(text(&c), "STARTUP warm(id=201) load() sim() no_realtime()", "{kind}");
+    }
+    let mut c = Controller::power_on_from(config(), SIM, Restart::PowerCycle { was: StateWord::Run }, loaded(&two_slots())).unwrap();
+    c.start(StartupReason::Warm, OFICINA, &Key).unwrap();
+    assert_eq!(text(&c), "STARTUP warm(id=201) load() sim() no_realtime()");
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, scripted(vec![Some(MakeError::State)])).unwrap();
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(text(&c), "RUN sim() no_realtime()");
+    c.stop(OFICINA).unwrap();
+    c.start(StartupReason::Warm, OFICINA, &Key).unwrap();
+    assert_eq!(text(&c), "STARTUP warm(id=201) load() sim() no_realtime()");
+}
+
+// R16-M7: a scan's FAULT 507 keeps the faulted program, where it failed, and its exchange on the program's own
+// periods, for a program started off the target's grid (at 13 ms): an input image the machine refuses on its third
+// scan, and a value read before anything wrote it on its first.
+#[test]
+fn a_scan_s_507_keeps_the_faulted_program_and_its_own_periods() {
+    fn refused_at_3(index: usize) -> In {
+        if index == 3 { In { value: REFUSED, divisor: 1 } } else { steady(index) }
+    }
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, refused_at_3);
+    let mut c = interpreted();
+    step(&mut c, &mut plant, &mut clock, 1); // the idle exchange at 0
+    clock.advance(ms(13));
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 5); // scans at 13 and 23, the 507 at 33, the faulted program at 43 and 53
+    assert_eq!(text(&c), "FAULT internal(id=507) sim() no_realtime()");
+    let times: Vec<Duration> = plant.writes.iter().map(|w| w.0).collect();
+    assert_eq!(times, [0, 13, 23, 33, 43, 53].map(ms), "the faulted program's exchange on its own periods");
+    let values: Vec<u32> = plant.writes.iter().map(|w| w.1).collect();
+    assert_eq!(values, [SAFE.value, scanned(FIRST + 1, 1), scanned(FIRST + 2, 2), SAFE.value, SAFE.value, SAFE.value]);
+    assert!(c.program().is_some(), "the faulted program is kept, where it failed");
+    // a value read before anything wrote it, on the first scan
+    let mut uninit = code();
+    uninit.functions[0].blocks[1].statements.remove(0);
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    let mut c = on(uninit);
+    step(&mut c, &mut plant, &mut clock, 1);
+    clock.advance(ms(13));
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 3);
+    assert_eq!(text(&c), "FAULT internal(id=507) sim() no_realtime()");
+    let times: Vec<Duration> = plant.writes.iter().map(|w| w.0).collect();
+    assert_eq!(times, [0, 13, 23, 33].map(ms));
+    assert!(c.program().is_some());
+}
