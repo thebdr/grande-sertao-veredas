@@ -843,6 +843,100 @@ fn a_run_arms_the_switch_for_the_writes_it_was_confirmed_for_and_disarms_it_afte
     assert_eq!(e.0, ["the test writes, and portal's write switch is off"]);
 }
 
+// ---- refute round 5 ------------------------------------------------------------------------
+
+#[test]
+fn the_tester_s_stop_ends_a_long_window_s_reading_between_its_pages() {
+    // 200 000 rows of `a`, one a millisecond, ten minutes back: a replayed wait and await read the
+    // window before they walk it, a page of portal's at a time. Stopped 200 ms in, each ends in a
+    // fraction of what reading the window once takes, measured here (it ran the whole reading
+    // first, stopped seconds later).
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &with_rules(project_text(&bench, false, 4)));
+    let n = 200_000;
+    let first = veredas_portal::serve::store_now_ms() - 600_000;
+    let mut lines = String::with_capacity(n as usize * 32);
+    for k in 0..n {
+        let at = chrono::DateTime::from_timestamp_millis(first + k).unwrap().naive_utc();
+        lines.push_str(&format!("{} x={}\n", at.format("%Y-%m-%d %H:%M:%S%.3f"), if k == n - 1 { 2 } else { 1 }));
+    }
+    {
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(dir.path().join("plant.log")).unwrap().write_all(lines.as_bytes()).unwrap();
+    }
+    let p = LivePlant::new(s.live()).unwrap();
+    let a = p.tables().unwrap().into_iter().find(|t| t.name == "a").unwrap();
+    let last = first + n - 1;
+    assert!(wait(Duration::from_secs(120), || p.latest(&a, "x", last).unwrap().is_some_and(|(at, v)| at == last && v == Value::Int(2))), "the rows stored");
+    let begun = std::time::Instant::now();
+    assert_eq!(p.rows(&a, first - 1, last).unwrap().len(), n as usize);
+    let whole = begun.elapsed();
+    for body in ["  step w wait a.x == 9\n", "  step w await a where e.x == 9 -> e\n"] {
+        let text = format!("{HEAD}test \"t\" {{\n  id T\n  timeout 1h\n  modes replay\n{body}}}\n");
+        let opts = RunOptions::replay(first - 1, last);
+        let stop = opts.stop.clone();
+        let begun = std::time::Instant::now();
+        let r = std::thread::scope(|sc| {
+            sc.spawn(|| {
+                std::thread::sleep(Duration::from_millis(200));
+                stop.store(true, Ordering::SeqCst);
+            });
+            run_with(&checked(&text), s.live(), &opts).unwrap().0
+        });
+        let took = begun.elapsed();
+        assert_eq!((r.verdict, r.reason.as_str()), (RunVerdict::Aborted, "stopped by the tester"), "{body}");
+        assert!(took.saturating_sub(Duration::from_millis(200)) * 4 < whole, "{body}: stopped after {took:?}, the window read once in {whole:?}");
+    }
+}
+
+#[test]
+fn a_write_whose_answer_never_came_is_recorded_sent() {
+    // A source reached through a relay, polled once a minute so no poll stands on the wire: the
+    // relay frozen, a write leaves portal and no answer comes. It may have reached the plant, so
+    // it is recorded sent and not done (C-202, docs/report-schema.md).
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let plc = bench.server("plc").unwrap();
+    let relay = plc.relay().unwrap();
+    let far = format!(
+        "\n[[opc]]\nsource_id = \"far\"\nendpoint_url = \"{}\"\npoll_ms = 60000\nrules = [ {{ name = \"far_main\", tags = [ {{ node_id = \"{}\", series = \"run\", type = \"int\", writable = true }} ] }} ]\n",
+        relay.endpoint_url,
+        plc.node_id_str("run")
+    );
+    let s = session(dir.path(), &(project_text(&bench, true, 4) + &far));
+    relay.freeze();
+    let (r, _) = run_with(&checked(&test_of("  step w write far_main.run := 1\n")), s.live(), &RunOptions::live()).unwrap();
+    relay.thaw();
+    let w = &r.writes[0];
+    assert!(w.sent && !w.ok && w.answer.starts_with("the write may have reached the plant: "), "{w:?}");
+}
+
+#[test]
+fn the_session_s_replies_are_confirmed_with_the_test_s_writes() {
+    // The plant handed the session's replies beside its arming (Q321): the refusal counts them,
+    // the writes' fingerprint alone confirms nothing, the one over both arms the switch.
+    use veredas_comissionador::run::{run, writes_fingerprint};
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = std::rc::Rc::new(session(dir.path(), &project_text(&bench, false, 4)));
+    let also = vec!["sorter: on announce reply answer(item: from item, dest: \"4\", flag: \"1\")".to_string()];
+    let p = {
+        let s = s.clone();
+        LivePlant::with_arming(s.live(), Box::new(move |on| s.set_writes_armed(on)), also.clone()).unwrap()
+    };
+    let c = checked(&test_of("  step go write plc_main.run := 1\n"));
+    let (alone, both) = (writes_fingerprint(&c, &[]), writes_fingerprint(&c, &also));
+    assert_ne!(alone, both);
+    let e = run(&c, &p, &RunOptions::live(), &mut |_| {}).unwrap_err();
+    assert_eq!(e.0, [format!("the test writes, and portal's write switch is off: its 1 gated write and the session's 1 reply, confirmed as `{both}`, arm it for the run")]);
+    let e = run(&c, &p, &RunOptions::live().confirming(alone.clone()), &mut |_| {}).unwrap_err();
+    assert!(e.0[0].contains(&format!("`{alone}` confirms no list of this test's")), "{:?}", e.0);
+    assert_eq!((tag(&bench, "run"), s.live().writes_armed()), ("Int32(0)".to_string(), false));
+    let r = run(&c, &p, &RunOptions::live().confirming(both), &mut |_| {}).unwrap();
+    assert_eq!((r.verdict, tag(&bench, "run"), s.live().writes_armed()), (RunVerdict::Passed, "Int32(1)".to_string(), false));
+}
+
 // ---- C-200's refute round 7 -------------------------------------------------------------------
 
 #[test]

@@ -946,7 +946,11 @@ impl Runner<'_> {
         let mut all = Vec::new();
         for (i, name) in tables.iter().enumerate() {
             let Some(t) = self.tables.get(name) else { continue };
-            let rows = self.plant.rows(t, after, upto).map_err(|e| Halt::Store(e.to_string()))?;
+            // The tester's stop looked at between the pages of a long window's reading too.
+            let stop = || self.stop.load(Ordering::SeqCst);
+            let Some(rows) = self.plant.rows_until(t, after, upto, &stop).map_err(|e| Halt::Store(e.to_string()))? else {
+                return Err(Halt::Stopped);
+            };
             all.extend(rows.into_iter().map(|r| (i, r)));
         }
         // Rows sharing a stamp in one order whatever the store's: by every field, then their cells.

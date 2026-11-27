@@ -71,6 +71,11 @@ pub trait Plant {
     fn tables(&self) -> Result<Vec<Table>, PlantError>;
     /// The rows of `table` stamped in `(after, upto]`, oldest first.
     fn rows(&self, table: &Table, after: i64, upto: i64) -> Result<Vec<Row>, PlantError>;
+    /// The same, `stop` looked at before each part of the reading (a page of portal's): `None`
+    /// once it says to stop, so a long window's reading ends at the tester's word.
+    fn rows_until(&self, table: &Table, after: i64, upto: i64, stop: &dyn Fn() -> bool) -> Result<Option<Vec<Row>>, PlantError> {
+        if stop() { Ok(None) } else { self.rows(table, after, upto).map(Some) }
+    }
     /// The latest value of `column` stamped at or before `at` (a hole read past), with its stamp.
     fn latest(&self, table: &Table, column: &str, at: i64) -> Result<Option<(i64, Value)>, PlantError>;
     /// Whether portal's write switch is armed.
@@ -233,12 +238,19 @@ impl Plant for LivePlant {
     }
 
     fn rows(&self, table: &Table, after: i64, upto: i64) -> Result<Vec<Row>, PlantError> {
+        Ok(self.rows_until(table, after, upto, &|| false)?.unwrap_or_default())
+    }
+
+    fn rows_until(&self, table: &Table, after: i64, upto: i64, stop: &dyn Fn() -> bool) -> Result<Option<Vec<Row>>, PlantError> {
         if upto <= after {
-            return Ok(Vec::new());
+            return Ok(if stop() { None } else { Some(Vec::new()) });
         }
         let mut out = Vec::new();
         let mut offset = 0;
         loop {
+            if stop() {
+                return Ok(None);
+            }
             let q = RowsQuery { from_ms: Some(after + 1), to_ms: Some(upto), limit: PAGE, offset };
             let (rows, total) = self.page(table, &q)?;
             let n = rows.len();
@@ -249,7 +261,7 @@ impl Plant for LivePlant {
             }
         }
         out.reverse();
-        Ok(out)
+        Ok(Some(out))
     }
 
     fn latest(&self, table: &Table, column: &str, at: i64) -> Result<Option<(i64, Value)>, PlantError> {

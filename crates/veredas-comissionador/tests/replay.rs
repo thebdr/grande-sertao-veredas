@@ -173,6 +173,33 @@ fn a_run_s_bound_passed_by_a_write_s_answer_replays_on_past_it() {
 }
 
 #[test]
+fn a_replay_s_clock_stays_the_write_s_lag_behind_until_a_wait_meets_a_row() {
+    // Refute round 5 (C-203): the lag a replayed write leaves carries on into every later step
+    // until a wait or an await meets a row (Q318, the claim narrowed so). A duration wait after the
+    // write ends the run at its bound inside it live, its clock past the plant's answer, and passes
+    // replayed;
+    // a check after a duration wait reads the plant after the reaction live and before it replayed.
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, true, 4));
+    let c = checked(&format!(
+        "{HEAD}test \"t\" {{\n  id T\n  timeout 1s\n  step a check plc_main.level > 0.5\n  step go write plc_main.run := 1\n  step d wait 800ms\n  step r report \"done\"\n}}\n"
+    ));
+    let (live, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    assert_eq!((live.verdict, live.decided_at.as_deref(), live.reason.as_str()), (RunVerdict::Aborted, Some("d"), "the run's bound of 1s passed"), "{:?}", steps(&live));
+    let (r, _) = run_with(&c, s.live(), &RunOptions::replay(live.start_ms, live.end_ms)).unwrap();
+    assert_eq!((r.verdict, r.decided_at.as_deref()), (RunVerdict::Passed, Some("r")), "{:?}", steps(&r));
+    bench.server("plc").unwrap().set("run", 0);
+    bench.server("plc").unwrap().set("speed", 1.5);
+    std::thread::sleep(Duration::from_millis(300));
+    let c = checked(&test_of("  step a check plc_main.level > 0.5\n  step go write plc_main.run := 1\n  step d wait 350ms\n  step c check plc_main.speed >= 2.0\n"));
+    let (live, _) = run_with(&c, s.live(), &RunOptions::live()).unwrap();
+    assert_eq!(live.verdict, RunVerdict::Passed, "{:?}", steps(&live));
+    let (r, _) = run_with(&c, s.live(), &RunOptions::replay(live.start_ms, live.end_ms)).unwrap();
+    assert_eq!((r.verdict, steps(&r)[3].as_str()), (RunVerdict::Failed, "c #1 fail: plc_main.speed >= 2.0: fail (plc_main.speed = 1.5)"), "{:?}", steps(&r));
+}
+
+#[test]
 fn a_replay_reads_the_plant_right_after_a_write_as_it_stood_before_it() {
     // The same lag, with a loose bound: an await right after the write takes a row stamped before
     // the write in the replay, where the live one took one after the plant's answer, and a read
