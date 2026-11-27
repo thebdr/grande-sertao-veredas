@@ -11,15 +11,15 @@
     "fisica"
   ],
   "exitCode": 0,
-  "outputSha": "62bd91126f745586a4da05934fbfca13aa37d83ed8782014a3377de35c64ca52",
-  "outputTail": "        PASS [   0.022s] (67/78) veredas-maquinar::fisica sensors_see_bodies_and_movers_in_order_and_a_body_taken_away_leaves_them\n        PASS [   1.775s] (68/78) veredas-maquinar::fisica round_7::a_fall_rebounds_a_little_and_the_speed_is_capped\n        PASS [   3.032s] (69/78) veredas-maquinar::fisica the_documented_scene_loads_with_its_numbers_and_runs_as_the_reference_says\n        PASS [   9.341s] (70/78) veredas-maquinar::fisica round_6::two_boxes_stack_alike_at_every_step\n        PASS [  12.017s] (71/78) veredas-maquinar::fisica round_7::a_part_crosses_a_seam_of_two_flush_belts\n        PASS [  12.535s] (72/78) veredas-maquinar::fisica round_7::a_light_barrier_sees_a_part_cross_it_once\n        PASS [  15.816s] (73/78) veredas-maquinar::fisica round_7::a_mover_pushes_at_long_steps\n        PASS [  19.834s] (74/78) veredas-maquinar::fisica round_7::a_body_falling_onto_a_body_over_a_gap_rests_on_it\n        PASS [  23.849s] (75/78) veredas-maquinar::fisica round_7::a_part_passing_beside_a_sensor_is_never_seen\n        SLOW [> 60.000s] (─────) veredas-maquinar::fisica round_6::drops_onto_a_mover_or_a_body_rest_on_it\n        PASS [ 106.266s] (76/78) veredas-maquinar::fisica round_6::drops_onto_a_mover_or_a_body_rest_on_it\n        PASS [   1.489s] (77/78) veredas-maquinar::fisica the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene\n        PASS [   5.388s] (78/78) veredas-maquinar::fisica the_same_scene_and_inputs_give_the_same_run_bit_for_bit\n────────────\n     Summary [ 206.576s] 78 tests run: 78 passed (1 slow), 0 skipped",
-  "ranAt": "2026-11-27T00:52:47.018Z",
-  "headCommit": "0eb754d7aa2c64dcc37f4aaceffce6a8cf5dc0e0",
+  "outputSha": "fd0c443b5a7b05d5c536a60b3f649ed51d35e6f8f3fb94527cca63573a147233",
+  "outputTail": "        PASS [  10.061s] (75/85) veredas-maquinar::fisica round_8::a_blade_at_3_m_s_pushes_every_part_ahead_of_it\n        PASS [  11.110s] (76/85) veredas-maquinar::fisica round_8::stacks_stand_however_tall_and_heavy\n        PASS [  12.774s] (77/85) veredas-maquinar::fisica round_7::a_part_crosses_a_seam_of_two_flush_belts\n        PASS [  17.319s] (78/85) veredas-maquinar::fisica round_7::a_light_barrier_sees_a_part_cross_it_once\n        PASS [  20.858s] (79/85) veredas-maquinar::fisica round_7::a_mover_pushes_at_long_steps\n        PASS [  22.732s] (80/85) veredas-maquinar::fisica round_8::small_parts_dropped_up_to_5_m_onto_a_thin_body_rest_on_it\n        PASS [  33.593s] (81/85) veredas-maquinar::fisica round_7::a_part_passing_beside_a_sensor_is_never_seen\n        PASS [  33.851s] (82/85) veredas-maquinar::fisica round_7::a_body_falling_onto_a_body_over_a_gap_rests_on_it\n        SLOW [> 60.000s] (─────) veredas-maquinar::fisica round_6::drops_onto_a_mover_or_a_body_rest_on_it\n        SLOW [>120.000s] (─────) veredas-maquinar::fisica round_6::drops_onto_a_mover_or_a_body_rest_on_it\n        PASS [ 136.178s] (83/85) veredas-maquinar::fisica round_6::drops_onto_a_mover_or_a_body_rest_on_it\n        PASS [   1.510s] (84/85) veredas-maquinar::fisica the_runner_steps_in_real_time_and_its_handle_reads_and_moves_the_scene\n        PASS [   7.949s] (85/85) veredas-maquinar::fisica the_same_scene_and_inputs_give_the_same_run_bit_for_bit\n────────────\n     Summary [ 245.159s] 85 tests run: 85 passed (1 slow), 0 skipped",
+  "ranAt": "2026-11-27T17:16:06.600Z",
+  "headCommit": "a4df3e88e41a3d0c4b86fc8352543b8282e61081",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/fisica.rs",
       "file": "crates/veredas-maquinar/tests/fisica.rs",
-      "fileSha": "e17bb6772988b9f246d6fdb153da05d32fc260480698486b23018bf1ba47e51d"
+      "fileSha": "cac4096d157d2f50b4ced2254934878213e6d384da129d3d775a14283d25a314"
     }
   ]
 }
