@@ -425,9 +425,10 @@ pub(crate) struct Evaluation {
     /// restart, the cells stay on `stack`, still `Evaluating`, to be run again
     /// from the top once the recursion has unwound.
     pub(crate) unwinding: bool,
-    /// LAMBDA calls and defined names' formulas running one inside another
-    /// (Veredas fork change 44). A recursion through them runs inside a single
-    /// formula, where no unwind can come, so it is bounded on its own.
+    /// LAMBDA calls and defined names' formulas running one inside another in
+    /// the formula's run under way (Veredas fork change 44; saved and begun
+    /// again by each run, refined). A recursion through them runs inside a
+    /// single formula, where no unwind can come, so it is bounded on its own.
     pub(crate) nested: usize,
     /// Where the stack was when the outermost of them started.
     pub(crate) nested_base: usize,
@@ -446,7 +447,8 @@ const DEFAULT_MAX_DEPTH: usize = 64;
 const DEFAULT_MAX_STACK: usize = 256 * 1024;
 
 /// How much stack LAMBDA calls and defined names' formulas may take running
-/// one inside another, counted from the outermost (Veredas fork change 44). A
+/// one inside another, counted from the outermost of a formula's run (Veredas
+/// fork change 44; a cell reading another starts no budget of the other's). A
 /// recursive LAMBDA's call takes some 24 KB of it in a debug build, a name
 /// that reads itself never ends: beyond this the call is `#NUM!`, as Excel's
 /// is past its own limit, where the thread's stack would have overflowed and
@@ -611,10 +613,11 @@ impl<'a> Model<'a> {
     }
 
     /// Runs `f`, a LAMBDA's call or a defined name's formula, inside the ones
-    /// already running (Veredas fork change 44): `#NUM!`, whose message is
-    /// `TOO_DEEP`, once they take more than `MAX_NESTED_STACK` of stack, the
-    /// formula cell `cell` then on record as gone too deep, unless the run is
-    /// one the evaluation abandons.
+    /// already running in the same formula's run (Veredas fork change 44):
+    /// `#NUM!`, whose message is `TOO_DEEP`, once they take more than
+    /// `MAX_NESTED_STACK` of stack from the run's first, the formula cell `cell`
+    /// then on record as gone too deep, unless the run is one the evaluation
+    /// abandons or no formula's run (a conditional format's rule, refined).
     pub(crate) fn nested(
         &mut self,
         cell: CellReferenceIndex,
@@ -624,7 +627,10 @@ impl<'a> Model<'a> {
         if self.evaluation.nested == 0 {
             self.evaluation.nested_base = here;
         } else if self.evaluation.nested_base.abs_diff(here) >= MAX_NESTED_STACK {
-            if !self.evaluation.unwinding && self.evaluation.restart.is_none() {
+            if self.evaluation.depth > 0
+                && !self.evaluation.unwinding
+                && self.evaluation.restart.is_none()
+            {
                 self.evaluation.too_deep.insert(key(cell));
             }
             return CalcResult::new_error(Error::NUM, cell, TOO_DEEP.to_string());
@@ -640,7 +646,8 @@ impl<'a> Model<'a> {
     /// computes (Veredas fork change 44): those whose own run went that deep,
     /// and those that hold such a run's error, by (sheet, row, column), in
     /// order. A cell that caught the error (`IFERROR`) in another's run is
-    /// not among them.
+    /// not among them, nor one that read it from an array's element, which
+    /// keeps an error's kind alone.
     pub fn too_deep_cells(&self) -> Vec<(u32, i32, i32)> {
         use crate::types::FormulaValue;
         let mut cells: Vec<CellKey> = self.evaluation.too_deep.iter().copied().collect();
@@ -1030,11 +1037,17 @@ impl<'a> Model<'a> {
         // and whether it goes too deep in LAMBDA calls (Veredas fork change 44)
         self.evaluation.too_deep.remove(&key);
         self.evaluation.depth += 1;
+        // Its LAMBDA calls and names' formulas counted from its own run, whichever
+        // cell reads it first and through how many (Veredas fork change 44,
+        // refined): a call's stack below it is the reader's, never its budget.
+        let outer = (self.evaluation.nested, self.evaluation.nested_base);
+        self.evaluation.nested = 0;
         let result = if self.evaluation.circular.contains(&key) {
             circular_reference(cell_reference)
         } else {
             self.compute_formula(cell_reference, cell.f)
         };
+        (self.evaluation.nested, self.evaluation.nested_base) = outer;
         self.evaluation.depth -= 1;
         if self.evaluation.unwinding {
             return CalcResult::EmptyCell;

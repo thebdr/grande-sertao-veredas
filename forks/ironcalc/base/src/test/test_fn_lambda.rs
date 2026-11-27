@@ -292,3 +292,72 @@ fn a_recursion_too_deep_is_num_and_overflows_no_stack() {
         .join()
         .unwrap();
 }
+
+// Veredas fork change 44, refined: a cell's LAMBDA calls and names are
+// counted from its own run, so what it computes does not turn on which cell
+// reads it first or through how many cells (the stack of the readers' runs
+// counted against its budget: `Soma(15)` was `#NUM!` behind a reader in a
+// debug build); a conditional format's rule going too deep puts no cell on
+// record.
+#[test]
+fn a_recursion_computes_the_same_whoever_reads_its_cell_first() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let soma = DefinedNameEntry::new("Soma", "=LAMBDA(n,IF(n<=0,0,n+Soma(n-1)))");
+            // a chain of k cells, each reading the next through a name or through a
+            // LAMBDA's body, the last computing `Soma(15)`
+            for through_a_name in [true, false] {
+                for k in [1usize, 8, 16, 32, 48, 64, 100] {
+                    let mut model = new_empty_model();
+                    model.new_defined_name(soma.clone()).unwrap();
+                    for i in 1..=k {
+                        let next = format!("Sheet1!$A${}", i + 1);
+                        if through_a_name {
+                            model
+                                .new_defined_name(DefinedNameEntry::new(&format!("Nome_{i}"), &format!("={next}+0")))
+                                .unwrap();
+                            model._set(&format!("A{i}"), &format!("=Nome_{i}"));
+                        } else {
+                            model._set(&format!("A{i}"), &format!("=LAMBDA(x,x+{next})(0)"));
+                        }
+                    }
+                    model._set(&format!("A{}", k + 1), "=Soma(15)");
+                    model.evaluate();
+                    for i in 1..=k + 1 {
+                        assert_eq!(model._get_text(&format!("A{i}")), *"120", "{through_a_name} {k}: A{i}");
+                    }
+                    assert!(model.too_deep_cells().is_empty(), "{through_a_name} {k}");
+                }
+            }
+            // a reader before the cell and one after it
+            let mut model = new_empty_model();
+            model.new_defined_name(soma).unwrap();
+            model
+                .new_defined_name(DefinedNameEntry::new("Rd", "=Sheet1!$B$1+0"))
+                .unwrap();
+            model._set("A1", "=Rd");
+            model._set("B1", "=Soma(15)");
+            model._set("C1", "=Rd");
+            // a conditional format's rule too deep, over empty cells
+            model
+                .add_conditional_formatting(
+                    0,
+                    "D1:D2",
+                    crate::cf_types::CfRuleInput::Formula {
+                        formula: "=Soma(5000)>0".to_string(),
+                        format: crate::types::Dxf::default(),
+                        stop_if_true: false,
+                    },
+                )
+                .unwrap();
+            model.evaluate();
+            for cell in ["A1", "B1", "C1"] {
+                assert_eq!(model._get_text(cell), *"120", "{cell}");
+            }
+            assert_eq!(model.too_deep_cells(), Vec::<(u32, i32, i32)>::new());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
