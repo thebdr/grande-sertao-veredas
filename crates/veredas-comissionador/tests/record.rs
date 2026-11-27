@@ -550,7 +550,7 @@ is the plant's clock on the store's axis, `YYYY-MM-DD HH:MM:SS.mmm`.
 **The evidence** (`[[evidence]]`): one table per table the test reads.
 - `table` (required): the portal table.
 - `file` (required): its CSV in the run's folder, `evidence/<table>.csv` for a plain name (ASCII
-  letters, digits, `_` and `-`), else `evidence/table.<n>.csv`, `n` its place among the evidence from 1,
+  letters, digits, `_` and `-`, 64 at most), else `evidence/table.<n>.csv`, `n` its place among the evidence from 1,
   which no plain name can take: a header of `time`, `arrival`, `source`, `key`, `seq` and the
   table's columns, then every row stamped in the run's window, oldest first, each cell as the
   suite shows its value and a hole empty. `time` is the row's stamp and `arrival` when it reached
@@ -704,4 +704,38 @@ fn every_table_s_evidence_is_kept_in_a_file_of_its_own_and_reads_back() {
     for (e, col) in report.evidence.iter().zip(["dest", "running", "x", "y"]) {
         assert_eq!(std::fs::read_to_string(folder.join(&e.file)).unwrap(), format!("time,arrival,source,key,seq,{col}\n"), "{}", e.table);
     }
+}
+
+#[test]
+fn a_plain_name_too_long_for_a_file_takes_its_place_number() {
+    // Refute round 5: a plain table name of 252 characters, which the store holds and no file system
+    // takes as a file's name, made the run's folder and lost the run there. A plain name keeps its
+    // own file up to 64 characters, portal's own bound on a name; past it, its place number.
+    use veredas_comissionador::plant::{CellType, Column, Table};
+    let (short, long) = ("a".repeat(record::PLAIN_NAME), "b".repeat(252));
+    let table = |name: &str| Table { name: name.to_string(), columns: vec![Column { name: "x".to_string(), ty: CellType::Int }] };
+    let plant = Tables(vec![table(&short), table(&long)]);
+    let c = checked(&test_of("  step a stop pass\n"));
+    let now = veredas_portal::serve::store_now_ms();
+    let r = veredas_comissionador::run::RunResult {
+        verdict: RunVerdict::Passed,
+        decided_at: Some("a".to_string()),
+        reason: "`a` passed the run".to_string(),
+        start_ms: now - 1000,
+        end_ms: now - 500,
+        steps: Vec::new(),
+        criteria: Vec::new(),
+        reported: Vec::new(),
+        writes: Vec::new(),
+        tables: [short.clone(), long.clone()].into_iter().collect::<BTreeSet<_>>(),
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let folder = record::keep(dir.path(), &c, &r, &RunOptions::replay(now - 1000, now - 500).mode, &plant).unwrap();
+    let report = record::read(&folder).unwrap();
+    let files: Vec<(&str, &str)> = report.evidence.iter().map(|e| (e.table.as_str(), e.file.as_str())).collect();
+    assert_eq!(files, [(short.as_str(), format!("evidence/{short}.csv").as_str()), (long.as_str(), "evidence/table.2.csv")]);
+    for e in &report.evidence {
+        assert_eq!(std::fs::read_to_string(folder.join(&e.file)).unwrap(), "time,arrival,source,key,seq,x\n", "{}", e.table);
+    }
+    assert_eq!(record::list(dir.path(), &c).unwrap().len(), 1);
 }

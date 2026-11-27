@@ -226,7 +226,7 @@ is the plant's clock on the store's axis, `YYYY-MM-DD HH:MM:SS.mmm`.
 **The evidence** (`[[evidence]]`): one table per table the test reads.
 - `table` (required): the portal table.
 - `file` (required): its CSV in the run's folder, `evidence/<table>.csv` for a plain name (ASCII
-  letters, digits, `_` and `-`), else `evidence/table.<n>.csv`, `n` its place among the evidence from 1,
+  letters, digits, `_` and `-`, 64 at most), else `evidence/table.<n>.csv`, `n` its place among the evidence from 1,
   which no plain name can take: a header of `time`, `arrival`, `source`, `key`, `seq` and the
   table's columns, then every row stamped in the run's window, oldest first, each cell as the
   suite shows its value and a hole empty. `time` is the row's stamp and `arrival` when it reached

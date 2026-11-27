@@ -442,6 +442,9 @@ fn settings_come_first_with_their_defaults() {
     assert_eq!(one("  id\n"), ["5:5: `id` has no value"]);
     assert_eq!(one("  id \"\"\n"), ["5:5: `id` has no value"]);
     assert_eq!(one("  id CHK 012\n"), ["5:6: `id` is `CHK 012`: letters, digits, `-` and `_`"]);
+    // Its runs are kept in a folder of its name: 64 characters at most (C-204's refute round 5).
+    assert_eq!(one(&format!("  id {}\n", "i".repeat(veredas_comissionador::check::MAX_ID))), Vec::<String>::new());
+    assert_eq!(one(&format!("  id {}\n", "i".repeat(256))), ["5:6: `id` is 256 characters long: 64 at most"]);
     assert_eq!(one("  id T\n  area a\n  area b\n"), ["7:3: `area` is given twice"]);
     assert_eq!(one("  id T\n  id U\n"), ["6:3: `id` is given twice"]);
     assert_eq!(one("  id T\n  portal p\n  portal q\n"), ["7:3: `portal` is given twice"]);
@@ -1955,8 +1958,8 @@ Each states in parentheses that it is required, or the value it takes when left 
 `area`, `portal` and `use` take the rest of their line, trimmed, a comment and a surrounding
 pair of quotes removed.
 
-- `id` (required): the test's identifier, letters, digits, `-` and `_`. Its runs are kept under
-  it (`runs/<id, lowercased>/`).
+- `id` (required): the test's identifier, letters, digits, `-` and `_`, 64 at most. Its runs are
+  kept under it (`runs/<id, lowercased>/`).
 - `area` (none): the group the library shows the test in.
 - `portal` (none): the name of the portal session the test is written for; a run against a
   session of another name is refused before anything is written.
@@ -2184,7 +2187,7 @@ nested deeper than 64 levels, counted together, or an expression holding more th
 statement; an `await` not assigned.
 
 The files read, it checks them whole and names every problem: `id` missing, or not letters,
-digits, `-` and `_`; a setting given twice, a path `use`d twice, a constant defined twice; a `let`
+digits, `-` and `_`, or longer than 64; a setting given twice, a path `use`d twice, a constant defined twice; a `let`
 made of anything but literals and the constants above it (a call among them); a used file that cannot be read; two
 functions of one name; a step's name given twice; a route to no step; `retry ... max 0`; an
 outcome routed twice by one step; `on pass` on a branch; a `send`'s field given twice; a call to

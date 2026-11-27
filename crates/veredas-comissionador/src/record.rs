@@ -219,10 +219,15 @@ pub fn csv_cell(text: &str) -> String {
     if text.contains([',', '"', '\n', '\r']) { format!("\"{}\"", text.replace('"', "\"\"")) } else { text.to_string() }
 }
 
-/// A file name for a table's evidence: its name when it is plain (ASCII letters, digits, `_`, `-`),
-/// else `table.<n>`, its place among the evidence from 1, which no plain name can take.
+/// The longest plain table name kept as its evidence's file name: portal's own bound on a name,
+/// well inside what a file system takes for one.
+pub const PLAIN_NAME: usize = 64;
+
+/// A file name for a table's evidence: its name when it is plain (ASCII letters, digits, `_`, `-`,
+/// [`PLAIN_NAME`] at most), else `table.<n>`, its place among the evidence from 1, which no plain
+/// name can take.
 fn evidence_name(i: usize, table: &str) -> String {
-    if !table.is_empty() && table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if !table.is_empty() && table.len() <= PLAIN_NAME && table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
         format!("evidence/{table}.csv")
     } else {
         format!("evidence/table.{}.csv", i + 1)

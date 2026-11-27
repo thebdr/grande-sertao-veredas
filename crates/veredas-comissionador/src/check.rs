@@ -11,6 +11,10 @@ use crate::{Lines, Problem};
 use crate::model::*;
 use crate::parse::{parse_functions, parse_test};
 
+/// The longest `id` a test may have: its runs are kept in a folder of its name (`runs/<id>/`),
+/// which a file system bounds, beside the run's own folders and files.
+pub const MAX_ID: usize = 64;
+
 /// A test that passed its check, with the function files it uses.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Checked {
@@ -98,6 +102,9 @@ pub fn check_test(text: &str, file: &str, resolve: &dyn Fn(&str) -> Result<Strin
             SettingKind::Id(id) => {
                 if !id.value.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
                     out.push(at(id.span, format!("`id` is `{}`: letters, digits, `-` and `_`", id.value)));
+                } else if id.value.len() > MAX_ID {
+                    // Its runs are kept in a folder of its name, which a file system bounds.
+                    out.push(at(id.span, format!("`id` is {} characters long: {MAX_ID} at most", id.value.len())));
                 }
             }
             SettingKind::Use(p) => {

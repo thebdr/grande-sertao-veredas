@@ -494,10 +494,15 @@ fn the_folders_made_for_a_refused_run_are_removed_and_no_other() {
     let dir = tempfile::tempdir().unwrap();
     // A run folder that cannot be made, part of the way made: the part made removed.
     let long = "a".repeat(300);
-    std::fs::write(dir.path().join("long.test"), format!("{HEAD}test \"t\" {{\n  id {long}\n  step a stop pass\n}}\n")).unwrap();
-    let (code, stdout, stderr) = out(&exe(dir.path(), &["run", "long.test", "--project", "nothere.toml", "--runs", "fresh/deep"]));
+    std::fs::write(dir.path().join("t.test"), test_of("  step a stop pass\n")).unwrap();
+    let runs = format!("fresh/deep/{long}");
+    let (code, stdout, stderr) = out(&exe(dir.path(), &["run", "t.test", "--project", "nothere.toml", "--runs", &runs]));
     assert_eq!((code, stdout.len(), dir.path().join("fresh").exists()), (4, 0, false), "{stderr:?}");
-    assert!(stderr[0].starts_with(&format!("the run cannot be kept: {}", Path::new("fresh/deep").join(&long).display())), "{stderr:?}");
+    assert!(stderr[0].starts_with(&format!("the run cannot be kept: {}", Path::new(&runs).display())), "{stderr:?}");
+    // An `id` past what a folder's name takes is the file's problem, named before anything is made.
+    std::fs::write(dir.path().join("long.test"), format!("{HEAD}test \"t\" {{\n  id {long}\n  step a stop pass\n}}\n")).unwrap();
+    let (code, _, stderr) = out(&exe(dir.path(), &["run", "long.test", "--project", "nothere.toml", "--runs", "fresh"]));
+    assert_eq!((code, stderr, dir.path().join("fresh").exists()), (1, vec!["long.test:5:6: `id` is 300 characters long: 64 at most".to_string()], false));
     // A `..` reaching a folder already there: that folder kept, only the ones the run made gone.
     std::fs::write(dir.path().join("t.test"), test_of("  step a stop pass\n")).unwrap();
     std::fs::create_dir(dir.path().join("existing")).unwrap();
