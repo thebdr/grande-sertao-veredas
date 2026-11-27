@@ -2900,3 +2900,81 @@ fn round_thirty_three_another_platforms_feature_a_raw_c_string_in_2018_and_what_
         assert!(named.contains_key(k), "{k}: {named:?}");
     }
 }
+
+/// Round 34's real forms: a crate a dependency's feature its executables need turns on, pinned by
+/// the lock for another package only (a repository tool's indexmap), charged to the component, so
+/// moving its lock entry changes the version's inputs; and a weak feature its plain and dependency
+/// features make together (`p` with `r/x`, `q?/f`), treed with every feature the builder passes,
+/// so what it builds outside the lock (ryu) is refused.
+#[test]
+fn round_thirty_four_what_a_dependencys_feature_builds_is_charged_and_treed_with_every_feature() {
+    let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let pins = |release: &str, commit: &str| -> (PathBuf, Manifest) {
+        let text = format!(
+            "format = \"veredas-release\"\nversion = 1\nrelease = \"{release}\"\ncommit = \"{commit}\"\ntarget = \"x86_64-unknown-linux-gnu\"\ntoolchain = \"rustc 1.100.0\"\n\n\
+             [[component]]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nbins = [\"veredas-core\"]\n\n\
+             [tested]\nsuite = \"cargo nextest run --workspace\"\ntogether = \"the bundle's bench and supervisão on its plant\"\n"
+        );
+        (PathBuf::from(format!("{release}.toml")), manifest::load(&text).unwrap())
+    };
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\", \"tools/*\"]\n");
+    r.write(
+        "crates/veredas-core/Cargo.toml",
+        "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\n\n[dependencies]\nserde_json = \"=1.0.154\"\n\n[[bin]]\nname = \"veredas-core\"\npath = \"src/main.rs\"\nrequired-features = [\"serde_json/preserve_order\"]\n",
+    );
+    r.write("crates/veredas-core/src/main.rs", "fn main() {}\n");
+    // A repository tool pinning indexmap and foldhash for itself, never turning `preserve_order` on.
+    r.write("tools/ferramenta/Cargo.toml", "[package]\nname = \"ferramenta\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nindexmap = \"2\"\nfoldhash = \"0.2\"\n");
+    r.write("tools/ferramenta/src/lib.rs", "\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = cargo().args(["update", "--offline", "-p", "indexmap", "--precise", "2.14.2"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let c1 = r.commit("serde_json's preserve_order, indexmap pinned by a tool");
+    let held = manifest::components_at(r.path(), &c1, &mut Vec::new()).unwrap();
+    let named = &held["veredas-core"].inputs.as_ref().unwrap().0;
+    for k in ["Cargo.lock: indexmap 2.14.2", "Cargo.lock: hashbrown 0.17.2", "Cargo.lock: equivalent 1.0.3", "Cargo.lock: foldhash 0.2.0"] {
+        assert!(named.contains_key(k), "{k}: {named:?}");
+    }
+    assert!(held["veredas-core"].packages.vendored.contains("indexmap-2.14.2"));
+    let out = cargo().args(["update", "--offline", "-p", "indexmap", "--precise", "2.14.0"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let c2 = r.commit("indexmap moved in the lock alone");
+    assert_eq!(
+        manifest::check_together(r.path(), &[pins("2.0.0", &c1), pins("2.0.1", &c2)]).unwrap(),
+        ["veredas-core 2.1.0 is pinned by releases 2.0.0 and 2.0.1 at different build inputs (Cargo.lock: indexmap 2.14.0, Cargo.lock: indexmap 2.14.2): a version names everything its build reads"]
+    );
+
+    // A weak feature the plain and the dependency feature make together, its crate unpinned.
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\nexclude = [\"forks\"]\n");
+    r.write("forks/garfo/Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"r\", \"q\"]\n");
+    r.write("forks/garfo/r/Cargo.toml", "[package]\nname = \"r\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nq = { path = \"../q\", optional = true }\n\n[features]\nuseq = [\"dep:q\"]\nx = [\"q?/f\"]\n");
+    r.write("forks/garfo/r/src/lib.rs", "\n");
+    r.write("forks/garfo/q/Cargo.toml", "[package]\nname = \"q\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nryu = { version = \"1\", optional = true }\n\n[features]\nf = [\"dep:ryu\"]\n");
+    r.write("forks/garfo/q/src/lib.rs", "\n");
+    r.write(
+        "crates/veredas-core/Cargo.toml",
+        "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\n\n[dependencies]\nr = { path = \"../../forks/garfo/r\" }\nq = { path = \"../../forks/garfo/q\", optional = true }\n\n\
+         [features]\np = [\"dep:q\", \"r/useq\"]\n\n[[bin]]\nname = \"veredas-core\"\npath = \"src/main.rs\"\nrequired-features = [\"p\", \"r/x\"]\n",
+    );
+    r.write("crates/veredas-core/src/main.rs", "fn main() {}\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!std::fs::read_to_string(r.path().join("Cargo.lock")).unwrap().contains("name = \"ryu\""));
+    let c = r.commit("a weak feature two features make together");
+    let held = manifest::components_at(r.path(), &c, &mut Vec::new()).unwrap();
+    let why = held["veredas-core"].inputs.as_ref().unwrap_err();
+    assert!(why.contains("cargo builds ") && why.contains("ryu 1.") && why.contains("that its Cargo.lock does not pin"), "{why}");
+    // Cargo's own build with the builder's features compiles ryu, held to no lock entry.
+    let target = tempfile::tempdir().unwrap();
+    let out = cargo()
+        .args(["build", "--offline", "--locked", "-q", "-p", "veredas-core@2.1.0", "--bins"])
+        .args(alforge::builder::feature_args("veredas-core", &["p".to_string(), "r/x".to_string()]))
+        .env("CARGO_TARGET_DIR", target.path())
+        .current_dir(r.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+}

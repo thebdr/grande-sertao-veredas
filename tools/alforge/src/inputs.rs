@@ -151,7 +151,7 @@ pub(crate) fn parse_lock(text: &str) -> Result<Vec<Locked>, String> {
 }
 
 impl Locked {
-    fn named(&self) -> String {
+    pub(crate) fn named(&self) -> String {
         match self.source.as_deref() {
             None | Some(CRATES_IO) => format!("Cargo.lock: {} {}", self.name, self.version),
             Some(s) => format!("Cargo.lock: {} {} ({s})", self.name, self.version),
