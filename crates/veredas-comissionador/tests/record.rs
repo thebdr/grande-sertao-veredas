@@ -786,8 +786,10 @@ fn a_device_s_name_and_a_name_past_the_bound_take_their_place_numbers() {
 #[cfg(target_os = "linux")]
 fn every_file_of_a_run_is_on_the_disk_before_its_report_names_it() {
     // Nothing a run's keeping wrote was synced, so a power cut could leave a report over files the
-    // disk never held. Watched under strace: each file of the run synced, and the folders naming
-    // them, before the report's `.part` is moved into place, the run's folder synced after.
+    // disk never held (round 7). Watched under strace (round 8: creations and writes too, a function
+    // file among the run's): each file's last write before its sync, each folder synced after every
+    // name made in it, all of it before the report's `.part` is moved into place, and the run's
+    // folder synced after.
     let strace = Path::new("/usr/bin/strace");
     if !strace.exists() {
         eprintln!("no strace on this machine: the order of the syncs is not watched here");
@@ -800,12 +802,13 @@ fn every_file_of_a_run_is_on_the_disk_before_its_report_names_it() {
     std::fs::write(dir.path().join("plant.log"), log).unwrap();
     let project = "format = \"veredas-project\"\nversion = 1\nname = \"the log\"\n\n[session]\nstart = { last_hours = 2 }\n\n[[log]]\nid = \"plant\"\nfile = \"plant.log\"\ntimestamp = { pattern = \"^(?P<ts>\\\\S+ \\\\S+)\", formats = [\"%Y-%m-%d %H:%M:%S%.3f\"] }\n\n[[rule]]\nname = \"readings\"\npattern = \"temp=(?P<temp>[0-9.]+)\"\nscope = \"plant\"\ntypes = { temp = \"float\" }\n";
     std::fs::write(dir.path().join("project.toml"), project).unwrap();
-    std::fs::write(dir.path().join("t.test"), test_of("  step w wait readings.temp >= 25.0 timeout 1min\n  step r report readings.temp\n")).unwrap();
+    std::fs::write(dir.path().join("f.fn"), "format = \"veredas-functions\"\nversion = 1\n\nfunction One() -> (y: int) {\n  y = 1\n}\n").unwrap();
+    std::fs::write(dir.path().join("t.test"), test_of("  use f.fn\n  step w wait readings.temp >= 25.0 timeout 1min\n  step c call One() -> y\n  step r report readings.temp, y\n")).unwrap();
     let (from, to) = (veredas_comissionador::eval::time_text(base - 500), veredas_comissionador::eval::time_text(base + 9_500));
     let trace = dir.path().join("trace.log");
     let o = std::process::Command::new(strace)
         .current_dir(dir.path())
-        .args(["-f", "-y", "-e", "trace=fsync,rename,renameat,renameat2", "-o"])
+        .args(["-f", "-y", "-e", "trace=openat,write,mkdir,mkdirat,fsync,rename,renameat,renameat2", "-o"])
         .arg(&trace)
         .arg(env!("CARGO_BIN_EXE_veredas-comissionador"))
         .args(["replay", "t.test", "--project", "project.toml", "--from", &from, "--to", &to])
@@ -813,12 +816,32 @@ fn every_file_of_a_run_is_on_the_disk_before_its_report_names_it() {
         .unwrap();
     assert_eq!(o.status.code(), Some(0), "{}", String::from_utf8_lossy(&o.stderr));
     let calls: Vec<String> = std::fs::read_to_string(&trace).unwrap().lines().map(str::to_string).collect();
-    let moved = calls.iter().position(|l| l.contains("rename") && l.contains("report.toml.part\"")).unwrap_or_else(|| panic!("no move of the report: {calls:?}"));
-    let synced = |what: &str| calls.iter().position(|l| l.contains("fsync(") && l.contains(&format!("{what}>")));
     let run = "runs/t/0001";
-    for what in [format!("{run}/test.test"), format!("{run}/evidence/readings.csv"), format!("{run}/evidence"), format!("{run}/report.toml.part")] {
-        assert!(synced(&what).is_some_and(|at| at < moved), "`{what}` synced before the report is moved into place: {calls:?}");
+    let fns: Vec<String> = std::fs::read_dir(dir.path().join(run).join("functions")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(fns.len(), 1, "{fns:?}");
+    let function = format!("{run}/functions/{}", fns[0]);
+    let moved = calls.iter().position(|l| l.contains("rename") && l.contains("report.toml.part\"")).unwrap_or_else(|| panic!("no move of the report: {calls:?}"));
+    // A call on the descriptor of `what` (strace names it by its path), and the making of `what`.
+    let on = |call: &str, what: &str| -> Vec<usize> { calls.iter().enumerate().filter(|(_, l)| l.contains(&format!("{call}(")) && l.contains(&format!("/{what}>"))).map(|(i, _)| i).collect() };
+    let made = |what: &str| calls.iter().position(|l| ((l.contains("openat(") && l.contains("O_CREAT")) || l.contains("mkdir")) && l.contains(&format!("{what}\""))).unwrap_or_else(|| panic!("`{what}` never made: {calls:?}"));
+    let synced_before = |what: &str| on("fsync", what).into_iter().filter(|i| *i < moved).max().unwrap_or_else(|| panic!("`{what}` not synced before the move: {calls:?}"));
+    for file in [format!("{run}/test.test"), function.clone(), format!("{run}/evidence/readings.csv"), format!("{run}/report.toml.part")] {
+        let last_write = on("write", &file).into_iter().max().unwrap_or_else(|| panic!("`{file}` never written: {calls:?}"));
+        assert!(last_write < synced_before(&file), "`{file}` synced after its last write: {calls:?}");
     }
-    assert!(calls[moved + 1..].iter().any(|l| l.contains("fsync(") && l.contains(&format!("{run}>"))), "the run's folder synced after: {calls:?}");
+    let names_in = [
+        ("runs".to_string(), vec!["runs/t".to_string()]),
+        ("runs/t".to_string(), vec![run.to_string()]),
+        (run.to_string(), vec![format!("{run}/test.test"), format!("{run}/functions"), format!("{run}/evidence")]),
+        (format!("{run}/functions"), vec![function.clone()]),
+        (format!("{run}/evidence"), vec![format!("{run}/evidence/readings.csv")]),
+    ];
+    for (folder, names) in &names_in {
+        let synced = synced_before(folder);
+        for name in names {
+            assert!(made(name) < synced, "`{folder}` synced before `{name}` was made in it: {calls:?}");
+        }
+    }
+    assert!(on("fsync", run).into_iter().any(|i| i > moved), "the run's folder synced after the move: {calls:?}");
 }
 

@@ -403,8 +403,10 @@ pub fn keep(runs: &Path, c: &Checked, r: &RunResult, mode: &RunMode, plant: &dyn
         }
     };
     report.run.number = number;
-    // Every file on the disk, and the folders that name them, before the report names them.
-    let mut folders = vec![folder.clone()];
+    // Every file on the disk, and the folders that name them, before the report names them: the
+    // run's own folders, the run's folder, the test's folder that names it and the runs' folder
+    // that names that, so a run kept survives a power cut whole or not at all.
+    let mut folders = vec![runs.to_path_buf(), dir.clone(), folder.clone()];
     let write = |name: &str, text: &str, folders: &mut Vec<PathBuf>| -> Result<(), RecordError> {
         let p = folder.join(name);
         if let Some(parent) = p.parent() {
