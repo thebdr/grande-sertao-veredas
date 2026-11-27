@@ -34,6 +34,10 @@ mod edges;
 #[allow(dead_code)]
 #[path = "programs/faults.rs"]
 mod faults;
+// its `alt` is a feature of the package cargo builds it in, not of this crate
+#[allow(dead_code, unexpected_cfgs)]
+#[path = "programs/featured.rs"]
+mod featured;
 #[allow(dead_code)]
 #[path = "programs/lines.rs"]
 mod lines;
@@ -517,6 +521,8 @@ image!(twofile::Inputs { a: i32, b: i32 });
 image!(twofile::Outputs { v: i32 });
 image!(lines::Inputs { a: i32, b: i32 });
 image!(lines::Outputs { v: i32 });
+image!(featured::Inputs { a: i32 });
+image!(featured::Outputs { v: i32 });
 image!(padded::Inputs { sel: u8 });
 image!(padded::Outputs { cmd: u16, pair: u16, recipe: u16 });
 image!(niches::Inputs { sel: u8 });
@@ -1295,6 +1301,16 @@ fn cargo_build(work: &Path, name: &str, target: &str, wrapped: Option<(&Path, &s
 
 /// `cargo_build` with cargo's command and its options `args` (`build`, `test --no-run`).
 fn cargo_run(work: &Path, name: &str, target: &str, args: &[&str], wrapped: Option<(&Path, &str)>) -> Output {
+    let mut command = cargo(work, name, target, args);
+    if let Some((file, revision)) = wrapped {
+        wrap(&mut command, Path::new(env!("CARGO_BIN_EXE_orcl-front-driver")), name, file, revision);
+    }
+    command.output().unwrap()
+}
+
+/// Cargo's command `args` on the package `name` in `work` (`package`), into the target directory `target` under
+/// `work`, plainly: no wrapper and none of the driver's variables from the test's own environment.
+fn cargo(work: &Path, name: &str, target: &str, args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO"));
     command
         .args(args)
@@ -1309,15 +1325,18 @@ fn cargo_run(work: &Path, name: &str, target: &str, args: &[&str], wrapped: Opti
         .env_remove("ORCL_FRONT_PROGRAM")
         .env_remove("ORCL_FRONT_OUT")
         .env_remove("ORCL_FRONT_REVISION");
-    if let Some((file, revision)) = wrapped {
-        command
-            .env("RUSTC_WRAPPER", env!("CARGO_BIN_EXE_orcl-front-driver"))
-            .env("LD_LIBRARY_PATH", library_path())
-            .env("ORCL_FRONT_PROGRAM", name)
-            .env("ORCL_FRONT_OUT", file)
-            .env("ORCL_FRONT_REVISION", revision);
-    }
-    command.output().unwrap()
+    command
+}
+
+/// `command` (`cargo`) with the driver `driver` as its `RUSTC_WRAPPER` and the environment naming the program
+/// `program`, its file and its revision.
+fn wrap<'a>(command: &'a mut Command, driver: &Path, program: &str, file: &Path, revision: &str) -> &'a mut Command {
+    command
+        .env("RUSTC_WRAPPER", driver)
+        .env("LD_LIBRARY_PATH", library_path())
+        .env("ORCL_FRONT_PROGRAM", program)
+        .env("ORCL_FRONT_OUT", file)
+        .env("ORCL_FRONT_REVISION", revision)
 }
 
 #[test]
@@ -1482,14 +1501,146 @@ fn the_driver_s_verbose_version_is_rustc_s_and_a_line_of_its_own() {
         String::from_utf8(out.stdout).unwrap()
     };
     // the driver's own build: the FNV-1a hash of the executable run, so a rebuilt driver answers otherwise
-    let driver = std::fs::read(env!("CARGO_BIN_EXE_orcl-front-driver")).unwrap();
-    let build = driver.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3));
-    let verbose = format!("{}orcl-front: {} {} build {build:016x}\n", rustc("-vV"), env!("CARGO_PKG_VERSION"), nightly());
+    let build = build_of(Path::new(env!("CARGO_BIN_EXE_orcl-front-driver")));
+    let verbose = format!("{}orcl-front: {} {} build {build}\n", rustc("-vV"), env!("CARGO_PKG_VERSION"), nightly());
     assert_eq!(answer(&["-vV"], None), verbose, "asked directly, no variable");
     assert_eq!(answer(&["/usr/bin/rustc", "-vV"], None), verbose, "as cargo's wrapper, no variable");
     assert_eq!(answer(&["/usr/bin/rustc", "-vV"], Some("conveyor")), verbose, "as cargo's wrapper, a program named");
     assert_eq!(answer(&["--version", "--verbose"], None), verbose, "in long options");
     assert_eq!(answer(&["-V"], None), rustc("-V"), "not verbose: rustc's line alone");
+}
+
+/// The build the driver's `-vV` line names for the executable `exe`: the FNV-1a hash of its bytes, in hexadecimal.
+fn build_of(exe: &Path) -> String {
+    let bytes = fs::read(exe).unwrap();
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3));
+    format!("{hash:016x}")
+}
+
+/// The driver run by a bare name found on `PATH`, as `RUSTC_WRAPPER=orcl-front-driver` runs it, in a folder holding no
+/// file of that name: its `-vV` line names the build of the executable run, never `unknown`.
+#[test]
+fn the_driver_run_by_a_bare_name_names_its_own_build() {
+    let exe = Path::new(env!("CARGO_BIN_EXE_orcl-front-driver"));
+    let path = format!("{}:{}", exe.parent().unwrap().display(), std::env::var("PATH").unwrap_or_default());
+    let out = Command::new("orcl-front-driver")
+        .env("PATH", path)
+        .env("LD_LIBRARY_PATH", library_path())
+        .current_dir(fresh("bare-name"))
+        .args(["/usr/bin/rustc", "-vV"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let line = format!("orcl-front: {} {} build {}", env!("CARGO_PKG_VERSION"), nightly(), build_of(exe));
+    assert!(stdout.lines().any(|l| l == line), "wanted {line}\ngot\n{stdout}");
+}
+
+/// Under cargo, in one target directory, the same variables: a wrapped build, the same build again (every crate fresh),
+/// then the same build after the driver changed (a byte appended to a copy of it, as a rebuild changes its bytes):
+/// every crate is compiled again and the file written.
+#[test]
+fn under_cargo_a_rebuilt_driver_rebuilds_and_writes() {
+    let work = fresh("cargo-rebuilt-driver");
+    package(&work, "lines");
+    let bin = work.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let driver = bin.join("orcl-front-driver");
+    fs::copy(env!("CARGO_BIN_EXE_orcl-front-driver"), &driver).unwrap();
+    let file = work.join("lines.orclb");
+    let build = || {
+        let out = wrap(&mut cargo(&work, "lines", "target", &["build"]), &driver, "lines", &file, "one-commit").output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        out
+    };
+    build();
+    assert!(file.exists(), "the first build's file");
+    let out = build();
+    assert!(!compiled(&out, "lines"), "the same driver: every crate fresh");
+    let mut bytes = fs::read(&driver).unwrap();
+    bytes.push(0);
+    fs::write(&driver, bytes).unwrap();
+    fs::remove_file(&file).unwrap();
+    let out = build();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(compiled(&out, "orcl-std") && compiled(&out, "lines"), "a rebuilt driver: every crate rebuilt: {stderr}");
+    assert!(file.exists(), "a rebuilt driver: the file written");
+}
+
+/// Under cargo, in one target directory, the same revision throughout: the default features, then a feature that
+/// changes the program, each configuration into an output path of its own (`docs/questions.md` Q238, the promise
+/// taken meanwhile): each file holds its own configuration's program, and built again in turn, each configuration
+/// writes or keeps its own.
+#[test]
+fn under_cargo_each_feature_set_into_a_path_of_its_own_writes_its_own_program() {
+    let work = fresh("cargo-features");
+    let package = package(&work, "featured");
+    let manifest = fs::read_to_string(package.join("Cargo.toml")).unwrap();
+    fs::write(package.join("Cargo.toml"), manifest.replace("[dependencies]", "[features]\nalt = []\n\n[dependencies]")).unwrap();
+    let build = |file: &Path, args: &[&str]| {
+        let out = cargo_run(&work, "featured", "target", args, Some((file, "one-commit")));
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        fs::read(file).unwrap()
+    };
+    let v = |bytes: &[u8]| {
+        let code = file::read(bytes).unwrap().1;
+        scan_once::<_, featured::Outputs>(&code, &featured::Inputs { a: 7 }).unwrap().v
+    };
+    let (plain_file, alt_file) = (work.join("default.orclb"), work.join("alt.orclb"));
+    let plain = build(&plain_file, &["build"]);
+    let alt = build(&alt_file, &["build", "--features", "alt"]);
+    assert_eq!(v(&plain), 7, "the default features' file holds their program");
+    assert_eq!(v(&alt), 1007, "the feature's file holds its program");
+    assert_eq!(build(&plain_file, &["build"]), plain, "the default features built again: their own program");
+    assert_eq!(build(&alt_file, &["build", "--features", "alt"]), alt, "the feature built again: its own program");
+}
+
+/// The same with profiles: dev, then release (no overflow checks), each into an output path of its own: dev's file
+/// faults at `i.a + i.b` past `i32::MAX`, release's wraps and runs on; built again in turn, each writes or keeps its
+/// own.
+#[test]
+fn under_cargo_each_profile_into_a_path_of_its_own_writes_its_own_program() {
+    let work = fresh("cargo-profiles");
+    // arith: `+`, `-` and `*` checked in dev, not in release
+    package(&work, "arith");
+    let build = |file: &Path, args: &[&str]| {
+        let out = cargo_run(&work, "arith", "target", args, Some((file, "one-commit")));
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        fs::read(file).unwrap()
+    };
+    let (dev_file, release_file) = (work.join("dev.orclb"), work.join("release.orclb"));
+    let dev = build(&dev_file, &["build"]);
+    let release = build(&release_file, &["build", "--release"]);
+    let inputs = arith::Inputs { a: i32::MAX, b: 1, ..arith_inputs(0) };
+    let e = fault::<_, arith::Outputs>(&file::read(&dev).unwrap().1, &inputs);
+    let (line, column) = place_of(&program("arith"), "i.a + i.b");
+    let wanted = (ErrorKind::Check(Check::Overflow(BinOp::Add)), line, column);
+    assert_eq!((e.kind, e.at.line as usize, e.at.column as usize), wanted, "dev's program faults at the sum");
+    let ran = scan_once::<_, arith::Outputs>(&file::read(&release).unwrap().1, &inputs);
+    let ran = ran.unwrap_or_else(|e| panic!("release's program faults: {e:?}"));
+    assert_eq!(ran.sum, i32::MIN, "release's program wraps the sum and runs on");
+    assert_eq!(build(&dev_file, &["build"]), dev, "dev built again: its own program");
+    assert_eq!(build(&release_file, &["build", "--release"]), release, "release built again: its own program");
+}
+
+/// Under cargo, a build naming a program the build does not hold (`line` for `lines`, a typo), its file at a fresh
+/// output path: every crate compiled by the driver, nothing lowered and no file written; the same build naming the
+/// program writes its file.
+#[test]
+fn under_cargo_a_build_naming_a_program_it_does_not_hold_writes_no_file() {
+    let work = fresh("cargo-absent");
+    package(&work, "lines");
+    let absent = work.join("line.orclb");
+    let driver = Path::new(env!("CARGO_BIN_EXE_orcl-front-driver"));
+    let out = wrap(&mut cargo(&work, "lines", "target", &["build"]), driver, "line", &absent, "one-commit").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{stderr}");
+    assert!(compiled(&out, "orcl-std") && compiled(&out, "lines"), "every crate compiled: {stderr}");
+    assert!(!absent.exists(), "a program the build does not hold: a file written");
+    let file = work.join("lines.orclb");
+    let out = cargo_run(&work, "lines", "target", &["build"], Some((&file, "one-commit")));
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(file::read(&fs::read(&file).unwrap()).unwrap().0.revision, "one-commit", "the program named: its file");
 }
 
 /// The 1-based line and column where `snippet` first stands in `source`.
@@ -1502,9 +1653,17 @@ fn place_of(source: &Path, snippet: &str) -> (usize, usize) {
     (line, column)
 }
 
-/// The program error a lowered program's scan stops at, called once on a machine holding its first state, a scan at
-/// time zero, `inputs` and the outputs' default.
+/// The program error a lowered program's scan stops at (`scan_once`).
 fn fault<I: Image + Debug, O: Image + Default>(code: &Code, inputs: &I) -> ProgramError {
+    match scan_once::<I, O>(code, inputs) {
+        Err(e) => e,
+        Ok(_) => panic!("{inputs:?} ran: Ok"),
+    }
+}
+
+/// A lowered program's scan, called once on a machine holding its first state, a scan at time zero, `inputs` and the
+/// outputs' default: the outputs it wrote, or the program error it stopped at.
+fn scan_once<I: Image + Debug, O: Image + Default>(code: &Code, inputs: &I) -> Result<O, ProgramError> {
     let regions = regions(code);
     let state = first_state(code);
     let mut machine = load(code, &[regions.state, regions.scan, regions.inputs, regions.outputs]);
@@ -1520,9 +1679,11 @@ fn fault<I: Image + Debug, O: Image + Default>(code: &Code, inputs: &I) -> Progr
     O::default().write(&mut slots);
     machine.set_region(RegionId(3), &slots).unwrap();
     let args = [0, 1, 2, 3].map(|r| Arg::Ref(RegionId(r)));
-    match machine.call(FunctionId(0), &args) {
-        Err(orcl_interp::CallError::Program(e)) => e,
-        other => panic!("{inputs:?} ran: {other:?}"),
+    let called = machine.call(FunctionId(0), &args).map(|_| ());
+    match called {
+        Ok(()) => Ok(O::read(machine.region(RegionId(3)).unwrap()).unwrap()),
+        Err(orcl_interp::CallError::Program(e)) => Err(e),
+        Err(other) => panic!("{inputs:?} ran: {other:?}"),
     }
 }
 

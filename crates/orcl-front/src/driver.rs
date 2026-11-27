@@ -24,6 +24,13 @@
 //! without the driver's flags, is never reused by a wrapped build, nor a stale program file kept. A function of the
 //! program's crates without MIR, from a crate built without those flags by other means (an rlib built by rustc
 //! alone, by hand or elsewhere), is refused naming that likely cause.
+//!
+//! What the driver keeps fresh is the file of one configuration of a program in one target directory. Cargo keeps a set of
+//! compiled units for each configuration (a feature set, a profile) in a target directory and runs no compiler for a
+//! unit it finds fresh, so a configuration built again after another into the same file may compile nothing and leave
+//! the other's program there. Each configuration of a program is built into an output path of its own; a build
+//! naming a program the build does not hold lowers nothing, writes no file and leaves what was there.
+// DECISION PENDING: docs/questions.md Q238
 use std::io::Write;
 use std::process::ExitCode;
 
