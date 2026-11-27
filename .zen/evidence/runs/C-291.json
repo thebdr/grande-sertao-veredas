@@ -1,10 +1,12 @@
 {
   "clause": "C-291",
-  "command": "cargo nextest run -p alforge --features corte --test bundle --test cut",
+  "command": "cargo nextest run -j 4 -p alforge --features corte --test bundle --test trace --test cut",
   "commandArgv": [
     "cargo",
     "nextest",
     "run",
+    "-j",
+    "4",
     "-p",
     "alforge",
     "--features",
@@ -12,23 +14,30 @@
     "--test",
     "bundle",
     "--test",
+    "trace",
+    "--test",
     "cut"
   ],
   "exitCode": 0,
-  "outputSha": "09c87d789cc2c5f73897e113fa4455500023d9ef05794067fbe6d4395ad635ed",
-  "outputTail": "        SLOW [> 60.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>120.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>180.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>240.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>300.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>360.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>420.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>480.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>540.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>600.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>660.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>720.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        PASS [ 760.284s] (40/40) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n────────────\n     Summary [ 760.352s] 40 tests run: 40 passed (1 slow), 0 skipped",
-  "ranAt": "2026-11-26T09:55:41.120Z",
-  "headCommit": "c3f20dd4ae3f45bc1ed611c7320077ccd32c2b30",
+  "outputSha": "594fbc1b145cb42f2547c907699f30c92cde05c4ec8f5e830f03fc33d9961dcf",
+  "outputTail": "        SLOW [>420.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>480.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>540.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>600.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>660.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>720.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>780.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>840.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>900.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>960.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1020.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        SLOW [>1080.000s] (─────) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n        PASS [1103.372s] (43/43) alforge::cut a_trial_cut_builds_in_the_builder_packs_and_runs_the_bundle_together\n────────────\n     Summary [1106.032s] 43 tests run: 43 passed (1 slow), 0 skipped",
+  "ranAt": "2026-11-27T00:15:15.728Z",
+  "headCommit": "5765f90aee54c2133ac9ce2dfe255c19ba4713d1",
   "tests": [
     {
       "name": "tools/alforge/tests/bundle.rs",
       "file": "tools/alforge/tests/bundle.rs",
-      "fileSha": "00de5f1dac1c978341ea97c7dd7a338654e71c840696fceb8f723b59f3125aa7"
+      "fileSha": "fd364a7ec11c2097ca763c711237901a85f7b54089439643b950899211714ffb"
+    },
+    {
+      "name": "tools/alforge/tests/trace.rs",
+      "file": "tools/alforge/tests/trace.rs",
+      "fileSha": "4592399997929724cbbee6fc9192c3394571467f772c1483ad9857f5d9521122"
     },
     {
       "name": "tools/alforge/tests/cut.rs",
       "file": "tools/alforge/tests/cut.rs",
-      "fileSha": "a563c9e248d8c4b32fa44a75b6d51450d71cdc85fa12d7cd673d0ec6b776d438"
+      "fileSha": "6bbded30d36fcdb264c94503394b887c086ba7a3281ae745202c9bd798cd68e3"
     }
   ]
 }
