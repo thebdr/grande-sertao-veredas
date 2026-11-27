@@ -444,6 +444,7 @@ fn settings_come_first_with_their_defaults() {
     assert_eq!(one("  id CHK 012\n"), ["5:6: `id` is `CHK 012`: letters, digits, `-` and `_`"]);
     // Its runs are kept in a folder of its name: 64 characters at most (C-204's refute round 5).
     assert_eq!(one(&format!("  id {}\n", "i".repeat(veredas_comissionador::check::MAX_ID))), Vec::<String>::new());
+    assert_eq!(one(&format!("  id {}\n", "i".repeat(veredas_comissionador::check::MAX_ID + 1))), ["5:6: `id` is 65 characters long: 64 at most"]);
     assert_eq!(one(&format!("  id {}\n", "i".repeat(256))), ["5:6: `id` is 256 characters long: 64 at most"]);
     assert_eq!(one("  id T\n  area a\n  area b\n"), ["7:3: `area` is given twice"]);
     assert_eq!(one("  id T\n  id U\n"), ["6:3: `id` is given twice"]);
@@ -1115,6 +1116,12 @@ fn a_call_statement_breaks_its_lines_inside_its_parentheses() {
 #[test]
 fn a_byte_order_mark_and_a_multi_line_stamp_are_the_stamp() {
     let body = "test \"t\" {\n  id T\n  step a stop pass\n}\n";
+    // A mark and the body at once, no stamp: the suite's words for it at the first line, as with no
+    // mark (refute round 11: the whole file was read as the header, in TOML's words).
+    for (text, noun) in [(format!("\u{feff}{body}"), "a test file"), ("\u{feff}function F() -> (y: int) {\n  y = 1\n}\n".to_string(), "a function file")] {
+        let e = if noun == "a test file" { parse_test(&text, "t").unwrap_err() } else { parse_functions(&text, "f").unwrap_err() };
+        assert_eq!((e.line, e.column, e.message), (1, 1, format!("no `format`: {noun} states `format` and `version`")), "{text:?}");
+    }
     assert!(parse_test(&format!("\u{feff}format = \"veredas-test\"\nversion = 1\n{body}"), "t").is_ok());
     assert!(parse_test(&format!("format = \"\"\"\nveredas-test\"\"\"\nversion = 1\n{body}"), "t").is_ok());
     let e = parse_test(&format!("\u{feff}format = \"veredas-test\"\nversion = 1\nname = 1\n{body}"), "t").unwrap_err();

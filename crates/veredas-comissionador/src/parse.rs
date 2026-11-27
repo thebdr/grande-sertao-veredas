@@ -37,11 +37,12 @@ pub fn parse_functions(text: &str, file: &str) -> Result<FunctionFile, Problem> 
     p.function_file()
 }
 
-/// Where the body begins: the first line that opens with the word `test` or `function`.
+/// Where the body begins: the first line that opens with the word `test` or `function`, a
+/// byte-order mark before the file's first word read past, as TOML reads it.
 pub fn body_start(text: &str) -> usize {
     let mut at = 0;
     for line in text.split_inclusive('\n') {
-        let t = line.trim_start();
+        let t = if at == 0 { line.trim_start_matches('\u{feff}') } else { line }.trim_start();
         for word in ["test", "function"] {
             if let Some(rest) = t.strip_prefix(word)
                 && !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
