@@ -4093,6 +4093,36 @@ controller's update to be reached.
 
 ---
 
+## Q372 - On a Wayland desktop, does Oficina claim Wayland or choose X11 itself?
+
+**Raised** 2026-11-26, by the oficina session, from the architect's first run of the window: on
+this machine's desktop, natively on Wayland (`WAYLAND_DISPLAY` set, no platform named), as Qt
+chooses by default.
+
+The plan says "Linux through X11 compatibility first" (the briefing). Every test of the window has
+run on Qt's `offscreen` platform or on X11 (`xcb`, this desktop's XWayland among them), never on
+Wayland. Wayland lets no client place its own windows, and docking does that: a pane floated where
+the person drops it, a saved layout restored with its floating windows at their places. How
+KDDockWidgets 2.5.1 copes there is not measured. The first run on Wayland also printed Qt's
+`qt.qpa.wayland.textinput` warnings, which X11 does not.
+- (a) Oficina chooses X11 itself on Linux when the person names no platform (Qt's `-platform` or
+  `QT_QPA_PLATFORM`): on a Wayland desktop it runs through XWayland; Wayland runs when named and is
+  not claimed until it is tested.
+- (b) Qt's default, and Wayland is claimed: it joins the platforms the window's tests run on (a
+  compositor started headless for the tests, Weston's headless back end for one), docking and
+  floating judged there.
+- (c) Qt's default, Wayland not claimed: it runs as it ran, the plan claiming X11 alone.
+
+**Recommended**: (a) for release 1, then (b) once the tests run on a headless Wayland compositor:
+what a person meets is then what the tests drove.
+
+**Taken meanwhile** (most reversible): (c): nothing changes in the code, and the plan says the
+window runs on Wayland by Qt's default, unclaimed.
+
+**Reversible?** Yes: the choice is a few lines at the window's start, before the application.
+
+---
+
 ## Q320 - How a person confirms a run's gated writes, and a switch a run finds armed
 
 **Raised** 2026-11-25, by the comissionador session, from the architect's ruling on Q314 (b): the

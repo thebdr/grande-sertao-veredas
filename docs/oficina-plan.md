@@ -29,7 +29,10 @@ users, the PLC programmer, the commissioning technician and the software enginee
 - **QML may hold view logic** (formatting, animation, selection), never project or plant logic.
 - **Windows 11 and Linux**, Linux through X11 compatibility first. No Windows 10 and no ARM build:
   an ARM device runs components only. Each Oficina release pins one Qt version (minor 51), Qt
-  6.12.0 today.
+  6.12.0 today. On a Wayland desktop the window runs on Wayland by Qt's default when no platform
+  is named (the architect's first run, 2026-11-26), where every test so far ran on `offscreen` or
+  on X11 (`xcb`, this desktop's XWayland among them): whether Oficina claims Wayland or chooses
+  X11 itself is Q372.
 - **Hosts without a GPU are virtual machines only** (Hyper-V, VMware, VirtualBox, Linux guests).
   There everything except 3D works: Oficina detects software drawing before its first window, runs
   with Qt Quick's software backend, switches effects off, starts the embedded browser in software
@@ -308,6 +311,17 @@ naming `QMAKE`), and the tests' driver a feature of its own, never on by default
   the formats' table, the window's docking and the test driver. The TOML document, the code editor
   and its language-server client, the table, the embedded pages and the drawing probe come over
   with their clauses; the spike's folder stays as its record.
+- **What its terminal shows is Oficina's.** The architect's first run (2026-11-26, on Wayland)
+  printed two kinds of others' lines: Qt's warning category `qt.qpa.wayland.textinput` (its
+  text-input surface "Trying to disable" one surface while none is focused), and `qml: -2x`, a
+  `console.log` left in KDDockWidgets 2.5.1's own title bar (`TitleBar.qml`, at each click of a
+  dock's float button: the image suffix for a display at twice the density). A release keeps them
+  out at the window's start: a Qt category known as noise by a logging rule set before the
+  application, so that a person's `QT_LOGGING_RULES` still turns it back on, and a library's own
+  print by a message handler that drops what that library's QML file sends, until a release of
+  the library drops it. Each lands with a clause whose test reads what the window writes.
+  Reporting the print to KDDockWidgets' project is an outward step, the architect's to take or
+  allow.
 - **What a release ships** (Q443 and Q446, ruled 2026-11-26): the release builder turns on the
   features the executable needs, `shell` and never `driver`, whatever the defaults; the bundle
   carries Qt 6.12's libraries and KDDockWidgets in `lib/` beside `bin/`, with their licence texts
@@ -574,6 +588,7 @@ kept, rust-analyzer is held to running nothing of the folder, and the embedded b
   47 to 52 and 54). Left: minor 53, bookkeeping (what waits on undecided work, marked so: the HMI
   creator waits for the panel HMI's plan).
 - **Q371**, Oficina's: how far back it speaks to an older controller (Q235's floor).
+- **Q372**, Oficina's: on a Wayland desktop, Wayland claimed or X11 chosen by Oficina itself.
 - **Q36, Q37 and Q43**: ruled but for what waits on the security study (Q43, 2026-11-26): a
   signature over a download's manifest, a keyed check on each altering request, and the end date
   of certificates issued after 2038. **Q45**'s remaining readings (its points on Windows, G2, C5
