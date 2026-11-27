@@ -43,6 +43,18 @@ mod niches;
 #[path = "programs/order.rs"]
 mod order;
 #[allow(dead_code)]
+#[path = "programs/p_names.rs"]
+mod p_names;
+#[allow(dead_code)]
+#[path = "programs/p_repr.rs"]
+mod p_repr;
+#[allow(dead_code)]
+#[path = "programs/p_traits.rs"]
+mod p_traits;
+#[allow(dead_code)]
+#[path = "programs/p_wrap.rs"]
+mod p_wrap;
+#[allow(dead_code)]
 #[path = "programs/padded.rs"]
 mod padded;
 #[allow(dead_code)]
@@ -430,6 +442,22 @@ image!(padded::Inputs { sel: u8 });
 image!(padded::Outputs { cmd: u16, pair: u16, recipe: u16 });
 image!(niches::Inputs { sel: u8 });
 image!(niches::Outputs { held: Duration, has: bool, dir: i8, step: Duration });
+image!(p_repr::Inputs { sel: u8, a: i64, b: u64, c: i8, d: u16 });
+image!(p_repr::Outputs {
+    cmd: u8, cmd_match: u8, wide: u64, wide_match: u8, sign: i16, sign_match: u8, big_match: u8, neg_match: u8,
+    sw8: u8, sw_i8: u8, nested: u16, nested_neg: i16, grid: u8, oo: u8, ob: u8, data: i16, data_dur: Duration,
+    umax: u64, imin: i64, neg: i64, negs: i32, held: u8,
+});
+image!(p_traits::Inputs { n: u8, p: bool, q: bool, a8: i8, u64v: u64, i64v: i64, u32v: u32, i16v: i16 });
+image!(p_traits::Outputs {
+    sa: u32, sb: u32, la: u16, lb: u16, pair_u8: u8, pair_dur: Duration, cfg: u32, count: u8, skipped: u8, got: u8,
+    blt: bool, bge: bool, bxor: bool, band: bool, c1: u64, c2: i8, c3: u32, c4: i16, c5: i64, c6: u16, c7: u8,
+    s1: u64, s2: i16, s3: u8, s4: i64, s5: u32, f1: f32, f2: i32, f3: u64, f4: f64,
+});
+image!(p_names::Inputs { a: u16, sel: u8, t_ms: u64 });
+image!(p_names::Outputs { d_ms: u32, d_tag: u8, opt: u16, core_some: bool, core_val: u16, held: Duration });
+image!(p_wrap::Inputs { sel: u8 });
+image!(p_wrap::Outputs { v: u8 });
 
 // Inputs drawn from a scan's index, the same for the native program and its lowered twin.
 
@@ -506,8 +534,9 @@ fn safe_outputs<O: Image>(code: &Code, state_ty: TypeId, state: &[Scalar]) -> O 
     O::read(&slots).unwrap()
 }
 
-/// Runs `name` natively and lowered on the engine for `scans` scans of `inputs`, every report and write alike.
-/// The native program's outputs, scan by scan, are returned for the test to say the run reached what it is to prove.
+/// Runs `name` natively and lowered on the engine for `scans` scans of `inputs`, every report and write alike, and
+/// scans that overran and deadlines skipped among them. The native program's outputs, scan by scan, are returned for
+/// the test to say the run reached what it is to prove.
 fn conform<P, I, O>(name: &str, native: P, state_name: &str, inputs: &dyn Fn(u64) -> I, scans: u64) -> Vec<O>
 where
     P: Program<Inputs = I, Outputs = O>,
@@ -552,6 +581,8 @@ where
     }
     assert_eq!(native_feed.writes, twin_feed.writes, "{name}: every write, by its time and value");
     assert_eq!(native_task.stats(), twin_task.stats(), "{name}: the cycle statistics");
+    let stats = native_task.stats();
+    assert!(stats.overruns > 0 && stats.skipped > 0, "{name}: the engine's run met overruns and skips: {stats:?}");
     assert!(instructions > 0);
     let record = format!("{name}: {scans} scans alike, {instructions} instructions in all, {most} at most in one scan\n");
     print!("{record}");
@@ -814,6 +845,70 @@ fn constants_in_a_duration_s_niche_and_a_signed_enum_s_run_lowered_as_natively()
     both(&outputs, "the long step", |o| o.step == Duration::from_secs(3));
 }
 
+fn edge_i64(k: u64) -> i64 {
+    [i64::MIN, -1, 0, i64::MAX, 5, -77][(mix(k, 21) % 6) as usize]
+}
+
+fn edge_u64(k: u64) -> u64 {
+    [u64::MAX, 1 << 63, 0, 12_345, mix(k, 22)][(mix(k, 23) % 5) as usize]
+}
+
+#[test]
+fn repr_enums_wide_constants_and_edge_switches_run_lowered_as_natively() {
+    let inputs = |k: u64| p_repr::Inputs {
+        sel: mix(k, 1) as u8,
+        a: edge_i64(k),
+        b: edge_u64(k),
+        c: [-128i8, -1, 127, 0, 5][(mix(k, 3) % 5) as usize],
+        d: [255u16, 128, 0, 256, 511, 7][(mix(k, 4) % 6) as usize],
+    };
+    let outputs = conform("p_repr", p_repr::PRepr::default(), "PRepr", &inputs, 600);
+    for v in 1..=4 {
+        both(&outputs, &format!("big {v}"), |o| o.big_match == v);
+        both(&outputs, &format!("sw8 {v}"), |o| o.sw8 == v);
+        both(&outputs, &format!("sw_i8 {v}"), |o| o.sw_i8 == v);
+    }
+    for v in 1..=5 {
+        both(&outputs, &format!("neg {v}"), |o| o.neg_match == v);
+    }
+}
+
+#[test]
+fn traits_generics_casts_and_shifts_run_lowered_as_natively() {
+    let inputs = |k: u64| p_traits::Inputs {
+        n: mix(k, 1) as u8,
+        p: mix(k, 2) % 2 == 0,
+        q: mix(k, 3) % 3 == 0,
+        a8: mix(k, 4) as i8,
+        u64v: edge_u64(k),
+        i64v: edge_i64(k),
+        u32v: mix(k, 7) as u32,
+        i16v: mix(k, 8) as i16,
+    };
+    let outputs = conform("p_traits", p_traits::PTraits::default(), "PTraits", &inputs, 600);
+    both(&outputs, "p < q", |o| o.blt);
+    both(&outputs, "let else", |o| o.got == 99);
+}
+
+#[test]
+fn a_program_s_own_duration_and_option_run_lowered_as_natively() {
+    // core's `Duration` and `Option` known by their definitions: a program's own of those names lowers as any
+    // structure and enum of the program's
+    let inputs = |k: u64| p_names::Inputs { a: mix(k, 1) as u16, sel: mix(k, 2) as u8, t_ms: mix(k, 3) % 3_000 };
+    let outputs = conform("p_names", p_names::PNames::default(), "PNames", &inputs, 400);
+    both(&outputs, "core's Option some", |o| o.core_some);
+    both(&outputs, "the program's Option's pair", |o| o.opt == 209);
+}
+
+#[test]
+fn constants_of_a_niche_that_wraps_past_its_tag_s_top_run_lowered_as_natively() {
+    let inputs = |k: u64| p_wrap::Inputs { sel: mix(k, 1) as u8 };
+    let outputs = conform("p_wrap", p_wrap::PWrap, "PWrap", &inputs, 200);
+    for v in 1..=4 {
+        both(&outputs, &format!("arm {v}"), |o| o.v == v);
+    }
+}
+
 #[test]
 fn the_driver_takes_its_options_from_the_environment_as_a_wrapper_and_lowers_no_test_build() {
     // as `RUSTC_WRAPPER` (the compiler it wraps first, then rustc's arguments), the program named by the
@@ -899,6 +994,31 @@ fn the_driver_refuses_an_option_given_twice() {
     let out = driver(&args);
     assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stderr).contains("error: orcl-front: usage: --orcl-out given twice"));
+}
+
+#[test]
+fn the_driver_refuses_an_option_given_last_with_no_value() {
+    let source = program("lines").display().to_string();
+    let mut args = strings(&["--crate-name", "lines", "--crate-type", "rlib", &source]);
+    args.extend(strings(&["--orcl-out=/nonexistent/x.orclb", "--orcl-revision=x", "--orcl-program"]));
+    let out = driver(&args);
+    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("error: orcl-front: usage: --orcl-program needs a value"));
+}
+
+#[test]
+fn the_driver_reads_a_crate_name_given_with_an_equals_sign() {
+    let work = fresh("crate-name-equals");
+    compile_std(&work, &[]);
+    let w = work.display().to_string();
+    let file = work.join("lines.orclb");
+    let source = program("lines").display().to_string();
+    let mut args = strings(&["--crate-name=lines", "--crate-type", "rlib", "--edition", "2024", &source]);
+    args.extend(strings(&["--extern", &format!("orcl_std={w}/liborcl_std.rlib"), "-L", &w, "--out-dir", &w]));
+    args.extend(strings(&["--orcl-program", "lines", &format!("--orcl-out={}", file.display()), "--orcl-revision", "eq"]));
+    let out = driver(&args);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(file.exists(), "the program named by `--crate-name=` lowered");
 }
 
 #[test]
@@ -1042,6 +1162,34 @@ fn statements_and_calls_name_their_own_lines() {
 }
 
 #[test]
+fn switches_and_returns_name_their_own_lines() {
+    // a `match`'s switch at the line of its scrutinee, a function's return past its first line
+    let (_, code) = lower_in("switches-edges", "edges", &program("edges")).result.unwrap();
+    let scan = &code.functions[0];
+    let switches: Vec<u32> = scan
+        .blocks
+        .iter()
+        .filter_map(|b| match &b.terminator {
+            Terminator::SwitchInt { at, .. } => Some(at.line),
+            _ => None,
+        })
+        .collect();
+    let (line, _) = place_of(&program("edges"), "o.signed_match = match i.a {");
+    assert!(switches.contains(&(line as u32)), "line {line} not among the switches' {switches:?}");
+    let (head, _) = place_of(&program("edges"), "fn scan(");
+    let mut returns = 0;
+    for f in code.functions.iter().filter(|f| f.name.ends_with("::scan")) {
+        for b in &f.blocks {
+            if let Terminator::Return { at } = &b.terminator {
+                assert!(at.line > head as u32, "{}: return at {at:?}, the function at line {head}", f.name);
+                returns += 1;
+            }
+        }
+    }
+    assert!(returns > 0, "the scan's returns");
+}
+
+#[test]
 fn the_source_map_names_no_file_of_core() {
     // every location a lowered program holds names a file of the program's crates: one inside core's macros is moved
     // to where the program calls the macro
@@ -1171,6 +1319,11 @@ fn an_isize_field_is_refused_where_the_program_declares_it() {
 }
 
 #[test]
+fn a_128_bit_integer_is_refused_where_the_program_declares_it() {
+    refused("i128", &at("i128", "total: i128", TYPE, "i128"));
+}
+
+#[test]
 fn a_usize_variable_is_refused_where_the_program_declares_it() {
     refused("usize_variable", &at("usize_variable", "at: usize", TYPE, "usize"));
 }
@@ -1208,6 +1361,11 @@ fn a_usize_behind_a_reference_parameter_is_refused_where_the_program_declares_it
 #[test]
 fn a_usize_inside_an_option_field_is_refused_where_the_program_declares_it_not_inside_core() {
     refused("usize_option", &at("usize_option", "last: Option<usize>", TYPE, "usize"));
+}
+
+#[test]
+fn a_usize_in_the_program_s_own_option_is_refused_at_its_payload() {
+    refused("own_option", &at("own_option", "usize),", TYPE, "usize"));
 }
 
 #[test]
