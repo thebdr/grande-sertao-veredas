@@ -3,7 +3,7 @@
 //! offsets, an enum's variant from its tag (direct or in a niche) and that variant's fields; a constant of no byte
 //! likewise, from none, so a one-variant enum still holds its discriminant. A shared reference to a constant (a
 //! promoted `&State::Stopping`) is the constant it refers to, which the body holds in a local of its own (and so
-//! refuses in a function whose result holds a reference, `crate::body`).
+//! refuses in a function a reference could leave its frame by, `crate::body`).
 use std::ops::Range;
 
 use orcl_interp::{Const, Scalar, Type, TypeId};

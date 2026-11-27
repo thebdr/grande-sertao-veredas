@@ -3155,10 +3155,11 @@ fn traits_probe_runs_lowered_as_natively() {
     assert!(outputs.iter().all(|o| o.gains == 132), "the associated constants");
 }
 
-// The fourteenth refute round's tests: a reference to a constant refused in a function whose result holds a reference,
-// which could hand it out of the frame the interpreter holds the constant in (O3), where the program takes it, no file
-// written; references to constants read in their own frames, and a reference returned derived from its parameters,
-// still lowered and run as natively; and a tuple's parts named by their positions.
+// The fourteenth refute round's tests: a reference to a constant refused in a function a reference could leave the
+// frame the interpreter holds the constant in by (O3), whose result holds a reference or one of whose parameters
+// reaches a `&mut` to a type that holds one, where the program takes it, no file written; references to constants read
+// in their own frames, and a reference returned derived from its parameters, still lowered and run as natively; and a
+// tuple's parts named by their positions.
 
 const CONST_REF: &str = "a reference to a constant a returned reference may hold";
 
@@ -3178,6 +3179,20 @@ fn a_reference_to_a_table_s_constant_returned_by_a_function_is_refused_where_the
 fn a_const_reference_in_a_function_whose_result_holds_a_reference_is_refused_where_the_program_takes_it() {
     // `const DEFAULT: &Recipe` in `fn find(k: u8) -> Option<&'static Recipe>`
     refused("const_ref_option", &at("const_ref_option", "DEFAULT) }", CONST_REF, "&Recipe"));
+}
+
+#[test]
+fn a_reference_to_a_constant_written_out_through_a_parameter_is_refused_where_the_program_takes_it() {
+    // `fn set(out: &mut &'static Recipe, fast: bool) { *out = if fast { &FAST } else { &SLOW }; }`; the scan's own
+    // `&SLOW`, read in its frame, lowered
+    refused("outparam", &at("outparam", "&FAST", CONST_REF, "&Recipe"));
+}
+
+#[test]
+fn a_reference_to_a_constant_written_into_the_state_is_refused_where_the_program_takes_it() {
+    // `self.recipe = Some(if *i > 127 { &FAST } else { &SLOW })`, a field `Option<&'static Recipe>` the scan's
+    // `&mut Self` reaches
+    refused("state_field", &at("state_field", "&FAST", CONST_REF, "&Recipe"));
 }
 
 #[allow(dead_code)]

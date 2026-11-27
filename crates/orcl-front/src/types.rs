@@ -81,6 +81,17 @@ impl Lowerer<'_> {
         self.first_in(id, |t| matches!(t, Type::Ref { .. }).then_some(())).is_some()
     }
 
+    /// Whether a type reaches a `&mut` to a type that holds a reference: is one, or holds one in a structure's or a
+    /// tuple's field, a variant's payload, an array's element or behind a reference; memory a write through it could
+    /// leave a reference in.
+    pub(crate) fn reaches_mut_to_ref(&self, id: TypeId) -> bool {
+        self.first_in(id, |t| match t {
+            Type::Ref { to, mutable: true } if self.holds_ref(*to) => Some(()),
+            _ => None,
+        })
+        .is_some()
+    }
+
     /// The first type a type holds that `found` gives a value for, in its fields' declared order: the type itself, a
     /// structure's or a tuple's field, a variant's payload, an array's element, a reference's pointee.
     fn first_in<T>(&self, id: TypeId, found: impl Fn(&Type) -> Option<T>) -> Option<T> {

@@ -31,8 +31,10 @@ pub enum Refused {
     /// A value the interpreter does not have: an operation, a cast, a constant, a place's projection.
     Value,
     /// A reference to a constant (a promoted `&FAST` or `&1`, a `const R: &T`) in a function whose result holds a
-    /// reference: the interpreter keeps no constant in memory of its own, so the function holds the constant in its
-    /// frame, which a reference it returned would outlive (O3: no reference in a return value).
+    /// reference, or one of whose parameters reaches a `&mut` to a type that holds one (the scan's `&mut Self` when
+    /// the state holds one): the interpreter keeps no constant in memory of its own, so the function holds the
+    /// constant in its frame, which a reference it returned or wrote out would outlive (O3: no reference in a return
+    /// value or a field).
     ConstRef,
     /// A terminator the interpreter does not have.
     Terminator,
