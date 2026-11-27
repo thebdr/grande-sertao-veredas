@@ -118,6 +118,27 @@ mod table;
 #[allow(dead_code)]
 #[path = "programs/include/include.rs"]
 mod include;
+#[allow(dead_code)]
+#[path = "programs/root.rs"]
+mod root;
+#[allow(dead_code)]
+#[path = "programs/char_arg.rs"]
+mod char_arg;
+#[allow(dead_code)]
+#[path = "programs/deep.rs"]
+mod deep;
+#[allow(dead_code)]
+#[path = "programs/noopt.rs"]
+mod noopt;
+#[allow(dead_code)]
+#[path = "programs/state.rs"]
+mod state;
+#[allow(dead_code)]
+#[path = "programs/marker.rs"]
+mod marker;
+#[allow(dead_code)]
+#[path = "programs/marker_shapes.rs"]
+mod marker_shapes;
 
 use std::fmt::Debug;
 use std::fs;
@@ -541,6 +562,20 @@ image!(include::Inputs { a: i32, b: i32 });
 image!(include::Outputs { v: i32 });
 image!(accents::Inputs { a: i32, b: i32 });
 image!(accents::Outputs { v: i32 });
+image!(root::Inputs { a: u8, on: bool });
+image!(root::Outputs { x: u8, y: u8, q: bool, k: u8, f: u8, h: u8, c: u8 });
+image!(char_arg::Inputs { a: u8 });
+image!(char_arg::Outputs { x: u8, y: u8 });
+image!(deep::Inputs { a: u8 });
+image!(deep::Outputs { x: u8, y: u8, t: u8, h: u8 });
+image!(noopt::Inputs { a: u8 });
+image!(noopt::Outputs { v: u8 });
+image!(state::Inputs { a: u8 });
+image!(state::Outputs { v: u8, w: u8 });
+image!(marker::Inputs { a: u8 });
+image!(marker::Outputs { x: u8, y: u8 });
+image!(marker_shapes::Inputs { a: u8 });
+image!(marker_shapes::Outputs { x: u8, y: u8 });
 
 // Inputs drawn from a scan's index, the same for the native program and its lowered twin.
 
@@ -2090,4 +2125,210 @@ fn a_program_built_as_a_staticlib_is_lowered() {
     let out = driver(&args);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(file.exists(), "a staticlib is a library: lowered");
+}
+
+// The ninth refute round's tests: names at the crate's root and by the crate's name, a `char` const argument by its
+// value, types of one name reached deep in other types and as marker types the file does not hold (and, with the
+// answer, every shape a name shows of such markers), a program's own `Option` in a file holding no `Option` of
+// core's, and a state named apart naming its entries.
+
+/// The names that occur more than once among `names`, core's `Option` aside (one name for every payload, by design).
+fn repeated<'a>(names: &[&'a str]) -> Vec<&'a str> {
+    let mut seen = std::collections::HashMap::new();
+    for n in names.iter().filter(|n| **n != "Option") {
+        *seen.entry(*n).or_insert(0) += 1;
+    }
+    let mut out: Vec<&str> = seen.into_iter().filter(|(_, c)| *c > 1).map(|(n, _)| n).collect();
+    out.sort_unstable();
+    out
+}
+
+#[test]
+fn root_names() {
+    // the root's `Option` and `timers::Ton` by the crate's name beside core's and orcl-std's, the root's `Timer` by
+    // its path beside `fast::Timer`, the two traits `Tr` by theirs
+    let (_, code) = lower_in("root-names", "root", &program("root")).result.unwrap_or_else(|e| panic!("{e}"));
+    let types = type_names(&code);
+    let functions = function_names(&code);
+    assert_eq!(repeated(&types), Vec::<&str>::new(), "types named alike: {types:?}");
+    assert_eq!(repeated(&functions), Vec::<&str>::new(), "functions named alike: {functions:?}");
+    for t in [
+        "root::Option",
+        "Timer",
+        "fast::Timer",
+        "root::timers::Ton",
+        "orcl_std::timers::Ton",
+        "Hold<Timer>",
+        "Hold<fast::Timer>",
+    ] {
+        assert!(types.contains(&t), "{t} among {types:?}");
+    }
+    let options = code.types.iter().filter(|t| matches!(t, Type::Enum { name, .. } if name == "Option"));
+    let firsts: Vec<Option<&str>> = options
+        .map(|t| match t {
+            Type::Enum { variants, .. } => variants.first().map(|v| v.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(firsts.iter().all(|v| *v == Some("None")), "only core's named Option: {firsts:?}");
+    for f in [
+        "<Timer as a::Tr>::f",
+        "<Timer as b::Tr>::f",
+        "root::timers::Ton::scan",
+        "orcl_std::timers::Ton::scan",
+        "Hold::<Timer>::bump",
+        "Hold::<fast::Timer>::bump",
+        "<root::Option as Default>::default",
+    ] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
+}
+
+#[test]
+fn root_runs_as_natively() {
+    let inputs = |k: u64| root::Inputs { a: mix(k, 1) as u8, on: mix(k / 5, 2) % 4 != 0 };
+    let (outputs, _) = conform("root", root::QRoot::default(), "QRoot", &inputs, 600);
+    both(&outputs, "q", |o| o.q);
+    both(&outputs, "c zero", |o| o.c == 0);
+}
+
+/// A defect of the ninth round: two instances of a structure generic over a `char` const parameter were named alike,
+/// `Tag<?>`, where the functions show `Tag::<'a'>` and `Tag::<'b'>`; a `char` argument is named by its value.
+#[test]
+fn char_const_arguments_are_named_by_their_values() {
+    let (_, code) = lower_in("char-names", "char_arg", &program("char_arg")).result.unwrap_or_else(|e| panic!("{e}"));
+    let types = type_names(&code);
+    let functions = function_names(&code);
+    assert_eq!(repeated(&functions), Vec::<&str>::new(), "functions named alike: {functions:?}");
+    assert!(types.contains(&"Tag<'a'>") && types.contains(&"Tag<'b'>"), "{types:?}");
+}
+
+#[test]
+fn char_runs_as_natively() {
+    let inputs = |k: u64| char_arg::Inputs { a: mix(k, 1) as u8 };
+    let (outputs, _) = conform("char_arg", char_arg::QChar::default(), "QChar", &inputs, 200);
+    both(&outputs, "x even", |o| o.x % 2 == 0);
+}
+
+#[test]
+fn deep_names() {
+    // tuples of each `Timer`, a generic of a generic of each, and a generic at each float, named apart
+    let (_, code) = lower_in("deep-names", "deep", &program("deep")).result.unwrap_or_else(|e| panic!("{e}"));
+    let types = type_names(&code);
+    let functions = function_names(&code);
+    assert_eq!(repeated(&types), Vec::<&str>::new(), "types named alike: {types:?}");
+    for t in [
+        "(fast::Timer, u8)",
+        "(slow::Timer, u8)",
+        "Hold<Hold<fast::Timer>>",
+        "Hold<Hold<slow::Timer>>",
+        "Hold<f32>",
+        "Hold<f64>",
+    ] {
+        assert!(types.contains(&t), "{t} among {types:?}");
+    }
+    for f in [
+        "<Hold<Hold<fast::Timer>> as Default>::default",
+        "<Hold<Hold<slow::Timer>> as Default>::default",
+        "pick::<(fast::Timer, u8)>",
+        "pick::<(slow::Timer, u8)>",
+    ] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
+}
+
+/// A defect of the ninth round: a generic function at an array of each of two types of one name, the array in no
+/// local, was named alike for both, `tag::<[Timer; 2]>`, the element shown by rustc's trimmed name and not the
+/// file's; it shows the element as the file names it.
+#[test]
+fn a_generic_at_arrays_of_types_of_one_name_is_named_apart() {
+    let (_, code) = lower_in("deep-apart", "deep", &program("deep")).result.unwrap_or_else(|e| panic!("{e}"));
+    let functions = function_names(&code);
+    assert_eq!(repeated(&functions), Vec::<&str>::new(), "functions named alike: {functions:?}");
+    for f in ["tag::<[fast::Timer; 2]>", "tag::<[slow::Timer; 2]>"] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
+}
+
+#[test]
+fn deep_runs_as_natively() {
+    let inputs = |k: u64| deep::Inputs { a: mix(k, 1) as u8 };
+    let (outputs, _) = conform("deep", deep::QDeep::default(), "QDeep", &inputs, 200);
+    both(&outputs, "x even", |o| o.x % 2 == 0);
+}
+
+#[test]
+fn noopt_names() {
+    // core's `Option` is counted though the file holds none: the program's own is named by its path
+    let (_, code) = lower_in("noopt-names", "noopt", &program("noopt")).result.unwrap_or_else(|e| panic!("{e}"));
+    let types = type_names(&code);
+    assert!(types.contains(&"mine::Option") && !types.contains(&"Option"), "{types:?}");
+}
+
+#[test]
+fn noopt_runs_as_natively() {
+    let inputs = |k: u64| noopt::Inputs { a: mix(k, 1) as u8 };
+    let (outputs, _) = conform("noopt", noopt::QNoopt::default(), "QNoopt", &inputs, 200);
+    both(&outputs, "v zero", |o| o.v == 0);
+}
+
+#[test]
+fn state_named_apart_runs_as_natively_and_names_its_entries() {
+    // `conform` asserts the entries by the state's name as the file gives it
+    let inputs = |k: u64| state::Inputs { a: mix(k, 1) as u8 };
+    let (outputs, _) = conform("state", state::Plant::default(), "line::Plant", &inputs, 200);
+    both(&outputs, "v even", |o| o.v % 2 == 0);
+    let (_, code) = lower_in("state-names", "state", &program("state")).result.unwrap_or_else(|e| panic!("{e}"));
+    let types = type_names(&code);
+    assert!(types.contains(&"line::Plant") && types.contains(&"other::Plant"), "{types:?}");
+}
+
+#[test]
+fn marker_runs_as_natively() {
+    let inputs = |k: u64| marker::Inputs { a: mix(k, 1) as u8 };
+    let (outputs, _) = conform("marker", marker::QMarker, "QMarker", &inputs, 200);
+    both(&outputs, "x even", |o| o.x % 2 == 0);
+}
+
+/// A defect of the ninth round: a generic function at two marker types of one name, which the file does not hold,
+/// was named alike for both, `rate::<Marker>`; the types a name shows count among the items named apart, so each
+/// instance shows its marker by its path.
+#[test]
+fn a_generic_at_markers_of_one_name_is_named_apart() {
+    let (_, code) = lower_in("marker-names", "marker", &program("marker")).result.unwrap_or_else(|e| panic!("{e}"));
+    let functions = function_names(&code);
+    assert_eq!(repeated(&functions), Vec::<&str>::new(), "functions named alike: {functions:?}");
+    for f in ["rate::<a::Marker>", "rate::<b::Marker>"] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
+}
+
+#[test]
+fn a_generic_at_shapes_of_markers_of_one_name_is_named_apart() {
+    // each shape a name shows made of its parts as the file names them, core's `PhantomData` among them, and the
+    // program's own `PhantomData` named by its path beside core's, which a name shows
+    let source = program("marker_shapes");
+    let (_, code) = lower_in("shapes-names", "marker_shapes", &source).result.unwrap_or_else(|e| panic!("{e}"));
+    let functions = function_names(&code);
+    assert_eq!(repeated(&functions), Vec::<&str>::new(), "functions named alike: {functions:?}");
+    for m in ["a", "b"] {
+        for f in [
+            format!("rate::<&{m}::Marker>"),
+            format!("rate::<({m}::Marker, u8)>"),
+            format!("rate::<[{m}::Marker]>"),
+            format!("rate::<*const {m}::Marker>"),
+            format!("rate::<PhantomData<{m}::Marker>>"),
+        ] {
+            assert!(functions.contains(&f.as_str()), "{f} among {functions:?}");
+        }
+    }
+    let types = type_names(&code);
+    assert!(types.contains(&"mine::PhantomData") && !types.contains(&"PhantomData"), "{types:?}");
+}
+
+#[test]
+fn marker_shapes_run_as_natively() {
+    let inputs = |k: u64| marker_shapes::Inputs { a: mix(k, 1) as u8 };
+    let (outputs, _) = conform("marker_shapes", marker_shapes::QShapes::default(), "QShapes", &inputs, 200);
+    both(&outputs, "x even", |o| o.x % 2 == 0);
 }

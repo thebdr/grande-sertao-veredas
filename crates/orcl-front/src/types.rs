@@ -283,11 +283,16 @@ impl Lowerer<'_> {
 }
 
 /// A const generic argument's value as a type's name shows it: a `bool`, a signed or an unsigned integer read from its
-/// bytes by its type, a `usize` evaluated, `?` for what is none of these.
+/// bytes by its type, a `char` quoted as rustc shows it (`'a'`), a `usize` evaluated, `?` for what is none of these.
 pub(crate) fn const_name(c: &TyConst) -> String {
     if let TyConstKind::Value(ty, alloc) = c.kind() {
         let value = match ty.kind() {
             TyKind::RigidTy(RigidTy::Bool) => alloc.read_bool().map(|b| b.to_string()).ok(),
+            // quoted and escaped as rustc prints a `char` constant, so a type's name and its functions' agree
+            TyKind::RigidTy(RigidTy::Char) => {
+                let value = alloc.read_uint().ok().and_then(|v| u32::try_from(v).ok());
+                value.and_then(char::from_u32).map(|c| format!("{c:?}"))
+            }
             // read as unsigned and sign-extended from the constant's own width: `read_int` gives `-1000` as
             // `4294966296` for an `i32`
             TyKind::RigidTy(RigidTy::Int(_)) => alloc.read_uint().map(|v| sign_extended(v, alloc.bytes.len()).to_string()).ok(),

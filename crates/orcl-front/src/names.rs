@@ -3,10 +3,13 @@
 //! unless two distinct items the file holds would share one. Then each of those is named by its path from its crate's
 //! root (`fast::Timer` and `slow::Timer`, `fast::step` and `slow::step`; `orcl-std`'s `timers::Ton` beside a program's
 //! own `Ton`), and by its crate's name and that path where two paths still meet; a function shows the types it names
-//! as the file names them (`<fast::Timer as Default>::default`, `fast::Timer::bump`, `pass::<fast::Timer>`). Core's
+//! as the file names them, inside arrays, tuples and references too (`<fast::Timer as Default>::default`,
+//! `fast::Timer::bump`, `pass::<fast::Timer>`, `tag::<[fast::Timer; 2]>`). The types a function's name shows count
+//! among the items whose names meet though the file holds no value of them, so two instances of a generic at marker
+//! types of one name are named apart by the markers' paths (`rate::<a::Marker>`, `rate::<b::Marker>`). Core's
 //! `Option` and `Duration` keep their names, `Option` the one the interpreter looks for: a structure or an enum of the
 //! program's crates named `Option` is always named by its path (`mine::Option`; one at the crate's root by the
-//! crate's name, `edge::Option`), and one named `Duration` too where the file holds core's.
+//! crate's name, `edge::Option`), and one named `Duration` too where the file holds core's or a name shows it.
 use std::collections::{HashMap, HashSet};
 
 use orcl_interp::{Type, TypeId};
@@ -15,8 +18,10 @@ use rustc_middle::ty::{self as rty, GenericArg, GenericArgKind, TypingEnv};
 use rustc_public::CrateDef;
 use rustc_public::mir::mono::Instance;
 use rustc_public::rustc_internal;
+use rustc_public::ty::{RigidTy, TyKind};
 use rustc_span::def_id::DefId;
 
+use crate::defs::Defs;
 use crate::lower::{Lowerer, entry_names};
 use crate::types::{Key, const_name};
 
@@ -24,12 +29,13 @@ use crate::types::{Key, const_name};
 /// alone, none the trimmed name.
 const CRATE: u8 = 2;
 
-/// An item a structure's or an enum's name stands for: a definition of the program's crates, or one of core's two
-/// whose names are fixed.
+/// An item a structure's or an enum's name stands for: a definition of the program's crates, one of core's two whose
+/// names are fixed, or another of core's a function's name shows (`PhantomData`), by its trimmed name.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Item {
     Adt(DefId),
     Fixed(&'static str),
+    Foreign(DefId),
 }
 
 /// What a function's name shows of its parent: nothing (a free function), its inherent impl's own type, or the trait
@@ -64,9 +70,10 @@ impl<'tcx> Lowerer<'tcx> {
         if level >= CRATE { format!("{}::{path}", tcx.crate_name(def.krate)) } else { path }
     }
 
-    /// The structures and enums named past their trimmed names, and how far: each of two distinct items the file
-    /// holds whose names meet, core's `Option` counted always (the interpreter knows it by that name) and core's
-    /// `Duration` where the file holds it, a step further until no two meet.
+    /// The structures and enums named past their trimmed names, and how far: each of two distinct items whose names
+    /// meet, the file's own and those a function's name shows (a marker type, an array's element), core's `Option`
+    /// counted always (the interpreter knows it by that name) and core's `Duration` where the file holds it or a name
+    /// shows it, a step further until no two meet.
     fn type_levels(&self) -> HashMap<DefId, u8> {
         let mut items = HashSet::from([Item::Fixed("Option")]);
         for key in self.keys.keys() {
@@ -80,6 +87,25 @@ impl<'tcx> Lowerer<'tcx> {
                 _ => {}
             }
         }
+        let tcx = self.defs.tcx;
+        for instance in self.instances.keys() {
+            let Some((own_args, shape)) = self.shown(rustc_internal::internal(tcx, *instance)) else { continue };
+            for arg in shown_args(own_args, &shape).iter().flat_map(|a| a.walk()) {
+                if let GenericArgKind::Type(t) = arg.kind()
+                    && let TyKind::RigidTy(RigidTy::Adt(def, _)) = rustc_internal::stable(t).kind()
+                {
+                    items.insert(if self.defs.is_option(def) {
+                        Item::Fixed("Option")
+                    } else if self.defs.is_duration(def) {
+                        Item::Fixed("Duration")
+                    } else if Defs::program_crate(&def.krate()) {
+                        Item::Adt(rustc_internal::internal(tcx, def.def_id()))
+                    } else {
+                        Item::Foreign(rustc_internal::internal(tcx, def.def_id()))
+                    });
+                }
+            }
+        }
         let mut levels: HashMap<DefId, u8> = HashMap::new();
         loop {
             let mut named: HashMap<String, Vec<Item>> = HashMap::new();
@@ -87,6 +113,7 @@ impl<'tcx> Lowerer<'tcx> {
                 let name = match item {
                     Item::Adt(def) => self.qualified(*def, levels.get(def).copied().unwrap_or(0)),
                     Item::Fixed(name) => (*name).to_string(),
+                    Item::Foreign(def) => self.qualified(*def, 0),
                 };
                 named.entry(name).or_default().push(*item);
             }
@@ -193,25 +220,8 @@ impl<'tcx> Lowerer<'tcx> {
         let tcx = self.defs.tcx;
         let instance: rty::Instance<'tcx> = rustc_internal::internal(tcx, instance);
         let def = instance.def_id();
-        let args = instance.args;
-        let env = TypingEnv::fully_monomorphized();
-        let parents = tcx.mk_args(args.as_slice().get(..tcx.generics_of(def).parent_count)?);
-        let shape = if let Some(imp) = tcx.trait_impl_of_assoc(def) {
-            Shape::Trait(tcx.try_instantiate_and_normalize_erasing_regions(parents, env, tcx.impl_trait_ref(imp)).ok()?)
-        } else if let Some(imp) = tcx.inherent_impl_of_assoc(def) {
-            Shape::Inherent(tcx.try_instantiate_and_normalize_erasing_regions(parents, env, tcx.type_of(imp)).ok()?)
-        } else if let Some(tr) = tcx.trait_of_assoc(def) {
-            Shape::Trait(rty::TraitRef::new_from_args(tcx, tr, parents))
-        } else {
-            Shape::Free
-        };
-        let own_args = tcx.generics_of(def).own_args_no_defaults(tcx, args.as_slice());
-        let mut shown: Vec<GenericArg<'tcx>> = own_args.to_vec();
-        match &shape {
-            Shape::Free => {}
-            Shape::Inherent(ty) => shown.push((*ty).into()),
-            Shape::Trait(tr) => shown.extend(tr.args.iter()),
-        }
+        let (own_args, shape) = self.shown(instance)?;
+        let shown = shown_args(own_args, &shape);
         let renamed = shown.iter().flat_map(|a| a.walk()).any(|a| match a.kind() {
             GenericArgKind::Type(t) => matches!(t.kind(), rty::Adt(adt, _) if levels.contains_key(&adt.did())),
             _ => false,
@@ -234,6 +244,26 @@ impl<'tcx> Lowerer<'tcx> {
         })
     }
 
+    /// What a function's name shows besides its own path: its own generic arguments (its defaults aside) and its
+    /// parent's shape at the instance's types; `None` where those types cannot be made.
+    fn shown(&self, instance: rty::Instance<'tcx>) -> Option<(&'tcx [GenericArg<'tcx>], Shape<'tcx>)> {
+        let tcx = self.defs.tcx;
+        let def = instance.def_id();
+        let args = instance.args.as_tcx_slice();
+        let env = TypingEnv::fully_monomorphized();
+        let parents = tcx.mk_args(args.get(..tcx.generics_of(def).parent_count)?);
+        let shape = if let Some(imp) = tcx.trait_impl_of_assoc(def) {
+            Shape::Trait(tcx.try_instantiate_and_normalize_erasing_regions(parents, env, tcx.impl_trait_ref(imp)).ok()?)
+        } else if let Some(imp) = tcx.inherent_impl_of_assoc(def) {
+            Shape::Inherent(tcx.try_instantiate_and_normalize_erasing_regions(parents, env, tcx.type_of(imp)).ok()?)
+        } else if let Some(tr) = tcx.trait_of_assoc(def) {
+            Shape::Trait(rty::TraitRef::new_from_args(tcx, tr, parents))
+        } else {
+            Shape::Free
+        };
+        Some((tcx.generics_of(def).own_args_no_defaults(tcx, args), shape))
+    }
+
     /// Generic arguments as a name shows them, its lifetimes aside; `None` for none.
     fn args_named(&self, args: &[GenericArg<'tcx>], levels: &HashMap<DefId, u8>) -> Option<String> {
         let names: Vec<String> = args
@@ -248,9 +278,12 @@ impl<'tcx> Lowerer<'tcx> {
     }
 
     /// A type as a function's name shows it: as the file names it, a structure or an enum of the program's crates
-    /// qualified at least to `floor`, its arguments after `::` where it heads a path (`Avg::<4>::push`); another type
-    /// the file does not hold as `rustc_public` trims it.
+    /// qualified at least to `floor`, its arguments after `::` where it heads a path (`Avg::<4>::push`); a type the
+    /// file does not hold made of its parts as the file names them (`[fast::Timer; 2]`, `(slow::Timer, u8)`,
+    /// `&fast::Timer`, a slice, a raw pointer, `PhantomData<a::Marker>`), core's structures and enums by their trimmed
+    /// names (none heads an inherent impl of the program's crates); anything else as `rustc_public` trims it.
     fn ty_named(&self, ty: rty::Ty<'tcx>, levels: &HashMap<DefId, u8>, floor: u8, head: bool) -> String {
+        let tcx = self.defs.tcx;
         if let rty::Adt(adt, args) = ty.kind()
             && self.defs.program_crate_num(adt.did().krate)
         {
@@ -264,7 +297,47 @@ impl<'tcx> Lowerer<'tcx> {
         if let Some(id) = self.memo.get(&rustc_internal::stable(ty)) {
             return self.name_of(*id);
         }
-        let _trimmed = ForceTrimmedGuard::new();
-        ty.to_string()
+        match ty.kind() {
+            rty::Array(element, len) => {
+                let len = len.try_to_target_usize(tcx).map_or_else(|| len.to_string(), |n| n.to_string());
+                format!("[{}; {len}]", self.ty_named(*element, levels, 0, false))
+            }
+            rty::Slice(element) => format!("[{}]", self.ty_named(*element, levels, 0, false)),
+            rty::Ref(_, to, mutability) => {
+                format!("&{}{}", mutability.prefix_str(), self.ty_named(*to, levels, 0, false))
+            }
+            rty::RawPtr(to, mutability) => {
+                format!("*{} {}", mutability.ptr_str(), self.ty_named(*to, levels, 0, false))
+            }
+            rty::Tuple(parts) => {
+                let names: Vec<String> = parts.iter().map(|t| self.ty_named(t, levels, 0, false)).collect();
+                match names.as_slice() {
+                    [one] => format!("({one},)"),
+                    _ => format!("({})", names.join(", ")),
+                }
+            }
+            rty::Adt(adt, args) => {
+                let base = self.qualified(adt.did(), 0);
+                match self.args_named(tcx.generics_of(adt.did()).own_args_no_defaults(tcx, args.as_slice()), levels) {
+                    Some(args) => format!("{base}<{args}>"),
+                    None => base,
+                }
+            }
+            _ => {
+                let _trimmed = ForceTrimmedGuard::new();
+                ty.to_string()
+            }
+        }
     }
+}
+
+/// The generic arguments a function's name shows: its own, then its inherent impl's own type or its trait's.
+fn shown_args<'tcx>(own_args: &[GenericArg<'tcx>], shape: &Shape<'tcx>) -> Vec<GenericArg<'tcx>> {
+    let mut shown: Vec<GenericArg<'tcx>> = own_args.to_vec();
+    match shape {
+        Shape::Free => {}
+        Shape::Inherent(ty) => shown.push((*ty).into()),
+        Shape::Trait(tr) => shown.extend(tr.args.iter()),
+    }
+    shown
 }
