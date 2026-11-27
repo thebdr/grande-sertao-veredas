@@ -5,8 +5,9 @@
 //! file, its first state and its safe outputs computed by calling its `Default` and its `safe_outputs` on a machine
 //! (as a host does until the file carries them, `docs/questions.md` Q231), and run on the engine of a scan beside
 //! its native build, each on its own virtual clock: every scan's report and every write compared, over thousands of
-//! scans with varied inputs, and its instruction count recorded. Each refusal is met by a program that triggers it,
-//! its name and its location asserted exactly, and no file written.
+//! scans with varied inputs, and its instruction count recorded (the conveyor's and the probe's asserted as the
+//! verification records them). Each refusal is met by a program that triggers it, its name and its location asserted
+//! exactly, and no file written.
 //!
 //! Run by the pinned nightly alone: `cargo +nightly-2026-11-21 test -p orcl-front --features driver --test lowering`.
 
@@ -37,11 +38,17 @@ mod faults;
 #[path = "programs/lines.rs"]
 mod lines;
 #[allow(dead_code)]
+#[path = "programs/more.rs"]
+mod more;
+#[allow(dead_code)]
 #[path = "programs/niches.rs"]
 mod niches;
 #[allow(dead_code)]
 #[path = "programs/order.rs"]
 mod order;
+#[allow(dead_code)]
+#[path = "programs/own_trait.rs"]
+mod own_trait;
 #[allow(dead_code)]
 #[path = "programs/p_names.rs"]
 mod p_names;
@@ -60,6 +67,9 @@ mod padded;
 #[allow(dead_code)]
 #[path = "programs/probe.rs"]
 mod probe;
+#[allow(dead_code)]
+#[path = "programs/refs.rs"]
+mod refs;
 #[allow(dead_code)]
 #[path = "programs/shapes.rs"]
 mod shapes;
@@ -458,6 +468,16 @@ image!(p_names::Inputs { a: u16, sel: u8, t_ms: u64 });
 image!(p_names::Outputs { d_ms: u32, d_tag: u8, opt: u16, core_some: bool, core_val: u16, held: Duration });
 image!(p_wrap::Inputs { sel: u8 });
 image!(p_wrap::Outputs { v: u8 });
+image!(more::Inputs { a: i16, b: u8, x: f32, y: f64, sel: u8 });
+image!(more::Outputs {
+    mention: u8, unnamed: u8, fact: u32, bumped: u16, setpoint: Duration, setv: u16, skipped: u8, tagged: u8,
+    const_tag: u16, to_u8: u8, to_i32: i32, big_f32: f32, narrowed: f32, below_zero: bool, is_zero: bool, sar: i16,
+    forever: Duration, far: Duration, self_lt: bool, self_ne: bool, oob: u8, grid: u16, updated: u8,
+});
+image!(refs::Inputs { a: u8, b: u8, on: bool });
+image!(refs::Outputs { counted: u8, swapped: u16, inner: u8, ret: u16, since: Duration, by_ref: u8, timers: u8, cfg: u16 });
+image!(own_trait::Inputs { a: u8 });
+image!(own_trait::Outputs { v: u8 });
 
 // Inputs drawn from a scan's index, the same for the native program and its lowered twin.
 
@@ -536,8 +556,8 @@ fn safe_outputs<O: Image>(code: &Code, state_ty: TypeId, state: &[Scalar]) -> O 
 
 /// Runs `name` natively and lowered on the engine for `scans` scans of `inputs`, every report and write alike, and
 /// scans that overran and deadlines skipped among them. The native program's outputs, scan by scan, are returned for
-/// the test to say the run reached what it is to prove.
-fn conform<P, I, O>(name: &str, native: P, state_name: &str, inputs: &dyn Fn(u64) -> I, scans: u64) -> Vec<O>
+/// the test to say the run reached what it is to prove, with the instructions the lowered program took in all.
+fn conform<P, I, O>(name: &str, native: P, state_name: &str, inputs: &dyn Fn(u64) -> I, scans: u64) -> (Vec<O>, u64)
 where
     P: Program<Inputs = I, Outputs = O>,
     I: Image + Debug,
@@ -587,7 +607,7 @@ where
     let record = format!("{name}: {scans} scans alike, {instructions} instructions in all, {most} at most in one scan\n");
     print!("{record}");
     fs::write(lowered.file.with_extension("instructions"), record).unwrap();
-    native_feed.writes.into_iter().map(|(_, o)| o).collect()
+    (native_feed.writes.into_iter().map(|(_, o)| o).collect(), instructions)
 }
 
 /// Asserts that a run's outputs held `what` true on some scan and false on another.
@@ -610,13 +630,19 @@ fn the_conveyor_runs_lowered_as_it_runs_natively() {
             part_at_end: mix(k / 3, 5) % 9 == 0,
         }
     };
-    let outputs = conform("conveyor", conveyor::Conveyor::default(), "Conveyor", &inputs, 6_000);
+    let (outputs, instructions) = conform("conveyor", conveyor::Conveyor::default(), "Conveyor", &inputs, 6_000);
     both(&outputs, "the motor", |o| o.motor_on);
     both(&outputs, "the door's alarm", |o| o.door_alarm);
     both(&outputs, "the running lamp", |o| o.lamp_running);
     both(&outputs, "the fault lamp", |o| o.lamp_fault);
     assert!(outputs.iter().map(|o| o.parts).max() >= Some(10), "parts counted");
+    assert_eq!(instructions, INSTRUCTIONS_CONVEYOR, "the conveyor's instructions, as the verification records them");
 }
+
+// The instructions the verification records (C-156), every crate compiled at MIR opt-level 0: a change to the
+// program, to `orcl-std`, to the lowering or to the nightly moves them, and the clause's figure moves with them.
+const INSTRUCTIONS_CONVEYOR: u64 = 998_579;
+const INSTRUCTIONS_PROBE: u64 = 2_539_645;
 
 #[test]
 fn the_probe_of_every_block_of_orcl_std_runs_lowered_as_it_runs_natively() {
@@ -633,7 +659,7 @@ fn the_probe_of_every_block_of_orcl_std_runs_lowered_as_it_runs_natively() {
         w32: mix(k, 10) as u32,
         w64: mix(k, 11),
     };
-    let outputs = conform("probe", probe::Probe::default(), "Probe", &inputs, 6_000);
+    let (outputs, instructions) = conform("probe", probe::Probe::default(), "Probe", &inputs, 6_000);
     both(&outputs, "the on-delay", |o| o.ton);
     both(&outputs, "the off-delay", |o| o.tof);
     both(&outputs, "the pulse", |o| o.tp);
@@ -647,6 +673,7 @@ fn the_probe_of_every_block_of_orcl_std_runs_lowered_as_it_runs_natively() {
     both(&outputs, "a bit of a u8", |o| o.get8);
     both(&outputs, "a bit of a u64", |o| o.get64);
     both(&outputs, "a bit written into a u16", |o| o.set16 != 0);
+    assert_eq!(instructions, INSTRUCTIONS_PROBE, "the probe's instructions, as the verification records them");
 }
 
 fn arith_inputs(k: u64) -> arith::Inputs {
@@ -668,7 +695,7 @@ fn arith_inputs(k: u64) -> arith::Inputs {
 
 #[test]
 fn arithmetic_bits_comparisons_and_casts_run_lowered_as_they_run_natively() {
-    let outputs = conform("arith", arith::Arith::default(), "Arith", &arith_inputs, 4_000);
+    let (outputs, _) = conform("arith", arith::Arith::default(), "Arith", &arith_inputs, 4_000);
     both(&outputs, "a < b", |o| o.less);
     both(&outputs, "a shift left within the width", |o| o.shl_ok);
     both(&outputs, "a shift right past the width", |o| o.shr_ok);
@@ -687,7 +714,7 @@ fn enums_arrays_options_tuples_references_durations_and_constants_run_lowered_as
         flag: mix(k, 4) % 3 == 0,
         t_ms: mix(k, 5) % 2_000,
     };
-    let outputs = conform("shapes", shapes::Shapes::default(), "Shapes", &inputs, 4_000);
+    let (outputs, _) = conform("shapes", shapes::Shapes::default(), "Shapes", &inputs, 4_000);
     both(&outputs, "the mode off", |o| o.mode == shapes::Mode::Off);
     both(&outputs, "the mode held", |o| matches!(o.mode, shapes::Mode::Hold(_)));
     both(&outputs, "the mode running forward", |o| o.forward);
@@ -713,7 +740,7 @@ fn comparisons_at_their_edges_signed_matches_and_constants_of_every_layout_run_l
         n: mix(k, 3) as u8,
         flag: mix(k, 4) % 2 == 0,
     };
-    let outputs = conform("edges", edges::Edges::default(), "Edges", &inputs, 2_000);
+    let (outputs, _) = conform("edges", edges::Edges::default(), "Edges", &inputs, 2_000);
     both(&outputs, "a > b", |o| o.gt);
     both(&outputs, "a <= b", |o| o.le);
     both(&outputs, "a == b", |o| o.eq);
@@ -742,7 +769,7 @@ fn ordinary_control_code_runs_lowered_as_natively() {
         off: mix(k, 5) % 3 == 0,
         t_ms: mix(k, 6) % 3_000,
     };
-    let outputs = conform("sound", sound::Sound::default(), "Sound", &inputs, 3_000);
+    let (outputs, _) = conform("sound", sound::Sound::default(), "Sound", &inputs, 3_000);
     for v in 1..=4 {
         both(&outputs, &format!("the guard's arm {v}"), |o| o.guard == v);
         both(&outputs, &format!("the tuple's arm {v}"), |o| o.tuple_match == v);
@@ -790,14 +817,14 @@ fn constants_of_no_byte_hold_a_one_variant_enum_s_discriminant_and_run_lowered_a
     assert_eq!(sizes, [1, 2, 3], "an enum, a structure and a tuple of two, an array of three: {constants:?}");
     assert!(constants.iter().any(|c| c.ty.0 as usize == only), "the enum's own constant");
     let inputs = |k: u64| zst_const::Inputs { a: mix(k, 1) as u8 };
-    let outputs = conform("zst_const", zst_const::ZstConst::default(), "ZstConst", &inputs, 200);
+    let (outputs, _) = conform("zst_const", zst_const::ZstConst::default(), "ZstConst", &inputs, 200);
     both(&outputs, "an odd sum", |o| o.v % 2 == 1);
 }
 
 #[test]
 fn a_promoted_reference_to_a_fieldless_enum_runs_lowered_as_natively() {
     let inputs = |k: u64| zst_ref::Inputs { a: mix(k, 1) as u8 };
-    let outputs = conform("zst_ref", zst_ref::ZstRef::default(), "ZstRef", &inputs, 200);
+    let (outputs, _) = conform("zst_ref", zst_ref::ZstRef::default(), "ZstRef", &inputs, 200);
     both(&outputs, "an odd sum", |o| o.v % 2 == 1);
 }
 
@@ -805,14 +832,14 @@ fn a_promoted_reference_to_a_fieldless_enum_runs_lowered_as_natively() {
 fn two_instances_of_a_const_generic_block_run_lowered_as_natively() {
     // `Avg<4>` and `Avg<8>`: two types, of four and eight elements, one generic code
     let inputs = |k: u64| cgen::Inputs { v: (mix(k, 1) % 1_000) as u16 };
-    let outputs = conform("cgen", cgen::Cgen::default(), "Cgen", &inputs, 400);
+    let (outputs, _) = conform("cgen", cgen::Cgen::default(), "Cgen", &inputs, 400);
     both(&outputs, "the two averages apart", |o| o.short != o.long);
 }
 
 #[test]
 fn a_place_behind_two_references_runs_lowered_as_natively() {
     let inputs = |k: u64| deref2::Inputs { a: mix(k, 1) as u8 };
-    let outputs = conform("deref2", deref2::Deref2::default(), "Deref2", &inputs, 200);
+    let (outputs, _) = conform("deref2", deref2::Deref2::default(), "Deref2", &inputs, 200);
     both(&outputs, "a value of four times an even input", |o| o.v % 8 == 0);
 }
 
@@ -820,7 +847,7 @@ fn a_place_behind_two_references_runs_lowered_as_natively() {
 fn constants_whose_fields_rustc_reorders_run_lowered_as_natively() {
     // each field of a `(u8, u16, bool)` and of a `{ u8, u32, u16 }` read on its own, not summed
     let inputs = |k: u64| order::Inputs { sel: (mix(k, 1) % 8) as u8 };
-    let outputs = conform("order", order::Order::default(), "Order", &inputs, 200);
+    let (outputs, _) = conform("order", order::Order::default(), "Order", &inputs, 200);
     assert!(outputs.iter().all(|o| (o.p1, o.a, o.b, o.c) == (300, 9, 70_000, 513)));
     both(&outputs, "the tuple's bool", |o| o.p2);
 }
@@ -829,7 +856,7 @@ fn constants_whose_fields_rustc_reorders_run_lowered_as_natively() {
 fn constant_enums_padded_past_an_array_or_a_tuple_run_lowered_as_natively() {
     // the slots an enum's smaller variant leaves unwritten count its largest variant's array or tuple whole
     let inputs = |k: u64| padded::Inputs { sel: mix(k, 1) as u8 };
-    let outputs = conform("padded", padded::Padded::default(), "Padded", &inputs, 200);
+    let (outputs, _) = conform("padded", padded::Padded::default(), "Padded", &inputs, 200);
     both(&outputs, "the idle command", |o| o.cmd == 1);
     both(&outputs, "the pair", |o| o.pair == 515);
     both(&outputs, "the recipe", |o| o.recipe == 100);
@@ -838,7 +865,7 @@ fn constant_enums_padded_past_an_array_or_a_tuple_run_lowered_as_natively() {
 #[test]
 fn constants_in_a_duration_s_niche_and_a_signed_enum_s_run_lowered_as_natively() {
     let inputs = |k: u64| niches::Inputs { sel: mix(k, 1) as u8 };
-    let outputs = conform("niches", niches::Niches::default(), "Niches", &inputs, 200);
+    let (outputs, _) = conform("niches", niches::Niches::default(), "Niches", &inputs, 200);
     both(&outputs, "a time held", |o| o.has && o.held == Duration::from_millis(1_500));
     both(&outputs, "back", |o| o.dir == -1);
     both(&outputs, "none", |o| o.dir == 9);
@@ -862,7 +889,7 @@ fn repr_enums_wide_constants_and_edge_switches_run_lowered_as_natively() {
         c: [-128i8, -1, 127, 0, 5][(mix(k, 3) % 5) as usize],
         d: [255u16, 128, 0, 256, 511, 7][(mix(k, 4) % 6) as usize],
     };
-    let outputs = conform("p_repr", p_repr::PRepr::default(), "PRepr", &inputs, 600);
+    let (outputs, _) = conform("p_repr", p_repr::PRepr::default(), "PRepr", &inputs, 600);
     for v in 1..=4 {
         both(&outputs, &format!("big {v}"), |o| o.big_match == v);
         both(&outputs, &format!("sw8 {v}"), |o| o.sw8 == v);
@@ -885,7 +912,7 @@ fn traits_generics_casts_and_shifts_run_lowered_as_natively() {
         u32v: mix(k, 7) as u32,
         i16v: mix(k, 8) as i16,
     };
-    let outputs = conform("p_traits", p_traits::PTraits::default(), "PTraits", &inputs, 600);
+    let (outputs, _) = conform("p_traits", p_traits::PTraits::default(), "PTraits", &inputs, 600);
     both(&outputs, "p < q", |o| o.blt);
     both(&outputs, "let else", |o| o.got == 99);
 }
@@ -895,7 +922,7 @@ fn a_program_s_own_duration_and_option_run_lowered_as_natively() {
     // core's `Duration` and `Option` known by their definitions: a program's own of those names lowers as any
     // structure and enum of the program's
     let inputs = |k: u64| p_names::Inputs { a: mix(k, 1) as u16, sel: mix(k, 2) as u8, t_ms: mix(k, 3) % 3_000 };
-    let outputs = conform("p_names", p_names::PNames::default(), "PNames", &inputs, 400);
+    let (outputs, _) = conform("p_names", p_names::PNames::default(), "PNames", &inputs, 400);
     both(&outputs, "core's Option some", |o| o.core_some);
     both(&outputs, "the program's Option's pair", |o| o.opt == 209);
 }
@@ -903,10 +930,59 @@ fn a_program_s_own_duration_and_option_run_lowered_as_natively() {
 #[test]
 fn constants_of_a_niche_that_wraps_past_its_tag_s_top_run_lowered_as_natively() {
     let inputs = |k: u64| p_wrap::Inputs { sel: mix(k, 1) as u8 };
-    let outputs = conform("p_wrap", p_wrap::PWrap, "PWrap", &inputs, 200);
+    let (outputs, _) = conform("p_wrap", p_wrap::PWrap, "PWrap", &inputs, 200);
     for v in 1..=4 {
         both(&outputs, &format!("arm {v}"), |o| o.v == v);
     }
+}
+
+#[test]
+fn more_runs_lowered_as_natively() {
+    // floats at their edges (NaN, the infinities, -0.0, past f32's range), `Duration::MAX` and a constant past 2^32 s,
+    // a `repr(u8)` enum with data, constant enums padded past a structure, nested options in a bool's niche
+    let xs = [f32::NAN, 1.5, -0.0, f32::INFINITY, 3.0e38, -7.25, f32::NEG_INFINITY, 0.0];
+    let ys = [1.0e10, -2.5, 0.0, 1.0e-300, -1.0e9];
+    let inputs = |k: u64| more::Inputs {
+        a: mix(k, 1) as i16,
+        b: mix(k, 2) as u8,
+        x: xs[(mix(k, 3) % 8) as usize],
+        y: ys[(mix(k, 4) % 5) as usize],
+        sel: mix(k, 5) as u8,
+    };
+    let (outputs, _) = conform("more", more::More::default(), "More", &inputs, 600);
+    both(&outputs, "forever", |o| o.forever == Duration::MAX);
+    both(&outputs, "far", |o| o.far == Duration::from_secs(5_000_000_000));
+    both(&outputs, "a NaN unequal to itself", |o| o.self_ne);
+    both(&outputs, "an infinity narrowed", |o| o.narrowed.is_infinite());
+    both(&outputs, "a NaN cast to zero, an infinity saturated", |o| o.to_i32 == i32::MAX);
+    both(&outputs, "the setpoint run", |o| o.setv == 51);
+    both(&outputs, "the setpoint held", |o| o.setv == 5);
+    for v in 1..=4 {
+        both(&outputs, &format!("oob {v}"), |o| o.oob == v);
+    }
+    both(&outputs, "an arithmetic shift of a negative value", |o| o.sar < 0);
+}
+
+#[test]
+fn refs_runs_lowered_as_natively() {
+    // places behind references and in enums: a `ref mut` into an option, a block's method through an array
+    // element's field, a constant structure of options matched
+    let inputs = |k: u64| refs::Inputs { a: mix(k, 1) as u8, b: mix(k, 2) as u8, on: mix(k / 4, 3) % 3 != 0 };
+    let (outputs, _) = conform("refs", refs::Refs::default(), "Refs", &inputs, 1_000);
+    both(&outputs, "counted", |o| o.counted == 255);
+    both(&outputs, "a time held", |o| o.since > Duration::ZERO);
+    both(&outputs, "a station's timer", |o| o.timers > 0);
+    both(&outputs, "the held configuration", |o| o.cfg == 300);
+    both(&outputs, "the running configuration", |o| o.cfg == 410);
+}
+
+#[test]
+fn trait_runs_lowered_as_natively() {
+    // a trait of the program's own named `Program`, implemented beside orcl-std's: orcl-std's implementation alone
+    // is the program
+    let inputs = |k: u64| own_trait::Inputs { a: mix(k, 1) as u8 };
+    let (outputs, _) = conform("own_trait", own_trait::OwnTrait::default(), "OwnTrait", &inputs, 200);
+    both(&outputs, "odd", |o| o.v % 2 == 1);
 }
 
 #[test]
@@ -1019,6 +1095,37 @@ fn the_driver_reads_a_crate_name_given_with_an_equals_sign() {
     let out = driver(&args);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(file.exists(), "the program named by `--crate-name=` lowered");
+}
+
+#[test]
+fn the_driver_drops_a_wrapped_rustc_exe() {
+    // as `RUSTC_WRAPPER` of a compiler named `rustc.exe`, its path dropped as `/usr/bin/rustc`'s is
+    let work = fresh("wrapper-exe");
+    let w = work.display().to_string();
+    let std_src = here().join("../orcl-std/src/lib.rs").display().to_string();
+    let mut args = strings(&["/opt/x/bin/rustc.exe", "--crate-name", "orcl_std", "--crate-type", "rlib", "--edition", "2024"]);
+    args.extend(strings(&[&std_src, "--out-dir", &w]));
+    let out = driver(&args);
+    assert!(out.status.success(), "as the wrapper of rustc.exe: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(work.join("liborcl_std.rlib").exists(), "orcl-std compiled");
+}
+
+#[test]
+fn an_output_path_holding_an_equals_sign_is_written_whole() {
+    // `--orcl-out=<path>` cut at its first `=`, never its last
+    let work = fresh("out-equals");
+    compile_std(&work, &[]);
+    let w = work.display().to_string();
+    let dir = work.join("a=b");
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("lines.orclb");
+    let source = program("lines").display().to_string();
+    let mut args = strings(&["--crate-name", "lines", "--crate-type", "rlib", "--edition", "2024", &source]);
+    args.extend(strings(&["--extern", &format!("orcl_std={w}/liborcl_std.rlib"), "-L", &w, "--out-dir", &w]));
+    args.extend(strings(&["--orcl-program", "lines", &format!("--orcl-out={}", file.display()), "--orcl-revision", "eq"]));
+    let out = driver(&args);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(file.exists(), "the file at the path given");
 }
 
 #[test]
@@ -1218,7 +1325,7 @@ fn a_fault_in_a_program_s_second_file_names_that_file() {
     );
     // and the program runs as natively, its divisor never zero
     let inputs = |k: u64| twofile::Inputs { a: (mix(k, 1) % 1_000) as i32 - 500, b: (mix(k, 2) % 9) as i32 + 1 };
-    let outputs = conform("twofile", twofile::Twofile::default(), "Twofile", &inputs, 200);
+    let (outputs, _) = conform("twofile", twofile::Twofile::default(), "Twofile", &inputs, 200);
     both(&outputs, "a negative ratio", |o| o.v < 0);
 }
 
@@ -1324,6 +1431,11 @@ fn a_128_bit_integer_is_refused_where_the_program_declares_it() {
 }
 
 #[test]
+fn a_u128_is_refused_where_the_program_declares_it() {
+    refused("u128", &at("u128", "total: u128", TYPE, "u128"));
+}
+
+#[test]
 fn a_usize_variable_is_refused_where_the_program_declares_it() {
     refused("usize_variable", &at("usize_variable", "at: usize", TYPE, "usize"));
 }
@@ -1331,6 +1443,11 @@ fn a_usize_variable_is_refused_where_the_program_declares_it() {
 #[test]
 fn a_usize_parameter_is_refused_where_the_program_declares_it() {
     refused("usize_param", &at("usize_param", "at: usize", TYPE, "usize"));
+}
+
+#[test]
+fn an_unnamed_usize_parameter_is_refused() {
+    refused("unnamed", &at("unnamed", "_: usize", TYPE, "usize"));
 }
 
 #[test]
@@ -1389,6 +1506,13 @@ fn a_call_into_core_outside_the_list_is_refused_by_name_where_it_is_called() {
 }
 
 #[test]
+fn ne_on_a_program_s_own_enum_is_refused_by_its_full_name() {
+    // the trait's own arguments kept in the name
+    let words = "a call into core outside the list";
+    refused("ne", &at("ne", "(self.state != next)", words, "<State as PartialEq<State>>::ne"));
+}
+
+#[test]
 fn a_statement_the_interpreter_does_not_have_is_refused_where_it_stands() {
     refused(
         "statement",
@@ -1413,6 +1537,12 @@ fn an_array_repeated_past_what_the_front_end_builds_is_refused_where_it_stands()
 #[test]
 fn a_terminator_the_interpreter_does_not_have_is_refused_where_it_stands() {
     refused("terminator", &at("terminator", "core::arch::asm!", "a terminator the interpreter does not have", "InlineAsm"));
+}
+
+#[test]
+fn a_call_that_does_not_return_is_refused_where_it_is_called() {
+    let words = "a terminator the interpreter does not have";
+    refused("noret", &at("noret", "halt();", words, "a call that does not return"));
 }
 
 #[test]
