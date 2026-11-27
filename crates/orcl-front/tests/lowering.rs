@@ -97,6 +97,24 @@ mod grid;
 #[allow(dead_code)]
 #[path = "programs/corners.rs"]
 mod corners;
+#[allow(dead_code)]
+#[path = "programs/accents.rs"]
+mod accents;
+#[allow(dead_code)]
+#[path = "programs/large.rs"]
+mod large;
+#[allow(dead_code)]
+#[path = "programs/state_enum.rs"]
+mod state_enum;
+#[allow(dead_code)]
+#[path = "programs/mods.rs"]
+mod mods;
+#[allow(dead_code)]
+#[path = "programs/cgen2.rs"]
+mod cgen2;
+#[allow(dead_code)]
+#[path = "programs/table.rs"]
+mod table;
 
 use std::fmt::Debug;
 use std::fs;
@@ -502,6 +520,22 @@ image!(corners::Outputs {
     r16: u16, r32: i32, r16_match: u8, r32_match: u8, oi: i16, oi_some: bool, arr: u32, picked: u16, abc: u16,
     broke: Duration, cfg_t: Duration, cfg_a: u8, cfg_b: bool, cfg_c: i16,
 });
+
+
+image!(state_enum::Inputs { go: bool, stop: bool });
+image!(state_enum::Outputs { code: u8, ticks: u16, since: Duration });
+image!(mods::Inputs { a: u8 });
+image!(mods::Outputs { x: u8, y: u16 });
+image!(cgen2::Inputs { v: i16 });
+image!(cgen2::Outputs { inv: i16, plain: i16, off_a: i32, off_b: i32, scaled: u8 });
+image!(table::Inputs { recipe: u8, run: bool });
+image!(table::Outputs { temp: i16, done: bool, phase: u8, kind: u8, limit: u16, has_limit: bool });
+
+image!(large::Inputs { v: u16 });
+image!(large::Outputs { oldest: u16, at: u32 });
+
+image!(accents::Inputs { a: i32, b: i32 });
+image!(accents::Outputs { v: i32 });
 
 // Inputs drawn from a scan's index, the same for the native program and its lowered twin.
 
@@ -1772,4 +1806,107 @@ fn types_and_functions_keep_the_source_s_names() {
     for f in ["Door::scan", "RTrig::scan", "Ton::scan", "Ctu::scan", "ms", "s"] {
         assert!(functions.contains(&f), "{f} among {functions:?}");
     }
+}
+
+// The seventh refute round's tests: generic instances' and const arguments' names, a large state, programs of
+// modules, accented names, a state enum, a recipe table, and macros of std refused where the program calls them.
+
+#[test]
+fn a_state_enum_runs_lowered_as_natively() {
+    let inputs = |k: u64| state_enum::Inputs { go: mix(k, 1) % 7 == 0, stop: mix(k, 2) % 41 == 0 };
+    let (outputs, _) = conform("state_enum", state_enum::Machine::default(), "Machine", &inputs, 2_000);
+    both(&outputs, "running", |o| o.code == 1);
+    both(&outputs, "stopped", |o| o.code == 2);
+}
+
+#[test]
+fn modules_of_one_name_run_lowered_as_natively() {
+    let inputs = |k: u64| mods::Inputs { a: mix(k, 1) as u8 };
+    let (outputs, _) = conform("mods", mods::RMods::default(), "RMods", &inputs, 400);
+    both(&outputs, "y moved", |o| o.y > 0);
+}
+
+#[test]
+fn const_generics_of_other_types_run_lowered_as_natively() {
+    let inputs = |k: u64| cgen2::Inputs { v: mix(k, 1) as i16 };
+    let (outputs, _) = conform("cgen2", cgen2::RCgen2::default(), "RCgen2", &inputs, 400);
+    both(&outputs, "inverted negative", |o| o.inv < 0);
+}
+
+#[test]
+fn const_generics_of_other_types_keep_their_names() {
+    let (_, code) = lower_in("cgen2-names", "cgen2", &program("cgen2")).result.unwrap();
+    let names: Vec<&str> = code.types.iter().filter_map(|t| match t {
+        Type::Struct { name, .. } => Some(name.as_str()),
+        _ => None,
+    }).collect();
+    for n in ["Sign<true>", "Sign<false>", "Offset<-1000>", "Offset<70000>"] {
+        assert!(names.contains(&n), "{n} among {names:?}");
+    }
+}
+
+#[test]
+fn a_recipe_table_runs_lowered_as_natively() {
+    let inputs = |k: u64| table::Inputs { recipe: (mix(k / 50, 1) % 7) as u8, run: mix(k / 3, 2) % 5 != 0 };
+    let (outputs, _) = conform("table", table::RTable::default(), "RTable", &inputs, 2_000);
+    both(&outputs, "done", |o| o.done);
+    for p in 0..=3 {
+        both(&outputs, &format!("phase {p}"), |o| o.phase == p);
+    }
+    both(&outputs, "has limit", |o| o.has_limit);
+}
+
+/// A `Duration` matched against a constant pattern, which rustc lowers to a transmute of its nanoseconds inside core:
+/// refused by the kind of value at the program's `match` (the closed list does not hold it yet), no file written.
+#[test]
+fn a_duration_matched_against_a_constant_pattern_is_refused_at_the_match() {
+    refused("dur_match", &at("dur_match", "d {", "a value the interpreter does not have", "Cast(Transmute)"));
+}
+
+
+#[test]
+fn generic_function_instances_keep_their_names() {
+    // two instances of one generic function, each by its own arguments
+    let (_, code) = lower_in("instance-names", "cgen", &program("cgen")).result.unwrap();
+    let functions: Vec<&str> = code.functions.iter().map(|f| f.name.as_str()).collect();
+    for f in ["Avg::<4>::push", "Avg::<8>::push"] {
+        assert!(functions.contains(&f), "{f} among {functions:?}");
+    }
+}
+
+#[test]
+fn a_large_sound_state_is_lowered_and_loads() {
+    // 200 000 slots of state: past 2^16, well within the driver's check (2^24) and the run's limits (2^20)
+    // (its first state is built in `default`'s frame, past the run's 4096-slot stack, so it is lowered and loaded, not run)
+    let (_, code) = lower("large", &program("large")).result.unwrap_or_else(|e| panic!("large: {e}"));
+    let regions = regions(&code);
+    Machine::load(code, &[regions.state], Limits { stack: 1 << 19, memory: 1 << 22 }).unwrap();
+}
+
+#[test]
+fn std_s_macros_are_refused_where_the_program_calls_them() {
+    refused("println", &at("println", "println!(", TYPE, "std::fmt::Arguments<'_>"));
+    refused("vec", &at("vec", "v = vec![", TYPE, "std::vec::Vec<u8>"));
+}
+
+#[test]
+fn a_generic_over_options_keeps_its_arguments() {
+    let (_, code) = lower_in("option-args", "names", &program("names")).result.unwrap();
+    let names: Vec<&str> = code.types.iter().filter_map(|t| match t {
+        Type::Struct { name, .. } => Some(name.as_str()),
+        _ => None,
+    }).collect();
+    for n in ["Hold<Option<u8>>", "Hold<Option<u16>>"] {
+        assert!(names.contains(&n), "{n} among {names:?}");
+    }
+}
+
+#[test]
+fn a_fault_after_accented_names_names_its_column_in_characters() {
+    let source = program("accents");
+    let (_, code) = lower("accents", &source).result.unwrap_or_else(|e| panic!("{e}"));
+    let e = fault::<_, accents::Outputs>(&code, &accents::Inputs { a: 5, b: 0 });
+    let (line, column) = place_of(&source, "razão / pressão");
+    assert_eq!(e.kind, ErrorKind::Check(Check::DivisionByZero));
+    assert_eq!((e.at.line as usize, e.at.column as usize), (line, column), "the division's place");
 }

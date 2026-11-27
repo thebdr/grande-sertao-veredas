@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use orcl_interp::{Field, Int, Type, TypeId, Variant};
 use rustc_public::{CrateDef, CrateDefType};
 use rustc_public::mir::mono::Instance;
-use rustc_public::ty::{AdtDef, AdtKind, FloatTy, GenericArgKind, GenericArgs, RigidTy, Span, Ty, TyConst, TyKind};
+use rustc_public::ty::{AdtDef, AdtKind, FloatTy, GenericArgKind, GenericArgs, RigidTy, Span, Ty, TyConst, TyConstKind, TyKind};
 
 use crate::defs::{Defs, int_of, uint_of};
 use crate::error::{Refusal, Refused};
@@ -109,6 +109,13 @@ impl Lowerer<'_> {
             Some(Type::F32) => "f32".into(),
             Some(Type::F64) => "f64".into(),
             Some(Type::Duration) => "Duration".into(),
+            // an `Option` keeps the name the interpreter looks for, and shows its payload where it is displayed
+            Some(Type::Enum { name, variants, .. }) if name == "Option" => {
+                match variants.get(1).and_then(|some| some.fields.first()) {
+                    Some(payload) => format!("Option<{}>", self.name_of(payload.ty)),
+                    None => name.clone(),
+                }
+            }
             Some(Type::Struct { name, .. } | Type::Enum { name, .. }) => name.clone(),
             Some(Type::Array { element, len }) => format!("[{}; {len}]", self.name_of(*element)),
             Some(Type::Ref { to, mutable: true }) => format!("&mut {}", self.name_of(*to)),
@@ -202,7 +209,7 @@ impl Lowerer<'_> {
                     keys.push(ArgKey::Ty(id));
                 }
                 GenericArgKind::Const(c) => {
-                    names.push(format!("{}", c.eval_target_usize().unwrap_or(0)));
+                    names.push(const_name(c));
                     keys.push(ArgKey::Const(c.clone()));
                 }
                 GenericArgKind::Lifetime(_) => {}
@@ -263,4 +270,33 @@ impl Lowerer<'_> {
         }
         Ok(id)
     }
+}
+
+/// A const generic argument's value as a type's name shows it: a `bool`, a signed or an unsigned integer read from its
+/// bytes by its type, a `usize` evaluated, `?` for what is none of these.
+fn const_name(c: &TyConst) -> String {
+    if let TyConstKind::Value(ty, alloc) = c.kind() {
+        let value = match ty.kind() {
+            TyKind::RigidTy(RigidTy::Bool) => alloc.read_bool().map(|b| b.to_string()).ok(),
+            // read as unsigned and sign-extended from the constant's own width: `read_int` gives `-1000` as
+            // `4294966296` for an `i32`
+            TyKind::RigidTy(RigidTy::Int(_)) => alloc.read_uint().map(|v| sign_extended(v, alloc.bytes.len()).to_string()).ok(),
+            TyKind::RigidTy(RigidTy::Uint(_)) => alloc.read_uint().map(|v| v.to_string()).ok(),
+            _ => None,
+        };
+        if let Some(value) = value {
+            return value;
+        }
+    }
+    c.eval_target_usize().map_or_else(|_| "?".to_string(), |v| v.to_string())
+}
+
+/// `v`, the bytes of a signed integer `bytes` wide read as unsigned, as the signed value they hold.
+fn sign_extended(v: u128, bytes: usize) -> i128 {
+    let bits = bytes.saturating_mul(8);
+    if bits == 0 || bits >= 128 {
+        return v as i128;
+    }
+    let shift = 128u32.saturating_sub(u32::try_from(bits).unwrap_or(128));
+    ((v << shift) as i128) >> shift
 }
