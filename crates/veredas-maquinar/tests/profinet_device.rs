@@ -2085,3 +2085,290 @@ mod round_7 {
         });
     }
 }
+
+/// Refute round 8's probes (the critic's, `~/.cache/veredas/critic-c112-r8/probes`), kept as pins:
+/// an IP suite no host holds refused, by a Set and by the configuration; a configured 0.0.0.0 not
+/// set; LLDP's TTL by its value; Identify filters combined; every kind of station name the standard
+/// refuses; the control blocks other than the signal; `undecodable` counting DCP frames alone.
+mod round_8 {
+    use std::time::{Duration, Instant};
+
+    use veredas_aranha::netns;
+    use veredas_aranha::profinet::dcp::{self, DcpPdu, Filter, IpSuite};
+    use veredas_aranha::profinet::ether;
+    use veredas_aranha::profinet::lldp;
+    use veredas_aranha::profinet::mac::Mac;
+    use veredas_aranha::wire::raw::{Options, RawLink};
+    use veredas_maquinar::profinet::*;
+
+    const DEVICE: &str = "interface = \"b0\"\nstation = \"io-device-1\"\nalias = \"port-001.switch-1\"\nvendor_id = 7\ndevice_id = 9\nip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }\nlldp_interval_ms = 200\nseed = 3\nhello = false\n";
+    const IP: &str = "ip = { address = \"192.168.0.10\", mask = \"255.255.255.0\" }";
+
+    fn config(text: &str) -> ProfinetConfig {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    fn link(iface: &str, ethertype: u16) -> RawLink {
+        RawLink::open_with(iface, Options { ethertype: Some(ethertype), promiscuous: false, outgoing: false }).unwrap()
+    }
+
+    fn next_dcp(link: &RawLink, within: Duration) -> Option<DcpPdu> {
+        let started = Instant::now();
+        while started.elapsed() < within {
+            let r = link.recv(within.saturating_sub(started.elapsed())).unwrap()?;
+            let f = ether::parse(&r.bytes).unwrap();
+            if f.ethertype == ether::ETHERTYPE_PROFINET {
+                return Some(dcp::decode(f.payload).unwrap());
+            }
+        }
+        None
+    }
+
+    /// A DCP PDU of these blocks, each `(option, suboption, data)`.
+    fn raw_pdu(frame_id: u16, service: u8, xid: u32, delay: u16, blocks: &[(u8, u8, Vec<u8>)]) -> Vec<u8> {
+        let mut data = Vec::new();
+        for (o, s, d) in blocks {
+            data.extend_from_slice(&[*o, *s]);
+            data.extend_from_slice(&(d.len() as u16).to_be_bytes());
+            data.extend_from_slice(d);
+            if d.len() % 2 == 1 {
+                data.push(0);
+            }
+        }
+        let mut pdu = frame_id.to_be_bytes().to_vec();
+        pdu.extend_from_slice(&[service, 0]);
+        pdu.extend_from_slice(&xid.to_be_bytes());
+        pdu.extend_from_slice(&delay.to_be_bytes());
+        pdu.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        pdu.extend_from_slice(&data);
+        pdu
+    }
+
+    /// A Set block's data: its qualifier, then `d`.
+    fn q(q: u16, d: &[u8]) -> Vec<u8> {
+        [q.to_be_bytes().to_vec(), d.to_vec()].concat()
+    }
+
+    fn suite(a: &str, m: &str, g: &str) -> IpSuite {
+        IpSuite { ip: a.parse().unwrap(), mask: m.parse().unwrap(), gateway: g.parse().unwrap() }
+    }
+
+    const NO_HOST: [(&str, &str, &str); 10] = [
+        ("224.0.0.5", "255.255.255.0", "0.0.0.0"),
+        ("127.0.0.1", "255.0.0.0", "0.0.0.0"),
+        ("255.255.255.255", "255.255.255.255", "0.0.0.0"),
+        ("10.0.0.255", "255.255.255.0", "0.0.0.0"),
+        ("10.0.0.0", "255.255.255.0", "0.0.0.0"),
+        ("10.0.0.5", "255.0.255.0", "0.0.0.0"),
+        ("10.0.0.5", "0.0.0.0", "0.0.0.0"),
+        ("10.0.0.5", "255.255.255.0", "192.168.9.1"),
+        ("240.0.0.1", "255.0.0.0", "0.0.0.0"),
+        ("0.0.0.7", "255.0.0.0", "0.0.0.0"),
+    ];
+
+    /// Each suite no host holds (a group, the loopback, the broadcast, the subnet's broadcast and
+    /// own address, a mask not contiguous, no mask, a gateway off the subnet, 240/4, 0/8) refused
+    /// by the configuration by its text and by a Set answered 0x05, the suite kept (each was taken
+    /// and ARP then claimed it); suites a host holds, the gateway its own address or another host
+    /// of a /31, and 0.0.0.0 taken.
+    #[test]
+    fn an_ip_suite_no_host_holds_is_refused() {
+        let why = |a: &str, m: &str, g: &str| validate(&config(&DEVICE.replace(IP, &format!("ip = {{ address = \"{a}\", mask = \"{m}\", gateway = \"{g}\" }}")))).err().map(|e| e.to_string());
+        let host = "an address no host holds (0/8, 127/8, 224/4, 240/4, or its subnet's own address or broadcast)";
+        let expected: Vec<String> = NO_HOST
+            .iter()
+            .map(|(a, m, g)| {
+                let reason = match (*m, *g) {
+                    ("255.0.255.0", _) => "a mask whose ones are not contiguous",
+                    ("0.0.0.0", _) => "an address with no mask",
+                    (_, "192.168.9.1") => "a gateway neither 0.0.0.0, the address itself nor another host of its subnet",
+                    _ => host,
+                };
+                format!("profinet.ip {a}/{m}/{g}: {reason}")
+            })
+            .collect();
+        assert_eq!(NO_HOST.iter().map(|(a, m, g)| why(a, m, g).unwrap_or_default()).collect::<Vec<_>>(), expected);
+        assert_eq!([why("10.0.0.5", "255.255.255.0", "10.0.0.5"), why("10.0.0.10", "255.255.255.254", "10.0.0.11"), why("0.0.0.0", "0.0.0.0", "0.0.0.0")], [None, None, None]);
+        netns::isolated("round_8::an_ip_suite_no_host_holds_is_refused", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            let kept = dev.identity().ip;
+            let mut wrong = Vec::new();
+            for (i, (a, m, g)) in NO_HOST.iter().enumerate() {
+                let s = suite(a, m, g);
+                let set = raw_pdu(dcp::FRAME_ID_GET_SET, 4, 10 + i as u32, 0, &[(1, 2, q(1, &[s.ip.octets(), s.mask.octets(), s.gateway.octets()].concat()))]);
+                ctl.send(&ether::build(dev.mac, me, ether::ETHERTYPE_PROFINET, &set).unwrap()).unwrap();
+                let answer = next_dcp(&ctl, Duration::from_millis(500)).map(|p| dcp::control_responses(&p));
+                if answer != Some(vec![(1, 2, 5)]) || dev.identity().ip != kept {
+                    wrong.push(format!("{a}/{m}/{g}: {answer:?}, now {:?}", dev.identity().ip));
+                }
+            }
+            for (i, (a, m, g)) in [("10.0.0.5", "255.255.255.0", "10.0.0.5"), ("10.0.0.10", "255.255.255.254", "10.0.0.11"), ("0.0.0.0", "0.0.0.0", "0.0.0.0")].into_iter().enumerate() {
+                let s = suite(a, m, g);
+                let set = raw_pdu(dcp::FRAME_ID_GET_SET, 4, 50 + i as u32, 0, &[(1, 2, q(1, &[s.ip.octets(), s.mask.octets(), s.gateway.octets()].concat()))]);
+                ctl.send(&ether::build(dev.mac, me, ether::ETHERTYPE_PROFINET, &set).unwrap()).unwrap();
+                let answer = next_dcp(&ctl, Duration::from_millis(500)).map(|p| dcp::control_responses(&p));
+                if answer != Some(vec![(1, 2, 0)]) || dev.identity().ip != Some(s.clone()) {
+                    wrong.push(format!("{a}/{m}/{g} refused: {answer:?}, now {:?}", dev.identity().ip));
+                }
+            }
+            assert!(wrong.is_empty(), "{wrong:#?}");
+        });
+    }
+
+    /// A configured address of 0.0.0.0, as the key absent: an Identify says its IP not set
+    /// (it said set).
+    #[test]
+    fn a_configured_address_of_0_0_0_0_is_not_set() {
+        netns::isolated("round_8::a_configured_address_of_0_0_0_0_is_not_set", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let mut said = Vec::new();
+            for (n, ip) in ["ip = { address = \"0.0.0.0\", mask = \"0.0.0.0\" }", ""].into_iter().enumerate() {
+                let dev = start(&config(&DEVICE.replace(IP, ip))).unwrap();
+                ctl.send(&dcp::identify_request(me, n as u32 + 1, 1, &Filter::All).unwrap()).unwrap();
+                let id = next_dcp(&ctl, Duration::from_millis(500)).map(|p| dcp::DeviceIdentity::from_blocks(&p.blocks));
+                said.push(id.and_then(|i| i.ip_status).map(|s| s.set));
+                dev.stop();
+                std::thread::sleep(Duration::from_millis(100));
+                while ctl.recv(Duration::from_millis(1)).unwrap().is_some() {}
+            }
+            assert_eq!(said, [Some(0), Some(0)]);
+        });
+    }
+
+    /// LLDP's TTL is four intervals in whole seconds, at least 1: 1 s at 200 ms, 4 at 1 s, 6 at
+    /// 1.5 s, 20 at the default 5 s (a TTL of 1 at every interval passed).
+    #[test]
+    fn lldp_s_ttl_is_four_intervals() {
+        netns::isolated("round_8::lldp_s_ttl_is_four_intervals", &[("a0", "b0")], || {
+            let lctl = link("a0", ether::ETHERTYPE_LLDP);
+            let mut ttls = Vec::new();
+            for ms in [200u64, 1000, 1500, 5000] {
+                let dev = start(&config(&DEVICE.replace("lldp_interval_ms = 200", &format!("lldp_interval_ms = {ms}")))).unwrap();
+                let r = lctl.recv(Duration::from_secs(2)).unwrap().expect("an LLDP frame");
+                ttls.push(lldp::decode(ether::parse(&r.bytes).unwrap().payload).unwrap().ttl);
+                dev.stop();
+                std::thread::sleep(Duration::from_millis(100));
+                while lctl.recv(Duration::from_millis(1)).unwrap().is_some() {}
+            }
+            assert_eq!(ttls, [1, 4, 6, 20]);
+        });
+    }
+
+    /// Two filters of known kinds, in either order: answered only when both match (the last one
+    /// deciding alone, or a name deciding alone, passed).
+    #[test]
+    fn an_identify_of_two_filters_is_answered_only_when_both_match() {
+        netns::isolated("round_8::an_identify_of_two_filters_is_answered_only_when_both_match", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let _dev = start(&config(DEVICE)).unwrap();
+            let cases: Vec<(&str, Vec<(u8, u8, Vec<u8>)>, bool)> = vec![
+                ("its name, another device id", vec![(2, 2, b"io-device-1".to_vec()), (2, 3, vec![0, 8, 0, 9])], false),
+                ("another device id, its name", vec![(2, 3, vec![0, 8, 0, 9]), (2, 2, b"io-device-1".to_vec())], false),
+                ("another name, all", vec![(2, 2, b"io-device-2".to_vec()), (0xFF, 0xFF, vec![])], false),
+                ("its vendor, a role it lacks", vec![(2, 1, b"veredas bench device".to_vec()), (2, 4, vec![0x02, 0])], false),
+                ("its alias, another name", vec![(2, 6, b"port-001.switch-1".to_vec()), (2, 2, b"io-device-2".to_vec())], false),
+                ("its name, its alias", vec![(2, 2, b"io-device-1".to_vec()), (2, 6, b"port-001.switch-1".to_vec())], true),
+            ];
+            let mut wrong = Vec::new();
+            for (i, (what, blocks, answered)) in cases.iter().enumerate() {
+                let pdu = raw_pdu(dcp::FRAME_ID_IDENTIFY_REQ, 5, 10 + i as u32, 1, blocks);
+                ctl.send(&ether::build(Mac::DCP_MULTICAST, me, ether::ETHERTYPE_PROFINET, &pdu).unwrap()).unwrap();
+                let got = next_dcp(&ctl, Duration::from_millis(300)).is_some_and(|p| p.xid == 10 + i as u32);
+                if got != *answered {
+                    wrong.push(format!("{what}: answered {got}"));
+                }
+            }
+            assert!(wrong.is_empty(), "{wrong:#?}");
+        });
+    }
+
+    /// A port's name, a port's long name, an address, an empty label, a hyphen or a dot at an
+    /// edge, a name of 241 characters and a label of 64: refused by the configuration (by the
+    /// standard's reason), by the plant side, and by a Set answered 0x05 with the name kept (a
+    /// check of the characters alone passed).
+    #[test]
+    fn every_kind_of_station_name_the_standard_refuses_is_refused() {
+        let long = "a".repeat(241);
+        let label = "a".repeat(64);
+        let names: Vec<&str> = vec!["port-001", "port-001-00001", "1.2.3.4", "a..b", "-a", "a-", ".a", "a.", &long, &label];
+        let mut wrong = Vec::new();
+        for n in &names {
+            let mut cfg = ProfinetConfig::new("b0");
+            cfg.station = n.to_string();
+            let want = dcp::check_station_name(n).err().map(|e| format!("profinet.station `{n}`: {e}"));
+            let got = validate(&cfg).err().map(|e| e.to_string());
+            if want.is_none() || got != want {
+                wrong.push(format!("`{n}`: the standard {want:?}, the configuration {got:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+        netns::isolated("round_8::every_kind_of_station_name_the_standard_refuses_is_refused", &[("a0", "b0")], move || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            let mut wrong = Vec::new();
+            for (i, n) in names.iter().enumerate() {
+                let by_hand = dev.set_station(n).is_err();
+                let set = raw_pdu(dcp::FRAME_ID_GET_SET, 4, i as u32 + 1, 0, &[(2, 2, q(1, n.as_bytes()))]);
+                ctl.send(&ether::build(dev.mac, me, ether::ETHERTYPE_PROFINET, &set).unwrap()).unwrap();
+                let answer = next_dcp(&ctl, Duration::from_millis(500)).map(|p| dcp::control_responses(&p));
+                if !by_hand || answer != Some(vec![(2, 2, 5)]) || dev.station() != "io-device-1" {
+                    wrong.push(format!("`{n}`: by hand refused {by_hand}, by a Set {answer:?}, now `{}`", dev.station()));
+                    let _ = dev.set_station("io-device-1");
+                }
+            }
+            assert!(wrong.is_empty(), "{wrong:#?}");
+        });
+    }
+
+    /// A Set of Start or End Transaction, a factory reset or a reset to factory: answered 0x02,
+    /// the name and the address unchanged (answered 0 with nothing done, a tool's reset was told it
+    /// happened).
+    #[test]
+    fn the_control_blocks_other_than_the_signal_are_answered_unsupported() {
+        netns::isolated("round_8::the_control_blocks_other_than_the_signal_are_answered_unsupported", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            let before = (dev.station(), dev.identity().ip);
+            let mut answers = Vec::new();
+            for (i, (sub, qual)) in [(1u8, 0u16), (2, 0), (5, 0), (6, 2)].into_iter().enumerate() {
+                let pdu = raw_pdu(dcp::FRAME_ID_GET_SET, 4, 50 + i as u32, 0, &[(5, sub, q(qual, b""))]);
+                ctl.send(&ether::build(dev.mac, me, ether::ETHERTYPE_PROFINET, &pdu).unwrap()).unwrap();
+                answers.push(next_dcp(&ctl, Duration::from_millis(500)).map(|p| dcp::control_responses(&p)));
+            }
+            assert_eq!(answers, [Some(vec![(5, 1, 2)]), Some(vec![(5, 2, 2)]), Some(vec![(5, 5, 2)]), Some(vec![(5, 6, 2)])]);
+            assert_eq!((dev.station(), dev.identity().ip), before);
+        });
+    }
+
+    /// A cyclic (0x8000), an alarm (0xFC01) and a PTCP (0xFF40) frame to its MAC: not counted
+    /// undecodable (each was); a DCP frame id with a body cut short is.
+    #[test]
+    fn undecodable_counts_dcp_frames_alone() {
+        netns::isolated("round_8::undecodable_counts_dcp_frames_alone", &[("a0", "b0")], || {
+            let ctl = link("a0", ether::ETHERTYPE_PROFINET);
+            let me = ctl.mac();
+            let dev = start(&config(DEVICE)).unwrap();
+            for fid in [0x8000u16, 0xFC01, 0xFF40] {
+                let mut payload = fid.to_be_bytes().to_vec();
+                payload.extend_from_slice(&[0u8; 40]);
+                ctl.send(&ether::build(dev.mac, me, ether::ETHERTYPE_PROFINET, &payload).unwrap()).unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            let other = dev.status().undecodable;
+            let mut cut = dcp::FRAME_ID_GET_SET.to_be_bytes().to_vec();
+            cut.extend_from_slice(&[3, 0, 0, 0, 0, 1, 0, 0, 0, 40]);
+            ctl.send(&ether::build(dev.mac, me, ether::ETHERTYPE_PROFINET, &cut).unwrap()).unwrap();
+            let started = Instant::now();
+            while dev.status().undecodable == other && started.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!((other, dev.status().undecodable), (0, 1));
+        });
+    }
+}

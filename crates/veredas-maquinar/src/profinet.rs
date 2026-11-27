@@ -25,9 +25,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use serde::Deserialize;
-use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpStatus};
+use veredas_aranha::profinet::dcp::{self, DeviceIdentity, IpStatus, IpSuite};
 #[cfg(target_os = "linux")]
-use veredas_aranha::profinet::dcp::{Block, BlockBody, DcpPdu, IpSuite, Service, ServiceType};
+use veredas_aranha::profinet::dcp::{Block, BlockBody, DcpPdu, Service, ServiceType};
 #[cfg(target_os = "linux")]
 use veredas_aranha::profinet::ether;
 #[cfg(target_os = "linux")]
@@ -166,6 +166,40 @@ pub const MAX_LLDP_INTERVAL_MS: u64 = 3_600_000;
 pub const MIN_LLDP_INTERVAL_MS: u64 = 10;
 
 /// Validate a configuration before anything opens.
+/// Why an IP suite is one no host can hold, or `None`. An address of 0.0.0.0 is none, whatever
+/// its mask and gateway (a device not yet addressed). Otherwise: a mask whose ones are contiguous
+/// and not 0; an address of neither this network (0/8), the loopback (127/8), a group (224/4) nor
+/// the reserved block with the broadcast (240/4), nor below /31 its subnet's own address or its
+/// broadcast; a gateway of 0.0.0.0, the address itself (PROFINET's "no router") or another host of
+/// the subnet (round 8: a Set of 224.0.0.5, the loopback, the subnet's broadcast or a mask not
+/// contiguous was taken, and ARP then claimed it).
+pub fn ip_suite_problem(suite: &IpSuite) -> Option<&'static str> {
+    if suite.ip.is_unspecified() {
+        return None;
+    }
+    let m = u32::from(suite.mask);
+    if m == 0 {
+        return Some("an address with no mask");
+    }
+    if m.leading_ones() + m.trailing_zeros() != 32 {
+        return Some("a mask whose ones are not contiguous");
+    }
+    // An address a host holds on a subnet of this mask.
+    let host = |a: Ipv4Addr| {
+        let first = a.octets()[0];
+        let bits = u32::from(a) & !m;
+        first != 0 && first != 127 && first < 224 && (m.leading_ones() >= 31 || (bits != 0 && bits != !m))
+    };
+    if !host(suite.ip) {
+        return Some("an address no host holds (0/8, 127/8, 224/4, 240/4, or its subnet's own address or broadcast)");
+    }
+    let g = suite.gateway;
+    if !(g.is_unspecified() || g == suite.ip || (u32::from(g) & m == u32::from(suite.ip) & m && host(g))) {
+        return Some("a gateway neither 0.0.0.0, the address itself nor another host of its subnet");
+    }
+    None
+}
+
 pub fn validate(cfg: &ProfinetConfig) -> Result<(), ProfinetError> {
     let bad = |m: String| ProfinetError::Config(m);
     if cfg.interface.trim().is_empty() {
@@ -183,6 +217,11 @@ pub fn validate(cfg: &ProfinetConfig) -> Result<(), ProfinetError> {
         if !ok {
             return Err(bad(format!("profinet.alias `{alias}`: an alias is a port name, a dot and a station name (port-001.switch-1)")));
         }
+    }
+    if let Some(ip) = &cfg.ip
+        && let Some(why) = ip_suite_problem(&IpSuite { ip: ip.address, mask: ip.mask, gateway: ip.gateway })
+    {
+        return Err(bad(format!("profinet.ip {}/{}/{}: {why}", ip.address, ip.mask, ip.gateway)));
     }
     if cfg.lldp_interval_ms > MAX_LLDP_INTERVAL_MS {
         return Err(bad(format!("profinet.lldp_interval_ms: {}, over {MAX_LLDP_INTERVAL_MS} (an hour, 802.1AB's longest)", cfg.lldp_interval_ms)));
@@ -361,7 +400,8 @@ impl Drop for ProfinetHandle {
 #[cfg(target_os = "linux")]
 fn identity_of(cfg: &ProfinetConfig, mac: Mac) -> DeviceIdentity {
     let (ip, ip_status) = match &cfg.ip {
-        Some(ip) => (IpSuite { ip: ip.address, mask: ip.mask, gateway: ip.gateway }, IpStatus { set: 1, conflict: false }),
+        // 0.0.0.0 configured is no address, as one a DCP Set gives (round 8: it said set).
+        Some(ip) => (IpSuite { ip: ip.address, mask: ip.mask, gateway: ip.gateway }, IpStatus { set: u8::from(!ip.address.is_unspecified()), conflict: false }),
         None => (IpSuite { ip: Ipv4Addr::UNSPECIFIED, mask: Ipv4Addr::UNSPECIFIED, gateway: Ipv4Addr::UNSPECIFIED }, IpStatus { set: 0, conflict: false }),
     };
     DeviceIdentity {
@@ -497,13 +537,17 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
         // mute is before the read or counted after it (round 6: noted just after the read, a mute
         // set and lifted in between let a request read before it be taken, 5 rounds of 16 000);
         // the link has no wait without a read, so an empty read waits a millisecond outside it.
-        let (received, read_mutes) = {
+        // The mute flag is noted with them: a request read while muted is never taken, though the
+        // mute be lifted before its turn comes (round 8: 12 Identify, 10 Set and 6 Get requests of
+        // 1500 each, read while muted, were taken after the lift).
+        let (received, read_mutes, read_muted) = {
             let state = shared.lock();
             let got = link.recv(Duration::ZERO);
             let mutes = state.mutes;
+            let muted = shared.muted.load(Ordering::SeqCst);
             drop(state);
             match got {
-                Ok(Some(received)) => (received, mutes),
+                Ok(Some(received)) => (received, mutes, muted),
                 _ => {
                     std::thread::sleep(Duration::from_millis(1));
                     continue;
@@ -582,7 +626,12 @@ fn run(link: RawLink, cfg: ProfinetConfig, shared: Arc<Shared>) {
                 if (frame.dst == mac || frame.dst == Mac::DCP_MULTICAST) && !frame.src.is_multicast() && frame.src != Mac([0; 6]) && frame.vlan.is_none_or(|t| t.id == 0) => {}
             _ => continue,
         }
-        if shared.muted.load(Ordering::SeqCst) {
+        if read_muted || shared.muted.load(Ordering::SeqCst) {
+            continue;
+        }
+        // DCP's frame ids alone: a cyclic, an alarm or a PTCP frame is not a DCP frame it could not
+        // read (round 8: each was counted undecodable).
+        if frame.payload.len() < 2 || !dcp::is_dcp_frame_id(u16::from_be_bytes([frame.payload[0], frame.payload[1]])) {
             continue;
         }
         let Ok(pdu) = dcp::decode(frame.payload) else {
@@ -845,6 +894,7 @@ fn set(state: &mut State, pdu: &DcpPdu) -> Vec<(u8, u8, u8)> {
                     error::SET_NOT_POSSIBLE
                 }
             }
+            BlockBody::IpParameter { suite } if ip_suite_problem(suite).is_some() => error::SET_NOT_POSSIBLE,
             BlockBody::IpParameter { suite } => {
                 state.identity.ip = Some(suite.clone());
                 let set = if suite.ip.is_unspecified() { 0 } else { 1 };
