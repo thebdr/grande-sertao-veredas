@@ -23,7 +23,7 @@ threads-required = 'num-cpus'
 # late, the load's doing, not the code's (docs/aranha-plan.md, "Traps"). Each runs with the machine
 # to itself.
 [[profile.default.overrides]]
-filter = 'package(veredas-aranha) & (test(the_defaults_and_the_pace_are_what_the_listener_promises) | test(sending_is_paced_bounded_and_only_where_it_listens) | test(an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer) | test(askers_at_once_each_take_their_turn_and_their_answers) | test(round_3::an_earlier_ask_s_late_answer_is_another_s) | test(round_3::the_window_s_edges) | test(round_3::a_turn_behind_a_frame_is_its_gaps_and_a_second_more) | test(asking_is_refused_where_it_cannot_be_heard_sent_or_bounded))'
+filter = 'package(veredas-aranha) & (test(the_defaults_and_the_pace_are_what_the_listener_promises) | test(sending_is_paced_bounded_and_only_where_it_listens) | test(an_identify_waits_its_turn_the_spread_and_its_wait_and_no_longer) | test(askers_at_once_each_take_their_turn_and_their_answers) | test(round_3::an_earlier_ask_s_late_answer_is_another_s) | test(round_3::the_window_s_edges) | test(round_3::a_turn_behind_a_frame_is_its_gaps_and_a_second_more) | test(asking_is_refused_where_it_cannot_be_heard_sent_or_bounded) | test(round_4::the_pace_at_rates_off_the_millisecond_is_never_faster_than_asked))'
 threads-required = 'num-cpus'
 
 # A test that keeps the machine's cores busy for seconds (a slow view read through a dashboard, so

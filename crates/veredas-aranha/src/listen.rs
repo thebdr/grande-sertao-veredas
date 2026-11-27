@@ -455,8 +455,10 @@ fn run(mut wire: Box<dyn Wire>, s: &Shared, iface: &str) -> Option<String> {
                         Outcome::Refused(e.to_string())
                     }
                 };
-                // Told before the lock goes, so whoever finds the frame gone from the queue finds
-                // what became of it too. An asker that stopped waiting is no fault of the frame's.
+                // Told before the lock goes, so whoever finds the frame kept as sent (or refused,
+                // counted) finds what became of it too; while the wire takes it, it is gone from
+                // the queue and not yet told. An asker that stopped waiting is no fault of the
+                // frame's.
                 if let Some(tx) = st.in_flight.remove(&iface).flatten() {
                     let _ = tx.send(outcome);
                 }
