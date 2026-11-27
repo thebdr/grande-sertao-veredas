@@ -429,8 +429,14 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         let workspace = inputs::Workspace { root, commit, tree: &tree, members, unread };
         // The release's target as rustc configures it (`unix`, `target_os="linux"`), which a
         // dependency's platform (`[target.'cfg(windows)'.dependencies]`) is read against.
-        let printed = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+        // The rustc of the cargo these checks run (beside it, the toolchain's own), else rustup's
+        // proxy choosing by the tree's toolchain file alone, no variable of the caller's steering it.
+        let rustc = std::env::var_os("CARGO").map(PathBuf::from).and_then(|c| c.parent().map(|d| d.join("rustc"))).filter(|r| r.is_file()).unwrap_or_else(|| PathBuf::from("rustc"));
+        let printed = Command::new(rustc)
             .args(["--print", "cfg", "--target", crate::components::TARGET])
+            .env_remove("RUSTUP_TOOLCHAIN")
+            .env_remove("RUSTC")
+            .env_remove("RUSTFLAGS")
             .current_dir(&tree)
             .stdin(Stdio::null())
             .output()?;
