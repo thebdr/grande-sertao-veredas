@@ -1524,6 +1524,13 @@ fn run_family(
             },
         }
 
-        wait_tick(&wake_rx, cfg.poll_interval);
+        // A newest-by-order family is rescanned every `rescan_interval`: the wait ends by the next
+        // rescan, so a member born while one is not yet due (a create that woke the loop early)
+        // is read then, never a whole poll later.
+        let wait = match spec.active_mode() {
+            ActiveMode::NewestByOrder => cfg.poll_interval.min(next_rescan.saturating_duration_since(Instant::now()).max(Duration::from_millis(1))),
+            ActiveMode::Fixed(_) => cfg.poll_interval,
+        };
+        wait_tick(&wake_rx, wait);
     }
 }

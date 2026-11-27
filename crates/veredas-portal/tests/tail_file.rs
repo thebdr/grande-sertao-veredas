@@ -1390,29 +1390,64 @@ fn thread_cpu_s(name: &str) -> Option<f64> {
     None
 }
 
-/// Following a quiet file costs almost nothing: a file gaining a line every 200 ms, followed for
-/// three seconds with the watcher on, every line read, and the follower's thread using under a
-/// tenth of a second of processor time. The watcher wakes the loop for what writers do, never for
-/// the follower's own opens and reads: woken by them it opened its path again on every pass, and a
-/// quiet file held a whole core (2026-11-26, the reference plant, a single file and a family alike).
+/// Following a quiet file costs almost nothing, and the watcher still wakes it for what a writer
+/// does. With a poll of five seconds every early read is the watcher's: a file gaining a line every
+/// 200 ms, written open-append-close and then through a writer's open `O_APPEND` handle (a modify
+/// alone), each line read within half a second of its write, the follower's thread using under a
+/// tenth of a second of processor time; a replacement renamed into place read within a second and
+/// a half; a file held at the first look (write alone allowed) read within a second of the `chmod`
+/// that opens it. Woken by its own opens it held a whole core on a quiet file (2026-11-26, the
+/// reference plant); woken by nothing, it would wait out its poll.
 #[cfg(target_os = "linux")]
 #[test]
 fn following_a_quiet_file_costs_almost_no_processor_time() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("quiet.log");
     std::fs::write(&path, "").unwrap();
     let (mut set, rx) = SourceSet::new();
-    let cfg = TailConfig { use_notify: Some(true), ..TailConfig::default() };
-    set.spawn(Box::new(FileTailSource::new("quiet", "quiet", &path, cfg))).unwrap();
+    let cfg = TailConfig { poll_interval: Duration::from_secs(5), use_notify: Some(true), ..TailConfig::default() };
+    set.spawn(Box::new(FileTailSource::new("quiet", "quiet", &path, cfg.clone()))).unwrap();
     std::thread::sleep(Duration::from_millis(300));
+    let read_within = |what: &str, within: Duration| {
+        let written = Instant::now();
+        let got = rx.recv_timeout(within).map(|e| e.line);
+        assert_eq!(got.as_deref(), Ok(what), "{what}: read within {within:?} of its write ({:?})", written.elapsed());
+    };
     let before = thread_cpu_s("tail:quiet").expect("the follower's thread");
-    for i in 0..15 {
+    for i in 0..10 {
         append(&path, &format!("line {i}\n"));
+        read_within(&format!("line {i}"), Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    for i in 10..15 {
+        writer.write_all(format!("line {i}\n").as_bytes()).unwrap();
+        writer.flush().unwrap();
+        read_within(&format!("line {i}"), Duration::from_millis(500));
         std::thread::sleep(Duration::from_millis(200));
     }
     let used = thread_cpu_s("tail:quiet").expect("the follower's thread") - before;
-    let lines: Vec<String> = rx.try_iter().map(|e| e.line).collect();
-    set.stop_all();
-    assert_eq!(lines, (0..15).map(|i| format!("line {i}")).collect::<Vec<_>>(), "every line read");
     assert!(used < 0.1, "three seconds of following a quiet file used {used:.2} s of processor time");
+    let aside = dir.path().join("quiet.log.new");
+    std::fs::write(&aside, "replaced 0\n").unwrap();
+    std::fs::rename(&aside, &path).unwrap();
+    read_within("replaced 0", Duration::from_millis(1500));
+    drop(writer);
+    set.stop_all();
+
+    // Held at the first look: the change of mode that opens it wakes the follower.
+    let held = dir.path().join("held.log");
+    std::fs::write(&held, "before\n").unwrap();
+    std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o200)).unwrap();
+    let (mut set, rx) = SourceSet::new();
+    set.spawn(Box::new(FileTailSource::new("held", "held", &held, cfg))).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    append(&held, "after\n");
+    std::thread::sleep(Duration::from_millis(300));
+    std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let opened = Instant::now();
+    let got = rx.recv_timeout(Duration::from_secs(1)).map(|e| e.line);
+    assert_eq!(got.as_deref(), Ok("after"), "the held file read within a second of its chmod ({:?})", opened.elapsed());
+    set.stop_all();
 }

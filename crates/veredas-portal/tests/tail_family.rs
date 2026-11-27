@@ -853,10 +853,13 @@ fn thread_cpu_s(name: &str) -> Option<f64> {
     None
 }
 
-/// Following a quiet family costs almost nothing, in either mode: a family of one dated member (the
-/// reference plant's shape) and a fixed-name one, each active gaining a line every 200 ms for three
-/// seconds with the watcher on, every line read, the follower's thread using under a tenth of a
-/// second of processor time (the watcher's own wake on the follower's opens held a whole core).
+/// Following a quiet family costs almost nothing, in either mode, and the watcher still wakes it
+/// for what a writer does. With a poll of five seconds every early read is the watcher's: a family
+/// of one dated member (the reference plant's shape) and a fixed-name one, each active gaining a
+/// line every 200 ms, each line read within half a second of its write, the follower's thread using
+/// under a tenth of a second of processor time; then a rotation, a new dated member born or the
+/// fixed active renamed into a retiree with a new one made, the new active's line read within a
+/// second and a half (the woken follower's own opens, which held a whole core, never wake it).
 #[cfg(target_os = "linux")]
 #[test]
 fn following_a_quiet_family_costs_almost_no_processor_time() {
@@ -867,26 +870,41 @@ fn following_a_quiet_family_costs_almost_no_processor_time() {
     let fixed = dir.path().join("fixed");
     std::fs::create_dir_all(&fixed).unwrap();
     std::fs::write(fixed.join("current.log"), "").unwrap();
+    let append_line = |path: &Path, line: &str| {
+        let mut f = std::fs::OpenOptions::new().append(true).create(true).open(path).unwrap();
+        std::io::Write::write_all(&mut f, format!("{line}\n").as_bytes()).unwrap();
+    };
     let cases = [
         ("qdated", FamilySpec::new(&dated, r"(?P<date>\d{8})_sorts(?P<idx>\d+)\.log", Some("%Y%m%d".into()), ActiveMode::NewestByOrder).unwrap(), dated.join("20261126_sorts1.log")),
         ("qfixed", FamilySpec::new(&fixed, r"done_(?P<idx>\d+)\.log", None, ActiveMode::Fixed("current.log".into())).unwrap(), fixed.join("current.log")),
     ];
     for (id, spec, active) in cases {
         let (mut set, rx) = SourceSet::new();
-        let cfg = FamilyTailConfig { use_notify: Some(true), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
+        let cfg = FamilyTailConfig { poll_interval: Duration::from_secs(5), use_notify: Some(true), start: FamilyStart::ActiveEnd, ..FamilyTailConfig::default() };
         set.spawn(Box::new(FamilyTailSource::new(id, id, spec, cfg))).unwrap();
         std::thread::sleep(Duration::from_millis(300));
+        let read_within = |what: &str, within: Duration| {
+            let written = Instant::now();
+            let got = rx.recv_timeout(within).map(|e| e.line);
+            assert_eq!(got.as_deref(), Ok(what), "{id}: {what} read within {within:?} of its write ({:?})", written.elapsed());
+        };
         let name = format!("family:{id}");
         let before = thread_cpu_s(&name).expect("the follower's thread");
         for i in 0..15 {
-            let mut f = std::fs::OpenOptions::new().append(true).open(&active).unwrap();
-            std::io::Write::write_all(&mut f, format!("line {i}\n").as_bytes()).unwrap();
+            append_line(&active, &format!("line {i}"));
+            read_within(&format!("line {i}"), Duration::from_millis(500));
             std::thread::sleep(Duration::from_millis(200));
         }
         let used = thread_cpu_s(&name).expect("the follower's thread") - before;
-        let lines: Vec<String> = rx.try_iter().map(|e| e.line).collect();
-        set.stop_all();
-        assert_eq!(lines, (0..15).map(|i| format!("line {i}")).collect::<Vec<_>>(), "{id}: every line read");
         assert!(used < 0.1, "{id}: three seconds of following a quiet family used {used:.2} s of processor time");
+        // A rotation: the new active's line read within a second and a half.
+        if id == "qdated" {
+            append_line(&dated.join("20261126_sorts2.log"), "rotated 0");
+        } else {
+            std::fs::rename(&active, fixed.join("done_1.log")).unwrap();
+            append_line(&active, "rotated 0");
+        }
+        read_within("rotated 0", Duration::from_millis(1500));
+        set.stop_all();
     }
 }
