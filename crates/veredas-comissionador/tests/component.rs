@@ -664,6 +664,87 @@ fn armings_as_given(text: &str) -> Vec<bool> {
     out
 }
 
+/// What the executable does with the project it read before its session starts from it, anything
+/// but handing it on as `load_file` returned it named: the project bound once, with no `mut`, from
+/// `load_file`; the session's configuration bound once, with no `mut`, from its `session_config`;
+/// `Session::start` given that configuration. So no view of the engine's own SQL (a project's
+/// `tables`) reaches the store past its readers (refute round 9).
+fn project_breaches(text: &str) -> Vec<String> {
+    use proc_macro2::{Delimiter, TokenTree as T};
+    #[derive(Default)]
+    struct Seen {
+        project: usize,
+        config: usize,
+        start: usize,
+    }
+    fn walk(stream: proc_macro2::TokenStream, out: &mut Vec<String>, seen: &mut Seen) {
+        let trees: Vec<T> = stream.into_iter().collect();
+        let ident = |k: usize| match trees.get(k) {
+            Some(T::Ident(i)) => Some(i.to_string()),
+            _ => None,
+        };
+        let punct = |k: usize, c: char| matches!(trees.get(k), Some(T::Punct(p)) if p.as_char() == c);
+        let paren = |k: usize, inner: &str| matches!(trees.get(k), Some(T::Group(g)) if g.delimiter() == Delimiter::Parenthesis && g.stream().to_string() == inner);
+        for (i, t) in trees.iter().enumerate() {
+            match t {
+                T::Ident(id) => match id.to_string().as_str() {
+                    "mut" if matches!(ident(i + 1).as_deref(), Some("loaded" | "config")) => out.push(format!("`mut {}`: the project handed on as it was read", ident(i + 1).unwrap_or_default())),
+                    "let" if ident(i + 1).as_deref() == Some("loaded") => {
+                        seen.project += 1;
+                        let from = punct(i + 2, '=') && ident(i + 3).as_deref() == Some("match") && ident(i + 4).as_deref() == Some("veredas_portal") && ident(i + 7).as_deref() == Some("project") && ident(i + 10).as_deref() == Some("load_file");
+                        if !from {
+                            out.push("`loaded` bound to anything but `load_file`'s project".to_string());
+                        }
+                    }
+                    "let" if ident(i + 1).as_deref() == Some("config") => {
+                        seen.config += 1;
+                        let from = punct(i + 2, '=') && ident(i + 3).as_deref() == Some("loaded") && punct(i + 4, '.') && ident(i + 5).as_deref() == Some("session_config") && matches!(trees.get(i + 6), Some(T::Group(_))) && punct(i + 7, ';');
+                        if !from {
+                            out.push("`config` bound to anything but the project's `session_config`".to_string());
+                        }
+                    }
+                    "session_config" if !(i >= 3 && ident(i - 2).as_deref() == Some("loaded") && ident(i - 4).as_deref() == Some("config")) => {
+                        out.push("`session_config` called past `let config = loaded.session_config(..)`".to_string());
+                    }
+                    "start" if i >= 3 && punct(i - 1, ':') && punct(i - 2, ':') && ident(i - 3).as_deref() == Some("Session") => {
+                        seen.start += 1;
+                        if !paren(i + 1, "config") {
+                            out.push("`Session::start` given anything but `config`".to_string());
+                        }
+                    }
+                    _ => {}
+                },
+                T::Group(g) => walk(g.stream(), out, seen),
+                _ => {}
+            }
+        }
+    }
+    let (mut out, mut seen) = (Vec::new(), Seen::default());
+    walk(text.parse().unwrap_or_else(|e| panic!("a source that does not lex: {e:?}")), &mut out, &mut seen);
+    if (seen.project, seen.config, seen.start) != (1, 1, 1) {
+        out.push(format!("the project read, configured and started once each, not {}, {} and {}", seen.project, seen.config, seen.start));
+    }
+    out
+}
+
+#[test]
+fn the_executable_starts_its_session_from_the_project_as_it_read_it() {
+    // Refute round 9: the executable could push a view of its own SQL into the project it read
+    // (`loaded.tables`), which the store makes a view reading any file, every guard green.
+    let text = std::fs::read_to_string(crate_dir().join("src").join(ARMING_FILE)).unwrap();
+    assert_eq!(project_breaches(&text), Vec::<String>::new(), "{ARMING_FILE}");
+    let good = "let loaded = match veredas_portal::project::load_file(p) { Ok(p) => p, Err(_) => return };\nlet config = loaded.session_config(t);\nlet s = Session::start(config);";
+    assert_eq!(project_breaches(good), Vec::<String>::new());
+    let mutable = good.replace("let loaded", "let mut loaded") + "\nloaded.tables.push(v);";
+    assert!(project_breaches(&mutable).contains(&"`mut loaded`: the project handed on as it was read".to_string()));
+    assert!(project_breaches(&good.replace("let config", "let mut config")).contains(&"`mut config`: the project handed on as it was read".to_string()));
+    let shadowed = good.replace("let s =", "let config = { let mut c = config; c.tables.push(v); c };\nlet s =");
+    assert!(project_breaches(&shadowed).iter().any(|b| b.starts_with("`config` bound to anything but")), "{:?}", project_breaches(&shadowed));
+    assert!(project_breaches(&good.replace("Session::start(config)", "Session::start(other)")).contains(&"`Session::start` given anything but `config`".to_string()));
+    let two = good.to_string() + "\nlet more = loaded.session_config(t);";
+    assert!(project_breaches(&two).contains(&"`session_config` called past `let config = loaded.session_config(..)`".to_string()));
+}
+
 #[test]
 fn the_executable_hands_the_run_its_arming_as_given() {
     // Refute round 8: the closure the executable hands the plant could arm on every call (the run's
