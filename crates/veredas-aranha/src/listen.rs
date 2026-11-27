@@ -335,6 +335,11 @@ impl Listener {
         lock(&self.shared.state).stats.interfaces.get(iface).cloned()
     }
 
+    /// This machine's own MACs: its wires', whose frames and whose subjects it leaves out of fusion.
+    pub fn own(&self) -> &BTreeSet<Mac> {
+        &self.shared.own
+    }
+
     /// The options it runs with.
     pub fn options(&self) -> Options {
         self.shared.options

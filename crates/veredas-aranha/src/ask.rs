@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::listen::{ListenError, Listener, Outcome};
+use crate::observe::{self, Observed};
 use crate::profinet::dcp::{self, DcpError, DeviceIdentity, Filter, Service};
 use crate::profinet::ether::{self, ETHERTYPE_PROFINET};
 use crate::profinet::mac::Mac;
@@ -142,6 +143,7 @@ pub fn identify(listener: &Listener, iface: &str, ask: &Identify) -> Result<Aske
     let mut asked = Asked { iface: iface.to_string(), xid, request: index, sent_ns, window, answers: Vec::new(), others: 0, lost: 0 };
     let (lost, frames) = listener.read_from(index + 1);
     asked.lost = lost;
+    let own = listener.own();
     for (i, k) in frames {
         if k.sent || k.frame.iface != iface || k.frame.is_cut() {
             continue;
@@ -151,11 +153,19 @@ pub fn identify(listener: &Listener, iface: &str, ask: &Identify) -> Result<Aske
             continue;
         }
         let Ok(pdu) = dcp::decode(e.payload) else { continue };
-        if pdu.service != Service::Identify || !pdu.service_type.is_response() {
+        // An Identify answer as the listener fuses one (C-140, C-141): of an answering service
+        // type DCP defines (success, unsupported), from a station's own MAC and none of this
+        // machine's; a frame the listener leaves out is no answer, nor another's.
+        let heard = observe::decode(&k.frame, i).observations.into_iter().find_map(|o| match o.observed {
+            Observed::Dcp { mac: source, service: Service::Identify, service_type, identity } if service_type.is_response() => Some((source, identity)),
+            _ => None,
+        });
+        let Some((source, identity)) = heard else { continue };
+        if own.contains(&source) {
             continue;
         }
         if pdu.xid == xid && e.dst == mac {
-            asked.answers.push(Answer { mac: e.src, frame: i, at_ns: k.frame.at_ns, identity: DeviceIdentity::from_blocks(&pdu.blocks) });
+            asked.answers.push(Answer { mac: source, frame: i, at_ns: k.frame.at_ns, identity });
         } else {
             asked.others += 1;
         }
