@@ -307,6 +307,9 @@ naming `QMAKE`), and the tests' driver a feature of its own, never on by default
   `QMAKE=$HOME/.local/opt/Qt/6.12.0/gcc_64/bin/qmake cargo nextest run -p veredas-oficina --features driver`.
   The model's own tests (`tests/tree_model.rs`) run in the suite's default build and prove no
   clause. The whole-suite run holds the window's tests with `--features veredas-oficina/driver`.
+  On Linux the component test builds the model inside bubblewrap (`bwrap`, no root needed), Qt and
+  the C++ libraries hidden, as a machine without them would; GitHub's run builds it before Qt is
+  installed.
 - **Brought from the spike**, as its verdict kept them: the project tree (its model and its bridge),
   the formats' table, the window's docking and the test driver. The TOML document, the code editor
   and its language-server client, the table, the embedded pages and the drawing probe come over

@@ -25,6 +25,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+      # Oficina's model with no Qt on the machine (C-250), before Qt is installed or restored.
+      - run: cargo build --locked -p veredas-oficina --no-default-features --lib --tests
       # Oficina's window is built by default (docs/questions.md Q370): Qt 6.12 from Qt's own archives
       # (aqtinstall checks each against Qt's sums) and KDDockWidgets 2.5.1 built from its tag, cached
       # by their versions; cxx-qt finds Qt through QMAKE, Oficina's build KDDockWidgets in

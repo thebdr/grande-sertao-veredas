@@ -60,9 +60,10 @@ members = [
     # (law L5 allows core and portal).
     "crates/veredas-abaco",
     # The workshop (docs/oficina-plan.md): the one native application through which a person sets
-    # up, programs, monitors and commissions every component. Its model builds anywhere; its window
-    # (Qt Quick through cxx-qt) only behind its `shell` feature, so no other member's build needs Qt
-    # (docs/questions.md Q370). Depends on core alone (law L5: a component outside the map).
+    # up, programs, monitors and commissions every component. Its window (Qt Quick through cxx-qt)
+    # is its `shell` feature, on by default, so the suite's build needs Qt 6.12 (docs/questions.md
+    # Q370); `--no-default-features` builds its model alone, with no Qt. Depends on core alone
+    # (law L5: a component outside the map).
     "crates/veredas-oficina",
 ]
 # Not the suite's crates: Ábaco's copy of IronCalc (the engine and its file layer), a cargo workspace
@@ -154,8 +155,8 @@ proc-macro2 = "1"
 # test reads a string in an attribute as the code a derive may make of it (C-073).
 syn = "3"
 # Oficina's window (docs/oficina-plan.md, "Foundations"): Qt Quick with its logic in Rust through
-# the cxx-qt bridge, the versions its own-shell spike passed on. Optional in Oficina, behind its
-# `shell` feature: no member's default build compiles them (docs/questions.md Q370).
+# the cxx-qt bridge, the versions its own-shell spike passed on. Optional in Oficina, its `shell`
+# feature, on by default (docs/questions.md Q370): Oficina alone of the members pulls them in.
 cxx = "1"
 cxx-qt = "0.10"
 # Qt's own types alone (Gui, Qml, QuickControls), none of the third-party integrations `full` brings.

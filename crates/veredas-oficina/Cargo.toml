@@ -47,6 +47,8 @@ cxx-qt-build = { workspace = true, optional = true }
 tempfile = { workspace = true }
 # cargo's own description of the package, read by the component test.
 serde_json = { workspace = true }
+# The GPL's text beside the manifest compared by its SHA-256 (the component test).
+sha2 = { workspace = true }
 
 [[bin]]
 name = "veredas-oficina"

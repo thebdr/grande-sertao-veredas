@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use common::Shell;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 fn crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -29,9 +30,29 @@ fn cargo(args: &[&str]) -> String {
     String::from_utf8(out.stdout).expect("UTF-8")
 }
 
-fn package() -> Value {
+/// cargo's description of the workspace's own packages (`--no-deps`: its members, every one).
+fn workspace() -> Value {
     let text = cargo(&["metadata", "--no-deps", "--format-version", "1", "--offline", "--manifest-path", workspace_manifest().to_str().expect("a UTF-8 path")]);
-    let meta: Value = serde_json::from_str(&text).expect("cargo's JSON");
+    serde_json::from_str(&text).expect("cargo's JSON")
+}
+
+/// The names of the workspace's members, as cargo states them, whatever they are called.
+fn member_names() -> BTreeSet<String> {
+    let meta = workspace();
+    let ids: BTreeSet<&str> = meta["workspace_members"].as_array().expect("workspace_members").iter().map(|id| id.as_str().expect("an id")).collect();
+    let names: BTreeSet<String> = meta["packages"]
+        .as_array()
+        .expect("packages")
+        .iter()
+        .filter(|p| ids.contains(p["id"].as_str().expect("an id")))
+        .map(|p| p["name"].as_str().expect("a name").to_string())
+        .collect();
+    assert_eq!(names.len(), ids.len(), "one name per member");
+    names
+}
+
+fn package() -> Value {
+    let meta = workspace();
     let manifest = crate_dir().join("Cargo.toml").canonicalize().expect("the manifest");
     meta["packages"]
         .as_array()
@@ -65,10 +86,14 @@ fn oficina_is_a_library_and_one_executable_its_window_behind_the_shell_feature()
     // GPL version 3 or later (Q35), the licence's text beside the manifest, unchanged.
     assert_eq!(p["license"], "GPL-3.0-or-later");
     assert!(p["license_file"].is_null(), "a licence file named: {}", p["license_file"]);
-    let copying = std::fs::read_to_string(crate_dir().join("COPYING")).expect("COPYING beside the manifest");
+    // Unchanged: byte for byte the text the Free Software Foundation publishes (Debian's
+    // `/usr/share/common-licenses/GPL-3`, its SHA-256 below), its lines ended LF everywhere
+    // (`.gitattributes`); the length and the title say which text it is when it differs.
+    let copying = std::fs::read(crate_dir().join("COPYING")).expect("COPYING beside the manifest");
     assert_eq!(copying.len(), 35_149, "the GPL version 3 text's length");
-    assert!(copying.starts_with("                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n"), "the GPL version 3's title");
-    assert!(copying.contains("                     END OF TERMS AND CONDITIONS\n"), "the terms whole");
+    assert!(copying.starts_with(b"                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n"), "the GPL version 3's title");
+    let digest: String = Sha256::digest(&copying).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(digest, "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986", "the GPL version 3 text, unchanged");
     let mut targets: Vec<(String, String, Vec<String>)> = p["targets"]
         .as_array()
         .expect("targets")
@@ -109,11 +134,14 @@ fn the_suite_s_default_build_carries_the_window_through_oficina_alone_and_the_mo
         assert!(everyone.contains(qt), "{qt} missing from the suite's default build: {everyone:?}");
         assert!(window.contains(qt), "{qt} missing from Oficina's default build: {window:?}");
     }
-    // Through Oficina alone: every member above a crate of the bridge is Oficina.
+    // Through Oficina alone: every member above a crate of the bridge is Oficina, the members being
+    // those cargo names, a tool's of any name among them.
+    let members = member_names();
+    assert!(members.contains("veredas-oficina") && members.contains("leis"), "{members:?}");
     for qt in QT {
         let above = tree(&["--workspace", "-e", "normal,build,dev", "--invert", qt]);
-        let members: Vec<&String> = above.iter().filter(|p| p.starts_with("veredas-") || p.starts_with("orcl-") || *p == "leis" || *p == "alforge" || *p == "mestres" || *p == "abaco-oracle").collect();
-        assert_eq!(members, [&"veredas-oficina".to_string()], "{qt} reached by another member: {above:?}");
+        let reaching: Vec<&String> = above.iter().filter(|p| members.contains(*p)).collect();
+        assert_eq!(reaching, [&"veredas-oficina".to_string()], "{qt} reached by another member: {above:?}");
     }
     // The model alone: no crate of the bridge, dev edges included.
     let model = tree(&["-p", "veredas-oficina", "--no-default-features", "-e", "normal,build,dev"]);
@@ -142,7 +170,10 @@ fn its_members_are_core_alone() {
 /// them: a fresh build folder (every build script run again), the home folder an empty one (no
 /// `~/.local/opt/Qt` to be found), no folder holding a qmake on `PATH`, no `LIBRARY_PATH` or
 /// `LD_LIBRARY_PATH`, `QMAKE` naming no qmake and `OFICINA_DEPS` unset; cargo's and rustup's own
-/// homes kept, and rustc named, so the toolchain is still found.
+/// homes kept, and rustc named, so the toolchain is still found. On Linux the build runs inside
+/// bubblewrap with Qt's installation (the one `QMAKE` names, and `~/.local/opt/Qt`) and the C++
+/// libraries' folder each under an empty folder, so no path to them, however written, reaches
+/// them; a look inside first finds each empty. Elsewhere (Windows) the environment alone.
 #[test]
 fn the_model_and_its_tests_build_with_no_qt() {
     let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("no-qt");
@@ -156,7 +187,40 @@ fn the_model_and_its_tests_build_with_no_qt() {
     let qmake_names = ["qmake", "qmake6", "qmake.exe", "qmake6.exe", "qmake.bat"];
     let path: Vec<PathBuf> = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).filter(|d| !qmake_names.iter().any(|q| d.join(q).exists())).collect();
     let manifest = workspace_manifest();
-    let out = Command::new(env!("CARGO"))
+    let mut build = if cfg!(target_os = "linux") {
+        let qmake = PathBuf::from(std::env::var_os("QMAKE").expect("QMAKE naming Qt's qmake, in cargo's environment"));
+        let prefix = qmake.parent().and_then(Path::parent).expect("Qt's installation").to_path_buf();
+        let deps = std::env::var_os("OFICINA_DEPS").map(PathBuf::from).unwrap_or_else(|| user_home.join(".local").join("opt").join("oficina-deps"));
+        let mut hidden = vec![prefix, deps];
+        let qt_root = user_home.join(".local").join("opt").join("Qt");
+        if qt_root.is_dir() {
+            hidden.push(qt_root);
+        }
+        for d in &hidden {
+            assert!(d.is_dir(), "{} to hide", d.display());
+        }
+        // A folder inside another hidden one goes with it (an empty folder over the outer).
+        let outer: Vec<PathBuf> = hidden.iter().filter(|d| !hidden.iter().any(|o| o != *d && d.starts_with(o))).cloned().collect();
+        let hidden = outer;
+        let sandbox = || {
+            let mut c = Command::new("bwrap");
+            c.args(["--dev-bind", "/", "/", "--die-with-parent"]);
+            for d in &hidden {
+                c.arg("--tmpfs").arg(d);
+            }
+            c.arg("--");
+            c
+        };
+        let look = sandbox().arg("find").args(&hidden).args(["-mindepth", "1"]).output().expect("bubblewrap (bwrap) runs the no-Qt build on Linux");
+        assert!(look.status.success(), "the look inside: {}", String::from_utf8_lossy(&look.stderr));
+        assert_eq!(String::from_utf8_lossy(&look.stdout), "", "Qt and the C++ libraries hidden inside");
+        let mut c = sandbox();
+        c.arg(env!("CARGO"));
+        c
+    } else {
+        Command::new(env!("CARGO"))
+    };
+    let out = build
         .args(["build", "--offline", "--locked", "-p", "veredas-oficina", "--no-default-features", "--lib", "--tests", "--manifest-path", manifest.to_str().expect("a UTF-8 path")])
         .env("CARGO_TARGET_DIR", scratch.join("target"))
         .env("HOME", &home)
@@ -270,24 +334,30 @@ fn the_build_script_reads_its_environment_by_name_and_the_driver_from_the_compil
 }
 
 /// What ships carries no test server: the window built as the release tool builds it (`--release
-/// --locked --offline -p veredas-oficina --bins`, the default features: the window without the
-/// driver), into a build folder of its own and with the
+/// --locked --offline -p veredas-oficina --bins --features veredas-oficina/shell`, the default
+/// features with them: the window without the driver), into a build folder of its own and with the
 /// environment set against it (cargo's variable for the driver feature, the driver's port), holds
 /// no name of Spix's or AnyRPC's, where the driver's executable does; started with a port named,
-/// it stays up and nothing answers on that port. The first build of that folder takes minutes.
+/// it stays up and nothing answers on that port. The executable a former run left is removed
+/// first, so the one read is this build's. The first build of that folder takes minutes.
 #[test]
 fn the_window_that_ships_carries_no_test_server() {
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("shipped");
+    let exe = target.join("release").join(format!("veredas-oficina{}", std::env::consts::EXE_SUFFIX));
+    match std::fs::remove_file(&exe) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => panic!("a former run's executable not removed: {e}"),
+    }
     let manifest = workspace_manifest();
     let out = Command::new(env!("CARGO"))
-        .args(["build", "--release", "--offline", "--locked", "-p", "veredas-oficina", "--bins", "--manifest-path", manifest.to_str().expect("a UTF-8 path")])
+        .args(["build", "--release", "--offline", "--locked", "-p", "veredas-oficina", "--bins", "--features", "veredas-oficina/shell", "--manifest-path", manifest.to_str().expect("a UTF-8 path")])
         .env("CARGO_TARGET_DIR", &target)
         .env("CARGO_FEATURE_DRIVER", "1")
         .env("OFICINA_SPIX_PORT", "1")
         .output()
         .expect("cargo runs");
     assert!(out.status.success(), "the window as it ships: {}", String::from_utf8_lossy(&out.stderr));
-    let exe = target.join("release").join(format!("veredas-oficina{}", std::env::consts::EXE_SUFFIX));
     let shipped = std::fs::read(&exe).expect("the executable that ships");
     let driven = std::fs::read(env!("CARGO_BIN_EXE_veredas-oficina")).expect("the driver's executable");
     for name in [&b"spix"[..], b"Spix", b"AnyRpc", b"OFICINA_SPIX_PORT"] {

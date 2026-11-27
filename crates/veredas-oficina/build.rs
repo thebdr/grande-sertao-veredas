@@ -1,7 +1,7 @@
 //! Builds Oficina's window when the `shell` feature asks for it: the QML module `Oficina`, the
 //! bridge and the C++ side of the seam, linking Qt and KDDockWidgets, and Spix with AnyRPC when the
-//! tests' `driver` is on. Without `shell` it builds nothing, so the suite's build needs no Qt
-//! (docs/questions.md Q370).
+//! tests' `driver` is on. `shell` is on by default (docs/questions.md Q370); without it
+//! (`--no-default-features`) the script builds nothing and the model needs no Qt.
 //!
 //! `QMAKE` names Qt's qmake, in cargo's environment, since cxx-qt's own build scripts read it too
 //! (unset, cxx-qt looks on `PATH`). `OFICINA_DEPS` names where KDDockWidgets, Spix and AnyRPC are
