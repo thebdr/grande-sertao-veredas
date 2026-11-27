@@ -591,8 +591,10 @@ async fn list_identity_udp(udp: UdpSocket, shared: Arc<Shared>) {
         let Ok(h) = <[u8; HEADER]>::try_from(&buf[..HEADER]) else { continue };
         let h = Header::parse(&h);
         // A request alone: one carries no data, an answer its identity item. Answering an answer
-        // set two adapters answering each other for ever, and one its own (round 8).
-        if h.command != command::LIST_IDENTITY || h.length != 0 || shared.silent.load(Ordering::SeqCst) {
+        // set two adapters answering each other for ever, and one its own (round 8). A header
+        // whose status or options are not 0 is ignored (Vol 2 2-3.3, 2-3.5): an error answer has
+        // no data either, and answering it looped with a peer that answers so (round 9).
+        if h.command != command::LIST_IDENTITY || h.length != 0 || h.status != 0 || h.options != 0 || shared.silent.load(Ordering::SeqCst) {
             continue;
         }
         let Some(own) = own else { continue };
@@ -697,7 +699,8 @@ async fn session(stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>, mut g
             r = rd.read_exact(&mut body) => if r.is_err() { return },
             _ = ended(&mut gone, generation) => return,
         }
-        if shared.silent.load(Ordering::SeqCst) {
+        // A request whose status or options are not 0 is ignored, no reply (Vol 2 2-3.3, 2-3.5).
+        if shared.silent.load(Ordering::SeqCst) || header.status != 0 || header.options != 0 {
             continue;
         }
         *shared.lock().status.commands.entry(header.command).or_default() += 1;
