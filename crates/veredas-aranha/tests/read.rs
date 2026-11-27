@@ -459,9 +459,12 @@ fn a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked() 
             Reply::Kind(PacketType::Working, b"working".to_vec()),
             good(b"mine"),
         ];
+        // (From where the listener stood before the read: the peer's copy on a1 may be kept by a1's
+        // worker before a0's, having handed the request to the wire, keeps it as sent.)
+        let from = l.kept().1;
         let r = run(before, im0).unwrap();
         assert_eq!(r.data, b"mine");
-        let heard = l.frames_from(r.request + 1);
+        let heard = l.frames_from(from);
         let mine: Vec<u64> = heard.iter().filter(|(_, k)| !k.sent && ip::datagram(&k.frame.bytes).is_some_and(|d| d.payload.windows(4).any(|w| w == b"mine"))).map(|(i, _)| *i).collect();
         assert_eq!(mine, [r.answer]);
         let carrying = |tag: &[u8]| heard.iter().filter(|(_, k)| ip::datagram(&k.frame.bytes).is_some_and(|d| d.payload.windows(tag.len()).any(|w| w == tag))).map(|(i, k)| (*i, k.frame.iface.clone())).collect::<Vec<_>>();

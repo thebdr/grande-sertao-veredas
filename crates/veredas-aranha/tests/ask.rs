@@ -175,11 +175,17 @@ fn an_identify_is_answered_by_what_it_matches_and_only_its_answers_count() {
     assert!(a.frame > asked.request);
     assert_eq!((kept.frame.iface.as_str(), kept.sent, a.at_ns), ("lan0", false, 77_000), "stamped by the hub's clock");
     assert_eq!((asked.others, asked.lost), (2, 0));
-    // The listener fused it, heard on both interfaces, its name witnessed after the request.
+    // The listener fused it, heard on both interfaces, its name first witnessed by a frame of the
+    // device's (which only answers): its answer kept on lan0 after the request, or that answer's
+    // copy on lan1, which lan1's worker may keep while lan0's, having handed the request to the
+    // wire, has yet to keep it as sent (the order kept across interfaces is no order of cause).
     let s = l.snapshot();
     let dev = &s.fusion.devices[&DEV];
     assert_eq!(dev.name.current().map(String::as_str), Some("io-device-1"));
-    assert!(dev.name.candidates[0].first.frame > asked.request);
+    let first = dev.name.candidates[0].first.frame;
+    let witness = l.frame(first).unwrap();
+    assert!(!witness.sent && ether::parse(&witness.frame.bytes).unwrap().src == DEV, "{witness:?}");
+    assert!(first > asked.request || witness.frame.iface == "lan1", "the name first witnessed at {first}, on {}, the request at {}", witness.frame.iface, asked.request);
     assert_eq!(dev.heard_on.iter().cloned().collect::<Vec<_>>(), ["lan0", "lan1"]);
     assert_eq!(s.stats.interfaces["lan1"].heard, 9, "the request, the answer, the six not to it and the answer lan0 sent");
     // By station name and by alias: answered; by a name it does not hold: nothing.

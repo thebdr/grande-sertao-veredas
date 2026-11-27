@@ -434,3 +434,12 @@ is pinned by a test when its phase lands.
   links among its member devices, whatever their ports, so two rings over one set of devices see
   each other's cables and read open. Telling them apart waits on reading each port's MRP data
   (the port's own record of its domain, by the implicit read) (C-145's sixth refute round).
+- **The order frames are kept in is no order of cause across interfaces.** A worker hands a frame to
+  its wire and then keeps it as sent; on a hub, a bridge or a peer answering on another link,
+  another interface's worker may keep a frame the sending caused (the answer heard there) before
+  the request is numbered, as the raw wire stamps a frame before its worker takes the listener's
+  lock (C-147's third round). On the asking interface the answer is always after its request (one
+  worker sends and hears). A test reading another interface's frames from a request's number reads
+  an order nothing promises: it reads from where the listener stood before it asked (found
+  2026-11-27, an Identify case red once under the whole suite's load, then reproduced at will by a
+  pause between the wire's send and the keep).
