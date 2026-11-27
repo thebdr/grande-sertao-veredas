@@ -14,20 +14,20 @@
     "binary(tail_family) | test(tail::watch::)"
   ],
   "exitCode": 0,
-  "outputSha": "a3255280114b396fb7c53500b6d1236dc86eddd1668344aa6e52517fde8dc3fa",
-  "outputTail": "        PASS [   2.301s] (44/56) veredas-portal::tail_family with_no_watcher_a_held_replacement_is_awaited_no_longer_than_the_rescan\n        PASS [   2.754s] (45/56) veredas-portal::tail_family the_bench_emitter_rotating_on_a_line_count_is_followed_whole_in_utf16\n        PASS [   3.991s] (46/56) veredas-portal::tail_family a_recursive_family_beside_a_busy_folder_costs_almost_nothing\n        PASS [   4.671s] (47/56) veredas-portal::tail_family fixed_name_generation_bursts_lose_nothing\n        PASS [   4.744s] (48/56) veredas-portal::tail_family fixed_name_straggler_into_the_renamed_file_loses_nothing\n        PASS [   4.855s] (49/56) veredas-portal::tail_family with_no_watcher_a_newest_family_waits_no_longer_than_its_rescan\n        PASS [   5.277s] (50/56) veredas-portal::tail_family a_replacement_and_a_newer_member_in_one_burst_are_read_in_order\n        PASS [   6.146s] (51/56) veredas-portal::tail_family folders_born_nested_at_once_in_a_tree_are_each_watched\n        PASS [   6.660s] (52/56) veredas-portal::tail_family a_recursive_family_is_woken_in_every_folder_of_its_tree\n        PASS [   6.714s] (53/56) veredas-portal::tail_family a_second_rotation_inside_the_pre_read_sweep_keeps_the_order\n        PASS [   6.955s] (54/56) veredas-portal::tail_family indexed_generation_bursts_faster_than_the_rescan_lose_nothing\n        PASS [   7.211s] (55/56) veredas-portal::tail_family indexed_straggler_and_split_writes_lose_nothing\n        PASS [  19.234s] (56/56) veredas-portal::tail_family following_a_quiet_family_costs_almost_no_processor_time\n────────────\n     Summary [  91.697s] 56 tests run: 56 passed, 53 skipped",
-  "ranAt": "2026-11-27T16:47:17.989Z",
-  "headCommit": "a88bc72e2c801d3a3d069e8f40d47e974461683c",
+  "outputSha": "f42889be141856a9028af73e1f3ec797a640d8fc65b2c7adbbf16f91a9a8ef32",
+  "outputTail": "        PASS [   2.281s] (45/57) veredas-portal::tail_family with_no_watcher_a_held_replacement_is_awaited_no_longer_than_the_rescan\n        PASS [   2.640s] (46/57) veredas-portal::tail_family the_bench_emitter_rotating_on_a_line_count_is_followed_whole_in_utf16\n        PASS [   3.804s] (47/57) veredas-portal::tail_family a_recursive_family_beside_a_busy_folder_costs_almost_nothing\n        PASS [   4.517s] (48/57) veredas-portal::tail_family fixed_name_generation_bursts_lose_nothing\n        PASS [   4.723s] (49/57) veredas-portal::tail_family fixed_name_straggler_into_the_renamed_file_loses_nothing\n        PASS [   4.814s] (50/57) veredas-portal::tail_family with_no_watcher_a_newest_family_waits_no_longer_than_its_rescan\n        PASS [   5.019s] (51/57) veredas-portal::tail_family a_replacement_and_a_newer_member_in_one_burst_are_read_in_order\n        PASS [   6.140s] (52/57) veredas-portal::tail_family folders_born_nested_at_once_in_a_tree_are_each_watched\n        PASS [   6.657s] (53/57) veredas-portal::tail_family a_recursive_family_is_woken_in_every_folder_of_its_tree\n        PASS [   6.700s] (54/57) veredas-portal::tail_family a_second_rotation_inside_the_pre_read_sweep_keeps_the_order\n        PASS [   6.747s] (55/57) veredas-portal::tail_family indexed_generation_bursts_faster_than_the_rescan_lose_nothing\n        PASS [   7.224s] (56/57) veredas-portal::tail_family indexed_straggler_and_split_writes_lose_nothing\n        PASS [  18.351s] (57/57) veredas-portal::tail_family following_a_quiet_family_costs_almost_no_processor_time\n────────────\n     Summary [  93.182s] 57 tests run: 57 passed, 53 skipped",
+  "ranAt": "2026-11-27T18:11:58.872Z",
+  "headCommit": "bb8c1a0bbffdd148dfafca5b14fe9af737d3583a",
   "tests": [
     {
       "name": "crates/veredas-portal/tests/tail_family.rs",
       "file": "crates/veredas-portal/tests/tail_family.rs",
-      "fileSha": "30172521b9ec25063b8d25224d09fc4540f13ce918c6a502e1bef472429f335a"
+      "fileSha": "5683f2fa5acf910c00de0369eb37f1631b54a26b983ffe57758ed0754639e4de"
     },
     {
       "name": "crates/veredas-portal/src/tail/watch.rs",
       "file": "crates/veredas-portal/src/tail/watch.rs",
-      "fileSha": "c112da56449c083d1e75a40d5ad16e7ec51acd7fd6ccd95131664d3545489f60"
+      "fileSha": "d25111a485dc9d4ced3086cc350c5afa1377b87c36368ce59201daa15b7cd4c1"
     }
   ]
 }
