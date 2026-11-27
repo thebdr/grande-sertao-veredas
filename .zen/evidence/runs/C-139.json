@@ -1,9 +1,7 @@
 {
   "clause": "C-139",
-  "command": "flock /tmp/veredas-suite.lock cargo test -j 4 -p veredas-aranha --test wire",
+  "command": "cargo test -j 4 -p veredas-aranha --test wire",
   "commandArgv": [
-    "flock",
-    "/tmp/veredas-suite.lock",
     "cargo",
     "test",
     "-j",
@@ -14,15 +12,15 @@
     "wire"
   ],
   "exitCode": 0,
-  "outputSha": "0d0624e6c1d52a28f207729405e4ee0b47c9ee9974682ae62f4919edc42eef21",
-  "outputTail": "test tshark_reads_every_capture_written_as_it_was_written ... ok\ntest where_the_reader_departs_from_tshark_it_keeps_what_the_file_states ... ok\ntest what_a_capture_holds_as_heard_is_kept_as_tshark_keeps_it ... ok\ntest captures_tshark_writes_are_read_in_either_resolution_and_pcapng_is_refused ... ok\ntest a_capture_cut_short_gives_the_frames_before_its_damage_as_tshark_does ... ok\ntest the_layouts_of_old_patched_tcpdumps_tshark_guesses_are_read_in_the_magic_s_own ... ok\ntest either_byte_order_either_resolution_and_every_header_field_are_read ... ok\ntest the_link_type_and_the_aix_format_are_read_as_tshark_reads_them ... ok\ntest every_version_magic_byte_order_and_record_layout_is_read_as_tshark_reads_it ... ok\ntest the_raw_link_is_a_wire_and_never_hands_back_a_frame_this_host_sent ... ok\n\ntest result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.39s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s\n     Running tests/wire.rs (target/debug/build/veredas-aranha/0ff737f87d5bb457/out/wire-0ff737f87d5bb457)",
-  "ranAt": "2026-11-23T17:56:17.264Z",
-  "headCommit": "3e69fe0afb0e564e1cb945f1a3f56d94401e39af",
+  "outputSha": "5787d8836e0485b4bda76643aec59069f79d8d386f5de9725340c0ce3ed99b0c",
+  "outputTail": "test tshark_reads_every_capture_written_as_it_was_written ... ok\ntest the_raw_link_is_a_wire_and_never_hands_back_a_frame_this_host_sent ... ok\ntest what_a_capture_holds_as_heard_is_kept_as_tshark_keeps_it ... ok\ntest where_the_reader_departs_from_tshark_it_keeps_what_the_file_states ... ok\ntest captures_tshark_writes_are_read_in_either_resolution_and_pcapng_is_refused ... ok\ntest a_capture_cut_short_gives_the_frames_before_its_damage_as_tshark_does ... ok\ntest either_byte_order_either_resolution_and_every_header_field_are_read ... ok\ntest the_layouts_of_old_patched_tcpdumps_tshark_guesses_are_read_in_the_magic_s_own ... ok\ntest the_link_type_and_the_aix_format_are_read_as_tshark_reads_them ... ok\ntest every_version_magic_byte_order_and_record_layout_is_read_as_tshark_reads_it ... ok\n\ntest result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.11s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.67s\n     Running tests/wire.rs (target/debug/build/veredas-aranha/86f991e5e5c846a3/out/wire-86f991e5e5c846a3)",
+  "ranAt": "2026-11-27T16:47:37.844Z",
+  "headCommit": "ecca694a4c7cf85722b5c79a339cf14370c2b707",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/wire.rs",
       "file": "crates/veredas-aranha/tests/wire.rs",
-      "fileSha": "b7e38175e657a9c7cceb54f9646d586175472069a1a4d321cfb9792fc0215360"
+      "fileSha": "a08327db3ecc59c27a2b31b73a45fb9dfb98b8d9df762e10da2671a6d9594079"
     },
     {
       "name": "crates/veredas-aranha/tests/common/mod.rs",

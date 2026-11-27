@@ -1,6 +1,6 @@
 {
   "clause": "C-142",
-  "command": "cargo test -j 8 -p veredas-aranha --test listen",
+  "command": "cargo test -j 8 -p veredas-aranha --test listen -- --test-threads=1",
   "commandArgv": [
     "cargo",
     "test",
@@ -9,18 +9,20 @@
     "-p",
     "veredas-aranha",
     "--test",
-    "listen"
+    "listen",
+    "--",
+    "--test-threads=1"
   ],
   "exitCode": 0,
-  "outputSha": "9d78e8bebbaa94332882ab85ed9ccbd106a58dd8d79aee89dda3e7076938fa64",
-  "outputTail": "test a_worker_that_panics_ends_with_its_reason_and_a_wire_name_may_hold_a_nul ... ok\ntest round_4::numbers_are_never_reused_while_sending_and_hearing ... ok\ntest an_ended_worker_takes_nothing_more_and_says_what_it_never_sent ... ok\ntest sending_is_paced_bounded_and_only_where_it_listens ... ok\ntest the_frames_after_a_number_are_read_with_their_lost_at_one_moment ... ok\ntest round_4::the_pace_at_rates_off_the_millisecond_is_never_faster_than_asked ... ok\ntest round_4::a_withdrawal_racing_its_worker_adds_up ... ok\ntest tickets_count_the_frames_ahead_under_many_senders_and_a_withdrawn_frame_never_goes ... ok\ntest a_tracked_frame_knows_its_place_may_be_withdrawn_and_is_told_even_mid_send ... ok\ntest the_defaults_and_the_pace_are_what_the_listener_promises ... ok\n\ntest result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.35s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running tests/listen.rs (target/debug/build/veredas-aranha/9de38450eee4a3a7/out/listen-9de38450eee4a3a7)",
-  "ranAt": "2026-11-27T14:04:33.473Z",
-  "headCommit": "bc75c90b66f468e91897d2bb77a775884f46bdcd",
+  "outputSha": "a9762d0c18441065742d5762f16efc489c80d624a0919126f4af6abe2ab76d7d",
+  "outputTail": "test round_4::the_queue_takes_its_last_place_and_refuses_one_more ... ok\ntest sending_is_paced_bounded_and_only_where_it_listens ... ok\ntest stopping_joins_every_worker_and_nothing_is_heard_after ... ok\ntest the_defaults_and_the_pace_are_what_the_listener_promises ... ok\ntest the_frames_after_a_number_are_read_with_their_lost_at_one_moment ... ok\ntest the_kept_frames_are_bounded_and_damage_is_kept_with_its_frame ... ok\ntest the_listener_says_each_wire_s_index_as_it_was_opened ... ok\ntest this_machine_s_own_frames_and_two_devices_of_one_name_in_the_snapshot ... ok\ntest tickets_count_the_frames_ahead_under_many_senders_and_a_withdrawn_frame_never_goes ... ok\ntest what_is_about_this_machine_is_left_out_and_counted ... ok\n\ntest result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.18s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s\n     Running tests/listen.rs (target/debug/build/veredas-aranha/9de38450eee4a3a7/out/listen-9de38450eee4a3a7)",
+  "ranAt": "2026-11-27T16:47:55.687Z",
+  "headCommit": "ecca694a4c7cf85722b5c79a339cf14370c2b707",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/listen.rs",
       "file": "crates/veredas-aranha/tests/listen.rs",
-      "fileSha": "69d938d53c0e685dd49a86dcd146c27e70094f11dc150074151d25c7aea3202b"
+      "fileSha": "065da57078e9e77a604a3e3fff914723b1e85b5ce0f99443ecc1fad07f71789c"
     }
   ]
 }

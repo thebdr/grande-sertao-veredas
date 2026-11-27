@@ -1,6 +1,6 @@
 {
   "clause": "C-148",
-  "command": "cargo test -j 8 -p veredas-aranha --test read",
+  "command": "cargo test -j 8 -p veredas-aranha --test read -- --test-threads=1",
   "commandArgv": [
     "cargo",
     "test",
@@ -9,18 +9,20 @@
     "-p",
     "veredas-aranha",
     "--test",
-    "read"
+    "read",
+    "--",
+    "--test-threads=1"
   ],
   "exitCode": 0,
-  "outputSha": "c2b6451a9d0ce812f8c943726b6831eac769cb1d3f0590a9b2629fd17316f5d0",
-  "outputTail": "test round_4::the_port_is_open_on_the_request_s_address ... ok\ntest round_4::frames_read_then_let_go_are_no_loss ... ok\ntest round_1::a_read_holds_its_port_open_and_takes_its_answer_whole ... ok\ntest a_read_takes_its_own_answer_alone_and_refuses_what_is_not_the_record_asked ... ok\ntest the_bench_s_devices_report_each_other_by_their_port_data_read_through_the_listener ... ok\ntest a_datagram_is_written_whole_and_read_back_only_when_whole ... ok\ntest round_1::a_read_goes_in_its_turn_or_is_taken_back_never_sent ... ok\n\ntest result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.78s\n\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n   Compiling veredas-aranha v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/aranha-fe97f2/crates/veredas-aranha)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.94s\n     Running tests/read.rs (target/debug/build/veredas-aranha/dac2399b65f5e262/out/read-dac2399b65f5e262)",
-  "ranAt": "2026-11-27T06:13:20.214Z",
-  "headCommit": "c4763275e5af839cb75413c147f414c5523db779",
+  "outputSha": "040042c627e3f7446d8b2bfd18a32aae509ad51b77af5cc18c110c9f84a52006",
+  "outputTail": "test round_5::a_list_of_addresses_the_system_cannot_give_is_refused_by_its_reason ... ok\ntest round_5::a_point_to_point_address_is_its_own_end ... ok\ntest round_5::a_rename_since_keeps_the_interface_s_addresses ... ok\ntest round_5::a_wire_without_an_index_takes_its_name_s_addresses_and_their_failure ... ok\ntest round_5::an_alternative_name_dropped_since_keeps_the_interface_s_addresses ... ok\ntest round_5::an_alternative_name_moved_since_keeps_the_interface_s_addresses ... ok\ntest round_5::an_interface_removed_is_refused ... ok\ntest round_5::the_addresses_are_the_system_s_list_in_its_order ... ok\ntest round_5::the_device_s_address_twice_and_a_slash_31 ... ok\ntest the_bench_s_devices_report_each_other_by_their_port_data_read_through_the_listener ... ok\n\ntest result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 65.71s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s\n     Running tests/read.rs (target/debug/build/veredas-aranha/dac2399b65f5e262/out/read-dac2399b65f5e262)",
+  "ranAt": "2026-11-27T16:49:01.913Z",
+  "headCommit": "ecca694a4c7cf85722b5c79a339cf14370c2b707",
   "tests": [
     {
       "name": "crates/veredas-aranha/tests/read.rs",
       "file": "crates/veredas-aranha/tests/read.rs",
-      "fileSha": "1ac1d6e5c77684073aaa80ce34aaa7738860dcd9437537b0a80cfa3f5198bf2a"
+      "fileSha": "341fbc1a1971edcc76ca0556686ae6eb9373ecbdb3538d1f93754b8045cfeedc"
     }
   ]
 }
