@@ -1,8 +1,8 @@
 {
   "clause": "C-152",
   "verdict": "refuted",
-  "ranAt": "2026-11-27T00:32:07.618Z",
-  "headCommit": "f249c1f34708311ce98bc5ad09a5a7f8f6eec390",
+  "ranAt": "2026-11-27T00:46:58.830Z",
+  "headCommit": "585b04f8761d64b82322efc983dee1b1e1e34e49",
   "tests": [
     {
       "name": "crates/veredas-controlador/tests/model.rs",
@@ -17,7 +17,7 @@
     {
       "name": "crates/veredas-controlador/tests/interpreted.rs",
       "file": "crates/veredas-controlador/tests/interpreted.rs",
-      "symbolSha": "c451b624215d03ce9e3d3731ae1095f98c4ad353412fe6c087fd3b77d73cfade"
+      "symbolSha": "2bde656e7527ef8669db67aca88149e008f5461abf6608de81aa1d0c40c9d882"
     }
   ]
 }
