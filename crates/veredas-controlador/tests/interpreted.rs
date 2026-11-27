@@ -1164,3 +1164,146 @@ fn a_memory_ceiling_the_program_does_not_fit_makes_no_program() {
     let reason = orcl_interp::LoadError::Region { index: 4, reason: "memory past the host's limit" };
     assert_eq!(c.load_error(), Some(&MakeError::Load(reason)));
 }
+// The fifteenth refute round's tests (the critic's probes, adopted): a crash's 507 with no program left by an
+// acknowledge to STOP 103 and refusing a start and a stop, a start in RUN after a mended program refused, an
+// acknowledge refused in STOP 104 after a power cycle and by its own reasons, and the load's reason kept across a
+// refused start and a stop from STARTUP.
+
+struct SwitchOff;
+
+impl Switch for SwitchOff {
+    fn armed(&self) -> bool {
+        false
+    }
+}
+
+fn two_slots() -> Vec<Scalar> {
+    vec![Scalar::Int(Int::U32, 1), Scalar::Int(Int::U32, 2)]
+}
+
+/// A source that never makes the program, and one that fails its first make and makes every one after.
+fn never_and_mended() -> [(&'static str, Scripted); 2] {
+    [
+        ("never made", Scripted { inner: loaded(&two_slots()), plan: vec![], makes: 0 }),
+        ("made once mended", scripted(vec![Some(MakeError::State)])),
+    ]
+}
+
+// R9-M10 (rewritten) and R15-M6: an acknowledge of a crash's FAULT 507 with no program leaves STOP acknowledged
+// (the clause: "only a person's acknowledge with the switch armed leaves it, to STOP acknowledged"), the reason kept.
+#[test]
+fn an_acknowledge_of_a_crash_with_no_program_leaves_stop_acknowledged() {
+    for (kind, source) in never_and_mended() {
+        let mut c = Controller::power_on_from(config(), SIM, Restart::Crash, source).unwrap();
+        assert_eq!(text(&c), "FAULT internal(id=507) sim() no_realtime()", "{kind}");
+        c.acknowledge(OFICINA, &Key).unwrap();
+        assert_eq!(text(&c), "STOP acknowledged(id=103) sim() no_realtime()", "{kind}");
+        assert_eq!(c.load_error(), Some(&MakeError::State), "{kind}");
+    }
+}
+
+// R9-M21 (rewritten) and R15-M3: in a crash's FAULT 507 with no program, a start of either kind and a stop are
+// refused by the state, nothing changed, the safe outputs exchanged on the target's periods.
+#[test]
+fn a_crash_with_no_program_refuses_a_start_and_a_stop() {
+    for (kind, source) in never_and_mended() {
+        let mut c = Controller::power_on_from(config(), SIM, Restart::Crash, source).unwrap();
+        let before = c.state().clone();
+        let refused = |command| Err(Refusal::State { command, state: StateWord::Fault });
+        for start in [StartupReason::Warm, StartupReason::Cold] {
+            assert_eq!(c.start(start, OFICINA, &Key), refused(Command::Start(start)), "{kind}");
+        }
+        assert_eq!(c.stop(OFICINA), refused(Command::Stop), "{kind}");
+        assert_eq!(c.state(), &before, "{kind}");
+        let mut clock = VirtualClock::new();
+        let mut plant = Plant::new(&clock, steady);
+        step(&mut c, &mut plant, &mut clock, 3);
+        assert_eq!(text(&c), "FAULT internal(id=507) sim() no_realtime()", "{kind}");
+        assert_eq!(plant.writes, [0, 10, 20].map(|t| (ms(t), SAFE.value)), "{kind}");
+    }
+}
+
+// R15-M3: after a start that made a mended program, a start in RUN is refused by the state and the program goes on.
+#[test]
+fn a_start_in_run_after_a_mended_program_is_refused_and_the_program_goes_on() {
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, scripted(vec![Some(MakeError::State)])).unwrap();
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 2);
+    assert_eq!(text(&c), "RUN sim() no_realtime()");
+    let start = Command::Start(StartupReason::Warm);
+    assert_eq!(c.start(StartupReason::Warm, OFICINA, &Key), Err(Refusal::State { command: start, state: StateWord::Run }));
+    step(&mut c, &mut plant, &mut clock, 1);
+    assert_eq!(text(&c), "RUN sim() no_realtime()");
+    let values: Vec<u32> = plant.writes.iter().map(|w| w.1).collect();
+    assert_eq!(values, (0..3).map(|k| scanned(FIRST + 1 + k as u32, k)).collect::<Vec<_>>());
+}
+
+// R12-M3 and R13-M3 (rewritten): after a power cycle with no program, from every state and whether the source could
+// make the program now or not, an acknowledge is refused by the state, nothing changed, and nothing starts.
+#[test]
+fn after_a_power_cycle_with_no_program_an_acknowledge_is_refused_by_the_state() {
+    for was in [StateWord::Run, StateWord::Startup, StateWord::Stop, StateWord::Hold, StateWord::Fault] {
+        for (kind, source) in never_and_mended() {
+            let mut c = Controller::power_on_from(config(), SIM, Restart::PowerCycle { was }, source).unwrap();
+            let before = c.state().clone();
+            let refused = Err(Refusal::State { command: Command::Acknowledge, state: StateWord::Stop });
+            assert_eq!(c.acknowledge(OFICINA, &Key), refused, "{was:?}, {kind}");
+            assert_eq!(c.state(), &before, "{was:?}, {kind}");
+            let mut clock = VirtualClock::new();
+            let mut plant = Plant::new(&clock, steady);
+            step(&mut c, &mut plant, &mut clock, 2);
+            assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()", "{was:?}, {kind}");
+            assert_eq!(plant.writes, [0, 10].map(|t| (ms(t), SAFE.value)), "{was:?}, {kind}");
+        }
+    }
+}
+
+// R13-M7 and R13-M8 (rewritten): with no program, an acknowledge with the switch off and one from the program are
+// refused by their own reasons, as in every other state, nothing changed.
+#[test]
+fn with_no_program_an_acknowledge_with_the_switch_off_or_from_the_program_is_refused_by_its_reason() {
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two_slots())).unwrap();
+    let before = c.state().clone();
+    let command = Command::Acknowledge;
+    assert_eq!(c.acknowledge(OFICINA, &SwitchOff), Err(Refusal::Switch { command }));
+    let program = CommandSource::Program;
+    assert_eq!(c.acknowledge(program, &Key), Err(Refusal::Source { command, source: program }));
+    assert_eq!(c.state(), &before);
+}
+
+// R15-M2: a start refused for want of real time with no program keeps the load's reason for the host.
+#[test]
+fn a_start_refused_for_want_of_real_time_keeps_the_load_s_reason() {
+    let production = Target { production: true, realtime: false, simulated: false };
+    let mut c = Controller::power_on_from(config(), production, Restart::First, loaded(&two_slots())).unwrap();
+    assert_eq!(c.start(StartupReason::Cold, OFICINA, &Key), Err(Refusal::Realtime));
+    assert_eq!(text(&c), "STOP realtime_refused(id=105)");
+    assert_eq!(c.load_error(), Some(&MakeError::State));
+}
+
+// R15-M7: a start's failed load arriving on a period's own instant exchanges the safe outputs at that instant, then
+// on each next period, none skipped.
+#[test]
+fn a_start_s_failed_load_on_a_period_s_instant_exchanges_at_once() {
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two_slots())).unwrap();
+    let mut clock = VirtualClock::new();
+    let mut plant = Plant::new(&clock, steady);
+    step(&mut c, &mut plant, &mut clock, 3); // 0, 10, 20
+    clock.advance(ms(20));
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    step(&mut c, &mut plant, &mut clock, 3);
+    assert_eq!(text(&c), "STOP no_program(id=104) sim() no_realtime()");
+    assert_eq!(plant.writes, [0, 10, 20, 40, 50, 60].map(|t| (ms(t), SAFE.value)));
+}
+
+// R15-M2: a stop from STARTUP before the load keeps the last make's reason: no make replaced it.
+#[test]
+fn a_stop_from_startup_keeps_the_last_make_s_reason() {
+    let mut c = Controller::power_on_from(config(), SIM, Restart::First, loaded(&two_slots())).unwrap();
+    c.start(StartupReason::Cold, OFICINA, &Key).unwrap();
+    c.stop(OFICINA).unwrap();
+    assert_eq!(text(&c), r#"STOP command(id=101, source="oficina") sim() no_realtime()"#);
+    assert_eq!(c.load_error(), Some(&MakeError::State));
+}
