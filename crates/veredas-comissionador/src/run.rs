@@ -527,6 +527,17 @@ pub fn bind(c: &Checked, plant: &dyn Plant, mode: &RunMode, confirmed: Option<&s
             problems.push(format!("`{table}` has no column `{column}`, read as `{base}.{column}`"));
         }
     }
+    // A replay whose window opens before the session's store holds a table the test reads, from
+    // the point its sources' start read from: refused, each table named.
+    if let RunMode::Replay { from_ms, .. } = mode {
+        for name in &read {
+            if let Some(at) = plant.rows_from(name)
+                && *from_ms < at
+            {
+                problems.push(format!("the window opens at {}, before the session's store holds `{name}`, from {}", eval::time_text(*from_ms), eval::time_text(at)));
+            }
+        }
+    }
     // Live, a test that writes with the switch off: the run arms it for itself when the person
     // confirmed this test's gated writes and the embedder handed it the way (Q314 (b)).
     let mut arm = false;

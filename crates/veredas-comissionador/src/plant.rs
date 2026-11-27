@@ -7,7 +7,7 @@
 //! portal session held in this process (Q313 (c): in process first); a reach over portal's HTTP
 //! interface would be a second implementation of [`Plant`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use veredas_portal::SeriesType;
@@ -78,6 +78,11 @@ pub trait Plant {
     }
     /// The latest value of `column` stamped at or before `at` (a hole read past), with its stamp.
     fn latest(&self, table: &Table, column: &str, at: i64) -> Result<Option<(i64, Value)>, PlantError>;
+    /// From which moment the session's store holds `table`'s rows whole, when the embedder said so
+    /// (the point its sources' start read from): a replay's window opening before it is refused.
+    fn rows_from(&self, _table: &str) -> Option<i64> {
+        None
+    }
     /// Whether portal's write switch is armed.
     fn armed(&self) -> bool;
     /// Whether a run may arm the switch for itself: the embedder handed the plant the way.
@@ -111,6 +116,9 @@ pub struct LivePlant {
     arming: Option<Box<dyn Fn(bool)>>,
     /// The session's automatic sends the armed switch lets through, as the embedder rendered them.
     also: Vec<String>,
+    /// From which moment the store holds each table's rows whole, by its name in ASCII lower case,
+    /// as the embedder said.
+    from: BTreeMap<String, i64>,
 }
 
 impl LivePlant {
@@ -119,7 +127,7 @@ impl LivePlant {
             .enable_all()
             .build()
             .map_err(|e| PlantError::Store(format!("no runtime for the writes: {e}")))?;
-        Ok(LivePlant { live, runtime, arming: None, also: Vec::new() })
+        Ok(LivePlant { live, runtime, arming: None, also: Vec::new(), from: BTreeMap::new() })
     }
 
     /// The same, with the embedder's way to arm and disarm the session's switch (its session's
@@ -130,6 +138,13 @@ impl LivePlant {
         p.arming = Some(arming);
         p.also = also;
         Ok(p)
+    }
+
+    /// The plant told from which moment the session's store holds each table's rows whole (the
+    /// point its sources' start read from), so a replay over a window before it is refused.
+    pub fn with_rows_from(mut self, from: BTreeMap<String, i64>) -> LivePlant {
+        self.from = from.into_iter().map(|(t, at)| (t.to_ascii_lowercase(), at)).collect();
+        self
     }
 
     /// The OPC UA source and the tag's node id text of a writable column.
@@ -283,6 +298,10 @@ impl Plant for LivePlant {
 
     fn armed(&self) -> bool {
         self.live.writes_armed()
+    }
+
+    fn rows_from(&self, table: &str) -> Option<i64> {
+        self.from.get(&table.to_ascii_lowercase()).copied()
     }
 
     fn can_arm(&self) -> bool {

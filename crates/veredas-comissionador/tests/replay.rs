@@ -200,6 +200,26 @@ fn a_replay_s_clock_stays_the_write_s_lag_behind_until_a_wait_meets_a_row() {
 }
 
 #[test]
+fn a_window_before_the_store_holds_a_table_the_test_reads_is_refused() {
+    // C-205's refute round 6: the embedder tells the plant from which moment the store holds each
+    // table's rows (`LivePlant::with_rows_from`); a replay whose window opens before it, for a table
+    // the test reads, is refused with the table named, and a table it does not read refuses nothing.
+    use veredas_comissionador::eval::time_text;
+    use veredas_comissionador::plant::LivePlant;
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let s = session(dir.path(), &project_text(&bench, false, 4));
+    let now = veredas_portal::serve::store_now_ms();
+    let held = [("plc_main".to_string(), now - 1_000), ("Readings".to_string(), now - 60_000)].into_iter().collect();
+    let p = LivePlant::new(s.live()).unwrap().with_rows_from(held);
+    let (from, to) = (now - 30_000, now - 20_000);
+    let go = |text: &str| veredas_comissionador::run::run(&checked(&test_of(text)), &p, &RunOptions::replay(from, to), &mut |_| {});
+    let e = go("  step c check plc_main.speed == 1.5\n  step r report readings.temp\n").unwrap_err();
+    assert_eq!(e.0, [format!("the window opens at {}, before the session's store holds `plc_main`, from {}", time_text(from), time_text(now - 1_000))]);
+    assert!(go("  step r report readings.temp\n").is_ok(), "a table held from before the window refuses nothing");
+}
+
+#[test]
 fn a_replay_reads_the_plant_right_after_a_write_as_it_stood_before_it() {
     // The same lag, with a loose bound: an await right after the write takes a row stamped before
     // the write in the replay, where the live one took one after the plant's answer, and a read

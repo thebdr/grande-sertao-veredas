@@ -479,14 +479,36 @@ fn a_window_opening_before_the_session_s_start_is_refused() {
         let (t0, t9) = window_test(dir.path(), base);
         let (code, stdout, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9]));
         assert_eq!((code, stdout.len(), dir.path().join("runs").exists(), stderr.len()), (4, 0, false, 1), "{stderr:?}");
-        let opens = format!("the window opens at {t0}, before the session's start ");
-        let tail = " (the project's `[session] start`): the replay is refused";
+        let opens = format!("the run is refused: the window opens at {t0}, before the session's store holds `readings`, from ");
         if family {
-            assert_eq!(stderr[0], format!("{opens}reads from {at}.000{tail}"));
+            assert_eq!(stderr[0], format!("{opens}{at}.000"));
         } else {
-            assert!(stderr[0].starts_with(&format!("{opens}is live, at ")) && stderr[0].ends_with(tail), "{stderr:?}");
+            assert!(stderr[0].starts_with(&opens), "{stderr:?}");
         }
     }
+    // Refute round 6: the start in the past is the logs' alone. A project of an OPC UA source alone,
+    // its start two hours back: its table is held from the session's start, so a window an hour old
+    // is refused, the table named (it ran over an empty store and was kept as passed).
+    let dir = tempfile::tempdir().unwrap();
+    let bench = plant(dir.path());
+    let text = project_text(&bench, false, 4);
+    let opc_only = text[..text.find("\n[[channel]]").unwrap()].replace("[session]\n", "[session]\nstart = { last_hours = 2 }\n") + "\n";
+    std::fs::write(dir.path().join("project.toml"), opc_only).unwrap();
+    std::fs::write(dir.path().join("t.test"), test_of("  step c check plc_main.speed == 1.5\n")).unwrap();
+    let (t0, t9) = (veredas_comissionador::eval::time_text(base - 500), veredas_comissionador::eval::time_text(base + 9_500));
+    let (code, stdout, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9]));
+    assert_eq!((code, stdout.len(), dir.path().join("runs").exists()), (4, 0, false), "{stderr:?}");
+    assert!(stderr[0].starts_with(&format!("the run is refused: the window opens at {t0}, before the session's store holds `plc_main`, from ")), "{stderr:?}");
+    // A file log the start reads whole from its first line: a window older than the start is in the
+    // store and replays (it was refused, the start taken for every table's).
+    let dir = tempfile::tempdir().unwrap();
+    let old = base - 7_200_000;
+    std::fs::write(dir.path().join("plant.log"), (0..10).map(|i| stamped(old + i * 1000, &format!("{}.0", 20 + i))).collect::<String>()).unwrap();
+    std::fs::write(dir.path().join("project.toml"), log_project("file = \"plant.log\"")).unwrap();
+    let (t0, t9) = window_test(dir.path(), old);
+    let (code, stdout, stderr) = out(&exe(dir.path(), &["replay", "t.test", "--project", "project.toml", "--from", &t0, "--to", &t9]));
+    assert_eq!((code, stdout.first().map(String::as_str)), (0, Some("w #1 pass: readings.temp >= 25.0 held after 5500ms")), "{stdout:?} {stderr:?}");
+    assert_eq!(record::read(&dir.path().join("runs/t/0001")).unwrap().evidence[0].rows, 6);
 }
 
 #[test]

@@ -226,6 +226,7 @@ const PORTAL: &[&str] = &[
     "veredas_portal::session::Live",
     "veredas_portal::session::HealthState",
     "veredas_portal::project::load_file",
+    "veredas_portal::project::LogKind",
     "veredas_portal::SeriesType",
     "veredas_portal::store::RowsQuery",
     "veredas_portal::store::TableKind",

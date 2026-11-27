@@ -13,8 +13,8 @@
 //! Each option is given once, followed by its value, never an empty one. Exit codes: 0 the file is
 //! sound or the run passed; 1 the file has problems or the run failed; 2 the command line is wrong;
 //! 3 the run was aborted; 4 the run was refused before it started (its folder cannot be made, the
-//! project or its session cannot start, a replay's window opens before the session's start or a
-//! log's history is not in the store, the engine refuses it),
+//! project or its session cannot start, a log's history is not in the store, the engine refuses
+//! it, a replay's window opening before the store holds a table it reads among its refusals),
 //! nothing run, nothing kept and the folders made for it removed; 5 the run ran, its verdict
 //! printed, but could not be kept.
 //!
@@ -28,7 +28,9 @@ use std::time::{Duration, Instant};
 use veredas_comissionador::plant::{LivePlant, Plant};
 use veredas_comissionador::run::{Event, RunMode, RunOptions, RunVerdict, gated_writes, run};
 use veredas_comissionador::{Checked, Problem, load_functions, load_test, record};
+use veredas_portal::project::LogKind;
 use veredas_portal::session::{HealthState, Session};
+use veredas_portal::store::TableKind;
 
 /// A line on stdout: one nobody reads (a pipe closed) never ends the run, whose verdict is its
 /// exit code and which is kept all the same.
@@ -278,20 +280,37 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
     // The session's start on the store's axis.
     let begun_at = chrono::Local::now().naive_local();
     let config = loaded.session_config(begun_at);
-    // A session's store is fresh: it holds nothing from before the point its start reads from (a
-    // live start's being the start itself), so a window opening before it is never whole there.
-    if let RunMode::Replay { from_ms, .. } = &mode.mode {
-        let reads_from = config.start.unwrap_or(begun_at).and_utc().timestamp_millis();
-        if *from_ms < reads_from {
-            let start = if config.start.is_some() { "reads from" } else { "is live, at" };
-            tell!(
-                "the window opens at {}, before the session's start {start} {} (the project's `[session] start`): the replay is refused",
-                veredas_comissionador::eval::time_text(*from_ms),
-                veredas_comissionador::eval::time_text(reads_from)
-            );
-            return 4;
-        }
-    }
+    // A session's store is fresh, so it holds each table's rows from the point its sources' start
+    // reads from, as portal reads them: a log's, the project's start in the past given, from it
+    // for a family's backfill and whole for a file read from its first line, and from the
+    // session's start for a log with no stamps or a live start; a rule's table from the latest of
+    // the logs it reads; every other table of the session's own (an OPC UA source's, a channel's)
+    // from the session's start. A view is not judged: its sources are its SELECT's. A replay's
+    // window opening before it is refused.
+    let begun_ms = begun_at.and_utc().timestamp_millis();
+    let logs: std::collections::BTreeMap<&str, i64> = loaded
+        .logs
+        .iter()
+        .map(|l| {
+            let at = match (config.start, l.timestamp.is_some(), &l.kind) {
+                (Some(_), true, LogKind::File { .. }) => i64::MIN,
+                (Some(t), true, LogKind::Family { .. }) => t.and_utc().timestamp_millis(),
+                _ => begun_ms,
+            };
+            (l.id.trim(), at)
+        })
+        .collect();
+    let ruled: std::collections::BTreeMap<String, i64> = loaded
+        .rules
+        .iter()
+        .filter_map(|rule| {
+            let at = match rule.scope.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(id) => logs.get(id).copied(),
+                None => logs.values().copied().max(),
+            }?;
+            Some((rule.name.trim().to_ascii_lowercase(), at))
+        })
+        .collect();
     let session = match Session::start(config) {
         Ok(s) => std::rc::Rc::new(s),
         Err(e) => {
@@ -355,7 +374,19 @@ fn with_session(project: &Path, c: &Checked, runs: &Path, mode: &RunOptions) -> 
         let s = session.clone();
         Box::new(move |on| s.set_writes_armed(on))
     };
-    let plant = match LivePlant::with_arming(live, arming, replies) {
+    let rows_from: std::collections::BTreeMap<String, i64> = live
+        .store
+        .list_tables()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|t| t.kind == TableKind::Base)
+        .map(|t| {
+            let name = t.name.to_ascii_lowercase();
+            let at = ruled.get(&name).copied().unwrap_or(begun_ms);
+            (name, at)
+        })
+        .collect();
+    let plant = match LivePlant::with_arming(live, arming, replies).map(|p| p.with_rows_from(rows_from)) {
         Ok(p) => p,
         Err(e) => {
             tell!("{e}");
