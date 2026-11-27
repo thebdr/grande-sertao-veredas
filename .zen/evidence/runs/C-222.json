@@ -10,15 +10,15 @@
     "parity"
   ],
   "exitCode": 0,
-  "outputSha": "77ea709080c774146500827f48351063f8620e4fc95ae972ec9efb14fd54f81a",
-  "outputTail": "test a_cell_and_a_rich_value_are_read_where_the_schema_puts_them ... ok\ntest excel_s_spill_and_calc_errors_are_read_through_their_value_metadata ... ok\ntest the_workbook_its_relationships_and_rich_values_are_read_by_namespace_and_name ... ok\ntest a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_computes ... ok\ntest parity_under_the_linked_resolution ... ok\ntest parity_under_the_cached_resolution ... ok\n\ntest result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 38.68s\n\n   Compiling ironcalc_base v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/base)\n   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/crates/veredas-abaco)\n   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.48s\n     Running tests/parity.rs (target/debug/build/abaco-oracle/3ebe579f77e32675/out/parity-3ebe579f77e32675)",
-  "ranAt": "2026-11-27T10:45:40.667Z",
-  "headCommit": "16740f8089f2e61eebdfdf7b4befb89f5fc18dd3",
+  "outputSha": "27bc5fea16a5be9978c946aef86ce4913986fe8b104488989c5a7dda21d4a480",
+  "outputTail": "test the_sheet_and_its_parts_are_read_as_an_xml_parser_reads_them ... ok\ntest excel_s_spill_and_calc_errors_are_read_through_their_value_metadata ... ok\ntest the_workbook_its_relationships_and_rich_values_are_read_by_namespace_and_name ... ok\ntest a_cache_whose_type_and_text_excel_never_pairs_matches_nothing_the_engine_computes ... ok\ntest parity_under_the_cached_resolution ... ok\ntest parity_under_the_linked_resolution ... ok\n\ntest result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.63s\n\n   Compiling ironcalc_base v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/base)\n   Compiling ironcalc v0.9.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/forks/ironcalc/xlsx)\n   Compiling veredas-abaco v2.0.0-alpha.1 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/crates/veredas-abaco)\n   Compiling abaco-oracle v0.1.0 (/home/thebdr/code/grande-sertao-veredas/.claude/worktrees/abaco-cc2f0b/tools/abaco-oracle)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.39s\n     Running tests/parity.rs (target/debug/build/abaco-oracle/3ebe579f77e32675/out/parity-3ebe579f77e32675)",
+  "ranAt": "2026-11-27T14:58:18.098Z",
+  "headCommit": "c06b2734c083f399bfcfffdb8d3c8c93d18e31db",
   "tests": [
     {
       "name": "tools/abaco-oracle/tests/parity.rs",
       "file": "tools/abaco-oracle/tests/parity.rs",
-      "fileSha": "c4c7ab7f8e921b6294a24e11b2575ee8a91a7a277783843cccb5d7e5efa18d46"
+      "fileSha": "aa727a4761ea7c21bfd756e63df4c7998b975c317b53f9d5548599b13d8ce97a"
     }
   ]
 }
