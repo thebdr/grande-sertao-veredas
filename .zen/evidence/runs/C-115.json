@@ -11,15 +11,15 @@
     "reflexo"
   ],
   "exitCode": 0,
-  "outputSha": "869e676bbc7aa4ea33f5a2852f5ac0b971ccd58e6f181441b4e5439124a4380d",
-  "outputTail": "        PASS [   0.008s] (47/59) veredas-maquinar::reflexo round_5::an_actuator_pose_whose_centre_a_scene_refuses_is_refused\n        PASS [   0.009s] (48/59) veredas-maquinar::reflexo round_5::an_actuator_whose_place_fails_writes_no_switch\n        PASS [   0.007s] (49/59) veredas-maquinar::reflexo round_5::every_integer_type_holds_to_both_ends_and_writes_nan_as_0\n        PASS [   0.013s] (50/59) veredas-maquinar::reflexo round_5::that_reversal_goes_on_10_000_steps_later\n        PASS [   6.592s] (51/59) veredas-maquinar::reflexo round_6::a_long_reversal_s_exact_zero_step_is_on_0\n        PASS [   0.008s] (52/59) veredas-maquinar::reflexo round_6::a_normally_closed_sensor_model_keeps_its_delays\n        PASS [   0.005s] (53/59) veredas-maquinar::reflexo round_6::a_ramp_at_a_10_ms_step_lands_at_its_step\n        PASS [   0.009s] (54/59) veredas-maquinar::reflexo round_6::a_refused_place_leaves_both_switches_as_they_were\n        PASS [   0.008s] (55/59) veredas-maquinar::reflexo round_6::a_sensor_model_at_a_100_ms_step_counts_its_delay\n        PASS [   0.009s] (56/59) veredas-maquinar::reflexo round_6::an_actuator_s_end_is_its_pose_to_the_bit\n        PASS [   0.009s] (57/59) veredas-maquinar::reflexo round_6::two_models_moving_one_belt_or_one_mover_are_refused\n        PASS [   0.009s] (58/59) veredas-maquinar::reflexo round_6::yaws_past_f64_s_difference_turn_evenly_not_at_once\n        PASS [   4.528s] (59/59) veredas-maquinar::reflexo the_reference_s_conveyor_line_is_driven_by_a_modbus_client_as_a_controller_drives_it\n────────────\n     Summary [  17.186s] 59 tests run: 59 passed, 0 skipped",
-  "ranAt": "2026-11-26T13:52:18.226Z",
-  "headCommit": "4aec49dabce2b7826c247b05c79cebb9e5c4afe1",
+  "outputSha": "f2cb2e8b2159ddfbf19a9f73a451535bb0ddb9a55e18e81ff5c7777254cd7f62",
+  "outputTail": "        PASS [   0.052s] (54/66) veredas-maquinar::reflexo round_6::a_refused_place_leaves_both_switches_as_they_were\n        PASS [   0.083s] (55/66) veredas-maquinar::reflexo round_6::a_sensor_model_at_a_100_ms_step_counts_its_delay\n        PASS [   0.030s] (56/66) veredas-maquinar::reflexo round_6::an_actuator_s_end_is_its_pose_to_the_bit\n        PASS [   0.040s] (57/66) veredas-maquinar::reflexo round_6::two_models_moving_one_belt_or_one_mover_are_refused\n        PASS [   0.026s] (58/66) veredas-maquinar::reflexo round_6::yaws_past_f64_s_difference_turn_evenly_not_at_once\n        PASS [   1.027s] (59/66) veredas-maquinar::reflexo round_7::a_step_without_a_scene_is_never_ahead_of_its_time_at_any_read\n        PASS [   0.015s] (60/66) veredas-maquinar::reflexo round_7::an_actuator_resting_at_its_retracted_end_holds_its_mover_there\n        PASS [   0.012s] (61/66) veredas-maquinar::reflexo round_7::one_belt_name_and_one_mover_name_on_two_scenes_are_two_belts_and_two_movers\n        PASS [   0.012s] (62/66) veredas-maquinar::reflexo round_7::the_belt_not_its_drive_is_held_to_100_m_s\n        PASS [   0.011s] (63/66) veredas-maquinar::reflexo round_7::the_ranges_tops_load\n        PASS [   0.012s] (64/66) veredas-maquinar::reflexo round_7::two_belts_whose_joined_names_read_alike_are_two_belts\n        PASS [   0.012s] (65/66) veredas-maquinar::reflexo round_7::yaws_past_f64_s_difference_follow_their_halves_at_every_step\n        PASS [   4.537s] (66/66) veredas-maquinar::reflexo the_reference_s_conveyor_line_is_driven_by_a_modbus_client_as_a_controller_drives_it\n────────────\n     Summary [  28.510s] 66 tests run: 66 passed, 0 skipped",
+  "ranAt": "2026-11-27T08:25:47.688Z",
+  "headCommit": "98e03794b2e2189d9c6c282bc8432b8438ad6388",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/reflexo.rs",
       "file": "crates/veredas-maquinar/tests/reflexo.rs",
-      "fileSha": "6af9c0057145c88f0f5ee180a1434cbf325263bfd6d783307bd51c0b2e222b35"
+      "fileSha": "5ae85cc42adb96ff387343bac6fde48e849cc8b990dd0a09d3ffc713ff46e459"
     }
   ]
 }
