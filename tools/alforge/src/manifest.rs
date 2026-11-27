@@ -240,7 +240,7 @@ pub fn components_at(root: &Path, commit: &str, refusals: &mut Vec<String>) -> R
 /// [`components_at`], its scratch folder made under `parent` (a folder reached through a link
 /// included).
 pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut Vec<String>) -> Result<BTreeMap<String, Held>, CheckError> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     let mut held = BTreeMap::new();
     // Cargo reads a workspace's member globs against the root's absolute path unescaped: a glob
     // character in that path (`*`, `?` or `[`; braces are no pattern to it) changes which members
@@ -288,13 +288,12 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         if toml::from_str::<toml::Table>(&root_manifest).is_ok_and(|t| !t.contains_key("workspace")) {
             return Ok(Some(format!("commit {commit}: its Cargo.toml is no workspace (`[workspace]`): cargo would look for one above the tree")));
         }
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let out = Command::new(cargo)
-            .args(["metadata", "--no-deps", "--offline", "--format-version", "1", "--manifest-path"])
-            .arg(tree.join("Cargo.toml"))
-            .current_dir(&tree)
-            .stdin(Stdio::null())
-            .output()?;
+        // Cargo and rustc in the suite's own environment (crate::cut::suite_command), as the cut and
+        // the list run them: no toolchain variable of the caller's (`RUSTUP_TOOLCHAIN`, `CARGO`,
+        // `RUSTC`) reads the commit another way.
+        let run = |argv: &[&str]| crate::cut::suite_command(&tree, &scratch, argv, std::env::vars_os()).stdin(Stdio::null()).output();
+        let root_manifest_path = tree.join("Cargo.toml").display().to_string();
+        let out = run(&["cargo", "metadata", "--no-deps", "--offline", "--format-version", "1", "--manifest-path", &root_manifest_path])?;
         if !out.status.success() {
             // Cargo's whole reason, its causes included, the scratch folder's path dropped.
             let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
@@ -384,13 +383,8 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                 break;
             }
             for dir in unknown {
-                let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-                let out = Command::new(cargo)
-                    .args(["metadata", "--no-deps", "--offline", "--format-version", "1", "--manifest-path"])
-                    .arg(tree.join(&dir).join("Cargo.toml"))
-                    .current_dir(&tree)
-                    .stdin(Stdio::null())
-                    .output()?;
+                let at = tree.join(&dir).join("Cargo.toml").display().to_string();
+                let out = run(&["cargo", "metadata", "--no-deps", "--offline", "--format-version", "1", "--manifest-path", &at])?;
                 let meta: Option<serde_json::Value> = out.status.success().then(|| serde_json::from_slice(&out.stdout).ok()).flatten();
                 let Some(meta) = meta else {
                     let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
@@ -429,17 +423,7 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
         let workspace = inputs::Workspace { root, commit, tree: &tree, members, unread };
         // The release's target as rustc configures it (`unix`, `target_os="linux"`), which a
         // dependency's platform (`[target.'cfg(windows)'.dependencies]`) is read against.
-        // The rustc of the cargo these checks run (beside it, the toolchain's own), else rustup's
-        // proxy choosing by the tree's toolchain file alone, no variable of the caller's steering it.
-        let rustc = std::env::var_os("CARGO").map(PathBuf::from).and_then(|c| c.parent().map(|d| d.join("rustc"))).filter(|r| r.is_file()).unwrap_or_else(|| PathBuf::from("rustc"));
-        let printed = Command::new(rustc)
-            .args(["--print", "cfg", "--target", crate::components::TARGET])
-            .env_remove("RUSTUP_TOOLCHAIN")
-            .env_remove("RUSTC")
-            .env_remove("RUSTFLAGS")
-            .current_dir(&tree)
-            .stdin(Stdio::null())
-            .output()?;
+        let printed = run(&["rustc", "--print", "cfg", "--target", crate::components::TARGET])?;
         if !printed.status.success() {
             return Ok(Some(format!("commit {commit}: rustc cannot say the configuration of {}: {}", crate::components::TARGET, String::from_utf8_lossy(&printed.stderr).trim())));
         }
@@ -482,13 +466,12 @@ pub fn components_at_in(root: &Path, commit: &str, parent: &Path, refusals: &mut
                     return Ok(workspace.members.iter().find(|m| m.dir == dir).is_some_and(|m| m.features.contains(feature)));
                 }
                 // Cargo's own word: its resolve with that feature on, offline, held to the lock.
-                let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-                let mut c = Command::new(cargo);
-                c.args(["tree", "--offline", "--depth", "0", "-e", "normal", "--prefix", "none", "--manifest-path"]).arg(tree.join("Cargo.toml"));
+                let spec = format!("{name}@{version}");
+                let mut argv = vec!["cargo", "tree", "--offline", "--depth", "0", "-e", "normal", "--prefix", "none", "--manifest-path", root_manifest_path.as_str(), "-p", spec.as_str(), "--features", f];
                 if tree.join("Cargo.lock").is_file() {
-                    c.arg("--locked");
+                    argv.push("--locked");
                 }
-                let out = c.args(["-p", &format!("{name}@{version}"), "--features", f]).current_dir(&tree).stdin(Stdio::null()).output().map_err(|e| format!("commit {commit}: cargo tree does not run: {e}"))?;
+                let out = run(&argv).map_err(|e| format!("commit {commit}: cargo tree does not run: {e}"))?;
                 let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
                 match out.status.success() {
                     true => Ok(true),

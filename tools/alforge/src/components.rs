@@ -102,7 +102,7 @@ pub fn purl(name: &str, version: &str, source: &str) -> String {
 /// (`cargo metadata --all-features --filter-platform <target> --offline`, `--locked` to the lock
 /// file the commit holds, in its tree,
 /// written out as git stores it), by cargo's id: what any build of a member may compile there.
-fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]) -> Result<BTreeMap<String, Package>, ListError> {
+fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[(String, Vec<String>)]) -> Result<BTreeMap<String, Package>, ListError> {
     let parent = crate::cache::dir()?.join("tmp");
     std::fs::create_dir_all(&parent)?;
     let scratch = tempfile::Builder::new().prefix("alforge-list-").tempdir_in(&parent)?;
@@ -169,19 +169,40 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
     // second), so what lies below a dependency no build compiles is left with it and nothing a
     // build compiles is printed there alone; drawn in ASCII, which marks a package's
     // build-dependencies (`[build-dependencies]`, at the depth of its children).
-    let mut tree_argv: Vec<String> = ["cargo", "tree", "--offline", "--all-features", "--target", target, "-e", "normal,build", "--no-dedupe", "--charset", "ascii", "--format", "{p}", "--manifest-path", &manifest].iter().map(|s| s.to_string()).collect();
-    if argv.contains(&"--locked") {
-        tree_argv.push("--locked".into());
+    // The components together, every feature of theirs on; then each whose executables need a
+    // dependency's feature (`serde_json/preserve_order`, which `--all-features` never turns on)
+    // alone with those features on too, as the builder builds it (crate::builder::feature_args).
+    let mut runs: Vec<Vec<String>> = Vec::new();
+    let base_argv: Vec<String> = ["cargo", "tree", "--offline", "--all-features", "--target", target, "-e", "normal,build", "--no-dedupe", "--charset", "ascii", "--format", "{p}", "--manifest-path", &manifest].iter().map(|s| s.to_string()).collect();
+    let locked = argv.contains(&"--locked");
+    if !components.is_empty() {
+        let mut all = base_argv.clone();
+        for (spec, _) in components {
+            all.extend(["-p".to_string(), spec.clone()]);
+        }
+        runs.push(all);
     }
-    for c in components {
-        tree_argv.extend(["-p".to_string(), c.to_string()]);
+    for (spec, needs) in components.iter().filter(|(_, needs)| !needs.is_empty()) {
+        let mut one = base_argv.clone();
+        one.extend(["-p".to_string(), spec.clone()]);
+        for f in needs {
+            one.extend(["--features".to_string(), f.clone()]);
+        }
+        runs.push(one);
     }
-    let words: Vec<&str> = tree_argv.iter().map(String::as_str).collect();
-    let out = list_cargo(&tree, &parent, &words).stdin(std::process::Stdio::null()).output()?;
-    if !out.status.success() {
-        let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
-        let reason: Vec<&str> = why.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-        return Err(refused(format!("commit {commit}: cargo cannot tree its packages offline: {}", reason.join(" / "))));
+    let mut printed: Vec<String> = Vec::new();
+    for mut run in runs {
+        if locked {
+            run.push("--locked".into());
+        }
+        let words: Vec<&str> = run.iter().map(String::as_str).collect();
+        let out = list_cargo(&tree, &parent, &words).stdin(std::process::Stdio::null()).output()?;
+        if !out.status.success() {
+            let why = String::from_utf8_lossy(&out.stderr).replace(&format!("{}/", tree.display()), "");
+            let reason: Vec<&str> = why.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+            return Err(refused(format!("commit {commit}: cargo cannot tree its packages offline: {}", reason.join(" / "))));
+        }
+        printed.push(String::from_utf8_lossy(&out.stdout).into_owned());
     }
     let by_name: BTreeMap<(String, String), Vec<String>> = found.iter().fold(BTreeMap::new(), |mut m, (id, p)| {
         m.entry((p.name.clone(), p.version.clone())).or_insert_with(Vec::new).push(id.clone());
@@ -250,7 +271,7 @@ fn resolve_packages(root: &Path, commit: &str, target: &str, components: &[&str]
     // (which cargo ignores, and warns of), a package cargo's metadata does not hold.
     let mut stack: Vec<(Option<String>, bool)> = Vec::new();
     let mut edges: Vec<(String, String)> = Vec::new();
-    for raw in String::from_utf8_lossy(&out.stdout).lines() {
+    for raw in printed.iter().flat_map(|t| t.lines()) {
         let Some((depth, text)) = drawn(raw) else { continue };
         if let Some(mark) = text.strip_prefix('[') {
             // A mark of the dependencies printed after it, at the depth of their parent.
@@ -390,10 +411,16 @@ pub fn list(root: &Path, commit: &str, release: Option<&str>) -> Result<String, 
         return Err(refused(unread.join("\n")));
     }
     // Each by its name and version (`-p veredas-core@2.1.0`): a package by path of the same name at
-    // another version may share the graph.
-    let specs: Vec<String> = held.values().map(|h| format!("{}@{}", h.name, h.version)).collect();
-    let names: Vec<&str> = specs.iter().map(String::as_str).collect();
-    let packages = resolve_packages(root, commit, TARGET, &names)?;
+    // another version may share the graph. Only one the builder builds something of (its library,
+    // or executables it ships): one of examples, tests or benches alone compiles nothing, nor what
+    // it depends on; it is listed itself all the same. With the dependencies' features its
+    // executables need.
+    let specs: Vec<(String, Vec<String>)> = held
+        .values()
+        .filter(|h| h.lib.is_some() || !h.bins.is_empty())
+        .map(|h| (format!("{}@{}", h.name, h.version), h.features.iter().filter(|f| f.contains('/')).cloned().collect()))
+        .collect();
+    let packages = resolve_packages(root, commit, TARGET, &specs)?;
     let lock_text = git::show(root, commit, "Cargo.lock").map_err(|e| refused(e.to_string()))?.unwrap_or_default();
     let lock = inputs::parse_lock(&lock_text).map_err(|e| refused(format!("commit {commit}: {e}")))?;
     // Each component's package, by its folder.

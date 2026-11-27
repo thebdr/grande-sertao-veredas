@@ -87,7 +87,11 @@ fn cargo_builds(dir: &Path, packages: &[&str], envs: &[(&str, &Path)]) -> (BTree
         c.arg("--locked");
     }
     for p in packages {
-        c.args(["-p", p]);
+        // A package named by its spec, or `--features <f>` passed as it stands.
+        match p.strip_prefix("--features ") {
+            Some(f) => c.args(["--features", f]),
+            None => c.args(["-p", p]),
+        };
     }
     for (k, v) in envs {
         c.env(k, v);
@@ -653,4 +657,59 @@ fn a_crate_of_a_named_registry_beside_its_crates_io_twin() {
     }
     let core_deps = doc["dependencies"].as_array().unwrap().iter().find(|d| d["ref"] == "veredas-core@2.1.0").unwrap();
     assert_eq!(core_deps["dependsOn"].as_array().unwrap().len(), 2);
+}
+
+/// Round 6's forms: an executable whose required feature is a dependency's (`serde_json/
+/// preserve_order`, which `--all-features` never turns on), listed with what the builder's own
+/// build of it compiles; a component of examples or tests alone, which the builder builds nothing
+/// of, listed itself and nothing below it; and the caller's toolchain variables (`RUSTUP_TOOLCHAIN`
+/// naming no installed toolchain, `CARGO` naming no cargo) reading the commit no other way.
+#[test]
+fn a_dependencys_feature_a_component_of_examples_alone_and_the_callers_toolchain() {
+    let cargo = || Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let r = Repo::new();
+    r.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\", \"tools/*\"]\n");
+    r.write(
+        "crates/veredas-core/Cargo.toml",
+        "[package]\nname = \"veredas-core\"\nversion = \"2.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nserde_json = \"=1.0.154\"\n\n[[bin]]\nname = \"veredas-core\"\npath = \"src/main.rs\"\nrequired-features = [\"serde_json/preserve_order\"]\n",
+    );
+    r.write("crates/veredas-core/src/main.rs", "fn main() {}\n");
+    r.write("crates/veredas-exemplos/Cargo.toml", "[package]\nname = \"veredas-exemplos\"\nversion = \"2.0.0\"\nedition = \"2024\"\nlicense = \"MIT\"\n\n[dependencies]\nitoa = \"=1.0.19\"\n\n[build-dependencies]\nryu = \"1\"\n");
+    r.write("crates/veredas-exemplos/build.rs", "fn main() {}\n");
+    r.write("crates/veredas-exemplos/examples/um.rs", "fn main() {}\n");
+    // A repository tool using serde_json's `preserve_order`, as one may.
+    r.write("tools/ferramenta/Cargo.toml", "[package]\nname = \"ferramenta\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\npublish = false\n\n[dependencies]\nserde_json = { version = \"=1.0.154\", features = [\"preserve_order\"] }\n");
+    r.write("tools/ferramenta/src/lib.rs", "\n");
+    let out = cargo().args(["generate-lockfile", "--offline"]).current_dir(r.path()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let c = r.commit("a dependency's feature and examples alone");
+    let doc: Value = serde_json::from_str(&alforge::components::list(r.path(), &c, None).unwrap()).unwrap();
+    // The builder's own build of core's executable (`-p veredas-core@2.1.0 --bins --features
+    // serde_json/preserve_order`) as cargo's unit graph has it: indexmap and its own among it.
+    let (built, edges) = cargo_builds(r.path(), &["veredas-core@2.1.0", "--features serde_json/preserve_order"], &[]);
+    assert!(built.iter().any(|(n, _)| n == "indexmap"), "{built:?}");
+    let (mut packages, dependencies) = listed(&doc);
+    // The component of examples alone is listed, itself and nothing it depends on.
+    assert!(packages.remove(&("veredas-exemplos".to_string(), "2.0.0".to_string())));
+    assert_eq!(packages, built);
+    assert_eq!(dependencies, edges);
+    let exemplos = doc["dependencies"].as_array().unwrap().iter().find(|d| d["ref"] == "veredas-exemplos@2.0.0").unwrap();
+    assert_eq!(exemplos["dependsOn"], serde_json::json!([]));
+
+    // The caller's toolchain variables: the same document.
+    let run = |vars: &[(&str, &str)]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_alforge"));
+        cmd.args(["components", &c]).env_remove("CARGO").current_dir(r.path());
+        for (k, v) in vars {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "{vars:?}: {}", String::from_utf8_lossy(&out.stderr));
+        out.stdout
+    };
+    let plain = run(&[]);
+    assert_eq!(serde_json::from_slice::<Value>(&plain).unwrap(), doc);
+    for vars in [&[("RUSTUP_TOOLCHAIN", "no-such-toolchain")][..], &[("CARGO", "/no/such/cargo")], &[("RUSTC", "/no/such/rustc")]] {
+        assert_eq!(run(vars), plain, "{vars:?}");
+    }
 }
