@@ -1,0 +1,18 @@
+{
+  "clause": "C-156",
+  "verdict": "refuted",
+  "ranAt": "2026-11-27T06:59:46.089Z",
+  "headCommit": "29475e3b976c5753d93668a3e0de7b4195b3dba1",
+  "tests": [
+    {
+      "name": "crates/orcl-front/tests/shell.rs",
+      "file": "crates/orcl-front/tests/shell.rs",
+      "symbolSha": "be91194cd2b4cf4dbaed69561029eb8f7e038c2c2eafe3cdd84290596820e455"
+    },
+    {
+      "name": "crates/orcl-front/tests/lowering.rs",
+      "file": "crates/orcl-front/tests/lowering.rs",
+      "symbolSha": "ba2efd5484b91aa3016aae896db2aa554dbde70090a355dccdd425e1d8dbaef3"
+    }
+  ]
+}
