@@ -1,13 +1,13 @@
 {
   "clause": "C-111",
   "verdict": "refuted",
-  "ranAt": "2026-11-26T17:49:37.119Z",
-  "headCommit": "0011f104b24a530fdbefde66331dc2b6da66629b",
+  "ranAt": "2026-11-27T12:05:56.005Z",
+  "headCommit": "dfdd073870d7ae147742b8e6b10c035bf4f8a1a7",
   "tests": [
     {
       "name": "crates/veredas-maquinar/tests/ethernetip_adapter.rs",
       "file": "crates/veredas-maquinar/tests/ethernetip_adapter.rs",
-      "symbolSha": "2820695af21849fba7af5fc64e7865c75e155de357b2cad813b06ea9cbaaf6a0"
+      "symbolSha": "6fe4289d36a4f1e8e2084b0f67816491074b58ef13a7651743f5d2e2819dd0ba"
     }
   ]
 }
